@@ -862,3 +862,50 @@ def test_revision_record_readers_decode_v1_and_v2_through_one_door(tmp_path):
     repo.write('runtime/revisions/active/design.json',
                {**payload, 'schema_version': 2, 'applies_to_request_sha256': 'e' * 64})
     assert verified_previous_revision(repo, 'design').applies_to_request_sha256 == 'e' * 64
+
+
+def test_resample_replay_decision_reads_v2_and_v1_active_records_through_the_one_door(tmp_path):
+    """显式重采的重放判定读 `active/<owner>.json`：V2（H1b 起新写盘）与 V1 同口。
+
+    此前 `execute` 里的 `body_replay` 直接按 V1 解析，任何带显式重采的章在这一步
+    因 `schema_version`／`applies_to_request_sha256` 而 ValidationError。
+    """
+    from types import SimpleNamespace
+
+    from novel.llm.ledger import CostLedger
+    from novel.stages.revisions import resample_replay_pending
+    from novel.store import Str06Repository
+    from tests.str06_facilities import make_context
+
+    repo = Str06Repository(tmp_path / 'run')
+    repo.attach_context(make_context(tmp_path / 'run', ledger=CostLedger(path=None)))
+    product_rel = 'stage5/body/ch01.txt'
+    repo.write_text(product_rel, '正文第一章。\n')
+    product_sha = repo.file_sha256(repo.path(product_rel))
+    selection = SimpleNamespace(sequence=1, baseline_request_sha256='a' * 64)
+    candidate_sha = 'c' * 64
+    v1 = {
+        'schema_version': 1, 'kind': 'resample', 'owner': 'body_ch01',
+        'node': 'str06.stage5.body', 'baseline_request_sha256': 'a' * 64,
+        'baseline_response_sha256': 'b' * 64, 'baseline_source_root': '/tmp/src',
+        'candidate_sha256': candidate_sha,
+        'evidence_rel': f'runtime/revisions/evidence/{candidate_sha}.json',
+        'diff_sha256': 'd' * 64, 'reason': '显式重采', 'sequence': 1,
+        'product_rel': product_rel, 'before_product_sha256': None,
+        'product_sha256': product_sha, 'status': 'resolved', 'created_at': 1759000000}
+    v2 = {**v1, 'schema_version': 2, 'applies_to_request_sha256': 'a' * 64}
+    active = 'runtime/revisions/active/body_ch01.json'
+
+    assert resample_replay_pending(repo, 'body_ch01', selection) is True, '没有记录＝待重放'
+    for payload in (v2, v1):
+        repo.write(active, payload)
+        assert resample_replay_pending(repo, 'body_ch01', selection) is False, \
+            '已采用且产物未漂移＝不再重放'
+        repo.write(active, {**payload, 'status': 'staged', 'product_sha256': None})
+        assert resample_replay_pending(repo, 'body_ch01', selection) is True
+    repo.write(active, v2)
+    repo.write_text(product_rel, '正文第一章被改动。\n')
+    assert resample_replay_pending(repo, 'body_ch01', selection) is True, '产物漂移＝待重放'
+    repo.write(active, {'schema_version': 9})
+    with pytest.raises(Exception, match='修订记录损坏'):
+        resample_replay_pending(repo, 'body_ch01', selection)

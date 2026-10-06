@@ -50,8 +50,8 @@ from novel.work_units import (
 __all__ = [
     'CandidateRound', 'CandidateRegistry', 'UpstreamDiff', 'UpstreamEntryDiff',
     'CandidateAssessment', 'ReusePlan', 'ReviewTarget',
-    'canonical_appellation_form', 'canonical_wire_bytes', 'candidates_rel',
-    'decode_round', 'load_registry', 'parse_json_path', 'plan_reuse',
+    'TEXT_FIELDS', 'canonical_appellation_form', 'canonical_wire_bytes', 'candidates_rel',
+    'decode_round', 'entry_equivalent', 'entry_keys', 'load_registry', 'parse_json_path', 'plan_reuse',
     'purchased_rounds', 'upstream_diff', 'wire_sha256', 'write_registry',
 ]
 
@@ -188,12 +188,19 @@ def purchased_rounds(base: Path, sid: str, owner: str) -> tuple[WorkUnitBudget |
 
 @dataclass(frozen=True)
 class UpstreamEntryDiff:
-    """一条上游条目在两个版本间的对齐结果（键＝(kind, anchors)）。"""
+    """一条上游条目在两个版本间的对齐结果（键＝(kind, anchors)）。
+
+    ``before_index``／``after_index`` 是条目在各自版本里的下标——义务编号（`ob01…`）
+    就是下标派生的，候选里的 `real: ['ob07']` 引用的是**位置**，所以位置漂移的条目
+    即使内容逐字相等也不是「未变」。
+    """
 
     key: tuple[str, tuple[str, ...]]
     status: Literal['unchanged', 'changed', 'added', 'removed']
     before: dict | None
     after: dict | None
+    before_index: int | None = None
+    after_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -228,11 +235,23 @@ class UpstreamDiff:
         return not (self.changed or self.added or self.removed)
 
 
-def _entry_key(entry: Mapping[str, Any]) -> tuple[str, tuple[str, ...]]:
-    """修订对照 wire 的条目键：（kind, anchors）——anchors 是源证据身份，保序不敏感。"""
-    anchors = entry.get('anchors')
-    handles = tuple(sorted(str(a) for a in anchors)) if isinstance(anchors, list) else ()
-    return (str(entry.get('kind', '')), handles)
+def entry_keys(pairs: Sequence[tuple[str, Iterable[str]]]) -> list[tuple[str, tuple[str, ...]]]:
+    """（kind, anchors）→ 修订对照 wire 的条目对齐键，输入顺序即条目顺序。
+
+    anchors 是源证据身份，保序不敏感（排序后比较）。Preserve 并不保证同 kind 同锚点
+    的义务唯一——模型可以对同一句源文立两条同类义务——所以同键重复时按出现序给后继
+    键追加 `#n` 序号后缀：对齐键恒唯一，重复键退化为按序配对而不是让整条免费判定
+    抛 `ValueError` 把 Design 节点（及整本书）停在重入处。配错对的代价只是把本该
+    「未变」的条目判成「变化」（走窄复核），不会把变化的条目判成未变——未变要求
+    条目内容逐字相等。
+    """
+    seen: dict[tuple[str, tuple[str, ...]], int] = {}
+    keys: list[tuple[str, tuple[str, ...]]] = []
+    for kind, anchors in pairs:
+        base = (str(kind), tuple(sorted(str(a) for a in anchors)))
+        ordinal = seen[base] = seen.get(base, 0) + 1
+        keys.append(base if ordinal == 1 else (base[0], (*base[1], f'#{ordinal}')))
+    return keys
 
 
 def _entries_of(wire: Any) -> dict[tuple[str, tuple[str, ...]], dict]:
@@ -243,26 +262,27 @@ def _entries_of(wire: Any) -> dict[tuple[str, tuple[str, ...]], dict]:
         return {}
     if not isinstance(obligations, list):
         raise ValueError('上游修订对照 wire 的 obligations 必须是数组')
-    entries: dict[tuple[str, tuple[str, ...]], dict] = {}
     for item in obligations:
         if not isinstance(item, dict):
             raise ValueError('上游修订对照 wire 的条目必须是对象')
-        key = _entry_key(item)
-        if key in entries:
-            raise ValueError(f'上游修订对照 wire 的条目键重复：{key}')
-        entries[key] = item
-    return entries
+    keys = entry_keys([
+        (item.get('kind', ''), item['anchors'] if isinstance(item.get('anchors'), list) else ())
+        for item in obligations])
+    return dict(zip(keys, obligations))
 
 
 def upstream_diff(before: Any, after: Any) -> UpstreamDiff:
     """两个上游版本的修订对照 wire → 条目级差异（复用 `wire_diff` 作字节层对照）。
 
-    条目按（kind, anchors）对齐：键相同且内容逐字相等＝未变；键相同内容不同＝
-    变化；只在当前版本＝新增；只在旧版本＝删除。差异摘要只能定位变化、不能判断
-    等价——等价判定另走称谓规范形（`canonical_appellation_form`）。
+    条目按（kind, anchors）对齐：键相同、内容逐字相等且**位置不变**＝未变；键相同
+    但内容不同或位置漂移＝变化（位置漂移＝重排或前面有增删，义务编号随之换了所指）；
+    只在当前版本＝新增；只在旧版本＝删除。差异摘要只能定位变化、不能判断等价——
+    等价判定另走 `entry_equivalent`（称谓规范形＋其余字段逐字相等）。
     """
     changes = wire_diff(before, after)
     before_entries, after_entries = _entries_of(before), _entries_of(after)
+    before_at = {key: index for index, key in enumerate(before_entries)}
+    after_at = {key: index for index, key in enumerate(after_entries)}
     entries: list[UpstreamEntryDiff] = []
     for key in sorted(set(before_entries) | set(after_entries), key=repr):
         old, new = before_entries.get(key), after_entries.get(key)
@@ -270,13 +290,14 @@ def upstream_diff(before: Any, after: Any) -> UpstreamDiff:
             status: Literal['unchanged', 'changed', 'added', 'removed'] = 'added'
         elif new is None:
             status = 'removed'
-        elif old == new:
+        elif old == new and before_at[key] == after_at[key]:
             status = 'unchanged'
         else:
             status = 'changed'
-        entries.append(UpstreamEntryDiff(key, status, old, new))
-    summary = [{'key': list(e.key), 'status': e.status,
-                'before': e.before, 'after': e.after} for e in entries]
+        entries.append(UpstreamEntryDiff(key, status, old, new,
+                                         before_at.get(key), after_at.get(key)))
+    summary = [{'key': list(e.key), 'status': e.status, 'before': e.before, 'after': e.after,
+                'at': [e.before_index, e.after_index]} for e in entries]
     return UpstreamDiff(tuple(entries), tuple(changes), digest(summary))
 
 
@@ -325,6 +346,40 @@ def canonical_appellation_form(text: str, person_literals: Mapping[str, Iterable
     return ''.join(ch for ch in folded if not _is_dropped(ch))
 
 
+#: 条目里允许「只差用哪个登记称谓」的自由文本字段；其余字段一律逐字相等才算等价。
+TEXT_FIELDS: Final[tuple[str, ...]] = ('statement', 'satisfaction')
+
+
+def entry_equivalent(entry: UpstreamEntryDiff, person_literals: Mapping[str, Iterable[str]]) -> bool:
+    """一条「变化」条目能否被机械证明只是换了登记称谓／标点（纯函数）。
+
+    要同时满足：位置不变（义务编号不漂移）；字段集相同；自由文本字段
+    （`TEXT_FIELDS`）称谓规范形相等；其余字段——`must_preserve`、`requires` 序号、
+    系列成员等——逐字相等（`anchors` 比集合，顺序不是语义）。任何一项不满足都只能
+    走窄复核，不能零调用放行（此前只比 `statement`，`satisfaction`／`requires`／
+    `must_preserve` 变了也被当成等价）。
+    """
+    if entry.status != 'changed' or entry.before is None or entry.after is None:
+        return False
+    if entry.before_index != entry.after_index:
+        return False
+    old, new = entry.before, entry.after
+    if set(old) != set(new):
+        return False
+    for field, before in old.items():
+        after = new[field]
+        if field in TEXT_FIELDS and isinstance(before, str) and isinstance(after, str):
+            if (canonical_appellation_form(before, person_literals)
+                    != canonical_appellation_form(after, person_literals)):
+                return False
+        elif field == 'anchors' and isinstance(before, list) and isinstance(after, list):
+            if sorted(map(str, before)) != sorted(map(str, after)):
+                return False
+        elif before != after:
+            return False
+    return True
+
+
 # ── 沿用判定（择优与四档动作） ────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -350,7 +405,7 @@ class CandidateAssessment:
     #: False＝上游是全新回答，与候选生成时的版本之间没有修订谱系（RC-53 闭集原因）。
     has_lineage: bool = True
     diff: UpstreamDiff | None = None
-    #: 变化条目的称谓规范形是否两两相等（调用方用当前登记面判定后传入）。
+    #: 全部变化条目是否都被 `entry_equivalent` 证明等价（调用方用当前登记面判定后传入）。
     changed_equivalent: bool = False
     preflight_passed: bool = False
     #: 剩余根因计数（预检 errors＋materials 的规则码去重）。
@@ -363,16 +418,22 @@ class CandidateAssessment:
 
     @property
     def adoptable(self) -> bool:
-        """零调用采用的条件：兼容、有谱系、当前输入下预检全绿、差异可证明无害。"""
-        return (self.compatible and self.has_lineage and self.preflight_passed
-                and (self.diff is None or self.diff.empty or self.changed_equivalent))
+        """零调用采用的条件：兼容、有谱系、当前输入下预检全绿、差异可证明无害。
+
+        可证明无害＝没有差异；或差异**只有**被证明等价的变化条目——新增、删除条目
+        （义务编号随之漂移、新义务无人承载）一律不得零调用放行。
+        """
+        harmless = (self.diff is None or self.diff.empty
+                    or (self.changed_equivalent and not self.diff.added
+                        and not self.diff.removed))
+        return self.compatible and self.has_lineage and self.preflight_passed and harmless
 
 
 @dataclass(frozen=True)
 class ReusePlan:
     """免费判定的结论：四档动作之一＋目标＋留痕原因。"""
 
-    action: Literal['carry_forward', 'narrow_review', 'full_purchase']
+    action: Literal['carry_forward', 'narrow_review', 'ordinary_ask', 'full_purchase']
     candidate: Any | None
     reason: str
     targets: tuple[ReviewTarget, ...] = ()
@@ -390,7 +451,8 @@ def plan_reuse(assessments: Sequence[CandidateAssessment]) -> ReusePlan:
     """择优（RC-52）：全绿优先，其次剩余根因最少，同分取最近（内容轮序最大）。
 
     没有可用候选时按闭集原因整份新购并留痕；有可用候选但都不能零调用采用时，
-    对最优候选生成窄复核目标（变化/删除条目的承载拍；新增条目给可选目标闭集）。
+    对最优候选生成窄复核目标（变化/删除条目的承载拍；新增条目给可选目标闭集）；
+    目标为空时：候选全绿＝无拍受影响，免费沿用；不全绿＝普通接受循环（`ordinary_ask`）。
     """
     usable = [a for a in assessments if a.compatible and a.has_lineage]
     if not usable:
@@ -404,8 +466,21 @@ def plan_reuse(assessments: Sequence[CandidateAssessment]) -> ReusePlan:
                else '变化条目称谓规范形相等')
         return ReusePlan('carry_forward', best.entry, why, diff=best.diff)
     best = min(usable, key=lambda a: (a.root_causes, -a.ordinal))
+    targets = _review_targets(best)
+    if not targets and best.preflight_passed:
+        # 变化／删除的条目没有任何承载拍引用、也没有新增条目要选承载位：没有受影响的
+        # 拍，窄复核无从发起——候选当前输入下全绿，免费沿用（不是静默整份新购）。
+        return ReusePlan('carry_forward', best.entry, '变化条目无承载拍引用，无拍需复核',
+                         diff=best.diff)
+    if not targets:
+        # 候选自身预检未过、上游差异又不产生复核目标：没有窄通道可走，也不是闭集原因的
+        # 整份新购——交给普通接受循环（同请求身份免费重放已购回答；换了身份才新购）。
+        # 不从该候选起步再买一轮：重入那样做会每次重启都重置修订额度。
+        return ReusePlan('ordinary_ask', best.entry,
+                         '候选自身预检未过且上游差异无复核目标：普通接受循环（同身份免费重放）',
+                         diff=best.diff)
     return ReusePlan('narrow_review', best.entry, '候选不能证明等价，窄复核受影响承载拍',
-                     targets=_review_targets(best), diff=best.diff)
+                     targets=targets, diff=best.diff)
 
 
 def _review_targets(assessment: CandidateAssessment) -> tuple[ReviewTarget, ...]:

@@ -205,6 +205,46 @@ def test_ask_json_unfixable_patch_stops_as_no_progress(tmp_path):
     assert len(transport.calls) == 2, '不无限付费'
 
 
+def test_ask_json_baseline_start_merges_baseline_errors_with_review_targets_in_one_round(tmp_path):
+    """带基底起步：基底自身的验收错误与复核目标合并进同一轮条目返修——只发一轮，没有
+    整份首轮请求；没有复核目标就没有发起理由，拒绝（零调用）。
+
+    ⚠ 「基底自身预检未过、没有复核目标」不得从基底起步：那样每次重启重入都会重新买
+    一轮、重置修订额度；该情形由编排走普通接受循环（同请求身份免费重放）。"""
+    from novel.llm.paid_requests import PatchBaseline, PatchTarget, digest
+
+    faulty = _faulty_wire()
+    faulty['beats'].append({**faulty['beats'][0], 'event': 'b', 'participants': ['fu_jun']})
+    baseline = PatchBaseline(wire=faulty, digest=digest(faulty))
+    fixed_first = {**faulty['beats'][0], 'participants': ['fu_jun']}
+    reviewed_second = {**faulty['beats'][1]}
+    transport = _ScriptedTransport([json.dumps({'patches': [
+        {'path': 'beats[0]', 'value': fixed_first},
+        {'path': 'beats[1]', 'value': reviewed_second}]}, ensure_ascii=False)])
+    base, _repo, session = _json_session(tmp_path, transport)
+
+    def validate(w):
+        return (['第1章拍1 participants 引用未知人物 ghost']
+                if w['beats'][0]['participants'] == ['ghost'] else [])
+
+    review = [PatchTarget(path=('beats', 1), issues=('上游条目变化：复核本拍',))]
+    data, answer = ask_json(session, 'ch01', _request(), validate, patch=_locate,
+                            baseline=baseline, review_targets=review)
+    assert len(transport.calls) == 1, '基底错误＋复核目标合并成一轮，没有整份首轮请求'
+    request = transport.calls[0].user
+    assert '路径 beats[0]' in request and '路径 beats[1]' in request
+    assert data['beats'][0]['participants'] == ['fu_jun'] and data['beats'][1] == reviewed_second
+    assert isinstance(answer, PatchedAnswer) and answer.base is None and len(answer.patches) == 1
+    assert len(_as_adoption_refs(answer)) == 1
+
+    (tmp_path / 'idle').mkdir()
+    idle = _ScriptedTransport([])
+    _base, _repo, refused = _json_session(tmp_path / 'idle', idle)
+    with pytest.raises(ValueError, match='必须给出窄复核目标'):
+        ask_json(refused, 'ch01', _request(), validate, patch=_locate, baseline=baseline)
+    assert not idle.calls, '拒绝发生在任何付费请求之前'
+
+
 def test_no_progress_judges_root_cause_tasks_not_candidate_bytes(tmp_path):
     """判据④（CS-H H2）：无进展按根因任务判定——候选字节变化不算进展。
 

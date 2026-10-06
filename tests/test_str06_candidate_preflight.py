@@ -514,8 +514,11 @@ def test_earlier_green_candidate_is_not_blocked_by_a_later_failed_one(tmp_path):
     assert result['reuse']['action'] == 'carried_forward'
     registry = repo.inspect('runtime/candidates/design.json')
     adopted = [e for e in registry['candidates'] if e.get('adoptions')]
-    assert len(adopted) == 1 and adopted[0]['ordinal'] == 1, \
-        '采用引用链落在第 1 轮候选上；被拒轮不进登记'
+    assert len(adopted) == 1 and adopted[0]['ordinal'] == 1, '采用引用链落在第 1 轮候选上'
+    rejected = [e for e in registry['candidates'] if e['accepted'] is False]
+    assert rejected, '被拒的那份也在登记里（RC-52：全部已购候选），且如实记未接受'
+    assert all(e['upstream_version'] for e in registry['candidates']), \
+        '本次验收过的候选都带谱系'
 
 
 def test_added_entry_review_uses_the_beat_closed_set_as_optional_targets(tmp_path):
@@ -582,3 +585,161 @@ def test_full_purchase_is_confined_to_the_closed_set_of_reasons_and_leaves_a_tra
     assert registry is not None
     assert registry.full_purchase_reasons[-1].startswith('上游是全新回答无修订谱系')
     assert len(registry.candidates) == 2, '新购轮也进登记'
+
+
+def test_routed_candidate_keeps_its_lineage_so_a_repaired_upstream_can_reuse_it(tmp_path):
+    """被上游回派（未发布）的候选也登记谱系：上游修好后据此沿用，不整份重购。
+
+    这正是 CS-H 的起因：Design 候选自身无错、只因 Preserve 的义务措辞不合格被回派；
+    Preserve 修订后同一份回答往往已经全绿。若谱系（候选生成时的上游版本）只在发布成功
+    后才登记，这类候选永远「没有修订谱系」，免费沿用对它不可达。
+    """
+    from novel.stages.owner_revision import OwnerRevisionRequired
+    ctx, wires, transport, _ = _prepare(tmp_path, bad_preserve=True)
+    repo = ctx.repository
+    session = _reopened_session(repo, transport)
+    ctx = _design_ctx(ctx, session)
+    with pytest.raises(OwnerRevisionRequired):
+        run_body_design(ctx)
+    assert transport.calls.count('design') == 1
+    good = _full_chain_wires()['preserve']['obligations'][0]['statement']
+
+    def repaired(checkpoint):
+        first = checkpoint.obligations[0].model_copy(update={'statement': good})
+        return checkpoint.model_copy(update={'obligations': (first, *checkpoint.obligations[1:])})
+
+    registry = repo.inspect('runtime/candidates/design.json')
+    assert len(registry['candidates']) == 1, '被回派（未发布）的候选已登记'
+    routed = registry['candidates'][0]
+    assert routed['accepted'] is False and routed['upstream_version']['wire']['obligations'], \
+        '如实记未接受，并带它生成时的上游版本'
+    republish_checkpoint(repo, repaired)
+    result = run_body_design(_design_ctx(ctx, session))
+    assert result['reuse']['action'] in ('carried_forward', 'narrow_review'), result['reuse']
+    assert transport.calls.count('design') <= 2, '至多一轮窄复核，不整份重购'
+
+
+def test_narrow_review_starts_from_the_purchased_candidate_with_a_narrow_request(tmp_path):
+    """窄复核走真实 `ask_json(baseline=…)`：从已购候选整份 wire 起步，只发窄输入。
+
+    此前的窄复核用例用会吞掉 `baseline`／`narrow` 的记录闭包，实际走的是普通整份购买。
+    本例让生产闭包原样收到它们：不重发整份原请求（无输入投影），请求带基底摘要与依赖
+    切片；回答只替换复核目标，其余拍字节不变，provenance 同时引用基底与返修轮。
+    """
+    from tests.test_str06_design_patch import PatchingTransport
+    ctx, wires, transport, _ = _prepare(tmp_path)
+    repo = ctx.repository
+    run_body_design(_design_ctx(ctx, _reopened_session(repo, transport)))
+    assert transport.calls.count('design') == 1
+    first = repo.read_model('stage4/design/body_design.json')
+    first_attempts = [row['attempt_id'] for row in _ledger_rows(repo)
+                      if not row.get('cached')]
+
+    def semantic_rewrite(checkpoint):
+        return checkpoint.model_copy(update={'obligations': tuple(
+            o.model_copy(update={'statement': o.statement + '，且夫君许诺必归'})
+            for o in checkpoint.obligations)})
+
+    republish_checkpoint(repo, semantic_rewrite)
+    patching = PatchingTransport(wires, wires['design'])
+    result = run_body_design(_design_ctx(ctx, _reopened_session(repo, patching)))
+    assert result['reuse']['action'] == 'narrow_review'
+    assert len(patching.owner_requests) == 1, '只有一轮条目返修，没有整份首轮请求'
+    request = patching.owner_requests[0]
+    assert '【窄返修】' in request and '【基底】' in request and '【依赖切片】' in request
+    assert 'stage4-design-input-v1' not in request, '不带整份原请求的输入投影'
+    assert repo.read_model('stage4/design/body_design.json') == first, \
+        '复核目标取回原值：产物内容不变'
+    provenance = repo.inspect('stage4/design/body_design.json')['_provenance']
+    assert provenance['usage'] is not None
+    assert provenance['usage']['prompt_tokens'] == 10 + 100, \
+        '基底 attempt（原付费行）与返修轮一并聚合，既不丢也不双计'
+    assert first_attempts and all(
+        any(row['attempt_id'] == a for row in _ledger_rows(repo)) for a in first_attempts)
+
+
+def test_same_identity_reentry_is_a_plain_cached_replay_not_a_carry_forward(tmp_path):
+    """同请求身份重入：沿用闭包主动放弃，节点走普通接受循环（缓存重放）。
+
+    沿用是跨请求身份的快路径；同身份那是缓存重放。否则每次重启都被记成一次「采用」
+    （修订记录＋沿用行），并要求原 attempt 有唯一真实付费行——历史采用的根上会误停。
+    """
+    ctx, wires, transport, _ = _prepare(tmp_path)
+    repo = ctx.repository
+    session = _reopened_session(repo, transport)
+    run_body_design(_design_ctx(ctx, session))
+    first = repo.read_model('stage4/design/body_design.json')
+    result = run_body_design(_design_ctx(ctx, session))
+    assert transport.calls.count('design') == 1, '零新购'
+    assert 'reuse' not in result, '没有发生沿用'
+    assert not [row for row in _ledger_rows(repo) if row.get('cache_policy') == 'carried-forward']
+    assert not repo.path('runtime/revisions/carried').exists(), '不落沿用凭证'
+    assert repo.read_model('stage4/design/body_design.json') == first
+
+
+def test_free_carry_forward_yields_to_registered_patch_resample_and_same_identity(tmp_path):
+    """免费沿用不得越过更高优先级的采用：同身份缓存重放、已登记 owner patch（`adopted_patch`
+    的职责是防止缓存原稿反向覆盖修订）、显式重采与已登记的采样选择。"""
+    import json
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from novel.llm.paid_requests import purchased_baseline
+    from novel.llm.transport import ChatRequest
+    from novel.stages import candidates
+    from novel.stages.chain import carry_forward_candidate
+    from novel.stages.common import SYS
+    from novel.stages.revisions import preview_owner_patch, stage_revision
+
+    ctx, wires, transport, _ = _prepare(tmp_path)
+    repo = ctx.repository
+    session = _reopened_session(repo, transport)
+    run_body_design(_design_ctx(ctx, session))                       # X1：购买并发布
+    republish_checkpoint(repo, _lineage_only_mutation)               # 请求身份变（差异为空）
+    prompts = {}
+    plain = json_ask(session)
+
+    def spy(owner, prompt, validate, **kwargs):
+        prompts[owner] = prompt
+        return plain(owner, prompt, validate, **kwargs)
+
+    run_body_design(replace(ctx, ask=spy, carry_forward=None))       # X2：普通购买
+    assert transport.calls.count('design') == 2
+    _unit, rounds = candidates.purchased_rounds(repo.root.parent, repo.root.name, 'design')
+    first, second = rounds[0], rounds[1]
+    assert first.request_sha256 != second.request_sha256
+    request = ChatRequest(model='fake', system=SYS, user=prompts['design'],
+                          reasoning_effort='high', thinking=True, json_mode=True,
+                          max_tokens=1000)
+
+    def decision(rnd):
+        return SimpleNamespace(
+            reason='测试', diff=None,
+            candidate={'turn_id': rnd.turn_id, 'attempt_id': rnd.attempt_id,
+                       'response_sha256': rnd.response_sha256,
+                       'request_sha256': rnd.request_sha256, 'wire': rnd.wire})
+
+    def carry(rnd=first, **kwargs):
+        return carry_forward_candidate(session, repo, 'design', request, decision(rnd), **kwargs)
+
+    def carried_rows():
+        return [r for r in _ledger_rows(repo) if r.get('cache_policy') == 'carried-forward']
+
+    # 放弃：候选身份＝当前身份（那是缓存重放）、显式重采、已登记的采样选择
+    assert carry(second) is None, '同身份：缓存重放，不是沿用'
+    assert carry(resample_owner='design') is None, '显式重采要新样本'
+    assert carry(selection=object()) is None, '已登记的采样选择要按选择取样'
+    assert not carried_rows()
+
+    # 已登记 owner patch（基线＝当前身份 X2）：沿用旧候选会反向覆盖人工修订
+    patched = json.loads(json.dumps(wires['design']))
+    patched['scenes'][0]['brief'] = patched['scenes'][0]['brief'] + '（人工补丁）'
+    baseline = purchased_baseline(repo.root, 'design', second.request_sha256)
+    preview = preview_owner_patch(
+        owner='design', identity=second.request_sha256, candidate=patched, baseline=baseline,
+        validate=lambda w: [], dry_run=lambda w: {'status': 'ran', 'errors': []})
+    stage_revision(repo, owner='design', identity=second.request_sha256, baseline=baseline,
+                   raw_bytes=json.dumps(patched, ensure_ascii=False).encode('utf-8'),
+                   preview=preview, reason='人工补丁')
+    assert carry() is None, '已登记 owner patch 优先：交给 ask 重放补丁'
+    assert not carried_rows() and not repo.path('runtime/revisions/carried').exists()

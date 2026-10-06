@@ -146,7 +146,9 @@ def test_replay_reads_purchased_design_rounds_against_current_inputs(tmp_path):
     assert (first['shape'], first['replay']['passed'], first['replay']['reuse']) == ('full', False, 'failed')
     assert first['replay']['codes'].get('positive_material_leak', 0) >= 2
     assert first['recorded'] == {'accepted': False, 'parse': 'failed', 'errors': first['recorded']['errors']}
-    assert first['recorded']['errors'] >= 2
+    # CS-H H2 起接受记录里的错误按根因聚合成任务（同一规则码的多处命中＝一个任务，附受
+    # 影响位置）：重放按条数计的两处泄漏，在记录里是一条任务——记录数＝根因数。
+    assert first['recorded']['errors'] == len(first['replay']['codes']) == 1
     # 次轮：完整预检全绿——当前输入下可零调用采用；用量读自账内回答值
     assert second['replay']['passed'] and second['replay']['reuse'] == 'green'
     assert {c['name']: c['status'] for c in second['replay']['checks']}['writer_materials'] == 'passed'

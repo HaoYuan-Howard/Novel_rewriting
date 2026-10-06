@@ -148,34 +148,15 @@ def carry_forward_ask(session, *, model='fake', max_tokens=1000):
     核验原 attempt（`session.adopt_carried_forward`）＋落 carried_forward 修订记录
     （V2）＋返回候选 wire 与指向原 attempt 的采用引用。
     """
-    from novel.llm.paid_requests import digest
     from novel.llm.transport import ChatRequest
-    from novel.stages import candidates
+    from novel.stages.chain import carry_forward_candidate
     from novel.stages.common import SYS
-    from novel.stages.revisions import stage_carried_forward
 
     def carry_forward(owner, prompt, decision):
         request = ChatRequest(model=model, system=SYS, user=prompt,
                               reasoning_effort='high', thinking=True,
                               json_mode=True, max_tokens=max_tokens)
-        identity = digest({'owner': owner, 'provider': session.provider,
-                           'request': request.cache_payload()})
-        candidate = decision.candidate
-        ref = session.adopt_carried_forward(
-            owner, request, identity,
-            baseline_request_sha256=candidate['request_sha256'],
-            turn_id=candidate['turn_id'], attempt_id=candidate['attempt_id'],
-            response_sha256=candidate['response_sha256'])
-        stage_carried_forward(
-            session.repository, owner=owner,
-            raw_bytes=candidates.canonical_wire_bytes(candidate['wire']),
-            baseline={'identity': candidate['request_sha256'],
-                      'response_sha256': candidate['response_sha256'],
-                      'source_root': str(session.repository.root)},
-            diff_sha256=decision.diff.sha256 if decision.diff is not None else digest({}),
-            applies_to_request_sha256=identity,
-            reason=f'免费沿用：{decision.reason}')
-        return candidate['wire'], ref
+        return carry_forward_candidate(session, session.repository, owner, request, decision)
 
     return carry_forward
 

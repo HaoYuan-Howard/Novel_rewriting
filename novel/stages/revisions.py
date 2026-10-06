@@ -37,6 +37,22 @@ def _revision_record(repository, owner: str, rel: str) -> OwnerRevisionRecordV2 
         raise revision_error(owner, f'修订记录损坏：{exc}') from exc
 
 
+def resample_replay_pending(repository, owner: str, selection) -> bool:
+    """显式重采是否仍待重放：True＝该章要进正文重放，False＝已登记采用且产物未漂移。
+
+    读 `runtime/revisions/active/<owner>.json` 走集中读口（V1／V2 同口、损坏显式拒绝）——
+    CS-H H1b 起新写盘的修订记录是 V2，此前这里直接按 V1 解析，任何带显式重采的章
+    在重放判定处因 `schema_version`／多出的 `applies_to_request_sha256` 而崩溃。
+    """
+    record = _revision_record(repository, owner, f'runtime/revisions/active/{owner}.json')
+    if record is None:
+        return True
+    return (record.kind != 'resample' or record.sequence != selection.sequence
+            or record.baseline_request_sha256 != selection.baseline_request_sha256
+            or record.status == 'staged'
+            or record.product_sha256 != repository.file_sha256(repository.path(record.product_rel)))
+
+
 def owner_product_rel(owner: str) -> str:
     node, scope = semantic_owner_unit(owner)
     rel = NODES[node].produces[0]
@@ -269,6 +285,17 @@ def stage_carried_forward(repository, *, owner: str, raw_bytes: bytes, baseline:
             owner, '同一应用身份已登记不同的 carried_forward 候选，拒绝覆盖采用凭证')
     repository.write(rel, record)
     return record
+
+
+def registered_owner_patch(repository, owner: str, identity: str) -> bool:
+    """当前请求身份下是否有已登记的 owner_patch（判定与 `adopted_patch` 同一把尺）。
+
+    有＝普通重放**必须**采用它（`adopted_patch` 的职责：防止缓存原稿反向覆盖修订）；
+    任何免费沿用都不得拿另一份已购旧候选把它盖掉。
+    """
+    record = _revision_record(repository, owner, f'runtime/revisions/active/{owner}.json')
+    return (record is not None and record.kind == 'owner_patch'
+            and record.baseline_request_sha256 == identity)
 
 
 def adopted_patch(repository, owner: str, identity: str, validate: Callable):

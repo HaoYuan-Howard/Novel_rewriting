@@ -153,6 +153,22 @@ def test_optional_closed_set_promotes_required_targets_inside_the_same_beat():
     assert out[('scenes', 0, 'beats', 0)] == ([carrier], True)
 
 
+def test_optional_closed_set_never_overlaps_a_required_target_that_contains_beats():
+    """必选目标包住闭集拍（整场／整个 beats 数组）：整体替换与逐拍可选替换会互相覆盖，
+    合并次序静默吞掉一侧——不发局部返修，退整份。拍内、拍外的必选目标不受影响。"""
+    carrier = design_issue('必保义务漏标', code='design_carrier_missing',
+                           location=('coverage', ('ob01',)))
+    whole_scene = issue('整场问题', ('scenes', 0))
+    assert locate_design_patches(deepcopy(WIRE), [whole_scene, carrier]) is None
+    beats_array = issue('整个 beats 数组', ('scenes', 1, 'beats'))
+    assert locate_design_patches(deepcopy(WIRE), [beats_array, carrier]) is None
+    inside = issue('拍内必选', ('scenes', 0, 'beats', 0, 'ev'))
+    assert locate_design_patches(deepcopy(WIRE), [inside, carrier]) is not None
+    scene_scalar = issue('场内标量', ('scenes', 0, 'brief'))
+    located = locate_design_patches(deepcopy(WIRE), [scene_scalar, carrier])
+    assert located is not None and ('scenes', 0, 'brief') in [entry[0] for entry in located]
+
+
 # ───────────────────────── 真实 stage：模型真的回 patches ─────────────────────────
 
 def _parse_path(text):

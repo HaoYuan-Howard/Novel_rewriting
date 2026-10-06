@@ -201,6 +201,11 @@ def locate_design_patches(wire: Any, errors: Sequence[object],
             promoted.setdefault(key, [])
             promoted[key].extend(e for e in items if e not in promoted[key])
         grouped = promoted
+        # 替换不重叠仍须成立：必选目标若包住某个闭集拍（整场、整个 beats 数组），
+        # 整体替换与逐拍可选替换互相覆盖，合并次序会静默吞掉一侧——退整份。
+        if any(_within(beat, outer) for outer in grouped if outer not in closed
+               for beat in closed_set):
+            return None
     for beat in closed_set:
         grouped.setdefault(beat, [])
         for error in optional_errors:

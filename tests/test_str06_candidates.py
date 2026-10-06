@@ -398,15 +398,140 @@ def test_upstream_diff_aligns_entries_by_kind_and_anchors():
     diff = upstream_diff(before, after)
     by_status = {status: [e.key for e in diff.entries if e.status == status]
                  for status in ('unchanged', 'changed', 'added', 'removed')}
-    # anchors 顺序与列表顺序不参与对齐；同 anchors 不同 kind 是不同条目。
-    assert sorted(by_status['unchanged']) == [(('event_core', ('b01_01.e1',))),
-                                              (('reveal', ('b02_01.e1',)))]
+    # anchors 顺序不参与对齐；同 anchors 不同 kind 是不同条目。列表顺序**参与**判定：
+    # 义务编号（`ob01…`）由下标派生，重排＝两条义务互换了编号，内容相等也是「变化」。
+    assert by_status['unchanged'] == []
+    assert sorted(by_status['changed']) == [(('event_core', ('b01_01.e1',))),
+                                            (('reveal', ('b02_01.e1',)))]
     assert by_status['added'] == [('causal', ('b01_01.e1',))]
-    assert not by_status['changed'] and not by_status['removed']
+    assert not by_status['removed']
     changed = upstream_diff(before, {'obligations': [
         {'kind': 'event_core', 'statement': '甲嫁入陆家且立约', 'anchors': ['b01_01.e1'],
          'must_preserve': True, 'satisfaction': '婚约成立', 'requires': []}]})
     assert [e.status for e in changed.entries] == ['changed', 'removed']
+
+
+def test_upstream_diff_aligns_duplicate_keys_by_occurrence_instead_of_raising():
+    """同 kind 同 anchors 的两条义务（Preserve 并不禁止）：按出现序配对，不抛错。
+
+    此前重复键直接 `ValueError`，而免费沿用判定在 `run_body_design` 里没有兜底——
+    只要上游有这样一对义务，重入 Design 就崩，整本书停在这里。配对只会把「未变」
+    保守地判成「变化」，不会把变化判成未变（未变要求条目逐字相等）。
+    """
+    from novel.stages.candidates import entry_keys, upstream_diff
+
+    def ob(statement):
+        return {'kind': 'event_core', 'statement': statement, 'anchors': ['b01_01.e1'],
+                'must_preserve': True, 'satisfaction': '', 'requires': []}
+
+    assert entry_keys([('event_core', ['b01_01.e1']), ('event_core', ['b01_01.e1']),
+                       ('reveal', ['b01_01.e1'])]) == [
+        ('event_core', ('b01_01.e1',)), ('event_core', ('b01_01.e1', '#2')),
+        ('reveal', ('b01_01.e1',))]
+    before = {'obligations': [ob('甲'), ob('乙')]}
+    assert upstream_diff(before, {'obligations': [ob('甲'), ob('乙')]}).empty
+    changed = upstream_diff(before, {'obligations': [ob('甲'), ob('丙')]})
+    assert {e.key[1][-1]: e.status for e in changed.entries} == {
+        'b01_01.e1': 'unchanged', '#2': 'changed'}
+    swapped = upstream_diff(before, {'obligations': [ob('乙'), ob('甲')]})
+    assert {e.status for e in swapped.entries} == {'changed'}, '换序不会被误判成未变'
+    removed = upstream_diff(before, {'obligations': [ob('甲')]})
+    assert {e.key[1][-1]: e.status for e in removed.entries} == {
+        'b01_01.e1': 'unchanged', '#2': 'removed'}
+
+
+def _ob(kind, anchor, statement='甲', **over):
+    return {'kind': kind, 'statement': statement, 'anchors': [anchor], 'must_preserve': True,
+            'satisfaction': '婚约成立', 'requires': [], **over}
+
+
+def test_position_drift_is_a_change_because_obligation_ids_are_positional():
+    """义务编号（`ob01…`）由下标派生，候选里的 `real: ['ob07']` 引用的是位置。
+
+    重排、或前面有增删，都让同一条目换了编号——内容逐字相等也不是「未变」，否则
+    候选里的承载标注会悄悄指向另一条义务，而差异摘要为空、预检又恰好全绿。
+    """
+    from novel.stages.candidates import upstream_diff
+
+    a, b, c = _ob('event_core', 'a1', '甲'), _ob('reveal', 'b1', '乙'), _ob('causal', 'c1', '丙')
+    reorder = upstream_diff({'obligations': [a, b]}, {'obligations': [b, a]})
+    assert not reorder.empty and {e.status for e in reorder.entries} == {'changed'}
+    insert = upstream_diff({'obligations': [a, b]}, {'obligations': [a, c, b]})
+    assert {e.key[0]: e.status for e in insert.entries} == {
+        'event_core': 'unchanged', 'causal': 'added', 'reveal': 'changed'}, \
+        '插入点之后的条目编号后移：变化；插入点之前的不受影响'
+    assert upstream_diff({'obligations': [a, b]}, {'obligations': [a, b]}).empty
+
+
+def test_entry_equivalence_needs_every_field_not_just_the_statement():
+    """等价＝位置不变＋文本字段称谓规范形相等＋其余字段逐字相等。
+
+    此前只比 `statement`：`satisfaction`（验收条件）、`requires`（前置序号）、
+    `must_preserve` 变了也被当成「只差称谓」而零调用放行。
+    """
+    from novel.stages.candidates import entry_equivalent, upstream_diff
+
+    people = {'fu_jun': ('夫君', '陆大哥'), 'yun_niang': ('苏芸娘', '芸娘')}
+    base = _ob('event_core', 'a1', '苏芸娘嫁给夫君')
+
+    def verdict(**over):
+        diff = upstream_diff({'obligations': [base]}, {'obligations': [{**base, **over}]})
+        return bool(diff.changed) and all(entry_equivalent(e, people) for e in diff.changed)
+
+    assert verdict(statement='芸娘嫁给陆大哥'), '只换登记称谓'
+    assert verdict(satisfaction='婚约，成立'), '标点空白'
+    assert not verdict(statement='芸娘嫁给陆大哥且立约'), '多了一段事实'
+    assert not verdict(satisfaction='婚约不成立'), '验收条件变了'
+    assert not verdict(requires=[3]), '前置义务变了'
+    assert not verdict(must_preserve=False), '必保性变了'
+    assert not verdict(extra_field='x'), '字段集变了'
+    # 位置漂移的条目即使内容等价也不放行（编号换了所指）
+    drift = upstream_diff({'obligations': [_ob('reveal', 'b1'), base]},
+                          {'obligations': [base, _ob('reveal', 'b1')]})
+    assert drift.changed and not any(entry_equivalent(e, people) for e in drift.changed)
+
+
+def test_added_or_removed_entries_are_never_carried_forward_for_free():
+    """差异里只要有新增／删除条目（编号漂移、新义务无人承载），即使其余变化都等价
+    也不得零调用采用——此前 `changed_equivalent` 只看变化条目。"""
+    from novel.stages.candidates import CandidateAssessment, upstream_diff
+
+    base, extra = _ob('event_core', 'a1'), _ob('causal', 'c1', '乙')
+    renamed = {**base, 'statement': '甲，'}
+    added = upstream_diff({'obligations': [base]}, {'obligations': [renamed, extra]})
+    removed = upstream_diff({'obligations': [base, extra]}, {'obligations': [renamed]})
+    for diff in (added, removed):
+        assessment = CandidateAssessment(entry='c', ordinal=1, compatible=True, has_lineage=True,
+                                         diff=diff, changed_equivalent=True, preflight_passed=True)
+        assert not assessment.adoptable
+    assert CandidateAssessment(
+        entry='c', ordinal=1, compatible=True, has_lineage=True,
+        diff=upstream_diff({'obligations': [base]}, {'obligations': [renamed]}),
+        changed_equivalent=True, preflight_passed=True).adoptable
+
+
+def test_plan_reuse_never_hides_a_full_purchase_behind_an_empty_narrow_review():
+    """窄复核没有目标时：候选全绿＝无拍受影响，免费沿用；候选自身预检未过＝如实标成
+    普通接受循环（同请求身份免费重放已购回答），而不是冒充窄复核——更不能从该候选
+    起步再买一轮：重入那样做会每次重启都重置修订额度。"""
+    from novel.stages.candidates import CandidateAssessment, plan_reuse, upstream_diff
+
+    base = _ob('event_core', 'a1', '甲')
+    changed = upstream_diff({'obligations': [base]},
+                            {'obligations': [{**base, 'statement': '甲且乙'}]})
+
+    def plan(passed):
+        return plan_reuse([CandidateAssessment(
+            entry='c', ordinal=1, compatible=True, has_lineage=True, diff=changed,
+            changed_equivalent=False, preflight_passed=passed, root_causes=0 if passed else 2,
+            carriers={})])
+
+    green = plan(True)
+    assert green.action == 'carry_forward' and '无承载拍引用' in green.reason
+    broken = plan(False)
+    assert broken.action == 'ordinary_ask' and not broken.targets
+    assert '自身预检未过' in broken.reason
+    assert broken.candidate == 'c', '仍记下最优候选供留痕，但不从它起步再买一轮'
 
 
 def test_canonical_appellation_form_ignores_apposition_punctuation_and_surface_choice():
