@@ -1283,7 +1283,10 @@ class ReleasePrefixes:
 
     · **拍行**（含本拍释放）：本拍正式介绍之后同拍可用，拍前不可用；
     · **场级说明行**：取到场末（不参与揭名判定——揭名走 H3b 的 know 拍位闸）；
-    · **书级行**：取章首。
+    · **书级行**：取章首；
+    · **章末**（`chapter_end_faces`）：本章最后一场之后——Design 原文闸（2026-10-07
+      用户裁定）的取位：写手拿到整章章包、正文最终闸也只按章判已释放称谓，章内
+      谁先谁后不检查，所以 Design 自有文本的「已释放」同取章级口径。
 
     查询返回 ``{char_id: (按释放顺序的称谓, …)}``——显示面取首个（`display_surface`）。
     faces 是原始释放面，不含登记家族构词（「陆家」一类构词不是指称某人的显示面）。
@@ -1294,6 +1297,7 @@ class ReleasePrefixes:
         self._beat: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {}
         self._scene_end: dict[str, dict[str, tuple[str, ...]]] = {}
         self._chapter_start: dict[int, dict[str, tuple[str, ...]]] = {}
+        self._chapter_end: dict[int, dict[str, tuple[str, ...]]] = {}
         faces: dict[str, list[str]] = {}
 
         def _merged() -> dict[str, tuple[str, ...]]:
@@ -1313,6 +1317,9 @@ class ReleasePrefixes:
                     faces.setdefault(intro.char_id, []).extend(intro.surfaces)
                 self._beat[(scene.scene_id, beat.beat_id)] = _merged()
             self._scene_end[scene.scene_id] = _merged()
+        for chapter in graph.chapters:
+            if chapter.scene_ids and chapter.scene_ids[-1] in self._scene_end:
+                self._chapter_end[chapter.chapter_ordinal] = self._scene_end[chapter.scene_ids[-1]]
 
     def beat_faces(self, scene_id: str, beat_id: str) -> dict[str, tuple[str, ...]]:
         try:
@@ -1331,6 +1338,12 @@ class ReleasePrefixes:
             return self._chapter_start[chapter_ordinal]
         except KeyError:
             raise ValueError(f'未知章 {chapter_ordinal}') from None
+
+    def chapter_end_faces(self, chapter_ordinal: int) -> dict[str, tuple[str, ...]]:
+        try:
+            return self._chapter_end[chapter_ordinal]
+        except KeyError:
+            raise ValueError(f'未知章或章内无场景 {chapter_ordinal}') from None
 
 
 def pending_reader_confirmations(

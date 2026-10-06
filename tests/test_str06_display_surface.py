@@ -315,13 +315,66 @@ def test_bound_name_without_display_routes_design_with_a_wire_path():
                 and '陆大哥' in i.message], '回落显示面把残余消掉，不再报泄漏'
 
 
+def _chapter_boundary_body(*, release_scene: int, release_beat: int):
+    """第 1 章章目的与 sc01 b01 的事件都提到『陆大哥』；夫君全书初始无释放，
+    『陆大哥』在 (release_scene, release_beat) 才释放（0 起的下标）。"""
+    from contracts.schema.context import SurfaceRelease
+    from tests.test_str06_r10b_writer_packet import _design
+    body = _design()
+    scenes = list(body.scenes)
+    beats = list(scenes[0].beats)
+    beats[0] = beats[0].model_copy(update={'event': '陆大哥说约定半月便回'})
+    scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})
+    target = list(scenes[release_scene].beats)
+    target[release_beat] = target[release_beat].model_copy(update={
+        'surface_introductions': (SurfaceRelease(char_id='fu_jun', surfaces=('陆大哥',)),)})
+    scenes[release_scene] = scenes[release_scene].model_copy(update={'beats': tuple(target)})
+    chapters = list(body.chapters)
+    chapters[0] = chapters[0].model_copy(update={'purpose': '陆大哥临行约定埋下疑心'})
+    return body.model_copy(update={
+        'scenes': tuple(scenes), 'chapters': tuple(chapters),
+        'initial_surfaces': tuple(s for s in body.initial_surfaces if s.char_id != 'fu_jun')})
+
+
+def _design_material_issues(body):
+    from novel.stages.stage4.materials import validate_design_materials
+    chars = _no_fallback_characters()      # 无回落纯称谓：投影不会把问题掩掉
+    return validate_design_materials(
+        body, projection=chars.name_projection(), known_char_ids=set(chars.characters),
+        structure=chars.name_structure, characters=chars.core_view())
+
+
+def test_design_gate_judges_released_names_per_chapter_not_per_beat():
+    """Design 原文闸的「已释放」按**章**判（2026-10-07 用户裁定，取代 H3 的按位置）：
+    正文最终闸与写手章包本来就只按章判，章内谁先谁后不检查，Design 的中间文本不该
+    比它指导的正文更严。反例来自 csf4 第 3 章：章目的与拍 1 事件提到拍 2 才介绍的人名，
+    被按位置闸拒收，已购的 Design 第 2 轮因此不能零调用沿用。
+
+    对照：同一人名只在**下一章**才释放时仍是泄漏（本章及之前都没释放过＝真正的
+    提前披露），带路径、可窄修。"""
+    # 章内后释放（第 1 章 sc01 b03）：章目的与 b01 事件都不算泄漏。
+    later_in_chapter = _design_material_issues(
+        _chapter_boundary_body(release_scene=0, release_beat=2))
+    assert [str(i) for i in later_in_chapter if '陆大哥' in str(i)] == [], \
+        [str(i) for i in later_in_chapter]
+    # 下一章才释放（第 2 章 sc02 b01）：第 1 章的两处提及仍被拦下，且归 Design。
+    next_chapter = _design_material_issues(
+        _chapter_boundary_body(release_scene=1, release_beat=0))
+    hits = [i for i in next_chapter if '陆大哥' in str(i)]
+    assert hits and {i.code for i in hits} == {'design_unreleased_reference'}, \
+        [str(i) for i in next_chapter]
+    assert {i.location[0] for i in hits} == {1}, '都在第 1 章（第 2 章释放之后不再报）'
+    assert len(hits) == 2, '章目的与 b01 事件各一处'
+
+
 def test_first_release_inside_the_chapter_beats_the_fallback_face():
     """RC-60 第 2 条：该位置之前已释放称谓里按释放顺序的第一个——章内才释放的人物，
     释放之后显示面是**首个已释放称谓**，不再停在章首附带的回落纯称谓上。
 
     夹具：夫君全书初始无释放（回落＝canonical『夫君』），第 1 章 b01 才释放『陆大哥』；
-    b03 的事件提到未释放的完整称谓『陆兄』（绑定夫君）。b01 之后投影应取『陆大哥』
-    （与 Design 原文闸同一把尺），而不是章首回落面『夫君』。"""
+    b03 的事件提到未释放的完整称谓『陆兄』（绑定夫君）。b01 之后写手章包的投影应取
+    『陆大哥』，而不是章首回落面『夫君』（这是写手章包按拍取显示面，与 Design 原文闸
+    的按章判已释放无关）。"""
     from contracts.schema.context import SurfaceRelease
     from tests.test_str06_r10b_writer_packet import _binding, _design, _requirements
     from novel.stages.stage4.book_ir import compile_writer_book_ir
