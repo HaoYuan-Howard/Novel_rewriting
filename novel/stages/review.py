@@ -19,7 +19,7 @@ from novel.stages.stage4 import (
     run_mechanical_guard, inspect_body_materials, plan_material_repairs,
     hook_combination_errors,
 )
-from novel.stages.stage5 import context_sha256, validate_chapter_prose, validate_hook_prose, sha256_text
+from novel.stages.stage5 import chapter_prose_validator, context_sha256, validate_hook_prose, sha256_text
 from novel.stages.stage7 import (
     assemble_delivery, chapter_access, compile_name_map, compile_surface_replacements,
     verify_chapter_receipts,
@@ -207,11 +207,8 @@ def _delivery_preview(repository, owner, candidate, chars) -> dict:
     elif owner.startswith('body_ch'):
         n = int(owner[7:])
         packet = project_chapter_packet(ir, n)
-        contract = packet.realization_contract
         prose[n] = candidate['prose']
-        errors = validate_chapter_prose(prose[n], withheld_literals=packet.chapter.withheld_literals,
-                                       released_surfaces=packet.chapter.released_surfaces,
-                                       target_chars=contract.target_chars, band_low=contract.band_low, band_high=contract.band_high)
+        errors = chapter_prose_validator(packet)(prose[n])
         receipts[n] = {**receipts[n], 'prose_sha256': sha256_text(prose[n]),
                        'writer_view_sha256': identities[n].writer_view_sha256,
                        'validation_sha256': identities[n].validation_sha256,

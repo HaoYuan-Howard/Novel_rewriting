@@ -623,13 +623,16 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                     location=('knowledge_lock', req.core_id, change.holder, change.kp,
                               change.mode),
                     paths=know_paths))
+    carrier_refs = {ob: tuple(f'{body.scenes[s].scene_id}#'
+                              f'{body.scenes[s].beats[b].beat_id}' for s, b in sites)
+                    for ob, sites in (real_sites or {}).items()}
     errors.extend(fact_lock_carrier_errors(
         body, bindings,
         required_locks={ob_of.get(req.core_id, req.core_id): req.realize_locks
                         for req in brief.requirements if req.must_preserve},
-        carrier_refs={ob: tuple(f'{body.scenes[s].scene_id}#'
-                               f'{body.scenes[s].beats[b].beat_id}' for s, b in sites)
-                      for ob, sites in (real_sites or {}).items()}, wire_paths=True))
+        carrier_refs=carrier_refs, wire_paths=True,
+        # real_sites 是阅读序，末次标注拍＝接受拍（与 derive_semantic_binding 同一规则）。
+        accept_refs={ob: refs[-1] for ob, refs in carrier_refs.items() if refs}))
 
 
 def assemble_body_design(

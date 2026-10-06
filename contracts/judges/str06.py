@@ -172,7 +172,7 @@ _hard('design_lock_acceptance', 'stage4',
       '时态锁标在同 modality 的 set、值未知锁标在 op=unknown、原文未回答锁是禁区不承载状态、'
       '一锁一承载且承载拍内地址唯一、映射随 Binding 发布不复制 value；必保锁兑现', 'R-5.17')
 _hard('preserve_name_literal_gate', 'stage4',
-      'Preserve 自闸（RC-64）：义务 statement／satisfaction 里的裸姓／家族构词／'
+      'Preserve 自闸（RC-64）：义务 statement／satisfaction 里的裸姓／'
       '多义带名面（未登记别名因含裸姓成分同被查出）在 Preserve 接受循环被逐条定位，'
       '带 obligations[i] 条目路径走条目返修；同一把尺与下游材料归因共用', 'R-5.22')
 _hard('design_requires_released_gate', 'stage4',

@@ -188,6 +188,53 @@ def test_first_draft_rejected_by_the_mechanical_gate_is_recorded_rejected(tmp_pa
     assert hook[0][2] == 'failed' and hook[0][3], '楔子首稿同理'
 
 
+class _Sequence:
+    """按序回放固定回答的 transport（记录每次请求的 system）。"""
+
+    def __init__(self, contents):
+        self.contents = list(contents)
+        self.systems: list[str] = []
+
+    def send(self, request):
+        self.systems.append(request.system)
+        return ChatResponse(content=self.contents[len(self.systems) - 1], finish_reason='stop',
+                            usage={'prompt_tokens': 10, 'completion_tokens': 5}, model='fake')
+
+
+def test_paragraph_patch_round_is_recorded_by_the_merged_prose_not_the_patch_json(tmp_path):
+    """RC-54×RC-61：段落修句轮的回答是行替换 JSON。付费边界必须按**合并后的稿**
+    判定接受（成功的修句记 accepted=true），首稿因缺必保揭名字面记 accepted=false；
+    用整章校验器直接验 JSON 会让成功的修句被记成被拒（篇幅带必然越界）。"""
+    from novel.stages.common import BODY_PARAGRAPH_REPAIR_SYSTEM, project_chapter_packet
+    from novel.stages.stage5.body import write_chapter
+    from tests.str06_facilities import body_ask
+    from tests.test_str06_body import _green_book_ir
+    _body, _binding, _plan, ir = _green_book_ir()
+    packet = project_chapter_packet(ir, 1)
+    packet = packet.model_copy(update={'chapter': packet.chapter.model_copy(
+        update={'requires_released': ('苏芸娘',)})})
+    # 多段章（真实形状）：补丁只替换第 0 段，行替换 JSON 远短于篇幅带 [600, 1300]——
+    # 直接拿整章校验器验 JSON 会报 length_band，成功的修句被记成被拒。
+    paragraph = '洞房花烛，夫君立下旧约，句句克制。' * 4
+    fixed_paragraph = '洞房花烛，苏芸娘听夫君立下旧约，句句克制。' * 4
+    draft = '\n'.join([paragraph] * 10)
+    repaired = '\n'.join([fixed_paragraph] + [paragraph] * 9)
+    patch = '{"paragraphs": [{"index": 0, "text": "' + fixed_paragraph + '"}]}'
+    assert len(patch) < 600 < len(repaired.replace('\n', '')) < 1300
+    transport = _Sequence([draft, patch])
+    base, _repo, session = _plain_session(tmp_path, transport)
+    ask_body = body_ask(session)
+    outcome = write_chapter(
+        packet=packet,    # 与 `chain._write_and_commit_chapter` 同形：绑定 owner，透传 system
+        ask=lambda prompt, validate, **kwargs: ask_body('body_ch01', prompt, validate, **kwargs))
+    assert outcome.prose == repaired and outcome.receipt.status == 'accepted'
+    rows = _records(base, 'run', 'str06.stage5.body', 'chapter:1')
+    assert [(turn, accepted) for turn, accepted, _p, _e in rows] == [(1, False), (2, True)], rows
+    assert any('[required_literals]' in e for e in rows[0][3]), '首稿因缺字面被拒'
+    assert rows[1][2] == 'ok' and rows[1][3] == (), '合并后的稿通过：记录不带篇幅带等假错误'
+    assert transport.systems[1] == BODY_PARAGRAPH_REPAIR_SYSTEM != transport.systems[0],         '修句请求不用「只输出完整正文」的写手 system 提示'
+
+
 # ─── 单节点路径跑完交付：accepted_body 与整链同源 ────────────────────────────
 
 def test_single_node_assemble_after_delivery_reports_the_delivery_state(tmp_path):

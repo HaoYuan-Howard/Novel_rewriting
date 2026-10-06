@@ -26,7 +26,7 @@ from novel.stages.chain import (
 from novel.stages.stage2 import (
     character_core_view, first_appearance_anchors, chapter_observation_prompt,
 )
-from novel.stages.stage5 import validate_chapter_prose, validate_hook_prose
+from novel.stages.stage5 import chapter_prose_validator, validate_hook_prose
 from novel.stages.common import (
     render_chapter_packet, render_hook_context, project_chapter_packet,
     validate_writer_materials, validate_hook_materials, material_identities,
@@ -73,11 +73,7 @@ def request_preview(repository, owner, source, profile):
         capture = _Capture(prompt, validate, SYS, True, 0.3)
     elif owner.startswith('body_ch'):
         packet = project_chapter_packet(repository.read_model('stage4/ir/writer_book_ir.json'), int(owner[7:]))
-        contract = packet.realization_contract
-        validate = lambda w: validate_prose_wire(w, lambda text: validate_chapter_prose(
-            text, withheld_literals=packet.chapter.withheld_literals,
-            released_surfaces=packet.chapter.released_surfaces, target_chars=contract.target_chars,
-            band_low=contract.band_low, band_high=contract.band_high))
+        validate = lambda w: validate_prose_wire(w, chapter_prose_validator(packet))
         capture = _Capture(render_chapter_packet(packet), validate, BODY_WRITER_SYSTEM, False, 0.7)
     else:
         def ask(_owner, prompt, validate):

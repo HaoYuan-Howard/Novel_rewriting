@@ -313,3 +313,61 @@ def test_bound_name_without_display_routes_design_with_a_wire_path():
     assert not [i for i in plain_issues
                 if i.code in ('design_unreleased_reference', 'positive_material_leak')
                 and '陆大哥' in i.message], '回落显示面把残余消掉，不再报泄漏'
+
+
+def test_first_release_inside_the_chapter_beats_the_fallback_face():
+    """RC-60 第 2 条：该位置之前已释放称谓里按释放顺序的第一个——章内才释放的人物，
+    释放之后显示面是**首个已释放称谓**，不再停在章首附带的回落纯称谓上。
+
+    夹具：夫君全书初始无释放（回落＝canonical『夫君』），第 1 章 b01 才释放『陆大哥』；
+    b03 的事件提到未释放的完整称谓『陆兄』（绑定夫君）。b01 之后投影应取『陆大哥』
+    （与 Design 原文闸同一把尺），而不是章首回落面『夫君』。"""
+    from contracts.schema.context import SurfaceRelease
+    from tests.test_str06_r10b_writer_packet import _binding, _design, _requirements
+    from novel.stages.stage4.book_ir import compile_writer_book_ir
+    from novel.stages.stage4.compile import compile_execution_plan
+    from novel.stages.common import project_chapter_packet
+    body = _design()
+    body = body.model_copy(update={'initial_surfaces': tuple(
+        r for r in body.initial_surfaces if r.char_id != 'fu_jun')})
+    scenes = list(body.scenes)
+    beats = list(scenes[0].beats)
+    beats[0] = beats[0].model_copy(update={'surface_introductions': (
+        SurfaceRelease(char_id='fu_jun', surfaces=('陆大哥',)),)})
+    beats[2] = beats[2].model_copy(update={'event': '陆兄在巷口回头看了一眼'})
+    scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})
+    body = body.model_copy(update={'scenes': tuple(scenes)})
+    binding = _binding(body)
+    plan, errors = compile_execution_plan(body, binding)
+    assert not errors, errors
+    chars = _characters()
+    brief = _requirements()
+    ir = compile_writer_book_ir(
+        graph=body, plan=plan, binding=binding, total_budget=4000,
+        length_band=(0.6, 1.3), projection=chars.name_projection(),
+        structure=chars.name_structure, fact_locks=brief.fact_locks,
+        kp_statements={p.kp_id: p.statement for p in brief.propositions},
+        display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure))
+    view = render_chapter_packet(project_chapter_packet(ir, 1))
+    line = next(row for row in view.splitlines() if '在巷口回头看了一眼' in row)
+    assert '陆大哥在巷口回头看了一眼' in line, f'章内首个已释放称谓是显示面：{line}'
+
+
+def test_family_collective_forms_follow_the_family_members_release_in_design_gate():
+    """Design 原文闸的「已释放」与正文／章 IR 同一把尺：同家族有人物已释放后，登记的
+    家族构词（陆家＝{family}家）不再算未释放字面。显示面解析用原始释放面（构词不是
+    指称某人的显示面），但字面检查面必须并入家族构词——否则 Design 对「陆家上下」
+    这类集体指称比正文闸更严，凭空多出首答失败。"""
+    from novel.stages.stage4.materials import validate_design_materials
+    from tests.test_str06_r10b_writer_packet import _design
+    body = _design()      # 夫君（陆家人）初始即已释放
+    scenes = list(body.scenes)
+    beats = list(scenes[0].beats)
+    beats[2] = beats[2].model_copy(update={'event': '陆家上下都在等消息'})
+    scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})
+    body = body.model_copy(update={'scenes': tuple(scenes)})
+    chars = _characters()
+    issues = validate_design_materials(
+        body, projection=chars.name_projection(), known_char_ids={'yun_niang', 'fu_jun'},
+        structure=chars.name_structure, characters=chars.core_view())
+    assert [i for i in issues if '陆家' in i.location] == [], [str(i) for i in issues]

@@ -1188,6 +1188,16 @@ BODY_WRITER_SYSTEM = """你是小说正文写手（prose realizer）。整本书
 
 直接输出本章正文本身：不要章号、标题、场景标记，不要任何解释、前言、后缀，不要 markdown 围栏。"""
 
+BODY_PARAGRAPH_REPAIR_SYSTEM = """你是小说正文的修句编辑（paragraph patcher）。整章正文已经写好并通过了
+绝大部分机械检查，只有用户消息点名的问题（如必保揭名的称谓字面缺失）未过。
+
+规则（违反任何一条即报废）：
+1. 只修订用户消息指出的问题：把缺失的字面自然写进相关段落，保持原有语气、视角与篇幅；
+   不新增、删除、替换事实、事件、知情与称谓释放位置，不改动无关段落。
+2. 本轮不是重写整章：不要输出整章正文、章号、标题、场景标记、解释、前言或 markdown 围栏。
+3. 只输出一个 JSON 对象，形状与用户消息给定的一致：只列需要替换的行，
+   index 取自用户消息中的行号，text 是该行替换后的全文。"""
+
 NAMING_RULES = """任务：为角色分配最终表层姓名（新姓/新名），只输出 JSON，不解释、不生成替换规则。
 
 规则（违反任何一条即报废）：
@@ -2099,14 +2109,16 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
     chapter = packet.chapter
     brief = packet.book_brief
     # 显示面（CS-H H3，RC-60）：前缀保序、覆盖全体人物——被提及未出场的人物
-    # 也有显示面；尚无释放者的回落纯称谓由 compile 期算好随 ChapterIR.display_prefix
-    # 携带（渲染期不读 Characters，D2）。三类取位：书级行＝章首；场级说明行＝场末；
+    # 也有显示面；尚无释放者的回落纯称谓由 compile 期算好随 ChapterIR.display_fallback
+    # 携带（渲染期不读 Characters，D2；回落面与已释放前缀分表：章内一旦释放，
+    # 显示面即取首个已释放称谓）。三类取位：书级行＝章首；场级说明行＝场末；
     # 拍行＝拍前缀（含本拍释放，拍前不可用）。第一人称叙述的聚焦人物用角色词
     # 「我（叙述者）」。投影仍只作用于章 IR 已证明唯一绑定人物的完整登记称谓，
     # 来源文本保持原字段原样（CS-F2）；同位语折叠与无损性守卫见投影函数。
     first_person = brief.narration.person == 'first'
     focalizers = set(brief.narration.focalizers)
     carry = {r.char_id: r.surfaces for r in chapter.display_prefix}
+    fallback_face = {r.char_id: r.surfaces[0] for r in chapter.display_fallback}
     scope_faces: dict[str, tuple[str, ...]] = dict(carry)
 
     def set_scope(faces: Mapping[str, tuple[str, ...]]) -> None:
@@ -2120,8 +2132,12 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
             return '读者'
         if first_person and char_id in focalizers:
             return FIRST_PERSON_ROLE_WORD
+        return _face(char_id)
+
+    def _face(char_id: str) -> str:
+        # RC-60 第 2、3 条：该位置之前已释放称谓里按释放顺序的第一个；尚无释放才回落。
         faces = scope_faces.get(char_id)
-        return faces[0] if faces else ''
+        return faces[0] if faces else fallback_face.get(char_id, '')
 
     def project(text: str):
         projected, hits, _blocked = project_withheld_names(
@@ -2162,7 +2178,7 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
         creative.append(f'表达机制：{choice.statement}',
                         source('expression', choice.ex_id, 'statement', choice.statement))
     for voice in brief.character_voices:
-        if scope_faces.get(voice.char_id):
+        if _face(voice.char_id):
             creative.append(f'{_name(voice.char_id)}的声线：{voice.voice}',
                             source('design', voice.char_id, 'voice', voice.voice))
     creative.append(f'本章目的（第{chapter.chapter_ordinal}章）：{chapter.purpose}',
@@ -2183,7 +2199,7 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
         line = (f'上一章收在「{ending.final_beat_event}」'
                 f'（转折：{ending.driver_turn}）')
         present = '、'.join(_name(c) for c in ending.present_chars
-                           if scope_faces.get(c))
+                           if _face(c))
         if present:
             line += f'，收尾时在场：{present}'
         line += f'；本章以{_TRANSITION_WORDINGS[entry.transition]}开场，' \

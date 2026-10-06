@@ -945,3 +945,48 @@ def test_fact_lock_subject_must_be_contained_in_the_carrier_state_subjects():
     binding, binding_errors = _derive_binding_v8(wire, body)
     assert binding is None and any(
         getattr(e, 'code', '') == 'fact_lock_subject' for e in binding_errors)
+
+
+def test_shared_fact_lock_carrier_later_than_a_sharing_obligation_is_locatable():
+    """RC-63：共享锁的承载拍只属于 ob02，而另一共享义务 ob04 的接受拍**早于**它——
+    派生的支撑引用会晚于其接受拍。这类问题必须在 Design 自己的接受循环里带 wire
+    路径被定位（改标位置或补 real），不能放行到 compile 面再以无编辑位置的
+    `compile_support_early`（路由 stop）停机——改前（逐义务自担承载）它就是可窄修的
+    `fact_lock_outside_obligation`。"""
+    preserve = _preserve_wire()
+    preserve['obligations'][3].update({
+        'statement': '归期预计也支撑夫君的承诺', 'anchors': ['b01_01.e1'],
+        'must_preserve': True, 'satisfaction': '保留预计承诺'})
+    checkpoint, errors = assemble_preserve(
+        preserve, policy_id='p', policy_version=5,
+        characters=_characters(), blueprint=_blueprint(),
+        provider='x', model='y', request_sha256='r' * 64)
+    assert checkpoint is not None and not errors, errors
+    brief, _ = project_brief(checkpoint, _characters(), _blueprint())
+    kf = _kf(brief, 'expected')
+    wire = _design_wire_v8(brief)
+    wire['scenes'][0]['beats'][0]['real'] = ['ob04']     # ob04 在 b01 验收；承载拍 b06 只属 ob02
+    body, acceptance_errors = _inspect_v8(wire, brief)
+    assert body is not None
+    from novel.stages.stage4.compile import compile_execution_plan
+    model = DesignWireV8.model_validate(wire)
+    binding, binding_errors = derive_semantic_binding(
+        design_placements(model), body, checkpoint, design_fact_marks(model))
+    codes = lambda errs: sorted({getattr(e, 'code', str(e)[:40]) for e in errs})   # noqa: E731
+    plan_errors = []
+    if binding is not None:
+        _plan, plan_errors = compile_execution_plan(body, binding)
+    for errors in (acceptance_errors, binding_errors):
+        issue = next(e for e in errors if getattr(e, 'code', '') == 'fact_lock_outside_obligation')
+        assert issue.context['kf_id'] == kf and issue.context['obligation_ids'] == ['ob02', 'ob04']
+        # 路径开放承载位与相关 real 拍：改标位置或让 ob04 在承载拍上标注 real 两种修法。
+        assert ['scenes', 0, 'beats', 5] in issue.context['wire_paths']
+        assert ['scenes', 0, 'beats', 0] in issue.context['wire_paths']
+    assert binding is None, '不放行到 compile 面再以无编辑位置的 stop 码整份退回'
+    assert plan_errors == []
+    # 绿对照：ob04 在承载拍上标注 real（接受拍后移到承载拍）⇒ 通过。
+    green = _design_wire_v8(brief)
+    green['scenes'][0]['beats'][0]['real'] = ['ob04']
+    green['scenes'][0]['beats'][5]['real'].append('ob04')
+    body, errors = _inspect_v8(green, brief)
+    assert body is not None and not errors, errors

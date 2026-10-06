@@ -5,7 +5,7 @@
 注册判据：`preserve_name_literal_gate`（本文件即其反例套件）。
 
 自闸＝与下游材料归因同一把尺：能被显示面投影的唯一归属带名面合法；**永不投影**
-的字面（裸姓／家族构词／多义带名面；未登记别名因含裸姓成分同被查出）在义务
+的字面（裸姓／多义带名面；未登记别名因含裸姓成分同被查出；家族构词不拒）在义务
 statement／satisfaction 里被逐条定位（`obligations[i]` 路径）。条目返修＝同一
 协议：窄输入（协议规则＋失败条目＋该义务 anchors 的源原子切片＋合法取值），
 无关义务字节不变。零付费：fake transport。
@@ -37,7 +37,7 @@ def _prepared(tmp_path, wires, transport=None):
 
 
 def test_self_gate_flags_bare_surname_and_unregistered_alias_with_item_paths(tmp_path):
-    """裸姓／家族构词／未登记别名逐条定位（`obligations[i]`）；可投影带名面合法。"""
+    """裸姓／未登记别名逐条定位（`obligations[i]`）；可投影带名面与家族构词合法。"""
     from contracts.schema.workflow import STAGE4_PRESERVE_POLICY_VERSION
     from novel.stages.stage4 import assemble_preserve, preserve_name_issues
     wires = _wires()
@@ -121,3 +121,43 @@ def test_replay_preserve_round_reports_gate_items(tmp_path):
     assert report['gate_items'] == ['ob01:statement:陆']
     good = replay_preserve_round(wires['preserve'], chars, blueprint)
     assert good['passed'] and good['reuse'] == 'green'
+
+
+def _checkpoint_with(statement: str):
+    from contracts.schema.grounding import (
+        ObligationAnchor, PreserveCheckpoint, SourceLineage, SourceObligation,
+    )
+    from contracts.schema.policy import PreserveKind
+    anchor = ObligationAnchor(
+        handle='b01_01.c1', source_kind='cognition', holder='hero', mode='learns',
+        proposition_ref='p_x', proposition_statement='x', quotes=('x',))
+    obligation = SourceObligation(
+        obligation_id='ob01', kind=PreserveKind.EVENT_CORE, statement=statement,
+        anchors=(anchor,), lineage=SourceLineage(blueprint_refs=('b01_01',),
+                                                  character_ids=('fu_jun',)),
+        must_preserve=True, satisfaction='自然落地')
+    return PreserveCheckpoint(
+        checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256='a' * 64,
+        blueprints_sha256='a' * 64, provider='x', model='y', request_sha256='r' * 64,
+        obligations=(obligation,), checkpoint_sha256='a' * 64)
+
+
+def test_self_gate_flags_ambiguous_name_bearing_surface():
+    """多义带名面（同一登记称谓属于两个人物）永不投影——下游必成泄漏，必须在 Preserve
+    自己的接受循环里被定位；可投影的唯一归属带名面仍合法（绿对照）。"""
+    from contracts.schema.source import CharactersArtifactV4
+    from novel.stages.stage4 import preserve_name_issues
+    from tests.test_str06_hook import _characters
+    data = _characters().model_dump(mode='json')
+    data['characters']['lu_er'] = {'canonical': '陆二', 'surfaces': [
+        {'surface': '陆二', 'from_chapter': 1, 'until_chapter': None, 'source_refs': ['e01_01']},
+        {'surface': '陆大哥', 'from_chapter': 1, 'until_chapter': None, 'source_refs': ['e01_01']}]}
+    data['name_structure']['people']['lu_er'] = {
+        'family_id': 'fam_lu', 'given': '二', 'aliases': [],
+        'surface_forms': {'陆二': '{family}{given}', '陆大哥': '{family}大哥'}}
+    chars = CharactersArtifactV4.model_validate(data)
+    ambiguous = preserve_name_issues(_checkpoint_with('陆大哥登门兴师问罪'), chars)
+    assert [(i.context['literal'], i.context['field']) for i in ambiguous] == \
+        [('陆', 'statement')], '多义带名面不可绑定、不可投影，须被逐条定位'
+    # 绿对照：唯一归属的带名面（陆二）可投影，合法。
+    assert preserve_name_issues(_checkpoint_with('陆二登门兴师问罪'), chars) == []

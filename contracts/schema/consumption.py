@@ -326,7 +326,15 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     'writer_book_ir.chapters[].display_prefix[].surfaces': _spec(
         'writer_book_ir.chapters[].display_prefix[].surfaces', consumers=(_V,),
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
-        note='章首按释放顺序的显示面（含回落纯称谓）：投影依据，不充当称谓许可'),
+        note='章首按释放顺序的已释放称谓（不含回落面）：投影依据，不充当称谓许可'),
+    'writer_book_ir.chapters[].display_fallback[].char_id': _spec(
+        'writer_book_ir.chapters[].display_fallback[].char_id', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='回落显示面的人物身份：内部句柄不进阅读面'),
+    'writer_book_ir.chapters[].display_fallback[].surfaces': _spec(
+        'writer_book_ir.chapters[].display_fallback[].surfaces', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='尚无释放时的回落纯称谓（RC-60 第 3 步）：与已释放前缀分表，章内释放后不抢占首位'),
     # CS-H H3（RC-61 必保揭名）：承载章正文必现字面——随章包「必保揭名」行送达
     # 写手，并进机械 validator（缺字面即拒，走段落级修句）。
     'writer_book_ir.chapters[].requires_released': _spec(

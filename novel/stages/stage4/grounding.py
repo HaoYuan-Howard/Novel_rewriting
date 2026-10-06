@@ -888,28 +888,33 @@ def preserve_name_issues(
 
     同一把尺＝下游材料归因的判据面（`positive_material_issues`／
     `withheld_name_bindings`）：能被显示面投影的字面（唯一归属的带名称谓）
-    合法——它们在写手材料里确定性投影；**永不投影**的字面（裸姓／家族构词／
-    多义带名面——未登记别名因含裸姓成分同被查出）在义务文本里就是下游缺口，
-    这里带 `obligations[i]` 条目路径提前拦下，不再等跨节点回派。
+    合法——它们在写手材料里确定性投影；**永不投影**的字面（裸姓；多义带名面——
+    同一登记称谓属于两个人物，其中的裸姓同被查出；未登记别名因含裸姓成分同被
+    查出）在义务文本里就是下游缺口，这里带 `obligations[i]` 条目路径提前拦下，
+    不再等跨节点回派。家族构词（「陆家」一类集体指称）**不拒**：同家族人物释放后
+    它是正文的合法字面，Preserve 阶段不知释放时点，拒收只会误报。
     quotes／anchors 是源文逐字证据，不在扫描面。纯函数、只读。
     """
     structure = chars.name_structure
     if checkpoint is None or structure is None:
         return []
     projection = chars.name_projection()
+    family_forms = family_form_literals(structure)
     registered = sorted(set(projection.proper_literals)
                         | {s for entry in projection.by_person
                            for s in entry.name_bearing_surfaces}
-                        | family_form_literals(structure))
+                        | family_forms)
     bindable = {literal for literal, _cid, _enc in
                 withheld_name_bindings(registered, structure)}
-    # 闸面＝裸姓（家族字面本身，含复姓整字）。家族构词（「陆家」一类集体指称）
-    # 与可投影带名面作认领面——「陆」在「陆家」「陆大哥」里被更长登记面认领，
-    # 在「陆郎」「陆某」这类未登记别名里未被覆盖、如实报出（RC-64）。
+    # 闸面＝裸姓（家族字面本身，含复姓整字）。认领面只有两类合法字面：家族构词
+    # （「陆家」一类集体指称）与**唯一归属、可投影**的带名面——「陆」在「陆家」
+    # 「陆兄」里被更长的合法字面认领；在「陆郎」「陆某」这类未登记别名里未被覆盖、
+    # 如实报出。多义带名面（同一登记称谓属于两个人物）永不投影，**不**作认领面：
+    # 它里面的裸姓同样如实报出（与下游材料归因同一把尺，RC-64）。
     gate = tuple(sorted({f.literal for f in structure.families.values()}))
     if not gate:
         return []
-    claim_face = tuple(sorted(set(registered) - set(gate) | bindable))
+    claim_face = tuple(sorted((family_forms | bindable) - set(gate)))
     issues: list[ValidationIssue] = []
     for index, obligation in enumerate(checkpoint.obligations):
         for field in ('statement', 'satisfaction'):
@@ -920,7 +925,7 @@ def preserve_name_issues(
             for claim in uncovered_occurrences(text, gate, claimed):
                 issue = _preserve_issue(
                     f'义务 {obligation.obligation_id} 的 {field} 含不可投影字面 '
-                    f'{claim.literal!r}（裸姓／家族构词／多义带名面——写手材料无法'
+                    f'{claim.literal!r}（裸姓／多义带名面中的裸姓成分——写手材料无法'
                     '确定性投影，下游必成泄漏）：改用可用称呼或不含姓名字面的表述，'
                     '保留 anchors 与原义务语义',
                     'preserve_name_literal',
@@ -1083,19 +1088,21 @@ def derive_semantic_binding(
     errors.extend(fact_lock_subject_errors(
         body, fact_bindings, fact_lock_subjects(checkpoint.obligations),
         wire_paths=True))
+    placed_refs = {ob: tuple(site_refs[site][2] for site in sites if site in site_refs)
+                   for ob, sites in placements.items()}
     errors.extend(fact_lock_carrier_errors(
         body, fact_bindings, required_locks=required_fact_locks(checkpoint.obligations),
-        carrier_refs={ob: tuple(site_refs[site][2] for site in sites if site in site_refs)
-                      for ob, sites in placements.items()}, wire_paths=True))
+        carrier_refs=placed_refs, wire_paths=True,
+        accept_refs={ob: refs[-1] for ob, refs in placed_refs.items() if refs}))
     if errors:
         return None, errors
     # 共享锁派生支撑引用（CS-H H3，RC-63）：一项事实定位一次——承载拍属于任一
     # 共享义务的 real 集合即成立；其余共享义务由 compiler 把承载拍记入
-    # supporting_beat_refs，对它们只校验先后（承载拍不晚于其接受拍，
-    # compile_support_early），不再要求逐义务自担承载。
+    # supporting_beat_refs，对它们只校验先后（承载拍早于其接受拍：Design 面在上面的
+    # `fact_lock_carrier_errors(accept_refs=…)` 带路径判掉，compile 面
+    # compile_support_early 兜底），不再要求逐义务自担承载。
     shared_required = required_fact_locks(checkpoint.obligations)
-    carrier_by_ob = {ob: tuple(site_refs[site][2] for site in sites if site in site_refs)
-                     for ob, sites in placements.items()}
+    carrier_by_ob = placed_refs
     for bound in fact_bindings:
         obligations = [ob for ob, locks in shared_required.items()
                        if bound.kf_id in locks]

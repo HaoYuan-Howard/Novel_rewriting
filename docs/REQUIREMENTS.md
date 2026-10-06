@@ -61,6 +61,15 @@ fake transport 绿例仍不得记成语义核验已通过。重开三条件（�
 H3b 必保揭名＋段落修句与 H3c 共享锁／主体包含（dca21787）、H3d Preserve 自闸
 ＋条目返修＋replay preserve 接入（54ae82fa）、H3e 确定性转换收口与最终请求
 文本断言（d2174447＋本批 expression 追加式修复路径）。
+**H3g 收口批（本批）**：① 章首已释放前缀与回落纯称谓分表（`ChapterIR.display_fallback`，
+回落面不再抢占章内释放后的首位）；② Preserve 自闸口径精修——家族构词（「陆家」集体指称）
+不拒，多义带名面（同一登记称谓属两人）不作认领面、其中裸姓如实报出；③ 共享锁支撑拍先后
+在 Design 接受面带 wire 路径判掉（`accept_refs`），compile 面 `compile_support_early` 只兜底；
+④ 章机械校验唯一构造点 `chapter_prose_validator`（采用／补丁面此前漏带 `required_literals`
+与 `scene_markers`）；⑤ 段落修句轮专用 system 提示＋付费边界按合并后的稿记接受
+（修句 JSON 直接过整章校验器会把成功修句记成被拒）；⑥ Design 原文闸字面检查面并入家族构词
+（与正文／章 IR 同一把尺）。规格 CS-H 一节已落地口径／口径差标注随本批闭合（含「待用户裁决」
+第 5 项的位置口径差登记）。
 
 判据对账：①（七反例与绿对照，tests/test_str06_display_surface.py）、②（四反例，
 tests/test_str06_required_released.py）、③（共享并集／主体包含／派生支撑引用，
@@ -72,13 +81,14 @@ tests/test_str06_a4_design_locks.py 改写＋新增）、④（tests/test_str06_
 （陆/沈/裴）在自闸被逐条定位**（计划文案「16 处」为起草估计，以盘面实测 17 为准）。
 每轮全量默认非 corpus 回归 pytest 退出码 0。
 
-余项（H3 收尾）：规格 CS-H 一节标注已落地面的口径差（同批随后补）。
+余项（H3 收尾）已闭合：规格 CS-H 一节标注已落地面的口径差（随 H3g 收口批落盘）。
 **rc17 升版裁决（2026-10-06 用户裁定）**：随 H4 集中升一次——H4 完成后、首次
 真实运行前一次性升 rc17 并重钉 `tests/test_str06_f7e_freeze.py` 冻结钉；H3
 提交继续在当前分支不 push，不做两次升版。H3 形状变化清单＝Brief 认知变化
 requires_released、BriefFactLock.subjects、ChapterIR.display_prefix/
-requires_released、BeatIR.release_introductions、HookContext.display_faces/
-avoid_lines、BODY_VALIDATOR v2（新字段均可缺省读入，旧 payload 读兼容）。
+display_fallback/requires_released、BeatIR.release_introductions、
+HookContext.display_faces/avoid_lines、BODY_VALIDATOR v2（新字段均可缺省读入，
+旧 payload 读兼容）。
 「待用户裁决」第 3 项就此闭合。
 
 ### CS-H 接受版本只发一次、首答通过、窄返修（RC-50～65）
@@ -94,7 +104,7 @@ avoid_lines、BODY_VALIDATOR v2（新字段均可缺省读入，旧 payload 读�
 | H0 登记与只读装置 | [x] | 已完成（2026-10-05，无行为变化）：本表、规格 CS-H 一节、RC-50～65 场景、DECISIONS 同日行（含对 CS-F5「Preserve 条目返修已落地」的更正）；`tools/repair_rounds.py` 分母改为 `work_units.json` 登记的单元（csf4 根上因只有锁文件的空壳目录崩溃，已修）；只读重放 `tools/replay_candidates.py`（design 已接入，Preserve 随 H3、associate 随 H4 接入）。重放在 csf4 根上复现：Design 第 2 轮对最终 Brief 完整预检全绿，第 1／3 轮称谓错误 11／320 条，第 4 轮 2 条写手材料泄漏归 Design |
 | H1 候选集合、免费沿用与真实记录 | [x] | 已完成（2026-10-06，fake transport 全绿、零付费）：**H1a**（2026-10-06，记录真实性：判据④⑤）上游回派以类型化信号 `UpstreamOwned` 取代空错误列表、被回派／被机械闸拒的候选与文本首稿记 `accepted=false`、单节点路径交付后状态与整链同源（`delivered`／`accepted_body=true`）、回派问题按材料身份去重。**H1b**（本批）：`novel/stages/candidates.py` 从工作单元账与响应 blob 重建全部已购候选（含补丁链合并）并写登记 `runtime/candidates/<owner>.json`（可重建索引，非第二本账）；上游差异（复用 `wire_diff`，条目按（kind, anchors）对齐分未变/变化/新增/删除）与称谓规范形（复用 `claim_spans`）为纯函数；`run_body_design` 在 `ctx.ask` 之前做免费判定（兼容→差异→完整预检→择优：全绿优先、根因最少、同分取最近）并落地四档动作——无差异或变化条目规范形相等且预检全绿→**零调用采用**（成本链 ledger-row 指向原 attempt，本根只记一行零 token cached 行），变化不能证明等价→一轮条目返修其承载拍，删除条目→承载拍进复核目标，新增条目→可选目标闭集（`PatchTarget.optional`）；整份新购只限闭集五因并留痕；`OwnerRevisionRecord` 升 V2（新增必填 `applies_to_request_sha256` 与 kind `carried_forward`，V1 读兼容登记于下方兼容层表）；三个中断恢复窗口（回答已存证而登记未更新／补丁已验证而未发布／上游已修订而下游未复验）用现有证据继续，无重复购买、无重复发布、不沿用失效接受记录；只读复检不走沿用凭证。完成判据（fake transport stage 测试，走真实入口）：①请求身份变而条目未变→零调用采用旧候选、成本链指向原 attempt；②变化条目称谓规范形相等→同样零调用；③较早的合格候选不被较晚的失败候选挡住；④被拒或被回派的候选 `accepted=false` 且带错误，正文首轮被机械闸拒同样如此；⑤单节点路径交付后 `accepted_body=true`；⑥三个中断恢复无重复购买与发布 |
 | H2 Design／HookDesign 完整窄修通道 | [x] | 已完成（2026-10-06，fake transport 全绿＋csf4 根免费重放，零付费）：**③**规则码→修复路由表 `contracts/judges/str06.py::PATCH_ROUTES`（76 码，四态 locate／optional／whole_answer／stop；Guard M1–M8 与 compile 依赖码无 Design 编辑位置登记 stop，裁定见 DECISIONS）＋`tests/test_str06_patch_routes.py` 双向核对；判据全部铸规则码＋稳定位置（guard／compile／grounding／hook／preflight）。**①**带基底起步（`PatchBaseline`：窄复核从已购候选整份 wire 起步，attempt 引用经 `baseline_ref` 展开进 provenance）与可选目标（`PATCH_ROUTES` optional 码——必保义务漏标 `design_carrier_missing`、series 互斥 `series_collapsed`——由 `locate_design_patches` 给全部拍闭集，回答只覆盖选中子集、至少一个、闭集外拒绝；compile 面 `compile_must_unbound` 回声与覆盖闸同根因，按义务重叠在 inspection 去重）；**②**窄输入（`NarrowPatchRequest`：协议规则＋失败条目＋依赖切片＋合法取值，不带整份原请求与前序材料；Design 切片 `novel/stages/stage4/slim.py::design_patch_slice`、Hook 切片 `novel/stages/stage4/hook.py::hook_patch_slice`；可选行不内联当前值——切片已携带，避免整份 wire 双写）；**④**反馈按根因聚合（`novel/stages/stage4/preflight.py::DesignInspection.feedback`：同码多处＝一个任务＋受影响位置；任务身份＝无进展判定尺，候选字节变化不算进展）；**⑥**沿用判定后半（`narrow_review` 动作从已购候选 wire 带基底起步，一轮取代整份重生）；**⑦**HookDesign 同法接入（窄上下文＋与只读预览同一把尺的组合检查 `hook_combination_errors`）。完成判据验证：①上游改义务语义→一轮条目返修且无关拍字节不变（H1b 用例续跑＋子集采纳用例）；②新增义务→闭集选承载位（H1b 用例）＋可选子集采纳、未选拍字节不变（新用例）；③必保义务漏标→一轮可选目标返修（stage＋产品入口双用例，`obligation_unbound` 不再整份重写）；④同一根因两轮仍在即停、字节变化不算进展（新用例）；⑤重放实测——csf4 根单拍修复（事实锁错拍，3 拍）窄请求 28,910 字符（协议规则 20,151＋切片 4,578＋合法值 1,781），输出只回选中拍替换，对照本根整份修订轮输入 35,434／46,624、输出 29,102／66,403 tokens；⑥重放实测——Design 第 2 轮对最终 Brief 完整预检全绿（`reuse=green`，输入身份 match）⇒ 零调用采用即取代当时两轮整份重生（R3＋R4 计 70,087 输入／130,741 输出 tokens）加一轮 Preserve；其生成时上游（preserve R1）对最终 wire 差异 14 条（6 条称谓规范形相等／8 条模型改写→窄复核），R3／R4 的上游（preserve R2）差异 1 条且等价——计划文案「7 条变化、3 等价、4 改写」为起草时估计，以盘面实测为准（更正记 DECISIONS） |
-| H3 称谓、必保揭名、锁与写手材料 | [~] | 显示面解析函数、释放前缀保序且覆盖全体人物、投影的同位语折叠与无损性守卫；Design 原文闸先投影再查与归因表；必保揭名（派生 `requires_released`、Design 闸、章包与正文检查）；正文段落级修句与写手规则；Preserve 自闸与条目返修；确定性转换；表达不点名的源头规则；共享锁派生与主体包含；Design／Hook 提示词规则；写手包清理；契约与版本随形状定稿统一分配。每个新判据与该 owner 的窄修同批。完成判据：①新反例与绿对照（被提及未出场人物投影、同位语折叠、无损性守卫、concealed 不回落、裸姓不投影、无显示面归 Design、第一人称角色词）；②必保揭名四反例（know 早于释放被拒并可窄修／同拍释放通过／全书未释放被拒／承载章正文缺该字面被拒并走段落修句）；③共享锁四类反例＋共享引用自动派生绿例；④Preserve 修一条义务时请求输入输出只含该条及其依赖（对照本根 54,390／19,428），无关义务字节不变；⑤重放 csf4 根：Design 第 1／3 轮首答称谓错误（11／320 条）只剩不可投影残余且全部带路径、共享锁错误为 0、Preserve 首答 16 处裸姓在自闸被逐条定位；⑥最终请求文本断言：写手与楔子请求不含来源引文、内部句柄、协议枚举词与未释放姓名，场的 `avoid` 到达正文请求、材料所引场的 `avoid` 到达楔子请求 |
+| H3 称谓、必保揭名、锁与写手材料 | [x] | 已完成（2026-10-06，fake transport 全绿＋csf4 根只读重放、零付费）：H3a～H3f 子批与 H3g 收口批（见上方执行状态）全部落地；判据①～⑥对账见执行状态一节；规格 CS-H 一节已落地口径／口径差标注闭合。遗留口径差（Design 原文闸位置口径）已登记「待用户裁决」第 5 项，随 H4 的 rc17 形状裁决，H5 前后对照表如实标出降幅 |
 | H4 其余节点的机械化与定位器 | [ ] | associate v3（维度句柄、提示词、可配对 close 闭集、定位器；编译器按地址传播规范键；R-2.12 改写）；book、names、naming 的条目定位器（不新增判据）；`tools/repair_rounds.py` 三类 token 分列。完成判据：associate 在同键状态很多的样例上输出不随句柄数增长；章内已闭合的 close 不可被配对；重放显示 csf4 根 89 对同键配对不再需要 |
 | H5 验证与收口 | [ ] | 每批：先复现目标反例，再跑受影响的定向测试，契约形状稳定后跑 BACKEND_CONTRACT §9.5 五文件，视图或 API 形状有变补前端 test 与 typecheck；四批合并后按最终改动集合跑一次默认非 corpus 回归（本机 `-n 4` 会被系统因内存终止，改串行分批并留 JUnit）；免费重放 `csf4_restore_20261005` 与 `cs_golden_20261004_rc15` 出前后对照表；真实运行**须另行授权**（付费与正文外发分别授权、独立新输出根）：《夫君的报恩》与《三人成行》各一本，可并入 CS-G 的 R10d 重复轮，记录完整 M1～M5（人工干预与失败轮全部计入）并带三项质量回归：姓名披露、事实状态（计划与实际）、D1 |
 
@@ -109,6 +119,15 @@ avoid_lines、BODY_VALIDATOR v2（新字段均可缺省读入，旧 payload 读�
    两项都需重购受影响的章与楔子，属付费动作。
 3. rc17 集中升一次（默认，建议）还是随 H3、H4 分两次升；H3／H4 形状定稿时再请裁决。
 4. 两处超出审阅意见的补强——承载章正文必须出现必保姓名的检查、事实锁的主体包含检查——按计划保留；不保留则这两处退为读数。
+5. **Design 原文闸的位置口径（H3 独立审阅发现，2026-10-06）**：原文闸对 Design 自有文本按位置（书级行＝章首、拍行＝拍前缀）判
+   「已释放」，但投影绑定表仍是章级——章内**后释放**的人名既不在绑定表里（不投影），在该位置又算未释放（判泄漏）。结果：
+   Design 文本在本章才释放的人名之前提到它，以 `positive_material_leak`（带路径、可窄修）拒收，而不是按裁决①走统一投影。
+   csf4 重放（只读）：第 2 轮（H1b／H2 零调用采用的依据，原先全绿）现有 3 条、第 4 轮 5 条这类拒收（第 3 章 purpose／
+   entry／sc04·sc05 首拍事件里的裴书远、沈知言）。实验（临时把原文闸绑定表改成位置口径，已回滚）：第 2 轮 3→1、第 4 轮
+   5→2，消掉的是有回落纯称谓（表弟）的裴书远；沈知言无纯称谓，仍是规格「无显示面」表里的合法残余（Design 补释放或改指称），
+   所以即便兑现裁决①，第 2 轮也不会回到全绿。当前行为安全侧（拒收不放行）且不影响正文闸；要兑现裁决①需把
+   `ChapterIR.withheld_bindings` 与 `project_withheld_names` 改成位置口径（释放位置不替换），触及写手章包的投影范围与
+   ChapterIR 语义，随 H4 的 rc17 形状一并裁决。H5 的前后对照表须如实标出该降幅。
 
 ### CS-T 分节点思考对照（含 CS-4：稳定输入前缀）
 

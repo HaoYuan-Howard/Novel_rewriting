@@ -30,8 +30,8 @@ from novel.core.name_materials import (
     appellation_fallbacks, display_surface, withheld_name_bindings,
 )
 from novel.stages.common import (
-    ReleasePrefixes, positive_material_issues, project_withheld_names,
-    withheld_name_literals,
+    ReleasePrefixes, expand_surface_releases, positive_material_issues,
+    project_withheld_names, withheld_name_literals,
 )
 from novel.stages.stage4.book_ir import chapter_surface_releases
 from novel.stages.stage4.design_paths import design_issue
@@ -151,7 +151,12 @@ def validate_design_materials(
             else:
                 faces = prefixes.beat_faces(position[1], position[2])
             display = display_at(faces)
-            released_here = {s for values in faces.values() for s in values}
+            # 字面检查面与正文／章 IR 同一把尺：已释放称谓并入本人家族的登记构词
+            # （陆家＝{family}家）。显示面解析用原始释放面（构词不是指称某人的
+            # 显示面），两者分开——此前只用原始面，「陆家上下」这类集体指称在
+            # 同家族人物已释放后仍被判泄漏，比正文闸更严。
+            released_here = {s for values in expand_surface_releases(faces, structure).values()
+                             for s in values}
             withheld_here = withheld_name_literals(projection, released_here, structure)
             # 先投影再查：同位语折叠与无损性守卫之后，残余才进字面检查。
             projected: dict[str, MaterialPart] = {}

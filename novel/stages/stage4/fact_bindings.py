@@ -93,19 +93,49 @@ def fact_lock_subject_errors(
     return errors
 
 
+def _late_shared_carriers(
+    carried: Iterable[FactLockBinding], obligations: tuple[str, ...],
+    carrier_refs: Mapping[str, tuple[str, ...]], accept_refs: Mapping[str, str] | None,
+    sites: Mapping[str, tuple],
+) -> list[tuple[str, str, str]]:
+    """承载拍不属于某共享义务自身 real 集合、又不早于其接受拍的 (义务, 承载拍, 接受拍)。
+
+    这些义务会拿到 compiler 派生的支撑引用，而支撑拍必须严格早于接受拍
+    （与 `compile.py` 的 `compile_support_early` 同一判定：位置 ≥ 接受拍即违例）。
+    """
+    if not accept_refs:
+        return []
+    order = {ref: (site[1], site[3]) for ref, site in sites.items()}
+    late: list[tuple[str, str, str]] = []
+    for bound in carried:
+        for ob in obligations:
+            accept = accept_refs.get(ob)
+            if (accept in order and bound.beat_ref in order
+                    and bound.beat_ref not in carrier_refs.get(ob, ())
+                    and order[bound.beat_ref] >= order[accept]):
+                late.append((ob, bound.beat_ref, accept))
+    return late
+
+
 def fact_lock_carrier_errors(
     body: BodyDesign, bindings: Iterable[FactLockBinding], *,
     required_locks: Mapping[str, tuple[str, ...]],
     carrier_refs: Mapping[str, tuple[str, ...]], wire_paths: bool = False,
+    accept_refs: Mapping[str, str] | None = None,
 ) -> list[ValidationIssue]:
     """必保锁须完整映射到共享义务集合的接受／显式支撑拍（CS-H H3，RC-63）。
 
     一项事实定位一次、多条义务共享：承载拍属于**其中任一**共享义务（realize_
     locks 引用同一 kf 的必保义务）的 real 集合即成立；其余共享义务由 compiler
     把承载拍记入 `supporting_beat_refs`（`derive_semantic_binding`），对它们只
-    校验先后（承载拍不晚于接受拍，`compile_support_early`）。锁分母由 compiler
-    或 Brief 给出，本判据只关联已有引用。问题身份绑定锁与共享义务集合，移动
-    到无关拍仍是同一问题；实际位置及可编辑路径只作诊断。
+    校验先后（承载拍早于接受拍，compile 面 `compile_support_early`）。锁分母由
+    compiler 或 Brief 给出，本判据只关联已有引用。问题身份绑定锁与共享义务集合，
+    移动到无关拍仍是同一问题；实际位置及可编辑路径只作诊断。
+
+    `accept_refs`（义务 → 接受拍）给出时，先后在**这里**就带 wire 路径判掉：承载拍
+    不早于某共享义务的接受拍，派生的支撑引用必然在 compile 面以无编辑位置的
+    `compile_support_early` 停下（整份退回）；改前逐义务自担承载时这类问题就是
+    可窄修的 `fact_lock_outside_obligation`，不能因为放宽成并集而退化。
     """
     sites = {f'{scene.scene_id}#{beat.beat_id}': ('scenes', si, 'beats', bi)
              for si, scene in enumerate(body.scenes)
@@ -123,16 +153,24 @@ def fact_lock_carrier_errors(
         allowed = tuple(dict.fromkeys(
             ref for ob in obligations for ref in carrier_refs.get(ob, ())))
         outside = [bound for bound in carried if bound.beat_ref not in allowed]
-        if carried and not outside:
+        late = (_late_shared_carriers(carried, obligations, carrier_refs, accept_refs, sites)
+                if carried and not outside else [])
+        if carried and not outside and not late:
             continue
-        actual = outside[0].beat_ref if outside else None
+        actual = outside[0].beat_ref if outside else (late[0][1] if late else None)
         paths = ()
         if wire_paths:
             # 状态与 real 是同一拍的耦合字段；同时开放当前承载位，允许移动状态
             # 或补 real 支撑，两种修复都必须重跑完整候选预检。
             repair_refs = (*((actual,) if actual is not None else ()), *allowed)
             paths = tuple(dict.fromkeys(sites[ref] for ref in repair_refs if ref in sites))
-        if carried:
+        if late:
+            code = 'fact_lock_outside_obligation'
+            ob, carrier, accept = late[0]
+            message = (f'M4 事实锁 {kf} 的承载拍 {carrier} 不早于共享义务 {ob} 的接受拍 '
+                       f'{accept}：其余共享义务的支撑引用必须早于接受拍——把锁标到不晚于'
+                       f'它的状态上，或让 {ob} 在承载拍上标注 real（接受拍随之后移）')
+        elif carried:
             code = 'fact_lock_outside_obligation'
             message = (f'M4 事实锁 {kf} 的承载拍 {actual} 不属于共享义务 '
                        f'{list(obligations)} 的 real 接受／支撑拍并集 {list(allowed)}：'

@@ -33,12 +33,12 @@ from typing import Any, NamedTuple
 
 from contracts.schema.receipt import ChapterLengthDisclosure, ChapterReceipt
 from novel.stages.common import (
-    RENDERER_VERSION, WRITER_PROTOCOL_VERSION, ChapterWriterPacket,
-    chapter_identities, render_chapter_packet,
+    BODY_PARAGRAPH_REPAIR_SYSTEM, RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
+    ChapterWriterPacket, chapter_identities, render_chapter_packet,
 )
 from novel.stages.stage5.body_checks import (
     BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION, MAX_BODY_REWRITES,
-    count_body_chars, validate_chapter_prose,
+    chapter_prose_validator, count_body_chars,
 )
 
 
@@ -119,6 +119,18 @@ def _merge_paragraph_patch(previous: str, answer: str) -> tuple[str | None, str]
     return '\n'.join(lines), ''
 
 
+def _patch_answer_validator(previous: str, validate):
+    """段落修句回答的接受校验：先确定性合并进上一稿，再跑本章同一把机械检查。
+
+    付费边界（`ask_text_once`）把返回的错误写进接受记录；回答是行替换 JSON，
+    不能拿整章校验器直接验它（篇幅带必然报错 ⇒ 成功的修句被记成 accepted=false）。
+    """
+    def check(answer: str) -> list[str]:
+        merged, merge_error = _merge_paragraph_patch(previous, answer)
+        return [merge_error] if merge_error else validate(merged)
+    return check
+
+
 def _rewrite_prompt(packet: str, previous: str, errors: list[str]) -> str:
     return (packet
             + '\n\n【重写要求】\n上一次稿未通过机械校验，原因：' + '；'.join(errors)
@@ -136,20 +148,10 @@ def write_chapter(
     （纯函数，与下面控制流用的是同一把）：付费边界据此把被拒首稿的接受记录如实记成
     accepted=false（RC-54）。返回的 outcome 不落盘。
     """
-    chapter = packet.chapter
     contract = packet.realization_contract
     packet_text = render_chapter_packet(packet)
-    released = chapter.released_surfaces          # 章级称谓许可（compile 时算好，D2）
-    withheld = chapter.withheld_literals          # 章级禁用字面（validator 材料）
-    required = chapter.requires_released          # 必保揭名必现字面（RC-61）
-    scene_markers = tuple(context.scene_id for context in chapter.scenes)
     low, high, target = contract.band_low, contract.band_high, contract.target_chars
-
-    def validate(prose: str) -> list[str]:
-        return validate_chapter_prose(
-            prose, withheld_literals=withheld, released_surfaces=released,
-            target_chars=target, band_low=low, band_high=high, scene_markers=scene_markers,
-            required_literals=required)
+    validate = chapter_prose_validator(packet)
 
     attempts: list[ChapterAttempt] = []
     candidates: list[tuple[str, str, list[str], Any]] = []   # (identity, prose, errors, ref)
@@ -157,15 +159,20 @@ def write_chapter(
     identity = ''
     previous: str | None = None   # 重写基线：最近一份非空回答（空回答不进基线）
     for attempt in range(1 + MAX_BODY_REWRITES):
+        # 段落级修句（RC-61）：只差必保揭名字面时按行窄修，不重发整份章包。
+        patch_round = (previous is not None and bool(errors)
+                       and all(error.startswith('[required_literals]') for error in errors))
         if previous is None:
-            prompt = packet_text
-        elif errors and all(error.startswith('[required_literals]')
-                            for error in errors):
-            # 段落级修句（RC-61）：只差必保揭名字面时按行窄修，不重发整份章包。
-            prompt = _paragraph_repair_prompt(previous, errors)
+            answered = ask(packet_text, validate)
+        elif patch_round:
+            # 回答是行替换 JSON，不是整章正文：付费边界收到的校验器必须校验**合并后**
+            # 的稿（接受记录 accepted 才如实，RC-54），请求用专用 system 提示
+            # （写手 system 要求「只输出完整正文」，与本轮的 JSON 输出相冲突）。
+            answered = ask(_paragraph_repair_prompt(previous, errors),
+                           _patch_answer_validator(previous, validate),
+                           system=BODY_PARAGRAPH_REPAIR_SYSTEM)
         else:
-            prompt = _rewrite_prompt(packet_text, previous, errors)
-        answered = ask(prompt, validate)
+            answered = ask(_rewrite_prompt(packet_text, previous, errors), validate)
         identity = answered.identity
         if answered.text is None:
             # B1/D5：空回答计一次失败留证；重发同一份章包（同请求身份 → Runtime
@@ -184,15 +191,15 @@ def write_chapter(
                 count_body_chars(prose),
                 ('[truncated] 响应被截断（finish_reason=length），即停该章（D6）',)))
             break
-        if (previous is not None and errors
-                and all(error.startswith('[required_literals]') for error in errors)):
-            # 段落修句轮：回答是行替换 JSON，合并进上一稿再跑同一套机械检查。
+        if patch_round:
             merged, merge_error = _merge_paragraph_patch(previous, prose)
             if merge_error:
-                errors = [merge_error]
+                # 解析失败如实留证；原有的缺字面问题继续带入下一轮（整份重写要知道
+                # 为什么要重写），只把本轮失败排在前面。
                 attempts.append(ChapterAttempt(attempt + 1, identity,
                                                answered.finish_reason,
-                                               count_body_chars(previous), tuple(errors)))
+                                               count_body_chars(previous), (merge_error,)))
+                errors = [merge_error, *errors]
                 continue
             prose = merged
         errors = validate(prose)

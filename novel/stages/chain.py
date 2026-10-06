@@ -125,8 +125,7 @@ from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt,
     build_rewrite_user_prompt, context_sha256,
-    sha256_text, validate_hook_prose, validate_chapter_prose,
-    write_chapter,
+    chapter_prose_validator, sha256_text, validate_hook_prose, write_chapter,
 )
 from novel.stages.stage7 import (
     apply_names, assemble_delivery, build_delivery_manifest, chapter_access,
@@ -1771,8 +1770,8 @@ def _write_and_commit_chapter(ctx: ChainContext, packet, ordinal: int):
     repository = ctx.repository
     outcome = write_chapter(
         packet=packet,
-        ask=lambda prompt, validate: ctx.ask_body(
-            f'body_{_chapter_ordinal(ordinal)}', prompt, validate))
+        ask=lambda prompt, validate, **kwargs: ctx.ask_body(
+            f'body_{_chapter_ordinal(ordinal)}', prompt, validate, **kwargs))
     repository.write(f'runtime/body_attempts_{_chapter_ordinal(ordinal)}.json',
                      {'attempts': [a._asdict() for a in outcome.attempts]})
     if outcome.prose is None or outcome.receipt is None:
@@ -2759,10 +2758,9 @@ def execute(args) -> None:
             context = repository.read_model('stage4/context/hook/hook.json')
             return validate_prose_wire(wire, lambda text: validate_hook_prose(text, context))
         packet = project_chapter_packet(repository.read_model('stage4/ir/writer_book_ir.json'), int(owner[7:]))
-        contract = packet.realization_contract
-        return validate_prose_wire(wire, lambda text: validate_chapter_prose(text, withheld_literals=packet.chapter.withheld_literals,
-            released_surfaces=packet.chapter.released_surfaces, target_chars=contract.target_chars,
-            band_low=contract.band_low, band_high=contract.band_high))
+        # 与写章循环同一把尺（含必保揭名必现字面与场景标记）：采用／补丁面放行的 wire
+        # 不会在随后的写章循环里被同一规则拒掉。
+        return validate_prose_wire(wire, chapter_prose_validator(packet))
 
     def ask_text(owner, prompt, validate=None):
         path = wire_path(owner)
@@ -2784,19 +2782,22 @@ def execute(args) -> None:
         return text, errors, answer.adoption_ref(
             prompts={'system': HOOK_WRITER_SYSTEM, 'user': prompt})
 
-    def ask_body(owner, prompt, validate=None):
+    def ask_body(owner, prompt, validate=None, system=None):
+        """`system` 只有段落修句轮给（RC-61）：回答是行替换 JSON，不用整章写手的
+        system 提示（它要求只输出完整正文）；默认仍是写手 system。"""
+        system = system or BODY_WRITER_SYSTEM
         path = wire_path(owner)
         if path is not None:
-            raw, ref = adopt(owner, path, lambda w: text_validation(owner, w), system=BODY_WRITER_SYSTEM,
+            raw, ref = adopt(owner, path, lambda w: text_validation(owner, w), system=system,
                              prompt=prompt, json_mode=False, temperature=0.7)
             prose = (raw.get('prose') or '').strip() if isinstance(raw, dict) else ''
             if not prose:
                 raise ValueError(f'{owner} wire 文本为空')
             return AnsweredText(text=prose, finish_reason=None, identity='wire-adoption',
                                 cached=True, ref=ref)
-        request = build_request(owner, prompt, json_mode=False, system=BODY_WRITER_SYSTEM,
+        request = build_request(owner, prompt, json_mode=False, system=system,
                                 temperature=0.7)
-        patch = replay_patch(owner, request, lambda w: text_validation(owner, w), BODY_WRITER_SYSTEM, prompt)
+        patch = replay_patch(owner, request, lambda w: text_validation(owner, w), system, prompt)
         if patch is not None:
             data, ref = patch
             return AnsweredText(text=data['prose'], finish_reason=None,
@@ -2806,7 +2807,7 @@ def execute(args) -> None:
         return AnsweredText(text=text, finish_reason=answer.finish_reason,
                             identity=answer.request_sha256, cached=answer.cached,
                             ref=answer.adoption_ref(
-                                prompts={'system': BODY_WRITER_SYSTEM, 'user': prompt}))
+                                prompts={'system': system, 'user': prompt}))
 
     def body_replay(ordinal, packet):
         from novel.stages.revisions import resample_replay_pending, sampling_request

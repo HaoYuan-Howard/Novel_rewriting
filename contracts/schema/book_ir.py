@@ -155,12 +155,17 @@ class ChapterIR(StrictModel):
     #: 禁用字面中已证明唯一绑定人物的完整登记称谓（渲染期投影的验证材料，不进阅读面）。
     withheld_bindings: tuple[WithheldNameBinding, ...] = Field(default=(), min_length=0)
     #: 显示面前缀（CS-H H3，RC-60；**章首**取位）：每人按**释放顺序**的已释放称谓，
-    #: 覆盖全体已释放人物（不再只收本场参与者、不按字典序）；尚无释放的人物在末尾
-    #: 附回落纯称谓（canonical 为纯称谓否则最早登记纯称谓）。只供显示面解析与渲染期
-    #: 投影，**不充当称谓许可**（可用称谓仍以 Design 释放为准），也不含家族构词。
-    #: 章内场末／拍前缀（含本拍释放）由 renderer 从本表＋`BeatIR.release_introductions`
-    #: 确定性累积（同章数据自足，不读其他章 IR）。
+    #: 覆盖全体已释放人物（不再只收本场参与者、不按字典序）。只含**已释放**称谓：
+    #: 章内后续释放由 renderer 追加在其后，显示面始终是首个已释放称谓。只供显示面
+    #: 解析与渲染期投影，**不充当称谓许可**（可用称谓仍以 Design 释放为准），也不含
+    #: 家族构词。章内场末／拍前缀（含本拍释放）由 renderer 从本表＋
+    #: `BeatIR.release_introductions` 确定性累积（同章数据自足，不读其他章 IR）。
     display_prefix: tuple[SurfaceRelease, ...] = Field(default=(), min_length=0)
+    #: 回落显示面（CS-H H3，RC-60 第 3 步）：尚无任何已释放称谓的人物所用的回落纯称谓
+    #: （canonical 为纯称谓否则最早登记纯称谓；每人一行、单称谓，全书同表）。与
+    #: `display_prefix` 分开存放：一旦该人物在章内释放了称谓，显示面立即改取首个已释放
+    #: 称谓，回落面不再抢占首位。不充当称谓许可，渲染期不读 Characters（D2 同尺）。
+    display_fallback: tuple[SurfaceRelease, ...] = Field(default=(), min_length=0)
     #: 必保揭名（CS-H H3，RC-61 正文面）：本章承载的认知变化要求正文**必现**的
     #: 称谓字面（compile 由 Brief 的 requires_released 按认知增量落章派生）。随章包
     #: 送达写手（必保揭名行）并进机械 validator（缺字面即拒，走段落级修句）。

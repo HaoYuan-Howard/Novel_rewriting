@@ -22,6 +22,7 @@ from contracts.schema.policy import PreserveKind
 from contracts.schema.source import (
     CharactersCore, NameStructure,
 )
+from novel.stages.common import BODY_PARAGRAPH_REPAIR_SYSTEM
 from novel.stages.stage4.grounding import project_brief, required_releases
 from tests.test_str06_a4_design_locks import _blueprint
 
@@ -193,6 +194,14 @@ def test_missing_literal_gets_a_paragraph_level_repair_round(tmp_path):
     assert '【段落修句】' in fake.prompts[1] and '〔当前稿〕' in fake.prompts[1]
     assert not fake.prompts[1].startswith(fake.prompts[0].rstrip('\n'))
     assert '【必须写出】' not in fake.prompts[1]
+    # 修句轮用专用 system 提示（写手 system 要求「只输出完整正文」，与 JSON 输出冲突）；
+    # 首轮不带 system，沿用写手默认。
+    assert fake.systems == [None, BODY_PARAGRAPH_REPAIR_SYSTEM]
+    # 付费边界收到的修句轮校验器验的是**合并后**的稿，不是行替换 JSON 本身。
+    assert fake.validators[1](patch) == []
+    assert '[required_literals]' in '；'.join(fake.validators[1](
+        '{"paragraphs": [{"index": 0, "text": "' + draft[:5] + '"}]}'))
+    assert '[paragraph_patch]' in '；'.join(fake.validators[1]('不是 JSON'))
     # 绿对照：首答已含字面即通过，无修句轮。
     fake = _FakeAnswers([_answered(repaired)])
     outcome = write_chapter(packet=packet, ask=fake)
@@ -218,3 +227,34 @@ def test_unparseable_paragraph_patch_is_a_failed_attempt_not_a_candidate():
     assert '[paragraph_patch]' in '；'.join(outcome.attempts[1].errors), '解析失败如实留证'
     assert '【段落修句】' in fake.prompts[1] and '【重写要求】' in fake.prompts[2], \
         '修句轮后回退整份重写路径'
+    # 整份重写的原因同时带上解析失败与原有的缺字面问题（不能只剩解析失败：重写者
+    # 要知道为什么要重写）。
+    assert '[paragraph_patch]' in fake.prompts[2] and '[required_literals]' in fake.prompts[2]
+    assert fake.systems == [None, BODY_PARAGRAPH_REPAIR_SYSTEM, None]
+
+
+def test_one_chapter_validator_serves_every_consumer_of_the_mechanical_gate():
+    """采用／补丁预检／复核捕获与写章循环必须是同一把尺：缺必保揭名字面的 wire
+    不能先被采用面放行、再在写章循环里被拒（此前三处各自拼参数且漏带
+    `required_literals` 与 `scene_markers`）。"""
+    import pathlib
+    from novel.stages.common import project_chapter_packet
+    from novel.stages.stage5 import chapter_prose_validator
+    from tests.test_str06_body import _green_book_ir
+    _body, _binding, _plan, ir = _green_book_ir()
+    packet = project_chapter_packet(ir, 1)
+    packet = packet.model_copy(update={'chapter': packet.chapter.model_copy(
+        update={'requires_released': ('苏芸娘',)})})
+    validate = chapter_prose_validator(packet)
+    body = '洞房花烛，夫君立下旧约，句句克制。' * 36
+    assert '[required_literals]' in '；'.join(validate(body)), '缺必保揭名字面被拒'
+    marker = packet.chapter.scenes[0].scene_id
+    assert '[no_wrapper]' in '；'.join(validate('苏芸娘：' + marker + body)), '场景标记被拒'
+    assert all('[required_literals]' not in e for e in validate('苏芸娘' + body)), '含字面即过该项'
+    # 静态守卫：stage5 之外不再直接拼 `validate_chapter_prose` 参数。
+    root = pathlib.Path(__file__).resolve().parent.parent
+    offenders = [str(path.relative_to(root)) for base in ('novel', 'tools')
+                 for path in (root / base).rglob('*.py')
+                 if 'stages/stage5' not in path.as_posix()
+                 and 'validate_chapter_prose(' in path.read_text(encoding='utf-8')]
+    assert not offenders, f'章机械校验须经 chapter_prose_validator 构造：{offenders}'

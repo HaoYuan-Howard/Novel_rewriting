@@ -27,7 +27,7 @@ from novel.stages.stage5.body import (
 )
 from novel.stages.stage5.body_checks import (
     BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION, MAX_BODY_REWRITES,
-    count_body_chars, validate_chapter_prose,
+    chapter_prose_validator, count_body_chars, validate_chapter_prose,
 )
 from novel.stages.stage5.hook_writer import (
     HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
@@ -39,7 +39,7 @@ __all__ = [
     'AnsweredText', 'BODY_MECHANICAL_CHECKS', 'BODY_VALIDATOR_VERSION',
     'ChapterAttempt', 'ChapterOutcome', 'HOOK_VALIDATOR_VERSION', 'MAX_BODY_REWRITES',
     'MAX_REWRITES', 'MECHANICAL_CHECKS',
-    'build_hook_user_prompt', 'build_rewrite_user_prompt',
+    'build_hook_user_prompt', 'build_rewrite_user_prompt', 'chapter_prose_validator',
     'context_sha256', 'count_body_chars',
     'sha256_text', 'validate_chapter_prose', 'validate_hook_prose', 'write_chapter',
 ]

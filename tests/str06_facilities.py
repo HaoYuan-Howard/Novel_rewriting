@@ -122,8 +122,8 @@ def body_ask(session, *, model='fake', max_tokens=4000):
     from novel.llm.transport import ChatRequest
     from novel.stages.stage5.body import AnsweredText
 
-    def ask_body(owner, prompt, validate=None):
-        request = ChatRequest(model=model, system='正文写手', user=prompt,
+    def ask_body(owner, prompt, validate=None, system=None):
+        request = ChatRequest(model=model, system=system or '正文写手', user=prompt,
                               reasoning_effort='high', thinking=True,
                               json_mode=False, max_tokens=max_tokens)
         text, _errors, answer = ask_text_once(session, owner, request, validate)

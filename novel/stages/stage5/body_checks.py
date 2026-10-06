@@ -14,16 +14,20 @@
 Design／Characters。
 
 【失败分级】
-硬失败（non_empty/encoding/no_wrapper/withheld_literals/truncated）：有额度则
+硬失败（non_empty/encoding/no_wrapper/withheld_literals/required_literals/
+truncated）：有额度则
 重写，不能披露放行；只有篇幅带（length_band）允许在额度耗尽后按偏差最小提交
 并披露。截断由调用方按 finish_reason 折算为 typed 错误进入同一通道。
 """
 from __future__ import annotations
 
 import re
+from typing import Callable
 
 from novel.core.text import count_non_whitespace_chars
-from novel.stages.common import claim_spans, uncovered_occurrences
+from novel.stages.common import (
+    ChapterWriterPacket, claim_spans, uncovered_occurrences,
+)
 
 #: 机械 validator 的版本：章级回执 validator_version 记这一位，规则变化必须换版。
 #: v2（CS-H H3，RC-61）：新增 `required_literals`——必保揭名的承载章正文必现
@@ -85,3 +89,25 @@ def validate_chapter_prose(
         errors.append(f'[length_band] 字数 {count} 超出篇幅带 [{band_low}, {band_high}]'
                       f'（目标 {target_chars}）')
     return errors
+
+
+def chapter_prose_validator(packet: ChapterWriterPacket) -> Callable[[str], list[str]]:
+    """本章机械校验的**唯一构造点**（纯函数，只读章包）。
+
+    写章控制流、付费边界的接受记录（RC-54）、wire 显式采用与 owner 补丁预检共用
+    这一把尺：规则只在 `validate_chapter_prose` 里定义，各处只经此取得绑定了本章
+    验证材料的校验器——不再各自拼参数（此前补丁／采用面漏带 `required_literals`
+    与 `scene_markers`，缺必保揭名字面的 wire 能被采用、随后在写章循环里被拒）。
+    """
+    chapter = packet.chapter
+    contract = packet.realization_contract
+    scene_markers = tuple(context.scene_id for context in chapter.scenes)
+
+    def validate(prose: str) -> list[str]:
+        return validate_chapter_prose(
+            prose, withheld_literals=chapter.withheld_literals,
+            released_surfaces=chapter.released_surfaces,
+            target_chars=contract.target_chars, band_low=contract.band_low,
+            band_high=contract.band_high, scene_markers=scene_markers,
+            required_literals=chapter.requires_released)
+    return validate

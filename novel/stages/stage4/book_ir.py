@@ -48,22 +48,26 @@ from novel.stages.common import (
 
 
 def chapter_display_prefix(
-    graph: BodyDesign, chapter_ordinal: int, *,
-    display_fallback: Mapping[str, str] | None = None,
+    graph: BodyDesign, chapter_ordinal: int,
 ) -> tuple[SurfaceRelease, ...]:
     """章首显示面前缀（CS-H H3，RC-60）：每人按释放顺序的已释放称谓，覆盖全体
-    已释放人物；尚无释放的人物附回落纯称谓（不充当称谓许可，见 ChapterIR 字段）。
+    已释放人物（不充当称谓许可，见 ChapterIR 字段）。回落纯称谓不在其中——它与
+    已释放称谓同表会在章内后续释放时抢占首位，另见 `chapter_display_fallback`。
 
     保序取代旧的扁平并集／字典序口径：被提及未出场的人物也有显示面；同拍释放
     顺序＝阅读序。纯函数。
     """
     start = ReleasePrefixes(graph).chapter_start_faces(chapter_ordinal)
-    entries = [SurfaceRelease(char_id=cid, surfaces=faces)
-               for cid, faces in sorted(start.items())]
-    for cid, fallback in sorted((display_fallback or {}).items()):
-        if fallback and cid not in start:
-            entries.append(SurfaceRelease(char_id=cid, surfaces=(fallback,)))
-    return tuple(entries)
+    return tuple(SurfaceRelease(char_id=cid, surfaces=faces)
+                 for cid, faces in sorted(start.items()))
+
+
+def chapter_display_fallback(
+    display_fallback: Mapping[str, str] | None,
+) -> tuple[SurfaceRelease, ...]:
+    """回落显示面表（RC-60 第 3 步）：人物 → 回落纯称谓，按人物序、一人一行。纯函数。"""
+    return tuple(SurfaceRelease(char_id=cid, surfaces=(fallback,))
+                 for cid, fallback in sorted((display_fallback or {}).items()) if fallback)
 
 
 def chapter_surface_releases(graph: BodyDesign, chapter_ordinal: int, structure: NameStructure | None = None) -> set[str]:
@@ -266,8 +270,8 @@ def compile_writer_book_ir(
                 WithheldNameBinding(literal=literal, char_id=char_id, enclosing=enclosing)
                 for literal, char_id, enclosing
                 in withheld_name_bindings(withheld, structure, released_here)),
-            display_prefix=chapter_display_prefix(
-                graph, ordinal, display_fallback=display_fallback),
+            display_prefix=chapter_display_prefix(graph, ordinal),
+            display_fallback=chapter_display_fallback(display_fallback),
             requires_released=tuple(sorted(chapter_requires.get(ordinal, ())))))
         nav.append(ChapterNavEntry(
             chapter_ordinal=ordinal, purpose=assignment.purpose,

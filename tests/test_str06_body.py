@@ -342,11 +342,14 @@ class _FakeAnswers:
         self.answers = list(answers)
         self.prompts = []
         self.validators = []
+        self.systems = []
 
-    def __call__(self, prompt, validate):
-        # 付费边界据 validate 把接受结果如实记入账（RC-54）；它必须是本章真实的机械校验。
+    def __call__(self, prompt, validate, system=None):
+        # 付费边界据 validate 把接受结果如实记入账（RC-54）；它必须是本章真实的机械校验
+        # （段落修句轮例外：回答是行替换 JSON，校验器先合并再验）。
         self.prompts.append(prompt)
         self.validators.append(validate)
+        self.systems.append(system)
         return self.answers.pop(0)
 
 
