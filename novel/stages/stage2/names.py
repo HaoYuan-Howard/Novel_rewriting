@@ -65,118 +65,194 @@ def compile_name_structure(
 
     全部错误聚合返回；wire 原样进、不修改（I-24）。
     """
+    structure, located = _compile_name_structure_located(
+        wire, characters, source_text, evidence=evidence)
+    return structure, [message for _path, message in located]
+
+
+def names_patch_locate(
+    wire: Any, errors: list, characters: CharactersCore, source_text: str,
+    *, evidence=None,
+) -> list[tuple[tuple[str | int, ...], list]] | None:
+    """CS-H H4（RC-57 覆盖）：names 条目定位（`ask_json` 的 `patch` 协议）。
+
+    与 `compile_name_structure` 同一条管道（不新增判据）：家族条目错误映射到
+    `families.{fid}`、人物条目到 `people.{slug}`。wire 级问题（协议字面量／
+    覆盖缺失＝需增删条目／构造期复检）或 `errors` 与复跑定位集不完全一致时
+    返回 None——本轮退整份返修，不静默漏项。
+    """
+    if not isinstance(wire, dict) or not errors:
+        return None
+    _structure, located = _compile_name_structure_located(
+        wire, characters, source_text, evidence=evidence)
+    if any(path is None for path, _message in located):
+        return None
+    if len(errors) != len(located) or sorted(map(str, errors)) != sorted(
+            str(message) for _path, message in located):
+        return None
+    grouped: dict[tuple[str | int, ...], list] = {}
+    remaining = list(errors)
+    for path, message in located:
+        bucket = grouped.setdefault(tuple(path), [])
+        hit = next((error for error in remaining if str(error) == str(message)), None)
+        if hit is not None:
+            remaining.remove(hit)
+            bucket.append(hit)
+    return list(grouped.items())
+
+
+def _compile_name_structure_located(
+    wire: dict[str, Any], characters: CharactersCore, source_text: str,
+    *, evidence=None,
+) -> tuple[NameStructure | None, list[tuple[tuple | None, str]]]:
+    """`compile_name_structure` 的定位视图（CS-H H4；None＝wire 级，退整份）。"""
+    issues: list[tuple[tuple | None, str]] = []
+
+    def fail(path: tuple | None, message: str) -> None:
+        issues.append((path, message))
+
     errors: list[str] = []
     if not isinstance(wire, dict):
-        return None, ['names wire必须是对象']
+        return None, [(None, 'names wire必须是对象')]
     if wire.get('protocol_version') != STAGE2_NAMES_PROTOCOL or 'resolutions' not in wire:
-        return None, [f'names必须使用{STAGE2_NAMES_PROTOCOL}并显式提供resolutions；旧回答不能推断已核验名称异写']
+        return None, [(None, f'names必须使用{STAGE2_NAMES_PROTOCOL}并显式提供resolutions；旧回答不能推断已核验名称异写')]
     if set(wire) - {'protocol_version', 'families', 'people', 'resolutions'}:
+        fail(None, 'names wire 携带未知字段')
         errors.append('names wire 携带未知字段')
     raw_families = wire.get('families') or {}
     raw_people = wire.get('people') or {}
     if not isinstance(raw_families, dict) or not raw_families:
-        return None, (errors + ['families 缺失或为空'])
+        for message in (errors + ['families 缺失或为空'] if errors else ['families 缺失或为空']):
+            fail(None, message)
+        return None, issues
     if not isinstance(raw_people, dict):
-        return None, (errors + ['people 必须是对象'])
+        for message in (errors + ['people 必须是对象'] if errors else ['people 必须是对象']):
+            fail(None, message)
+        return None, issues
     slugs = set(characters.characters)
     unknown_people = set(raw_people) - slugs
     if unknown_people:
+        # 删除条目不是替换——定位不了，退整份返修。
+        fail(None, f'people 引用了 Characters 之外的人物：{sorted(unknown_people)}')
         errors.append(f'people 引用了 Characters 之外的人物：{sorted(unknown_people)}')
     missing_people = slugs - set(raw_people)
     if missing_people:
+        # 补条目不是替换——定位不了，退整份返修。
+        fail(None, f'people 缺少人物条目：{sorted(missing_people)}')
         errors.append(f'people 缺少人物条目：{sorted(missing_people)}')
 
     # 家族：键白名单、字面非空、源文出现、form 只用 {family}。
     for family_id, raw in raw_families.items():
+        path = ('families', family_id)
         where = f'家族 {family_id}'
         if not isinstance(raw, dict) or set(raw) - _FAMILY_KEYS - _FAMILY_OPTIONAL:
+            fail(path, f'{where} 携带未知字段或形状非法')
             errors.append(f'{where} 携带未知字段或形状非法')
             continue
         if 'family_id' in raw and raw['family_id'] != family_id:
+            fail(path, f'{where} 对象内 family_id 与键不一致：{raw["family_id"]!r}')
             errors.append(f'{where} 对象内 family_id 与键不一致：{raw["family_id"]!r}')
             continue
         literal = raw.get('literal')
         if not isinstance(literal, str) or not literal:
+            fail(path, f'{where} 的 literal 缺失或为空')
             errors.append(f'{where} 的 literal 缺失或为空')
             continue
         if literal not in source_text:
+            fail(path, f'{where} 的字面 {literal!r} 未在源文中出现')
             errors.append(f'{where} 的字面 {literal!r} 未在源文中出现')
         for form in raw.get('forms') or []:
             if not isinstance(form, dict) or set(form) - {'literal', 'form', 'source_refs'}:
+                fail(path, f'{where} 称谓条目形状非法')
                 errors.append(f'{where} 称谓条目形状非法')
                 continue
             try:
                 rendered = render_form(form['form'], family=literal, given=None, aliases={})
             except ValueError as exc:
+                fail(path, f'{where} 称谓 {form.get("literal")!r}：{exc}')
                 errors.append(f'{where} 称谓 {form.get("literal")!r}：{exc}')
                 continue
             if rendered != form.get('literal'):
-                errors.append(
-                    f'{where} 称谓 {form.get("literal")!r} 与构词渲染不一致')
+                fail(path, f'{where} 称谓 {form.get("literal")!r} 与构词渲染不一致')
+                errors.append(f'{where} 称谓 {form.get("literal")!r} 与构词渲染不一致')
             if form.get('literal') and form['literal'] not in source_text:
+                fail(path, f'{where} 称谓字面 {form["literal"]!r} 未在源文中出现')
                 errors.append(f'{where} 称谓字面 {form["literal"]!r} 未在源文中出现')
 
     # 人物：键白名单、引用闭合、surface 覆盖、渲染等式、字面源文出现。
     for slug, raw in raw_people.items():
         if slug not in slugs:
             continue
+        path = ('people', slug)
         where = f'人物 {slug}'
         if not isinstance(raw, dict) or set(raw) - _PEOPLE_KEYS:
+            fail(path, f'{where} 携带未知字段或形状非法')
             errors.append(f'{where} 携带未知字段或形状非法')
             continue
         surfaces = {s.surface for s in characters.characters[slug].surfaces}
         surface_forms = raw.get('surface_forms')
         if not isinstance(surface_forms, dict) or set(surface_forms) != surfaces:
+            fail(path, f'{where} 的 surface_forms 未恰好覆盖全部 surface')
             errors.append(f'{where} 的 surface_forms 未恰好覆盖全部 surface')
             surface_forms = surface_forms if isinstance(surface_forms, dict) else {}
         aliases_raw = raw.get('aliases') or []
         aliases: dict[str, str] = {}
         for alias in aliases_raw:
             if not isinstance(alias, dict) or set(alias) - {'alias_id', 'literal'}:
+                fail(path, f'{where} 化名条目形状非法')
                 errors.append(f'{where} 化名条目形状非法')
                 continue
             if alias['alias_id'] in aliases:
+                fail(path, f'{where} 化名 id 重复：{alias["alias_id"]}')
                 errors.append(f'{where} 化名 id 重复：{alias["alias_id"]}')
             aliases[alias['alias_id']] = alias.get('literal') or ''
             if alias.get('literal') and alias['literal'] not in source_text:
+                fail(path, f'{where} 化名字面 {alias["literal"]!r} 未在源文中出现')
                 errors.append(f'{where} 化名字面 {alias["literal"]!r} 未在源文中出现')
         family_id = raw.get('family_id')
         family_literal = None
         if family_id is not None:
             entry = raw_families.get(family_id)
             if not isinstance(entry, dict):
+                fail(path, f'{where} 的 family_id {family_id!r} 未登记家族')
                 errors.append(f'{where} 的 family_id {family_id!r} 未登记家族')
             else:
                 family_literal = entry.get('literal')
         given = raw.get('given')
         if given is not None and not isinstance(given, str):
+            fail(path, f'{where} 的 given 必须是字符串或 null')
             errors.append(f'{where} 的 given 必须是字符串或 null')
             given = None
         if given and given not in source_text:
+            fail(path, f'{where} 的名字面 {given!r} 未在源文中出现')
             errors.append(f'{where} 的名字面 {given!r} 未在源文中出现')
         for alias_literal in aliases.values():
             if alias_literal and alias_literal not in source_text:
+                fail(path, f'{where} 的化名字面 {alias_literal!r} 未在源文中出现')
                 errors.append(f'{where} 的化名字面 {alias_literal!r} 未在源文中出现')
         for surface, form in surface_forms.items():
             if form is None:
                 for literal in (family_literal, given, *aliases.values()):
                     if literal and literal in surface:
-                        errors.append(
-                            f'{where} 的纯称谓 {surface!r} 含本人姓名字面 {literal!r}'
-                            '（防漏标：应登记构词）')
+                        message = (f'{where} 的纯称谓 {surface!r} 含本人姓名字面 {literal!r}'
+                                   '（防漏标：应登记构词）')
+                        fail(path, message)
+                        errors.append(message)
                 continue
             try:
                 rendered = render_form(form, family=family_literal, given=given,
                                        aliases=aliases)
             except ValueError as exc:
+                fail(path, f'{where} 的 surface {surface!r}：{exc}')
                 errors.append(f'{where} 的 surface {surface!r}：{exc}')
                 continue
             if rendered != surface:
-                errors.append(
-                    f'{where} 的 surface {surface!r} 与构词渲染不一致：'
-                    f'{form!r} 渲染为 {rendered!r}')
+                message = (f'{where} 的 surface {surface!r} 与构词渲染不一致：'
+                           f'{form!r} 渲染为 {rendered!r}')
+                fail(path, message)
+                errors.append(message)
     if errors:
-        return None, errors
+        return None, issues
     # schema 构造期复检全部跨段规则（渲染等式、覆盖、闭合）；先剥家族对象内
     # 与键一致的冗余 family_id（wire 允许携带，canonical 不收）。
     normalized = {
@@ -189,9 +265,10 @@ def compile_name_structure(
     try:
         structure = NameStructure.model_validate(normalized)
         errors = validate_name_resolutions(structure, characters, evidence=evidence)
-        return (None, errors) if errors else (structure, [])
+        return (None, issues + [(None, message) for message in errors]) if errors \
+            else (structure, issues)
     except ValidationError as exc:
-        return None, [f'name_structure 构造失败：{exc}']
+        return None, issues + [(None, f'name_structure 构造失败：{exc}')]
 
 
 def validate_name_resolutions(

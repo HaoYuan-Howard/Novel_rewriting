@@ -91,7 +91,8 @@ from novel.stages.common import (
 from novel.stages import candidates
 from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
-    chapter_observation_prompt, chapter_patch_locate, character_core_view,
+    book_patch_locate, chapter_observation_prompt, chapter_patch_locate,
+    character_core_view, names_patch_locate,
     compile_associate_observation, associate_observation_prompt,
     associate_patch_locate,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
@@ -131,7 +132,7 @@ from novel.stages.stage5 import (
 from novel.stages.stage7 import (
     apply_names, assemble_delivery, build_delivery_manifest, chapter_access,
     check_residual, compile_name_map, compile_surface_replacements,
-    naming_projection, verify_chapter_receipts,
+    naming_patch_locate, naming_projection, verify_chapter_receipts,
 )
 from novel.store import PublishItem, Str06Repository
 from novel.work_units import read_book_budget, require_workflow
@@ -305,9 +306,15 @@ def run_book(ctx: ChainContext) -> dict:
         book_observation_prompt(chapters=ctx.chapters, hook_copy=ctx.hook_copy,
                                 evidence=evidence),
         'stage2/observations/book.json')
+
+    def _locate(w, errs):
+        # CS-H H4（RC-57 覆盖）：条目级返修——人物条目／初态／约束／表达各自
+        # 可定位；协议形状类问题返回 None 退整份。
+        return book_patch_locate(w, errs, evidence=evidence)
+
     wire, book_ref = ctx.ask(
         'book', prompt,
-        lambda w: compile_book_observation(w, evidence=evidence)[1])
+        lambda w: compile_book_observation(w, evidence=evidence)[1], patch=_locate)
     observation, errors = compile_book_observation(wire, evidence=evidence)
     if errors:
         raise ValueError(errors)
@@ -461,8 +468,16 @@ def run_names(ctx: ChainContext) -> dict:
     names_prompt = pack_prompt(
         NAMES_RULES, input_version=NAMES_INPUT_VERSION,
         characters=core.model_dump(mode='json'), evidence=names_evidence_view(evidence))
+
+    def _locate(w, errs):
+        # CS-H H4（RC-57 覆盖）：条目级返修——家族／人物条目可定位；覆盖增删
+        # 与构造期复检返回 None 退整份。
+        return names_patch_locate(w, errs, core, full, evidence=evidence)
+
     names_wire, names_ref = ctx.ask(
-        'names', names_prompt, lambda w: compile_name_structure(w, core, full, evidence=evidence)[1])
+        'names', names_prompt,
+        lambda w: compile_name_structure(w, core, full, evidence=evidence)[1],
+        patch=_locate)
     structure, errors = compile_name_structure(names_wire, core, full, evidence=evidence)
     if errors:
         raise ValueError(errors)
@@ -1874,7 +1889,14 @@ def run_naming(ctx: ChainContext) -> dict:
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
     naming_prompt = pack_prompt(NAMING_RULES, book_title=ctx.book_title,
                                 projection=naming_projection(chars, blueprint))
-    nw, naming_ref = ctx.ask('naming', naming_prompt, lambda w: compile_name_map(w, chars)[1])
+
+    def _locate(w, errs):
+        # CS-H H4（RC-57 覆盖）：条目级返修——冲突类问题挂牵连条目，wire 级
+        # 问题（漏项＝需新增条目、未知字段）返回 None 退整份。
+        return naming_patch_locate(w, errs, chars)
+
+    nw, naming_ref = ctx.ask('naming', naming_prompt,
+                             lambda w: compile_name_map(w, chars)[1], patch=_locate)
     name_map, errors = compile_name_map(nw, chars)
     if errors:
         raise ValueError(errors)

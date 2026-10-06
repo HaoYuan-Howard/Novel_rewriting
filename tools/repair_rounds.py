@@ -107,21 +107,35 @@ def main(argv: list[str] | None = None) -> int:
 
     rows = [row for row in _load_ledger(base) if row.get('sid') == sid]
     if rows:
-        print('\n== 每节点全新生成（fresh，非缓存重放）与 completion ==')
-        agg: dict[str, dict] = defaultdict(lambda: {'fresh': 0, 'comp': 0, 'unknown': 0})
+        print('\n== 每节点全新生成（fresh，非缓存重放）与 token 三分列（输入/输出/推理；'
+              '推理不重复计入输出，D 表计量口径）==')
+        agg: dict[str, dict] = defaultdict(
+            lambda: {'fresh': 0, 'prompt': 0, 'prompt_unk': 0,
+                     'comp': 0, 'comp_unk': 0, 'reasoning': 0, 'reasoning_unk': 0})
         for row in rows:
             if row.get('cached'):
                 continue
             a = agg[row.get('node') or '?']
             a['fresh'] += 1
-            value = parse_usage(row).values['completion_tokens']
-            if value is None:
-                a['unknown'] += 1
-            else:
-                a['comp'] += value
+            values = parse_usage(row).values
+            for bucket, field in (('prompt', 'prompt_tokens'),
+                                  ('comp', 'completion_tokens'),
+                                  ('reasoning', 'reasoning_tokens')):
+                value = values[field]
+                if value is None:
+                    a[f'{bucket}_unk'] += 1
+                else:
+                    a[bucket] += value
         for node, a in sorted(agg.items()):
-            reading = f'{a["comp"]:8d}' if not a['unknown'] else f'未知（已知小计{a["comp"]}，缺失{a["unknown"]}次）'
-            print(f'  {node:26s} fresh={a["fresh"]:4d}  completion={reading}')
+
+            def _reading(bucket: str) -> str:
+                unknown = a[f'{bucket}_unk']
+                return (f'{a[bucket]:8d}' if not unknown else
+                        f'未知（已知小计{a[bucket]}，缺失{unknown}次）')
+
+            print(f'  {node:26s} fresh={a["fresh"]:4d}  '
+                  f'输入={_reading("prompt")}  输出={_reading("comp")}  '
+                  f'推理={_reading("reasoning")}')
         print(f'  缓存采用：{sum(bool(r.get("cached")) for r in rows)} 次（不重复计费）')
 
     accepts = _load_acceptances(base, sid) if sid else []

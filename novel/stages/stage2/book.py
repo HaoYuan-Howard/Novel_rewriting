@@ -56,38 +56,44 @@ def book_observation_prompt(*, chapters: list[dict], hook_copy: str,
                               evidence=render_evidence_block(evidence))
 
 
-def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]]:
-    """book wire 里全部 (来源, source_refs) 对（闭集核对与锚点派生共用）。
+def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...], tuple]]:
+    """book wire 里全部 (来源, source_refs, wire 路径) 三元组（闭集核对与锚点
+    派生共用；路径供条目定位器 `book_patch_locate` 同源复用，CS-H H4）。
 
     只走形状合法的条目；畸形条目交给协议校验报错，这里不猜不抛。
     """
-    pairs: list[tuple[str, tuple[str, ...]]] = []
+    pairs: list[tuple[str, tuple[str, ...], tuple]] = []
     raw_chars = wire.get('characters')
     if isinstance(raw_chars, Mapping):
         for slug, c in raw_chars.items():
             surfaces = (c or {}).get('surfaces') if isinstance(c, Mapping) else None
-            for s in surfaces or []:
+            for s_index, s in enumerate(surfaces or []):
                 if not isinstance(s, Mapping):
                     continue
                 pairs.append((f'{slug} surface {s.get("surface")}',
-                              tuple(s.get('source_refs') or ())))
+                              tuple(s.get('source_refs') or ()),
+                              ('characters', slug, 'surfaces', s_index)))
     raw_initial = wire.get('initial_state')
-    for atom in raw_initial or []:
+    for atom_index, atom in enumerate(raw_initial or []):
         if not isinstance(atom, Mapping):
             continue
         pairs.append((f'initial_state {atom.get("key")}',
-                      tuple(atom.get('source_refs') or ())))
+                      tuple(atom.get('source_refs') or ()),
+                      ('initial_state', atom_index)))
     raw_wcs = wire.get('world_constraints')
-    for wc in raw_wcs or []:
+    for wc_index, wc in enumerate(raw_wcs or []):
         if not isinstance(wc, Mapping):
             continue
         pairs.append((f'world_constraint {str(wc.get("statement"))[:20]}',
-                      tuple(wc.get('source_refs') or ())))
+                      tuple(wc.get('source_refs') or ()),
+                      ('world_constraints', wc_index)))
     expression = wire.get('expression')
     if isinstance(expression, Mapping):
         for index, item in enumerate([expression.get('narration'), *(expression.get('mechanisms') or [])]):
             if isinstance(item, Mapping):
-                pairs.append((f'expression[{index}]', tuple(item.get('source_refs') or ())))
+                path = (('expression', 'narration') if index == 0
+                        else ('expression', 'mechanisms', index - 1))
+                pairs.append((f'expression[{index}]', tuple(item.get('source_refs') or ()), path))
     return pairs
 
 
@@ -135,17 +141,19 @@ def _expand_wire_basis(wire: dict) -> dict:
     return expanded
 
 
-def _locate_basis_quotes(wire: dict, resolver: EvidenceResolver) -> list[str]:
+def _locate_basis_quotes(
+    wire: dict, resolver: EvidenceResolver,
+) -> list[tuple[tuple, str]]:
     """RC-27：初态／约束只给引文的 basis 在条目自身 source_refs 内定位所在段，
     段号与原文切片写回 compiler 副本；定位不了逐条报告（不改 source_refs、
-    不换引文——Resolver 的 issue 指明引文实际所在段）。"""
-    errors: list[str] = []
+    不换引文——Resolver 的 issue 指明引文实际所在段）。返回 (wire 路径, 消息)。"""
+    issues: list[tuple[tuple, str]] = []
     for group in ('initial_state', 'world_constraints'):
-        for atom in wire.get(group) or ():
+        for atom_index, atom in enumerate(wire.get(group) or ()):
             if not isinstance(atom, dict):
                 continue
             refs = tuple(atom.get('source_refs') or ())
-            for basis in atom.get('basis') or ():
+            for basis_index, basis in enumerate(atom.get('basis') or ()):
                 if not isinstance(basis, dict) or basis.get('segment') is not None:
                     continue
                 segment, quote, issue = resolver.locate_quote(
@@ -153,8 +161,10 @@ def _locate_basis_quotes(wire: dict, resolver: EvidenceResolver) -> list[str]:
                 if issue is None:
                     basis['segment'], basis['quote'] = segment, quote
                 else:
-                    errors.append(f'{_basis_label(group, atom)}：{issue.message}')
-    return errors
+                    issues.append((
+                        (group, atom_index, 'basis', basis_index),
+                        f'{_basis_label(group, atom)}：{issue.message}'))
+    return issues
 
 
 #: 定位失败的 basis 在**形状复验副本**里的占位段号（与 chapters 侧同一规则：
@@ -184,9 +194,54 @@ def compile_book_observation(
     （`STAGE2_BOOK_WIRE_PROTOCOL`）的 basis 只给引文，所在段由 Resolver 在条目
     自身 source_refs 内定位（RC-27）；canonical 形状直通（wire 领养与测试读面）。
     """
+    observation, located = _compile_book_view(wire, evidence=evidence)
+    return observation, [message for _path, message in located]
+
+
+def book_patch_locate(
+    wire: Any, errors: list, *,
+    evidence: Mapping[str, Mapping[str, Any]] | Iterable[str],
+) -> list[tuple[tuple[str | int, ...], list]] | None:
+    """CS-H H4（RC-57 覆盖）：book 条目定位（`ask_json` 的 `patch` 协议）。
+
+    与 `compile_book_observation` 同一条管道（不新增判据），把每条错误映射到
+    wire 条目路径（`characters.{slug}`／`initial_state[i]`／`world_constraints[i]`／
+    `expression.narration`）；协议形状类问题（wire 级）或 `errors` 与复跑定位集
+    不完全一致时返回 None——本轮退整份返修，不静默漏项。裸元组返回，
+    不 import novel.llm（分层规则禁 stage2 依赖 LLM 面）。
+    """
+    if not isinstance(wire, dict) or not errors:
+        return None
+    _observation, located = _compile_book_view(wire, evidence=evidence)
+    if any(path is None for path, _message in located):
+        return None
+    if len(errors) != len(located) or sorted(map(str, errors)) != sorted(
+            str(message) for _path, message in located):
+        return None
+    grouped: dict[tuple[str | int, ...], list] = {}
+    remaining = list(errors)
+    for path, message in located:
+        bucket = grouped.setdefault(tuple(path), [])
+        hit = next((error for error in remaining if str(error) == str(message)), None)
+        if hit is not None:
+            remaining.remove(hit)
+            bucket.append(hit)
+    return list(grouped.items())
+
+
+def _compile_book_view(
+    wire: Any, *, evidence: Mapping[str, Mapping[str, Any]] | Iterable[str],
+) -> tuple[BookObservation | None, list[tuple[tuple | None, str]]]:
+    """`compile_book_observation` 的定位视图：错误携带 wire 路径（None＝wire 级，
+    退整份返修；CS-H H4，与 `chapter_patch_locate` 的 `_compile_view` 同一模式）。"""
+    issues: list[tuple[tuple | None, str]] = []
+
+    def fail(path: tuple | None, message: str) -> None:
+        issues.append((path, message))
+
     errors: list[str] = []
     if not isinstance(wire, dict):
-        return None, ['book wire 必须是 JSON object']
+        return None, [(None, 'book wire 必须是 JSON object')]
     segments = dict(evidence) if isinstance(evidence, Mapping) else {}
     resolver = EvidenceResolver(segments)
     original = wire
@@ -196,13 +251,15 @@ def compile_book_observation(
     canonical = _expand_wire_basis(wire) if is_wire else deepcopy(wire)
     if is_wire:
         # 只有 wire 面的 basis 不带段号；canonical 直通缺段号按协议拒收，不代补。
-        errors.extend(_locate_basis_quotes(canonical, resolver))
+        issues.extend(_locate_basis_quotes(canonical, resolver))
+        errors.extend(message for _path, message in issues)
     _canonicalize_basis_quotes(canonical, resolver)
     wire = canonical
 
     # ① 证据句段闭集（逐条精确 issue，不模糊差）
-    for where, refs in _iter_book_refs(wire):
+    for where, refs, path in _iter_book_refs(wire):
         for issue in resolver.check_closed_set(refs):
+            fail(path, f'{where}：{issue.message}')
             errors.append(f'{where}：{issue.message}')
 
     # ② R-2.10 锚点可派生：每个 surface 的所引段至少一段逐字包含该称呼
@@ -211,12 +268,14 @@ def compile_book_observation(
     for slug, c in char_items:
         if not isinstance(c, Mapping):
             continue
-        for s in (c.get('surfaces') or []):
+        for s_index, s in enumerate(c.get('surfaces') or []):
             if not isinstance(s, Mapping):
                 continue
             _chapter, issue = resolver.surface_chapter(
                 s.get('surface'), tuple(s.get('source_refs') or ()))
             if issue is not None:
+                path = ('characters', slug, 'surfaces', s_index)
+                fail(path, f'{slug}：{issue.message}')
                 errors.append(f'{slug}：{issue.message}')
 
     # ②b from_chapter 源保真（R10c 硬化，2026-10-02）：surface 的首现章必须
@@ -227,7 +286,7 @@ def compile_book_observation(
     for slug, c in char_items:
         if not isinstance(c, Mapping):
             continue
-        for s in (c.get('surfaces') or []):
+        for s_index, s in enumerate(c.get('surfaces') or []):
             if not isinstance(s, Mapping):
                 continue
             literal = s.get('surface')
@@ -245,11 +304,13 @@ def compile_book_observation(
             first_chapter, first_ref = hits[0]
             expected = max(1, first_chapter)  # 章前（e00，chapter=0）映射第 1 章
             if declared != expected:
-                errors.append(
+                message = (
                     f'{slug} surface {literal!r} 的 from_chapter={declared} 记晚了'
                     f'——源文最早逐字出现于第 {expected} 章（证据段 {first_ref}），'
                     f'请把 from_chapter 改为 {expected} 并将 source_refs 指向'
                     '该章逐字命中的段')
+                fail(('characters', slug, 'surfaces', s_index), message)
+                errors.append(message)
 
     # ③ R-2.8 canonical 闭合 + surface 重复（canonical 未登记字面进不了替换表）
     slugs = set(raw_chars) if isinstance(raw_chars, Mapping) else set()
@@ -260,50 +321,69 @@ def compile_book_observation(
                     if isinstance(s, Mapping)]
         canonical = c.get('canonical')
         if canonical is not None and canonical not in surfaces:
-            errors.append(
-                f'{slug} 的 canonical {canonical!r} 不是其 surface 之一'
-                '（canonical 必须逐字等于某个已登记 surface）')
+            message = (f'{slug} 的 canonical {canonical!r} 不是其 surface 之一'
+                       '（canonical 必须逐字等于某个已登记 surface）')
+            fail(('characters', slug), message)
+            errors.append(message)
         if len(set(surfaces)) != len(surfaces):
-            errors.append(f'{slug} 的 surface 重复登记（复现应并入同一证据条）')
+            message = f'{slug} 的 surface 重复登记（复现应并入同一证据条）'
+            fail(('characters', slug), message)
+            errors.append(message)
 
     # ④ 初态与约束的引用闭合：目标人物、known_by、场景作用域键（R-2.9 一族）
-    for atom in wire.get('initial_state') or []:
+    for atom_index, atom in enumerate(wire.get('initial_state') or []):
         if not isinstance(atom, Mapping):
             continue
+        path = ('initial_state', atom_index)
         target = atom.get('target') or {}
         refs = ([target.get('char_id')] if target.get('kind') == 'character'
                 else [target.get('subject'), target.get('object')])
         for ref in refs:
             if ref is not None and ref not in slugs:
-                errors.append(f'initial_state {atom.get("key")} 引用未知人物 {ref}')
+                message = f'initial_state {atom.get("key")} 引用未知人物 {ref}'
+                fail(path, message)
+                errors.append(message)
         knowledge = atom.get('knowledge')
         for who in (knowledge.get('known_by') or []) if isinstance(knowledge, Mapping) else []:
             if who not in slugs:
-                errors.append(
-                    f'initial_state {atom.get("key")} 的 known_by 引用未知人物 {who}'
-                    '（读者知情用 reader_knows 表达）')
+                message = (f'initial_state {atom.get("key")} 的 known_by 引用未知人物 {who}'
+                           '（读者知情用 reader_knows 表达）')
+                fail(path, message)
+                errors.append(message)
         if REGISTERED_STATE_KEYS.get(atom.get('key')) == 'scene':
-            errors.append(
-                f'initial_state {atom.get("key")} 的键 {atom.get("key")} 是场景'
-                '作用域：开场所在交给第 1 章第一个 new 拍；故事开始前成立的长期'
-                '居所登记 residence')
+            message = (f'initial_state {atom.get("key")} 的键 {atom.get("key")} 是场景'
+                       '作用域：开场所在交给第 1 章第一个 new 拍；故事开始前成立的长期'
+                       '居所登记 residence')
+            fail(path, message)
+            errors.append(message)
 
     # ④b R10a a1：初态/约束的 basis 引文判定（C4——逐字命中＋段属自身
     # source_refs）；定位失败的 basis（段号仍为 None）已在定位步报告，不重复。
     basis_entries: list[tuple[str, str, str, Iterable[str]]] = []
+    basis_paths: list[tuple] = []
     for group in ('initial_state', 'world_constraints'):
-        for atom in wire.get(group) or []:
+        for atom_index, atom in enumerate(wire.get(group) or []):
             if not isinstance(atom, Mapping):
                 continue
-            for basis in atom.get('basis') or ():
+            for basis_index, basis in enumerate(atom.get('basis') or ()):
                 if isinstance(basis, Mapping) and basis.get('segment') is not None:
                     basis_entries.append((
                         _basis_label(group, atom),
                         str(basis.get('segment') or ''),
                         str(basis.get('quote') or ''),
                         tuple(atom.get('source_refs') or ())))
+                    basis_paths.append((group, atom_index, 'basis', basis_index))
+    # 标签可能重复（同键初态、前 16 字相同的约束）：按条目序消费路径，与
+    # verify_bases 的逐条产出序对齐。
+    by_label: dict[str, list[tuple]] = {}
+    for (where, _seg, _quote, _refs), path in zip(basis_entries, basis_paths):
+        by_label.setdefault(where, []).append(path)
     for where, issue in verify_bases(resolver, basis_entries):
-        errors.append(f'{where}：{issue.message}')
+        message = f'{where}：{issue.message}'
+        paths = by_label.get(where) or []
+        path = paths.pop(0) if paths else None
+        fail(path, message)
+        errors.append(message)
 
     # ⑤ 协议形状（版本字面量、slug 形状、target 形状、转移原子闭集）；LLM
     # 输出面另按 wire 模型复验（basis 只收引文串，不宽松接纳 canonical 形状）。
@@ -311,20 +391,23 @@ def compile_book_observation(
         try:
             BookObservationWire.model_validate(original)
         except ValidationError as exc:
+            fail(None, f'book 观察 wire 协议校验失败：{exc}')
             errors.append(f'book 观察 wire 协议校验失败：{exc}')
     try:
         # 占位段号只在本轮已带错（必不发布）时用于形状复验，见 `_UNLOCATED_SEGMENT`。
         observation = BookObservation.model_validate(_shape_view(wire) if errors else wire)
     except ValidationError as exc:
-        return None, errors + [f'book 观察协议校验失败：{exc}']
+        return None, issues + [(None, f'book 观察协议校验失败：{exc}')]
     if errors:
-        return None, errors
+        return None, issues
     for cid in observation.expression.narration.focalizers:
         if cid != 'narrator' and cid not in observation.characters:
+            fail(('expression', 'narration', 'focalizers'),
+                 f'expression.narration 引用未知人物 {cid}')
             errors.append(f'expression.narration 引用未知人物 {cid}')
     if errors:
-        return None, errors
-    return observation, []
+        return None, issues
+    return observation, issues
 
 
 def character_core_view(

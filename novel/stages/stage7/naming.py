@@ -84,32 +84,84 @@ def compile_name_map(
     wire: dict[str, Any], characters: CharactersArtifactV4,
 ) -> tuple[NameMapV5 | None, list[str]]:
     """Naming wire（{'entries': [...]}）→ NameMap v5（full 由 compiler 拼接）。"""
+    _map, located = _compile_name_map_located(wire, characters)
+    return _map, [message for _path, message in located]
+
+
+def naming_patch_locate(
+    wire: Any, errors: list, characters: CharactersArtifactV4,
+) -> list[tuple[tuple[str | int, ...], list]] | None:
+    """CS-H H4（RC-57 覆盖）：naming 条目定位（`ask_json` 的 `patch` 协议）。
+
+    与 `compile_name_map` 同一条管道（不新增判据），把每条错误映射到 wire 的
+    `entries[i]` 条目路径；冲突类错误挂到牵连的**每个**条目（改任一侧都能解）。
+    wire 级问题（未知字段／entries 缺失）或 `errors` 与复跑定位集不完全一致时
+    返回 None——本轮退整份返修，不静默漏项。裸元组返回，不 import novel.llm
+    （分层规则禁 stage7 依赖 LLM 面）。
+    """
+    if not isinstance(wire, dict) or not errors:
+        return None
+    _map, located = _compile_name_map_located(wire, characters)
+    if any(path is None for path, _message in located):
+        return None
+    if len(errors) != len(located) or sorted(map(str, errors)) != sorted(
+            str(message) for _path, message in located):
+        return None
+    grouped: dict[tuple[str | int, ...], list] = {}
+    remaining = list(errors)
+    for path, message in located:
+        bucket = grouped.setdefault(tuple(path), [])
+        hit = next((error for error in remaining if str(error) == str(message)), None)
+        if hit is not None:
+            remaining.remove(hit)
+            bucket.append(hit)
+    return list(grouped.items())
+
+
+def _compile_name_map_located(
+    wire: dict[str, Any], characters: CharactersArtifactV4,
+) -> tuple[NameMapV5 | None, list[tuple[tuple[str | int, ...] | None, str]]]:
+    """`compile_name_map` 的定位视图：错误携带 wire 路径（None＝wire 级，退整份）。"""
+    issues: list[tuple[tuple[str | int, ...] | None, str]] = []
+
+    def fail(path, message: str) -> None:
+        issues.append((path, message))
+
     errors: list[str] = []
     if set(wire) - {'entries'}:
+        fail(None, 'naming wire 携带未知字段')
         errors.append('naming wire 携带未知字段')
     raw_entries = wire.get('entries')
     if not isinstance(raw_entries, list) or not raw_entries:
-        return None, (errors + ['entries 缺失或为空'])
+        for message in (errors + ['entries 缺失或为空'] if errors else ['entries 缺失或为空']):
+            fail(None, message)
+        return None, issues
     expected = naming_projection(characters)
     expected_refs = set(expected['rename_set'])
     structure = characters.name_structure
     seen: dict[str, str] = {}
     entries: list[NameAssignment] = []
-    for raw in raw_entries:
+    entry_index: dict[str, int] = {}
+    for index, raw in enumerate(raw_entries):
         if not isinstance(raw, dict) or set(raw) - {'char_ref', 'name', 'aliases', 'keep_reason'}:
+            fail(('entries', index), f'naming 条目形状非法：{raw}')
             errors.append(f'naming 条目形状非法：{raw}')
             continue
         ref = raw.get('char_ref')
         if ref not in expected_refs:
             if ref in characters.characters:
+                fail(('entries', index), f'{ref} 不在应改名集合（纯称谓人物无需决策）')
                 errors.append(f'{ref} 不在应改名集合（纯称谓人物无需决策）')
             else:
+                fail(('entries', index), f'未知 char_ref：{ref}')
                 errors.append(f'未知 char_ref：{ref}')
             continue
         if ref in seen:
+            fail(('entries', index), f'char_ref 重复：{ref}')
             errors.append(f'char_ref 重复：{ref}')
             continue
         seen[ref] = ref
+        entry_index[ref] = index
         person = structure.people[ref]
         source_family = (structure.families[person.family_id].literal
                          if person.family_id else None)
@@ -117,38 +169,49 @@ def compile_name_map(
         name_raw = raw.get('name')
         aliases_raw = raw.get('aliases') or {}
         if keep_reason is not None and not str(keep_reason).strip():
+            fail(('entries', index), f'{ref} 保留必须带理由')
             errors.append(f'{ref} 保留必须带理由')
             continue
         if name_raw is None:
             if aliases_raw:
+                fail(('entries', index), f'{ref} 保留时不得再改化名')
                 errors.append(f'{ref} 保留时不得再改化名')
             entries.append(NameAssignment(
                 char_ref=ref, name=None, aliases={},
                 keep_reason=str(keep_reason)))
             continue
         if not isinstance(name_raw, dict):
+            fail(('entries', index), f'{ref} 的 name 形状非法')
             errors.append(f'{ref} 的 name 形状非法')
             continue
         family = name_raw.get('family')
         given = name_raw.get('given')
         aliases_raw = aliases_raw if isinstance(aliases_raw, dict) else {}
         if not family and not given and not aliases_raw:
+            fail(('entries', index),
+                 f'{ref} 的目标名称全空：改名需给名称位或化名位，保留请给 keep_reason')
             errors.append(
                 f'{ref} 的目标名称全空：改名需给名称位或化名位，保留请给 keep_reason')
             continue
         if keep_reason is not None:
+            fail(('entries', index), f'{ref} 的 name 与 keep_reason 只能给出一个')
             errors.append(f'{ref} 的 name 与 keep_reason 只能给出一个')
             continue
-        if source_family is not None and not family:
-            errors.append(f'{ref} 缺少姓氏位（源结构登记了姓 {source_family}）')
-        if source_family is None and family:
-            errors.append(f'{ref} 源结构无姓氏位，不得给 family')
-        if person.given is not None and not given:
-            errors.append(f'{ref} 缺少名字位（源结构登记了名 {person.given}）')
-        if person.given is None and given:
-            errors.append(f'{ref} 源结构无名字位，不得给 given')
+        for message in (
+                f'{ref} 缺少姓氏位（源结构登记了姓 {source_family}）'
+                if source_family is not None and not family else None,
+                f'{ref} 源结构无姓氏位，不得给 family'
+                if source_family is None and family else None,
+                f'{ref} 缺少名字位（源结构登记了名 {person.given}）'
+                if person.given is not None and not given else None,
+                f'{ref} 源结构无名字位，不得给 given'
+                if person.given is None and given else None):
+            if message:
+                fail(('entries', index), message)
+                errors.append(message)
         unknown_alias = set(aliases_raw) - {a.alias_id for a in person.aliases}
         if unknown_alias:
+            fail(('entries', index), f'{ref} 的化名位未登记：{sorted(unknown_alias)}')
             errors.append(f'{ref} 的化名位未登记：{sorted(unknown_alias)}')
         entries.append(NameAssignment(
             char_ref=ref,
@@ -158,12 +221,19 @@ def compile_name_map(
     by_ref = {e.char_ref: e for e in entries}
     missing = expected_refs - set(by_ref)
     if missing:
+        # 漏项＝需要新增条目，不是替换既有条目——定位不了，退整份返修。
+        fail(None, f'应改名集合漏项：{sorted(missing)}')
         errors.append(f'应改名集合漏项：{sorted(missing)}')
 
     if not errors:
-        errors.extend(_check_name_conflicts(entries, characters, structure))
+        for message, refs in _check_name_conflicts(entries, characters, structure):
+            paths = tuple(dict.fromkeys(
+                ('entries', entry_index[ref]) for ref in refs if ref in entry_index))
+            for path in paths or (None,):
+                fail(path, message)
+            errors.append(message)
     if errors:
-        return None, errors
+        return None, issues
     # full 由 compiler 拼接（wire 不携带）；化名位改名人物可无姓名位。
     filled: list[NameAssignment] = []
     for entry in entries:
@@ -174,19 +244,21 @@ def compile_name_map(
         filled.append(entry.model_copy(update={
             'name': TargetName(family=entry.name.family, given=entry.name.given,
                                full=full)}))
-    return NameMapV5(entries=tuple(filled)), []
+    return NameMapV5(entries=tuple(filled)), issues
 
 
-def _check_name_conflicts(entries, characters, structure) -> list[str]:
+def _check_name_conflicts(entries, characters, structure) -> list[tuple[str, tuple[str, ...]]]:
     """同 family_id 新姓一致；不同源姓不得合并同姓；新字面与跨人旧字面冲突。
 
-    本人保留未改的名称位（如只换姓、名不变）不算冲突；新姓必须与本人旧姓
+    返回 (message, 牵连 char_ref 序)：定位器把冲突挂到牵连条目（改任一侧都能
+    解）。本人保留未改的名称位（如只换姓、名不变）不算冲突；新姓必须与本人旧姓
     不同（换名就要真换）。
     """
-    problems: list[str] = []
+    problems: list[tuple[str, tuple[str, ...]]] = []
     renames = {e.char_ref: e for e in entries if e.name is not None}
     # 家族一致性：同 family_id → 同新姓；不同 literal 的 family → 不得同新姓。
     family_new: dict[str, str] = {}
+    family_new_ref: dict[str, str] = {}
     new_family_owner: dict[str, tuple[str, str]] = {}
     for ref, entry in sorted(renames.items()):
         if not entry.name.family:
@@ -196,13 +268,16 @@ def _check_name_conflicts(entries, characters, structure) -> list[str]:
         if family_id:
             registered = family_new.get(family_id)
             if registered is not None and registered != entry.name.family:
-                problems.append(
+                problems.append((
                     f'同一家族 {family_id} 的新姓不一致：{registered} 与 {entry.name.family}'
-                    f'（{ref}）')
-            family_new.setdefault(family_id, entry.name.family)
+                    f'（{family_new_ref[family_id]} 与 {ref}）',
+                    (family_new_ref[family_id], ref)))
+            else:
+                family_new.setdefault(family_id, entry.name.family)
+                family_new_ref.setdefault(family_id, ref)
             literal = structure.families[family_id].literal
             if entry.name.family == literal:
-                problems.append(f'{ref} 的新姓与本人旧姓相同：{literal!r}')
+                problems.append((f'{ref} 的新姓与本人旧姓相同：{literal!r}', (ref,)))
         owner = new_family_owner.get(entry.name.family)
         if owner is None:
             source = structure.families[family_id].literal if family_id else None
@@ -210,9 +285,9 @@ def _check_name_conflicts(entries, characters, structure) -> list[str]:
         else:
             source = structure.families[family_id].literal if family_id else None
             if owner[0] != (source or ''):
-                problems.append(
+                problems.append((
                     f'不同源姓 {owner[0]!r} 与 {source!r} 不得合并到同一新姓 '
-                    f'{entry.name.family!r}（{owner[1]} 与 {ref}）')
+                    f'{entry.name.family!r}（{owner[1]} 与 {ref}）', (owner[1], ref)))
     # 跨人旧字面集：新字面不得与**他人**的专名字面/带名 surface 相撞；
     # 本人保留未改的名称位（同名传入）不算冲突。
     for ref, entry in sorted(renames.items()):
@@ -229,16 +304,17 @@ def _check_name_conflicts(entries, characters, structure) -> list[str]:
                             *entry.aliases.values()) if x]
         for literal in news:
             if literal in others:
-                problems.append(f'{ref} 的新字面 {literal!r} 与他人旧字面冲突')
+                problems.append((f'{ref} 的新字面 {literal!r} 与他人旧字面冲突', (ref,)))
             if literal in own and literal != person.given and literal not in {
                     a.literal for a in person.aliases}:
-                problems.append(f'{ref} 的新字面 {literal!r} 与本人旧字面冲突')
+                problems.append((f'{ref} 的新字面 {literal!r} 与本人旧字面冲突', (ref,)))
     new_literals: dict[str, str] = {}
     for ref, entry in sorted(renames.items()):
         for literal in [x for x in (entry.name.given, *entry.aliases.values()) if x]:
             if literal in new_literals and new_literals[literal] != ref:
-                problems.append(
-                    f'新字面 {literal!r} 归属多人：{new_literals[literal]} 与 {ref}')
+                problems.append((
+                    f'新字面 {literal!r} 归属多人：{new_literals[literal]} 与 {ref}',
+                    (new_literals[literal], ref)))
             new_literals.setdefault(literal, ref)
     return problems
 

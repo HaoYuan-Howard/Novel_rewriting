@@ -182,7 +182,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                  budget=800)
     assert repo.path('stage4/ir/writer_book_ir.json').read_bytes() == before
     assert repo.read('runtime/workflow_status.json')['status'] == 'planned_validated'
-    def rejected(owner, prompt, validate):
+    def rejected(owner, prompt, validate, patch=None, **kwargs):
         raise ValueError('book 输入待免费修复')
     import pytest
     with pytest.raises(ValueError, match='免费修复'):

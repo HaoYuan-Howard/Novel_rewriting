@@ -32,7 +32,8 @@ from novel.stages.stage2.associate import (
     target_label,
 )
 from novel.stages.stage2.book import (
-    book_observation_prompt, character_core_view, compile_book_observation,
+    book_observation_prompt, book_patch_locate, character_core_view,
+    compile_book_observation,
 )
 from novel.stages.stage2.chapters import (
     chapter_observation_prompt, chapter_patch_locate, chapter_prior_text,
@@ -46,7 +47,7 @@ from novel.stages.stage2.compile import (
 from novel.stages.stage2.names import (
     NAMES_INPUT_VERSION, normalize_name_observations, validate_name_resolutions,
     ProbeFinding, compile_name_structure, merge_name_structure, names_evidence_view,
-    surname_construction_probe,
+    names_patch_locate, surname_construction_probe,
 )
 from novel.stages.stage2.resolver import (
     AnchorHit, EvidenceResolver, ResolverIssue,
@@ -63,15 +64,16 @@ __all__ = [
     'STAGE2_OBSERVATION_PROTOCOL', 'SceneHandle',
     'StateHandle', 'expand_chapter_wire', 'first_appearance_anchors',
     'first_appearance_issues', 'slim_chapter_wire',
-    'associate_observation_prompt', 'associate_patch_locate', 'book_state_handle',
-    'chapter_observation_prompt', 'chapter_prior_text',
+    'associate_observation_prompt', 'associate_patch_locate', 'book_observation_prompt',
+    'book_patch_locate', 'book_state_handle', 'chapter_observation_prompt', 'chapter_prior_text',
     'chapter_state_handle', 'character_core_view',
     'compile_associate_observation',
     'chapter_patch_locate', 'compile_book_observation', 'compile_chapter_observation', 'chapter_loop_issues',
     'compile_name_structure', 'compile_source_truth', 'evidence_metrics',
     'normalize_name_observations', 'validate_name_resolutions',
     'initial_snapshot',
-    'merge_name_structure', 'names_evidence_view', 'project_association_space',
+    'merge_name_structure', 'names_evidence_view', 'names_patch_locate',
+    'project_association_space',
     'serialize_target', 'state_dimension_address',
     'source_fold', 'surname_construction_probe', 'target_label',
 ]

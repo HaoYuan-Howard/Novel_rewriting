@@ -19,8 +19,10 @@ def _make_base(tmp_path):
     from novel.work_units import initialize_workflow
     initialize_workflow(base)
     (base / '_service' / 'ledger.jsonl').write_text('\n'.join(json.dumps(dict(r, sid='sid1')) for r in (
-        {'node': 'str06.stage2.chapters', 'cached': False, 'completion_tokens': 100},
-        {'node': 'str06.stage2.chapters', 'cached': False, 'completion_tokens': 50},
+        {'node': 'str06.stage2.chapters', 'cached': False, 'completion_tokens': 100,
+         'prompt_tokens': 120, 'completion_tokens_details': {'reasoning_tokens': 40}},
+        {'node': 'str06.stage2.chapters', 'cached': False, 'completion_tokens': 50,
+         'prompt_tokens': 80, 'completion_tokens_details': {'reasoning_tokens': 20}},
         {'node': 'str06.stage2.chapters', 'cached': True, 'completion_tokens': 0},
     )) + '\n', encoding='utf-8')
     import hashlib
@@ -52,7 +54,9 @@ def test_repair_rounds_tables(tmp_path, capsys):
     base = _make_base(tmp_path)
     assert main([str(base), '--sid', 'sid1']) == 0
     out = capsys.readouterr().out
-    assert 'str06.stage2.chapters      fresh=   2  completion=     150' in out, \
+    # CS-H H4（D 表计量口径）：输入／输出／推理三分列（推理不重复计入输出），
+    # 缓存重放不计 fresh。
+    assert 'str06.stage2.chapters      fresh=   2  输入=     200  输出=     150  推理=      60' in out, \
         '缓存重放不计 fresh（ledger 为权威账）'
     assert '当前首内容轮接受：0/1' in out, '按正式轮次排序，不按反序时间戳或随机ID'
     assert '修订内容轮×1' in out and '非历史首过率' in out

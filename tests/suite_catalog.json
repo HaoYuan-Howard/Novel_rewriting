@@ -907,6 +907,13 @@
         "test_stage2_observation_leg_persists_observations_and_names_remount": "stage"
       }
     },
+    "tests/test_str06_entry_locators.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage7"
+      ]
+    },
     "tests/test_str06_associate_v3.py": {
       "layer": "unit_contract",
       "stages": [
