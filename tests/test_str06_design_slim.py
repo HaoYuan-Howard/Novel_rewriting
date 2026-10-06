@@ -56,7 +56,7 @@ def test_model_design_schema_keeps_dynamic_knowledge_branches_valid():
 def _brief() -> ReconstructionBrief:
     return ReconstructionBrief.model_validate({
         'brief_id': 'brief_test', 'preserve_checkpoint_sha256': 'a' * 64,
-        'contract_version': 'str06-rc14',
+        'contract_version': 'str06-rc17',
         'requirements': [
             {'core_id': 'req_aaaa', 'summary': '芸娘确知夫君不育',
              'kind': 'reveal', 'must_preserve': True, 'satisfaction': '开场揭示',

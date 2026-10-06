@@ -521,7 +521,7 @@ def test_hook_context_rejects_pre_rc16_payload_and_duplicate_bindings():
     with pytest.raises(ValidationError):
         HookContext.model_validate(stored)
     duplicate = dict(stored)
-    duplicate['contract_version'] = 'str06-rc16'
+    duplicate['contract_version'] = 'str06-rc17'
     duplicate['withheld_bindings'] = [
         dict(b) for b in context.withheld_bindings][:1] * 2
     with pytest.raises(ValidationError, match='重复'):
@@ -558,5 +558,5 @@ def test_hook_projection_reaches_the_compile_guard_report(tmp_path):
     reopened = Str06Repository(repo.root)
     assert reopened.inspect('stage4/acceptance/guard/report.json') == report
     context = reopened.read_model('stage4/context/hook/hook.json')
-    assert context.contract_version == 'str06-rc16'
+    assert context.contract_version == 'str06-rc17'
     assert '陆大哥' in context.design_brief and '陆大哥' not in build_hook_user_prompt(context)

@@ -414,7 +414,7 @@ def _receipt_stale() -> list:
 
     from contracts.schema.receipt import ChapterLengthDisclosure
     receipt = ChapterReceipt(
-        contract_version='str06-rc12', chapter_ordinal=1, status='accepted',
+        contract_version='str06-rc17', chapter_ordinal=1, status='accepted',
         writer_view_sha256='a' * 64, validation_sha256='b' * 64,
         machine_view_sha256='e' * 64,
         prose_sha256='c' * 64, request_identity='r1',

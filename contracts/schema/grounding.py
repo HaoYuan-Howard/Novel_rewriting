@@ -330,7 +330,7 @@ class ReconstructionBrief(StrictModel):
     不得经状态或说明改写；兑现与越权校验归 assemble_body_design。
     """
 
-    contract_version: Literal['str06-rc14'] = 'str06-rc14'
+    contract_version: Literal['str06-rc17'] = 'str06-rc17'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
@@ -445,7 +445,7 @@ class SemanticBinding(StrictModel):
     产物没有该映射，由 `contract_version` 字面量拒读——缺省空表不会冒充旧产物。
     """
 
-    contract_version: Literal['str06-rc16'] = 'str06-rc16'
+    contract_version: Literal['str06-rc17'] = 'str06-rc17'
     binding_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     obligations: tuple[SourceObligation, ...] = Field(min_length=1)

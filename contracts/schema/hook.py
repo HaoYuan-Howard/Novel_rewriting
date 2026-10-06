@@ -165,7 +165,7 @@ class HookContext(StrictModel):
     （无可证明绑定＝一律不投影），上下文字段本身不被投影改写。
     """
 
-    contract_version: Literal['str06-rc16'] = 'str06-rc16'
+    contract_version: Literal['str06-rc17'] = 'str06-rc17'
     pov: HookPov
     opening_facts: tuple[HookOpeningFact, ...] = ()
     materials: tuple[HookMaterialView, ...] = Field(min_length=1)

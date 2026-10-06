@@ -206,7 +206,7 @@ def test_binding_fact_bindings_reference_states_and_never_copy_values():
     bound = FactLockBinding(kf_id=kf, beat_ref='sc01#b06', address=address)
     assert set(bound.model_dump()) == {'kf_id', 'beat_ref', 'address'}, '不复制目标 value'
     binding = SemanticBinding(**_binding(fact_bindings=(bound,)))
-    assert binding.contract_version == 'str06-rc16'
+    assert binding.contract_version == 'str06-rc17'
     assert SemanticBinding(**_binding()).fact_bindings == (), '空表＝没有锁被兑现'
     with pytest.raises(ValidationError):
         SemanticBinding(**_binding(fact_bindings=(bound, bound)))   # 一锁一承载

@@ -121,9 +121,14 @@ def _artifact_model(rel: str | None):
 
 # ── rc12/rc13→rc14 登记迁移：仅正式模型读取口；inspect 保留原字节 ─────────
 # 删除条件见 REQUIREMENTS：历史运行根全部重建或退役后删除此兼容层。
+# rc17（CS-H H3）：brief／writer_book_ir 形状再升（H3 新字段全部可缺省读入），
+# 迁移直接钉 rc17——旧根保持只读可读（增量字段缺省），续跑仍按候选契约表拒收。
 _RC14_SITES = {
     'stage4/design/body_design.json', 'stage4/design/presentation_graph.json',
-    'stage4/compiled/execution_plan.json', 'stage4/grounding/reconstruction_brief.json',
+    'stage4/compiled/execution_plan.json',
+}
+_RC17_SITES = {
+    'stage4/grounding/reconstruction_brief.json',
     'stage4/ir/writer_book_ir.json',
 }
 _ADDRESS_FIELDS = {'domain', 'key', 'subjects', 'holder', 'at', 'op', 'value',
@@ -137,7 +142,7 @@ def _upgrade_rc12_payload(spec: str | None, data: dict) -> dict:
     地址、读取、Hook 地址和变化使用同一 reader 归一。StateEntry 读者条目
     转为 KnowledgeEntry，并移动到相应知情容器；不修改输入或历史封存字节。
     """
-    if spec not in _RC14_SITES or data.get('contract_version') not in (
+    if spec not in _RC14_SITES | _RC17_SITES or data.get('contract_version') not in (
             'str06-rc12', 'str06-rc13'):
         return data
     out = copy.deepcopy(data)
@@ -206,7 +211,10 @@ def _upgrade_rc12_payload(spec: str | None, data: dict) -> dict:
                               for r in value['reads']]
         return {key: walk(item, f'{path}.{key}') for key, item in value.items()}
 
-    return walk(out)
+    result = walk(out)
+    if spec in _RC17_SITES:
+        result['contract_version'] = 'str06-rc17'
+    return result
 
 
 

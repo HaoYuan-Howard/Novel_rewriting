@@ -2723,7 +2723,8 @@ def test_upgrade_rc12_brief_structurizes_book_constraints():
         'stage4/grounding/reconstruction_brief.json',
         {'contract_version': 'str06-rc12',
          'book_constraints': ['术法须以寿命为代价', '官府不涉异事']})
-    assert data['contract_version'] == 'str06-rc14'
+    # rc17（CS-H H3）：Brief 形状再升（新字段可缺省读入），迁移直接钉 rc17。
+    assert data['contract_version'] == 'str06-rc17'
     assert data['book_constraints'] == [
         {'constraint_id': 'wc_01', 'statement': '术法须以寿命为代价'},
         {'constraint_id': 'wc_02', 'statement': '官府不涉异事'}]

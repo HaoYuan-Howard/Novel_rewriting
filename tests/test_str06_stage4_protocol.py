@@ -135,7 +135,7 @@ def test_protocols_are_independent_literals():
     assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,
                 STAGE4_HOOK_DESIGN_PROTOCOL}) == 3
     # RC 版式头随 R2 语义送达升 rc10（R1 关联无损曾升 rc9）
-    assert STR06_RC_VERSION == 'str06-rc16'  # rc16 事实锁引用（CS-F2）；rc15 证据寻址（RC-26／27）
+    assert STR06_RC_VERSION == 'str06-rc17'  # rc17 CS-H H3 称谓面＋H4 associate v3
 
 
 def test_design_wire_without_protocol_is_refused():
