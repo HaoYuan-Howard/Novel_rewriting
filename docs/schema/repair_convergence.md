@@ -500,7 +500,7 @@ anchors／quotes，Hook材料里的姓名在渲染期已投影（本根17次）�
 
 | 环节 | 要求 |
 |---|---|
-| 覆盖 | 全部JSON节点都有条目定位器；跨节点回派与节点内返修同一协议，基底是owner已发布版本的修订对照wire。**已落地口径（H4，2026-10-06）**：定位器齐面——chapters（`chapter_patch_locate`，CS-patch）、Design／HookDesign（`locate_design_patches`）、Preserve（`locate_preserve_patches`）、associate（`associate_patch_locate`，配对条目）、book／names／naming（`book_patch_locate`／`names_patch_locate`／`naming_patch_locate`，与各自 compile 同源视图，不新增判据）；覆盖增删、构造期复检与协议字面量等**替换不了**的问题仍走整份出口，不静默漏项 |
+| 覆盖 | 全部JSON节点都有条目定位器；跨节点回派与节点内返修同一协议，基底是owner已发布版本的修订对照wire。**已落地口径（H4，2026-10-06）**：定位器齐面——chapters（`chapter_patch_locate`，CS-patch）、Design／HookDesign（`locate_design_patches`）、Preserve（`locate_preserve_patches`）、associate（`associate_patch_locate`，配对条目）、book／names／naming（`book_patch_locate`／`names_patch_locate`／`naming_patch_locate`，与各自 compile 同源视图，不新增判据）；覆盖增删、构造期复检与协议字面量等**替换不了**的问题仍走整份出口，不静默漏项。**请求路径不重叠**：同一条目的父、子错误折叠到父条目（`novel/stages/common.py::group_located_errors`，book／names／naming 共用；chapters 的同名折叠在 `chapter_patch_locate`）；associate 的多句柄位置（同章／因果／续场的两端）只命中**同时含全部句柄**的那一行，未知句柄按所在字段定位，协议校验错误按 `loc` 的条目下标直达 |
 | 目标 | 固定路径；或**可选目标**：责任位置须由模型决定时（必保义务漏标、新增义务、需选释放位置），给出候选拍闭集，回答的路径必须落在闭集内（RC-58） |
 | 输入 | 协议规则＋失败条目＋依赖切片＋合法取值；切片只带必要的事实与状态，不带整份原请求，也不带前序材料全文 |
 | 输出与应用 | 只返回目标路径的替换；范围外改动拒绝；核对基底候选摘要；合并后跑完整验收，无关条目字节不变 |

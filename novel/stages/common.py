@@ -27,13 +27,15 @@
                    格式化，不压缩语义、不改写 brief、不新增模型调用。
   六、场景叠加     `StateOverlay`：book／scene 两级状态叠加与换场失效（D16：
                    Stage2 源折叠与 Stage4 计划折叠共用的唯一实现）。
+  七、条目定位     `group_located_errors`：JSON owner 的 `patch` 定位器共用的
+                   「错误→不重叠条目路径」对账与分组（CS-H H4，RC-57）。
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
-from typing import Any, Callable, Iterable, Mapping, NamedTuple, Protocol
+from typing import Any, Callable, Iterable, Mapping, NamedTuple, Protocol, Sequence
 
 from pydantic import BaseModel
 
@@ -2719,3 +2721,60 @@ class StateOverlay:
 
     def entries(self) -> tuple[OverlayChange, ...]:
         return tuple(self.visible()[addr] for addr in sorted(self.visible(), key=str))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 七、条目定位原语（CS-H H4，RC-57：JSON owner 的 `patch` 定位器共用）
+#
+# 【为什么在这里】book／names／naming（Stage2、Stage7）各有一个条目定位器：用
+# **与验收同一条管道**产出定位视图（每条错误一项 `(wire 路径元组 | None, 消息)`），
+# 再与 `ask_json` 实际收到的错误对账并分组。对账与分组是跨 stage 的确定性尾巴，
+# 不属任何一个 owner；此前三个定位器各抄一份，抄漏了「祖先折叠」（章观察那份
+# `chapter_patch_locate` 有），book 的父、子错误就成了重叠的请求路径。
+#
+# 【它不是什么】不产出定位视图、不判错（判据归各 owner 的 compile）、不 import
+# `novel.llm`（分层规则禁 stage 依赖 LLM 面）；返回裸元组，错误对象原样回传
+# （`ask_json` 以集合相等核对覆盖）。
+# ═════════════════════════════════════════════════════════════════════════════
+
+#: wire 内条目路径（`('families', 'f_lu')`、`('entries', 3)`…）。
+EntryPath = tuple[str | int, ...]
+
+
+def group_located_errors(
+    errors: Sequence[object],
+    located: Sequence[tuple[Sequence[EntryPath] | None, str]],
+) -> list[tuple[EntryPath, list[object]]] | None:
+    """把 `ask_json` 收到的 `errors` 按**不重叠**的条目路径分组。
+
+    `located` 与 `errors` 一一对应（每条错误一项）：``(该错误挂到的路径元组, 消息)``；
+    路径为空或 None＝wire 级（协议字面量、覆盖增删、构造期复检）。三件事：
+
+    1. 对账：数量与消息集合须一致，否则返回 None（别的闸在拦，本轮退整份返修）；
+    2. 任一错误没有条目路径即整体返回 None，不静默漏项；
+    3. 祖先折叠：错误的路径有祖先路径也在请求集合里时挂到祖先——请求路径不重叠，
+       防止父替换改变结构后子路径失效，也避免模型为同一内容提交两份值。
+
+    一条错误可挂多个路径（冲突类：改任一侧都能解）。返回按首次出现序的
+    ``(path, [errors])``；无法完整定位时返回 None。
+    """
+    if not errors or not located:
+        return None
+    if any(not paths for paths, _message in located):
+        return None
+    if len(errors) != len(located) or sorted(map(str, errors)) != sorted(
+            str(message) for _paths, message in located):
+        return None
+    requested = {tuple(path) for paths, _message in located for path in paths}
+    grouped: dict[EntryPath, list[object]] = {}
+    remaining = list(errors)
+    for paths, message in located:
+        hit = remaining.pop(next(index for index, error in enumerate(remaining)
+                                 if str(error) == str(message)))
+        for path in map(tuple, paths):
+            ancestor = next((path[:length] for length in range(1, len(path))
+                             if path[:length] in requested), path)
+            bucket = grouped.setdefault(ancestor, [])
+            if not any(item is hit for item in bucket):
+                bucket.append(hit)
+    return list(grouped.items())

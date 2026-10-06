@@ -20,6 +20,7 @@ from contracts.schema.source import (
     CharactersCore, NameStructure, render_form,
 )
 from contracts.schema.observation import STAGE2_NAMES_PROTOCOL
+from novel.stages.common import group_located_errors
 
 _PEOPLE_KEYS = frozenset({'family_id', 'given', 'aliases', 'surface_forms'})
 _FAMILY_KEYS = frozenset({'literal', 'forms'})
@@ -77,28 +78,18 @@ def names_patch_locate(
     """CS-H H4（RC-57 覆盖）：names 条目定位（`ask_json` 的 `patch` 协议）。
 
     与 `compile_name_structure` 同一条管道（不新增判据）：家族条目错误映射到
-    `families.{fid}`、人物条目到 `people.{slug}`。wire 级问题（协议字面量／
-    覆盖缺失＝需增删条目／构造期复检）或 `errors` 与复跑定位集不完全一致时
-    返回 None——本轮退整份返修，不静默漏项。
+    `families.{fid}`、人物条目到 `people.{slug}`（两级路径互不嵌套，分组见
+    `common.group_located_errors`）。wire 级问题（协议字面量／覆盖缺失＝需增删
+    条目／构造期复检）或 `errors` 与复跑定位集不完全一致时返回 None——本轮退整份
+    返修，不静默漏项。
     """
     if not isinstance(wire, dict) or not errors:
         return None
     _structure, located = _compile_name_structure_located(
         wire, characters, source_text, evidence=evidence)
-    if any(path is None for path, _message in located):
-        return None
-    if len(errors) != len(located) or sorted(map(str, errors)) != sorted(
-            str(message) for _path, message in located):
-        return None
-    grouped: dict[tuple[str | int, ...], list] = {}
-    remaining = list(errors)
-    for path, message in located:
-        bucket = grouped.setdefault(tuple(path), [])
-        hit = next((error for error in remaining if str(error) == str(message)), None)
-        if hit is not None:
-            remaining.remove(hit)
-            bucket.append(hit)
-    return list(grouped.items())
+    return group_located_errors(
+        errors, [((path,) if path is not None else None, message)
+                 for path, message in located])
 
 
 def _compile_name_structure_located(
@@ -121,13 +112,12 @@ def _compile_name_structure_located(
         errors.append('names wire 携带未知字段')
     raw_families = wire.get('families') or {}
     raw_people = wire.get('people') or {}
+    # 早退分支只补报自己的问题：此前的「未知字段」已经记入 issues，不再重报。
     if not isinstance(raw_families, dict) or not raw_families:
-        for message in (errors + ['families 缺失或为空'] if errors else ['families 缺失或为空']):
-            fail(None, message)
+        fail(None, 'families 缺失或为空')
         return None, issues
     if not isinstance(raw_people, dict):
-        for message in (errors + ['people 必须是对象'] if errors else ['people 必须是对象']):
-            fail(None, message)
+        fail(None, 'people 必须是对象')
         return None, issues
     slugs = set(characters.characters)
     unknown_people = set(raw_people) - slugs

@@ -22,7 +22,9 @@ from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
 from contracts.schema.source import (
     BlueprintsArtifactV15, CharactersArtifactV4, render_form,
 )
-from novel.stages.common import apply_replacements, uncovered_occurrences
+from novel.stages.common import (
+    apply_replacements, group_located_errors, uncovered_occurrences,
+)
 
 NAMING_VALIDATOR_VERSION = 'str06-naming-v1'
 
@@ -85,7 +87,7 @@ def compile_name_map(
 ) -> tuple[NameMapV5 | None, list[str]]:
     """Naming wire（{'entries': [...]}）→ NameMap v5（full 由 compiler 拼接）。"""
     _map, located = _compile_name_map_located(wire, characters)
-    return _map, [message for _path, message in located]
+    return _map, [message for _paths, message in located]
 
 
 def naming_patch_locate(
@@ -96,36 +98,27 @@ def naming_patch_locate(
     与 `compile_name_map` 同一条管道（不新增判据），把每条错误映射到 wire 的
     `entries[i]` 条目路径；冲突类错误挂到牵连的**每个**条目（改任一侧都能解）。
     wire 级问题（未知字段／entries 缺失）或 `errors` 与复跑定位集不完全一致时
-    返回 None——本轮退整份返修，不静默漏项。裸元组返回，不 import novel.llm
+    返回 None——本轮退整份返修，不静默漏项。分组与对账见
+    `common.group_located_errors`；裸元组返回，不 import novel.llm
     （分层规则禁 stage7 依赖 LLM 面）。
     """
     if not isinstance(wire, dict) or not errors:
         return None
     _map, located = _compile_name_map_located(wire, characters)
-    if any(path is None for path, _message in located):
-        return None
-    if len(errors) != len(located) or sorted(map(str, errors)) != sorted(
-            str(message) for _path, message in located):
-        return None
-    grouped: dict[tuple[str | int, ...], list] = {}
-    remaining = list(errors)
-    for path, message in located:
-        bucket = grouped.setdefault(tuple(path), [])
-        hit = next((error for error in remaining if str(error) == str(message)), None)
-        if hit is not None:
-            remaining.remove(hit)
-            bucket.append(hit)
-    return list(grouped.items())
+    return group_located_errors(errors, located)
 
 
 def _compile_name_map_located(
     wire: dict[str, Any], characters: CharactersArtifactV4,
-) -> tuple[NameMapV5 | None, list[tuple[tuple[str | int, ...] | None, str]]]:
-    """`compile_name_map` 的定位视图：错误携带 wire 路径（None＝wire 级，退整份）。"""
-    issues: list[tuple[tuple[str | int, ...] | None, str]] = []
+) -> tuple[NameMapV5 | None,
+           list[tuple[tuple[tuple[str | int, ...], ...] | None, str]]]:
+    """`compile_name_map` 的定位视图：每条错误一项 ``(挂到的条目路径元组, 消息)``
+    （None＝wire 级，退整份）。冲突类错误一条消息挂多个条目，**错误列表仍只有一条**
+    ——定位面的扇出不改变 `compile_name_map` 返回的错误。"""
+    issues: list[tuple[tuple[tuple[str | int, ...], ...] | None, str]] = []
 
     def fail(path, message: str) -> None:
-        issues.append((path, message))
+        issues.append(((path,) if path is not None else None, message))
 
     errors: list[str] = []
     if set(wire) - {'entries'}:
@@ -133,8 +126,8 @@ def _compile_name_map_located(
         errors.append('naming wire 携带未知字段')
     raw_entries = wire.get('entries')
     if not isinstance(raw_entries, list) or not raw_entries:
-        for message in (errors + ['entries 缺失或为空'] if errors else ['entries 缺失或为空']):
-            fail(None, message)
+        # 早退分支只补报自己的问题：此前的「未知字段」已经记入 issues，不再重报。
+        fail(None, 'entries 缺失或为空')
         return None, issues
     expected = naming_projection(characters)
     expected_refs = set(expected['rename_set'])
@@ -229,8 +222,7 @@ def _compile_name_map_located(
         for message, refs in _check_name_conflicts(entries, characters, structure):
             paths = tuple(dict.fromkeys(
                 ('entries', entry_index[ref]) for ref in refs if ref in entry_index))
-            for path in paths or (None,):
-                fail(path, message)
+            issues.append((paths or None, message))
             errors.append(message)
     if errors:
         return None, issues

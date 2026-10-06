@@ -284,10 +284,11 @@ Binding 不维护第二份初始态。
 现役 v14 契约（保留拍三类转移 effects/cognition/loops、场景边界、`temporal_mode`，并增加源表达，见
 `contracts/schema/source.py` 与 `R-2.3`/`R-2.12`）是五节点重建的起点。B2 前半已落地：
 观察与关联协议（`contracts/schema/observation.py`，三类观察 `stage2-observation-v1`；
-R1 起 associate 独立版本 `stage2-associate-v2`——typed 目标显式序列化＋状态句柄
-位置编码）、Resolver
+R1 起 associate 独立版本——v2 typed 目标显式序列化＋状态句柄位置编码，CS-H H4 起
+`stage2-associate-v3` 同维状态改配维度句柄 `dim{nn}`，见 `docs/schema/stage2.md`）、
+Resolver
 （`novel/stages/stage2/resolver.py`）与节点/产物注册（RC6；associate 观察形状
-R1 升 rc9）；associate／compile
+R1 升 rc9、H4 升 rc17）；associate／compile
 的引擎与 Stage4 改读 canonical 已随 B2 第三步闭合。
 
 ## Stage4：把章依赖编译完整（目标）

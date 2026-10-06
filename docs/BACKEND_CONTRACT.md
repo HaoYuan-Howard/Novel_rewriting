@@ -141,9 +141,10 @@ orchestrator 推进，semantic unit 生成；Stage 页只读监控。`HUMAN_NODE
 退役，Stage4 改读 canonical。观察与关联协议显式版本化
 （`contracts/schema/observation.py`；I-13，无运行时转换层，旧根只读，新协议下
 新根全量重购）：book／chapters／names 三类观察共用 `stage2-observation-v1`；
-associate 独立版本 `stage2-associate-v2`（R1，2026-09-28——typed 作用对象显式
-序列化、状态句柄位置编码 `ch{nn}.b{拍}.e{效应序}.{key}`／`book.e{条目序}.{key}`，
-三类观察请求逐字不变）。模型输出面去机械化（I-20/I-21）：拍号、
+associate 独立版本 `stage2-associate-v3`（R1，2026-09-28 起独立；v2＝typed 作用对象
+显式序列化、状态句柄位置编码 `ch{nn}.b{拍}.e{效应序}.{key}`／`book.e{条目序}.{key}`；
+CS-H H4，2026-10-06 升 v3＝同维状态改配**维度句柄** `dim{nn}`、章内已自开自闭的
+close 不进可配对闭集，见 `R-2.12`；三类观察请求逐字不变）。模型输出面去机械化（I-20/I-21）：拍号、
 状态/约束编号、命题/loop/场景正式 ID、章序、offset、hash 一律由 compiler 生成；
 人物 slug 仍由模型给出（可读语义句柄）。证据定位归 Resolver
 （`novel/stages/stage2/resolver.py`：句段 id 闭集选择、逐字锚唯一定位、basis 引文

@@ -36,7 +36,7 @@ from contracts.schema.observation import (
 from contracts.schema.source import (
     REGISTERED_STATE_KEYS, CharactersCore, CharacterEntry,
 )
-from novel.stages.common import BOOK_PROMPT
+from novel.stages.common import BOOK_PROMPT, group_located_errors
 from novel.stages.stage2.resolver import (
     EvidenceResolver, render_evidence_block, verify_bases,
 )
@@ -205,28 +205,18 @@ def book_patch_locate(
     """CS-H H4（RC-57 覆盖）：book 条目定位（`ask_json` 的 `patch` 协议）。
 
     与 `compile_book_observation` 同一条管道（不新增判据），把每条错误映射到
-    wire 条目路径（`characters.{slug}`／`initial_state[i]`／`world_constraints[i]`／
-    `expression.narration`）；协议形状类问题（wire 级）或 `errors` 与复跑定位集
-    不完全一致时返回 None——本轮退整份返修，不静默漏项。裸元组返回，
-    不 import novel.llm（分层规则禁 stage2 依赖 LLM 面）。
+    wire 条目路径（`characters.{slug}`［`.surfaces.i`］／`initial_state[i]`［`.basis.j`］／
+    `world_constraints[i]`／`expression.narration`）；同一条目的父、子错误折叠到父条目
+    （请求路径不重叠，见 `common.group_located_errors`）。协议形状类问题
+    （wire 级）或 `errors` 与复跑定位集不完全一致时返回 None——本轮退整份返修，
+    不静默漏项。裸元组返回，不 import novel.llm（分层规则禁 stage2 依赖 LLM 面）。
     """
     if not isinstance(wire, dict) or not errors:
         return None
     _observation, located = _compile_book_view(wire, evidence=evidence)
-    if any(path is None for path, _message in located):
-        return None
-    if len(errors) != len(located) or sorted(map(str, errors)) != sorted(
-            str(message) for _path, message in located):
-        return None
-    grouped: dict[tuple[str | int, ...], list] = {}
-    remaining = list(errors)
-    for path, message in located:
-        bucket = grouped.setdefault(tuple(path), [])
-        hit = next((error for error in remaining if str(error) == str(message)), None)
-        if hit is not None:
-            remaining.remove(hit)
-            bucket.append(hit)
-    return list(grouped.items())
+    return group_located_errors(
+        errors, [((path,) if path is not None else None, message)
+                 for path, message in located])
 
 
 def _compile_book_view(

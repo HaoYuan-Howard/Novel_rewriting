@@ -122,7 +122,9 @@ def _artifact_model(rel: str | None):
 # ── rc12/rc13→rc14 登记迁移：仅正式模型读取口；inspect 保留原字节 ─────────
 # 删除条件见 REQUIREMENTS：历史运行根全部重建或退役后删除此兼容层。
 # rc17（CS-H H3）：brief／writer_book_ir 形状再升（H3 新字段全部可缺省读入），
-# 迁移直接钉 rc17——旧根保持只读可读（增量字段缺省），续跑仍按候选契约表拒收。
+# rc12／rc13 载荷的迁移目标直接钉 rc17。⚠ 盘上 rc14～rc16 载荷不在迁移白名单内：
+# 模型字面量只收 rc17，按契约表漂移拒读（ChapterIR.display_prefix 语义已变，
+# 不能把旧值当新字段缺省读入）；旧根续跑同样按候选契约表拒收。
 _RC14_SITES = {
     'stage4/design/body_design.json', 'stage4/design/presentation_graph.json',
     'stage4/compiled/execution_plan.json',

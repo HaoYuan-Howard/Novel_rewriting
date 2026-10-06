@@ -216,6 +216,101 @@ def test_associate_patch_locate_returns_none_for_unmappable_or_ambiguous_errors(
     assert associate_patch_locate(wire, ['裸字符串错误'], space=space) is None
 
 
+def _two_chapter_space():
+    """两章三拍的最小关联空间（跨章因果／续场定位用例的底座）。"""
+    book = _book_wire()
+    ch01 = {'protocol_version': CPV, 'beats': [
+        _beat('一拍', ('e01_01',)),
+        _beat('二拍', ('e01_02',), scene_boundary='continue')]}
+    ch02 = {'protocol_version': CPV, 'beats': [_beat('三拍', ('e02_01',))]}
+    book_obs, chapters = _observations(book, {1: ch01, 2: ch02})
+    return project_association_space(book_obs, chapters)
+
+
+def _wire_with(**pairings) -> dict:
+    wire = {'protocol_version': 'stage2-associate-v3', 'same_proposition': [],
+            'same_state_dimension': [], 'loop_pairing': [],
+            'cross_chapter_cause': [], 'scene_continuation': []}
+    wire.update(pairings)
+    return wire
+
+
+def test_associate_patch_locate_matches_the_row_carrying_every_handle():
+    """多句柄位置（同章／因果／续场等的 `(left, right)`）只命中**同时含全部句柄**
+    的那一行：同一句柄在多条合法配对里出现（一因多果很常见）不是歧义，不得因此
+    把本可条目返修的问题整份退回。"""
+    space = _two_chapter_space()
+    wire = _wire_with(cross_chapter_cause=[
+        {'from_beat': 'ch01.b1', 'to_beat': 'ch02.b1', 'kind': 'causes'},    # 合法
+        {'from_beat': 'ch01.b1', 'to_beat': 'ch01.b2', 'kind': 'causes'},    # 同章
+        {'from_beat': 'ch01.b2', 'to_beat': 'ch02.b1', 'kind': 'enables'}])  # 合法
+    _observation, errors = compile_associate_observation(wire, space)
+    assert [getattr(e, 'code', '') for e in errors] == ['association_same_chapter'], errors
+    assert associate_patch_locate(wire, errors, space=space) == [
+        (('cross_chapter_cause', 1), list(errors))]
+
+
+def test_ask_json_associate_patch_round_replaces_only_the_offending_row(tmp_path):
+    """真实消费路径（ask_json＋真验收＋真定位器）：一因多果里只有一行同章，patch 轮
+    只请求那一行、其余合法配对字节不变；定位不到就会整份重写（输出随配对总数涨）。"""
+    import json
+
+    from novel.llm.paid_requests import PatchedAnswer, ask_json
+    from tests.test_str06_r3_selfheal import _json_session, _request, _ScriptedTransport
+
+    space = _two_chapter_space()
+    rows = [{'from_beat': 'ch01.b1', 'to_beat': 'ch02.b1', 'kind': 'causes'},
+            {'from_beat': 'ch01.b1', 'to_beat': 'ch01.b2', 'kind': 'causes'},
+            {'from_beat': 'ch01.b2', 'to_beat': 'ch02.b1', 'kind': 'enables'}]
+    fixed = {'from_beat': 'ch01.b1', 'to_beat': 'ch02.b1', 'kind': 'motivates'}
+    transport = _ScriptedTransport([
+        json.dumps(_wire_with(cross_chapter_cause=rows), ensure_ascii=False),
+        json.dumps({'patches': [{'path': 'cross_chapter_cause[1]', 'value': fixed}]},
+                   ensure_ascii=False)])
+    _base, _repo, session = _json_session(tmp_path, transport)
+    data, answer = ask_json(
+        session, 'associate', _request(),
+        lambda w: compile_associate_observation(w, space)[1],
+        patch=lambda w, errs: associate_patch_locate(w, errs, space=space))
+    assert isinstance(answer, PatchedAnswer) and len(answer.patches) == 1
+    assert len(transport.calls) == 2, '原轮＋一轮 patch，无整份重写'
+    assert transport.calls[1].user.count('- 路径 ') == 1, transport.calls[1].user
+    assert '- 路径 cross_chapter_cause[1]：' in transport.calls[1].user
+    assert data['cross_chapter_cause'] == [rows[0], fixed, rows[2]], '无关配对字节不变'
+
+
+def test_associate_patch_locate_scopes_unknown_handle_to_its_field():
+    """同一个坏句柄出现在两行的不同字段：各自按「该字段」定位到自己的行，
+    不因句柄在别处（另一字段）也出现而互相判成歧义。"""
+    space = _two_chapter_space()
+    wire = _wire_with(same_proposition=[
+        {'left': 'ch01.p_gone', 'right': 'ch02.p_other'},
+        {'left': 'ch01.p_third', 'right': 'ch01.p_gone'}])
+    _observation, errors = compile_associate_observation(wire, space)
+    bad = [e for e in errors if getattr(e, 'code', '') == 'association_unknown_handle'
+           and 'p_gone' in e]
+    assert len(bad) == 2, errors
+    targets = associate_patch_locate(wire, bad, space=space)
+    assert sorted(t[0] for t in targets) == [('same_proposition', 0), ('same_proposition', 1)]
+
+
+def test_associate_patch_locate_addresses_schema_errors_by_row_index():
+    """协议校验错误的 `loc` 本身就是 `(kind, i, …)`：按下标直接定位到该条目；
+    没有条目下标的（顶层字段、整数组形状）仍是 wire 级，退整份。"""
+    space = _two_chapter_space()
+    wire = _wire_with(same_proposition=[
+        {'left': 'ch01.p_a', 'right': 'ch02.p_a'},
+        {'left': 'ch01.p_a', 'right': 'ch02.p_a', 'bogus': 1}])
+    _observation, errors = compile_associate_observation(wire, space)
+    assert len(errors) == 1 and getattr(errors[0], 'code', '').startswith('association_schema_'), errors
+    assert associate_patch_locate(wire, errors, space=space) == [
+        (('same_proposition', 1), list(errors))]
+    stale = _wire_with()
+    stale['protocol_version'] = 'stage2-associate-v2'
+    _observation, errors = compile_associate_observation(stale, space)
+    assert errors and associate_patch_locate(stale, errors, space=space) is None
+
+
 def test_dimension_of_maps_every_write_to_its_dimension():
     """登记表内部一致性：每个写入句柄都映射到其地址维度；维度的 writes 覆盖
     该地址全部写入且按登记序（审计读数面）。"""

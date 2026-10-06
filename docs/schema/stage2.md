@@ -17,19 +17,31 @@ unver 行常驻披露，不产生审批待办。机械检查只证明形状、�
 ## 观察与关联协议（B2；R1 associate 独立版本）
 
 book／chapters 两个付费观察面与名称结构观察共用协议版本字面量
-`stage2-observation-v1`；associate 用**独立版本** `stage2-associate-v2`
-（R1，2026-09-28；`contracts/schema/observation.py`；进请求身份与盘面信封，
-升版＝换字面量＋改模型＋登记，不做运行时转换层）。R1 只升 associate：typed
-作用对象显式序列化（人物带 `char_id`、关系保留主客体方向、world 是显式类型，
-不拿空 dict 兜底）＋状态句柄位置编码——三类观察的请求与字面量逐字不变。
+`stage2-observation-v1`；associate 用**独立版本** `stage2-associate-v3`
+（R1，2026-09-28 起独立；CS-H H4，2026-10-06 升 v3；`contracts/schema/observation.py`；
+进请求身份与盘面信封，升版＝换字面量＋改模型＋登记，不做运行时转换层）。R1 只升
+associate：typed 作用对象显式序列化（人物带 `char_id`、关系保留主客体方向、world
+是显式类型，不拿空 dict 兜底）＋状态句柄位置编码——三类观察的请求与字面量逐字
+不变。v3（RC-65）再改一处配对面：`same_state_dimension` 不再逐条配**写入句柄**，
+改配**维度句柄**（见下）。
 
 **句柄编码（R1 v2：唯一的关联登记表）**：`AssociationSpace`
 （`novel/stages/stage2/associate.py::project_association_space`）是 prompt、
 闭集核对与 compile（`_StateClasses` 确定性序、初态与章效应句柄定位）共用的
 唯一登记表；构建时重复句柄即拒。拍 `ch{nn}.b{拍序}`、命题/悬念
-`ch{nn}.{本地 ref}`、状态 `ch{nn}.b{拍}.e{效应序}.{key}`／`book.e{条目序}.{key}`
+`ch{nn}.{本地 ref}`、状态写入 `ch{nn}.b{拍}.e{效应序}.{key}`／`book.e{条目序}.{key}`
 （位置编码：key 只是载荷，不承担唯一性；book 初态无拍位，独立命名空间）、
 场景 `ch{nn}.sc{序}`。
+
+**维度句柄（CS-H H4，v3；RC-65）**：状态槽位在 compiler 里的身份是（作用对象，键），
+所以同对象同键的配对没有效果（csf4 根 90 对里 89 对是这种空操作）。登记表因此多一层：
+同（作用对象，键）地址的全部状态写入（含书级初态与章内效应同键）聚合成一个**维度句柄**
+`dim{nn}`（按首次写入序编号；`AssociationSpace.dimensions`／`dimension_of`），请求面
+每个地址只出现一行、不随同键写入数增长。`same_state_dimension` 只配**键不同但同维**的
+两个维度句柄（近义键如 trust／trust_level）；同键合并已在编译器里完成，配同键即自指
+拒绝；规范键（类内首次写入最早者的键）由 compiler 按地址传播到两类**全部写入**。维度
+跨章聚合，故不做同章拒绝。可配对 close 闭集（`pairable_closes`）排除章内已自开自闭的
+close——提示词不列、wire 引用即带「已在章内自开自闭」说明的精确 issue。
 
 **模型输出面去机械化（I-20/I-21）**：协议里没有拍号、状态/约束编号、命题/loop/场景
 正式 ID、章序、offset、hash——一律由 compiler 生成；人物 slug 仍由模型给出（可读
@@ -84,7 +96,7 @@ Stage6 退役后 `stage1/hook_copy.json` 的唯一消费者是本层：切成 `e
 | `stage2/observations/book.json` | `BookObservation` | `str06.stage2.book` | 书级观察：人物候选（可读 slug、称谓及证据）、初态、世界约束 |
 | `stage2/observations/ch{nn}.json` | `ChapterObservation` | `str06.stage2.chapters` | 逐章观察：有序事件＋三类转移＋场景边界＋时间模式＋证据（章内本地句柄） |
 | `stage2/observations/names.json` | `NamesObservation` | `str06.stage2.names` | 源名称结构观察（`NameStructure`） |
-| `stage2/observations/associate.json` | `AssociateObservation` | `str06.stage2.associate` | 跨章关联决定：同一命题／同维状态／悬念配对／跨章因果／跨章续场（只选已给句柄；R1 起协议 `stage2-associate-v2`、形状 `str06-rc9`） |
+| `stage2/observations/associate.json` | `AssociateObservation` | `str06.stage2.associate` | 跨章关联决定：同一命题／同维状态／悬念配对／跨章因果／跨章续场（只选已给句柄；R1 起独立协议，现役 `stage2-associate-v3`、形状 `str06-rc17`） |
 | `stage2/blueprints/chapter_blueprints.json` | `BlueprintsArtifactV13` | `str06.stage2.compile` | 逐章 Blueprint（三类转移、场景分段与因果边；compile 唯一 writer） |
 | `stage2/acceptance/fold.json` | 自由形态派生记录 | `str06.stage2.compile` | source fold 读数表（事件＋每章空转移拍比例＋书末未揭示 concealed） |
 | `stage2/characters/characters.json` | `CharactersArtifactV4` | `str06.stage2.compile` | Characters v4：core＋名称结构（compile 合并 book 与 names 观察后唯一发布，D9） |

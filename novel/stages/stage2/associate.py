@@ -521,6 +521,46 @@ _PAIRING_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ('cross_chapter_cause', ('from_beat', 'to_beat')),
     ('scene_continuation', ('left', 'right')),
 )
+_PAIR_KINDS = dict(_PAIRING_FIELDS)
+#: 位置里出现字段名＝字段作用域，不是句柄。
+_PAIR_FIELD_NAMES = frozenset(f for _kind, fields in _PAIRING_FIELDS for f in fields)
+
+
+def _located_rows(wire: dict, location: tuple, space: AssociationSpace) -> set[tuple[str, int]]:
+    """一条错误的 `location` → 它能替换的配对条目候选集 ``{(kind, i)}``。
+
+    位置形状全部由本模块与 `compile.py` 的 `association_issue` 铸造：
+    • 协议校验 `(kind, i, …)`：``loc`` 本身就是条目下标，直接定位；
+    • `(kind, field, 句柄)`（未知句柄）：只在该字段上匹配——同一个坏句柄出现在
+      两行的不同字段时，各自定位到自己的行；
+    • `(kind, 句柄…)`／`(句柄…)`：条目须**同时含全部句柄**——同一句柄在多条合法
+      配对里出现（一因多果）不是歧义，只有同时含两端的那一行才是问题所在。
+    写入句柄（干跑未决的判定处）先经 `dimension_of` 归到维度句柄再比对。
+    """
+    scope = location[0] if location and isinstance(location[0], str)         and location[0] in _PAIR_KINDS else None
+    if scope is not None and len(location) > 1 and isinstance(location[1], int):
+        rows = wire.get(scope)
+        index = location[1]
+        return {(scope, index)} if isinstance(rows, list) and 0 <= index < len(rows) else set()
+    field_scope = location[1] if scope is not None and len(location) > 1         and isinstance(location[1], str) and location[1] in _PAIR_FIELD_NAMES else None
+    handles = [item for item in location if isinstance(item, str)
+               and item not in _PAIR_KINDS and item not in _PAIR_FIELD_NAMES]
+    if not handles:
+        return set()
+    found: set[tuple[str, int]] = set()
+    for kind, fields in _PAIRING_FIELDS:
+        rows = wire.get(kind)
+        if (scope is not None and kind != scope) or not isinstance(rows, list):
+            continue
+        scoped_fields = (field_scope,) if field_scope in fields else fields
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            held = {row.get(field) for field in scoped_fields}
+            if all(handle in held or space.dimension_of.get(handle, handle) in held
+                   for handle in handles):
+                found.add((kind, index))
+    return found
 
 
 def associate_patch_locate(
@@ -528,12 +568,11 @@ def associate_patch_locate(
 ) -> list[tuple[tuple[str | int, ...], list[object]]] | None:
     """associate 条目定位（`ask_json` 的 `patch` 协议；与验收同源）。
 
-    机械验收（闭集／自指／占用）与干跑未决里归属 associate 的问题按其
-    `location` 句柄反查 wire 配对条目，映射到 ``(kind, i)`` 条目路径；句柄在
-    多条配对里出现（歧义）、问题指向**尚不存在的条目**（如悬空命题引用需要
-    新增配对——不是替换既有条目）或错误无结构化位置时返回 None——本轮退整份
-    返修，不静默漏项。干跑未决的写入句柄经 `space.dimension_of` 归到维度句柄
-    后再反查（compile 判定处的句柄是写入句柄，配对条目引用的是维度句柄）。
+    机械验收（协议校验／闭集／自指／占用）与干跑未决里归属 associate 的问题按其
+    `location` 反查 wire 配对条目（`_located_rows`），映射到 ``(kind, i)`` 条目路径；
+    候选不是恰好一条——问题指向**尚不存在的条目**（如悬空命题引用需要新增配对，
+    不是替换既有条目）、同一句柄组合在多条配对里重复（无法唯一指定替换目标）——或
+    错误无结构化位置时返回 None：本轮退整份返修，不静默漏项。
     """
     if not isinstance(wire, dict) or not errors:
         return None
@@ -542,30 +581,10 @@ def associate_patch_locate(
         location = getattr(error, 'location', None)
         if not isinstance(location, tuple):
             return None
-        # 干跑未决的位置句柄可能是状态写入句柄（compile 判定处）；配对条目引用
-        # 维度句柄——先经登记表归并，再反查。
-        handles = set(location)
-        for item in location:
-            dim = space.dimension_of.get(item) if isinstance(item, str) else None
-            if dim is not None:
-                handles.add(dim)
-        candidates: set[tuple[str, int]] = set()
-        for kind, fields in _PAIRING_FIELDS:
-            rows = wire.get(kind)
-            if not isinstance(rows, list):
-                continue
-            for index, row in enumerate(rows):
-                if not isinstance(row, dict):
-                    continue
-                for field in fields:
-                    if row.get(field) in handles:
-                        candidates.add((kind, index))
-        if len(candidates) != 1:
-            # 零命中＝需要新增条目或工程缺陷；多命中＝同一句柄多处出现，无法
-            # 唯一指定替换目标。两种都退整份返修。
+        rows = _located_rows(wire, location, space)
+        if len(rows) != 1:
             return None
-        kind, index = candidates.pop()
-        grouped.setdefault((kind, index), [])
-        if error not in grouped[(kind, index)]:
-            grouped[(kind, index)].append(error)
+        bucket = grouped.setdefault(next(iter(rows)), [])
+        if not any(item is error for item in bucket):
+            bucket.append(error)
     return list(grouped.items())
