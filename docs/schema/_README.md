@@ -5,11 +5,11 @@
 
 | 文档 | 负责的语义 |
 |---|---|
-| [str06](str06.md) | STR-06 新链架构总纲：14 节点、两层 IR、自愈、发布权威与恢复 |
+| [str06](str06.md) | STR-06 新链架构总纲：13 节点（CS-3 bind 退役后）、两层 IR、自愈、发布权威与恢复 |
 | [stage0](stage0.md) | 剔除决定、原文身份与 clean 的确定性物化 |
 | [stage1](stage1.md) | 原文分章、源引子（hook_copy）物化与即时章号诊断 |
 | [stage2](stage2.md) | 源语义观察、名称结构、关联与编译（五节点协议与判据） |
-| [stage4](stage4.md) | 目标故事：Preserve／BodyDesign／Bind／HookDesign 与确定性编译、Guard |
+| [stage4](stage4.md) | 目标故事：Preserve／BodyDesign／HookDesign（CS-3 bind 退役）与确定性编译、Guard |
 | [stage5](stage5.md) | 按章正文与 Hook 成文（body／hook 两节点） |
 | [stage7](stage7.md) | 命名（naming）与成书组装（assemble） |
 | [_common](_common.md) | provenance、freshness、用量、归档及共有字段 |

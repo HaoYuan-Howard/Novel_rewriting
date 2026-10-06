@@ -11,7 +11,7 @@
 Stage7 交付、页面刷新与服务重启读回一致的 fake 全链钉在
 `tests/test_str06_product_entry.py::test_service_full_chain_real_subprocess_and_restart_readback`
 （fake transport 经 `sitecustomize` 注入子进程，`real_code_version` 过 run_step
-代码身份闸；13 次付费、11 个付费节点、`--check-only` 追跑零新购、二次
+代码身份闸；12 次付费、10 个付费节点——CS-3 bind 退役后现数、`--check-only` 追跑零新购、二次
 `agent.start` 零派发）；旧联合抽取引擎 `novel/stages/stage2/source.py` 整包删除
 （反例迁至五 owner 引擎，`tests/test_str06_source.py`／`tests/hard_cases.py`
 换轨）；`_llm_client`／`create_legacy_client`／`default_legacy_backend`（执行期

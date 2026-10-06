@@ -251,8 +251,9 @@ conda run -n novel_refactor python -m pytest -q tests/test_fixture_registry.py
 
 ## Stage4 免费编译与候选生命周期补尾（新链）
 
-STR-06 新链的 Stage4 免费聚合由结构性禁付节点 `str06.stage4.compile` 承担：Design/Hook/Bind
-的已购 wire 经 `--check-only` 或默认免费采用路径编译，全部采用不创建模型客户端。跨执行补尾
+STR-06 新链的 Stage4 免费聚合由结构性禁付节点 `str06.stage4.compile` 承担：Design／Hook
+的已购 wire（bind 已退役，义务承载位随 BodyDesign 的 real 标注派生）经 `--check-only`
+或默认免费采用路径编译，全部采用不创建模型客户端。跨执行补尾
 不再是 `--recover-prepared` 一类人工恢复动作，而是候选生命周期自身的
 `committed_set_recovery`／`deterministic_replay`（`novel/llm/paid_requests.py::PaidRequestSession`）：
 同请求身份优先免费采用，缺失且未授权时停在该 owner 并报告需要授权（`PurchaseRequired`）。

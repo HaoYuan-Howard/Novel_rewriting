@@ -10,7 +10,7 @@ stage1/hook_copy.json  {text}
 
 原文章号、切片坐标、章数、断号/重号/倒退和告警都能从当前 clean
 确定性复扫，因此不落盘第二份。`novel/core/ingest_audit.py::audit_surface`
-是 producer、`--check-only`、Stage1 页、freshness 与 s1 审批共用的唯一审计口。
+是 producer、`--check-only` 与 Stage1 页共用的唯一审计口。
 
 ---
 
@@ -66,14 +66,17 @@ beats；与正文重复的事件以正文为准；预告/概括不进 canonical�
 
 producer 在落盘前处理「不可构造」的终态（无文案、少于两章、空章、残留非正文）；
 可构造时先落两份材料，再经同一审计口产出 CheckReport，保留 landed-red 的
-0 成本恢复语义。freshness 和 s1 审批不只绑输入：任意一份材料被单独篡改，
-都会分别变为 stale 并撤销批准有效性。
+0 成本恢复语义。两份材料的当前性由机械审计钉死：任意一份被单独篡改，
+`stage1.partition --check-only` 即红——旧「s1 人工决定绑定两份材料、篡改即撤销 gate」
+的审批面已随人工闸整层退役，同族不变量改由机械审计承担（反例
+`tests/test_stage01.py::test_hook_tampering_turns_the_stage1_check_red`）。
 
-已确认切分后，仅经 Stage0 批准修订钩子并准确重新物化两份材料，才可按
-`novel/source_identity.py::revision_proof` 证明原切点与正文逐字不变。Stage1 只读审批
-还要从祖先 revision 重建原 MainText / HookCopy 两份字节 SHA，与旧确认全部对上；
-通过后沿用旧票而不改根、不补票。正文或章标记改变、原票缺失、任一旧 SHA 损坏
-或当前源未批准时，仍需现役审计与显式切分确认。
+已确认切分后，若源侧重新物化两份材料，须按
+`novel/source_identity.py::revision_proof` 证明原切点与正文逐字不变：Stage0 v3 无多
+修订祖先链，旧根必须等于当前 transform 的 clean_sha1 且机械 admission 已 passed，
+MainText／HookCopy 两份字节 SHA 全部对上才放行（稳定盲句柄据此沿用源根）。正文或
+章标记改变、旧根对不上、admission 未过或任一 SHA 损坏时保持拒绝，改根须重新走现役
+审计与显式切分确认；旧「Stage1 只读审批沿用旧票」面已随人工闸整层退役，没有票据可沿用。
 
 ---
 

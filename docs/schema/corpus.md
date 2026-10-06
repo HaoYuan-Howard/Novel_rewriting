@@ -54,7 +54,7 @@ conda run -n novel_refactor python -m tests.corpus_manifest verify `
 ```
 
 所有付费节点的冻结 flags 都恰为 `--base --yes`（旧链的 `--advisory`／`--deep` 等已随节点
-退役，多一个 flag 即拒）。两书 × 11 个付费节点 = 当前 22 条 dispatch，校验器按
+退役，多一个 flag 即拒）。两书 × 10 个付费节点 = 当前 20 条 dispatch，校验器按
 `contracts/schema/corpus.py` 的 `CURRENT_CORPUS_BOOKS × CURRENT_CORPUS_PAID_NODES`
 两个现役元组现算条数、节点面与顺序，不信本文数字。
 `preview`、`mark` 或缺少 `run` 的展示命令不能冒充 production dispatch。
@@ -73,15 +73,15 @@ conda run -n novel_refactor python -m pytest --require-corpus
 corpus 还要求 local cache hit 为 0、每个 dispatch 节点均有非零 wire 行；每个 token 列分别记录
 reported/null 行数，分母不闭合就失败。
 
-manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 22 条真实
+manifest 的 `commands` 字段必须是 `-m novel.cli run <node> <sid> ... --yes` 的 20 条真实
 付费 production dispatch：每书各一条 `CURRENT_CORPUS_PAID_NODES` 里的节点——Stage2 四个
-观察 owner（book／chapters／names／associate）、Stage4 四相（preserve／body_design／bind／
+观察 owner（book／chapters／names／associate）、Stage4 三相（preserve／body_design／
 hook_design）、Stage5 hook／body、Stage7 naming。确定性编译（`str06.stage2.compile`／
 `str06.stage4.compile`）与交付装配（`str06.stage7.assemble`）结构性禁付，不是 dispatch，
 但它们的产物（fold、guard 报告、WriterBookIR 等）仍在 required artifacts 中。
-ledger 必须对两书、11 个付费节点逐一有非零记录并与这 22 条命令对账；各付费相是
+ledger 必须对两书、10 个付费节点逐一有非零记录并与这 20 条命令对账；各付费相是
 独立 dispatch，不能用别相的一行账或中间产物替代。
-条数按 2 书 × 11 付费节点现算；条数以
+条数按 2 书 × 10 付费节点现算；条数以
 `contracts/schema/corpus.py` 的 `CURRENT_CORPUS_BOOKS × CURRENT_CORPUS_PAID_NODES` 为准。
 `preview`、`mark` 或缺 `run` 的展示命令不能冒充生产 dispatch。
 

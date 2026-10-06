@@ -42,7 +42,7 @@ kept 含映射键不误报。换 NameMap 只影响交付，Hook 窄改不使无�
 |---|---|---|
 | `name_map_compile` | hard | NameMap v5 编译闭合（名称位一致、无姓氏冲突） |
 | `naming_residual` | hard | 单遍替换后旧名零残留（遵守 claimed/kept） |
-| `assembly_chapter_chain` | hard | 章回执链核对（IR 身份＋前文链＋正文 hash） |
+| `assembly_chapter_chain` | hard | 章回执链核对（逐章写手视图／验证输入摘要＋正文 hash；Machine 层摘要仅审计不参与） |
 | `delivery_manifest` | hard | TXT 先落盘、manifest 最后提交、hash 逐字一致 |
 | `delivery_replayable` | hard | 同输入交付字节一致（零新购重放） |
 | `delivery_chapter_markers` | hard | 成书按阅读序加「第N章」、交付身份对分章敏感 |
