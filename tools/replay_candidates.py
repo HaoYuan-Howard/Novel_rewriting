@@ -47,7 +47,8 @@ from novel.llm.paid_requests import digest, semantic_owner_unit
 from novel.stages.candidates import purchased_rounds
 from novel.stages.chain import derive_total_length_budget, load_stage1_chapters
 from novel.stages.stage4 import (
-    design_obligation_index, inspect_design_candidate, plan_material_repairs, project_brief,
+    assemble_preserve, design_obligation_index, inspect_design_candidate,
+    plan_material_repairs, project_brief,
 )
 from novel.store import Str06Repository
 
@@ -144,8 +145,48 @@ def _design_replayer(base: Path, sid: str, repository: Str06Repository,
     return lambda wire: replay_design_round(wire, inputs)
 
 
-#: owner → 构造重放函数的工厂。后续批次在此登记 preserve（H3）、associate（H4）。
-REPLAYERS: dict[str, Callable[..., Callable[[dict], dict]]] = {'design': _design_replayer}
+def preserve_inputs(repository: Str06Repository):
+    """Preserve 重放的正式输入（Characters＋Blueprint）；读不到＝ReplayNotRun。"""
+    try:
+        chars = repository.read_model('stage2/characters/characters.json')
+        blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+    except (FileNotFoundError, UnsealedArtifact, ProvenanceRefused, ValidationError) as exc:
+        raise ReplayNotRun(f'上游正式输入缺失、未封存或不符当前契约：{type(exc).__name__}：{exc}') from exc
+    return chars, blueprint
+
+
+def replay_preserve_round(wire: dict, chars, blueprint) -> dict:
+    """已购 Preserve 回答在**现役判据**（含 CS-H H3 自闸）下的只读复检。"""
+    from novel.stages.stage4.grounding import preserve_name_issues
+    from contracts.schema.workflow import STAGE4_PRESERVE_POLICY_VERSION
+    checkpoint, errors = assemble_preserve(
+        wire, policy_id='preserve-default',
+        policy_version=STAGE4_PRESERVE_POLICY_VERSION,
+        characters=chars.core_view(), blueprint=blueprint,
+        provider='replay', model='replay', request_sha256='0' * 64)
+    gate = preserve_name_issues(checkpoint, chars)
+    problems = list(errors) + list(gate)
+    return {
+        'status': 'ran', 'passed': checkpoint is not None and not problems,
+        'assembled': checkpoint is not None,
+        'error_count': len(problems),
+        'codes': dict(Counter(error_code(e) for e in problems)),
+        'gate_items': [f'{i.context["obligation_id"]}:{i.context["field"]}'
+                       f':{i.context["literal"]}' for i in gate],
+        'reuse': 'green' if checkpoint is not None and not problems else 'failed',
+    }
+
+
+def _preserve_replayer(base: Path, sid: str, repository: Str06Repository,
+                       source: dict) -> Callable[[dict], dict]:
+    chars, blueprint = preserve_inputs(repository)
+    return lambda wire: replay_preserve_round(wire, chars, blueprint)
+
+
+#: owner → 构造重放函数的工厂。后续批次在此登记 associate（H4）。
+REPLAYERS: dict[str, Callable[..., Callable[[dict], dict]]] = {
+    'design': _design_replayer, 'preserve': _preserve_replayer,
+}
 
 
 def input_identity(repository: Str06Repository, chapters: list[dict], hook_copy: str,
@@ -272,13 +313,17 @@ def render(report: dict) -> str:
             if replay_row['status'] != 'ran':
                 lines.append(f'    重放：未运行——{replay_row["reason"]}')
                 continue
-            checks = ' '.join(f'{c["name"]}={c["status"]}' for c in replay_row['checks'])
+            checks = ' '.join(f'{c["name"]}={c["status"]}'
+                              for c in replay_row.get('checks', ()))
             lines.append(f'    重放（当前输入）：{"通过" if replay_row["passed"] else "未通过"}  {checks}')
-            if replay_row['error_count'] or replay_row['material_count']:
+            if replay_row['error_count']:
                 codes = '  '.join(f'{k}×{v}' for k, v in sorted(replay_row['codes'].items()))
-                attribution = '  '.join(f'{k}×{v}' for k, v in sorted(replay_row['attribution'].items()))
-                lines.append(f'    问题：{replay_row["error_count"]} 条（{codes or "—"}）；'
-                             f'写手材料 {replay_row["material_count"]} 条（归因 {attribution or "—"}）')
+                gate = ''.join(f'（{item}）' for item in replay_row.get('gate_items', ()))
+                lines.append(f'    问题：{replay_row["error_count"]} 条（{codes or "—"}）{gate}')
+            if replay_row.get('material_count'):
+                attribution = '  '.join(f'{k}×{v}'
+                                        for k, v in sorted(replay_row['attribution'].items()))
+                lines.append(f'    写手材料 {replay_row["material_count"]} 条（归因 {attribution or "—"}）')
             lines.append('    沿用：' + ('完整预检全绿——当前输入下可零调用采用'
                                        if replay_row['reuse'] == 'green' else '不可沿用'))
         usage = summary['usage']

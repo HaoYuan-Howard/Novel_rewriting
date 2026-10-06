@@ -24,8 +24,6 @@ from tests.test_str06_hook import _full_chain_wires
 
 def _prepare(tmp_path, *, bad_preserve=False):
     wires = _full_chain_wires()
-    if bad_preserve:
-        wires['preserve']['obligations'][0]['statement'] = '陆郎与芸娘成亲且立下旧约'
     repo, session, transport = _make_session(tmp_path, wires)
 
     def no_body(*args):
@@ -37,6 +35,14 @@ def _prepare(tmp_path, *, bad_preserve=False):
                  ask_text=ctx.ask_text, ask_body=ctx.ask_body, budget=ctx.budget,
                  through='stage2')
     run_preserve(ctx)
+    if bad_preserve:
+        # CS-H H3d 起 Preserve 自闸在义务文本拦下不可投影字面（陆郎）——上游材料
+        # 反例改经已发布 checkpoint 的正式修订注入（republish 换 seal＝上游新版本），
+        # 不再经 Preserve 购买回答（那里会被自闸逐条定位）。
+        republish_checkpoint(repo, lambda cp: cp.model_copy(update={'obligations': tuple(
+            o.model_copy(update={'statement': '陆郎与芸娘成亲且立下旧约'})
+            if o.obligation_id == 'ob01' else o
+            for o in cp.obligations)}))
     chars = repo.read_model('stage2/characters/characters.json')
     checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
     brief, _ = project_brief(checkpoint, chars.core_view(),

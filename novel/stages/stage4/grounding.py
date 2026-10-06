@@ -42,8 +42,13 @@ from contracts.schema.source import (
     BlueprintsArtifactV15, CharactersCore,
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
+from novel.core.name_materials import (
+    family_form_literals, withheld_name_bindings,
+)
 from novel.core.validation import ValidationIssue
-from novel.stages.common import check_binding_covers_checkpoint
+from novel.stages.common import (
+    check_binding_covers_checkpoint, claim_spans, uncovered_occurrences,
+)
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.fact_bindings import (
     fact_binding_errors, fact_lock_carrier_errors, fact_lock_subject_errors,
@@ -865,6 +870,113 @@ def design_obligation_index(
     by_core = {r.core_id: r for r in brief.requirements}
     return {o.obligation_id: by_core[obligation_core_id(o.obligation_id)]
             for o in checkpoint.obligations}
+
+
+def _preserve_issue(message: str, code: str, location: tuple,
+                   paths=()) -> ValidationIssue:
+    """Preserve 判据问题：规则码＋稳定位置＋`obligations[i]` 条目路径。"""
+    return ValidationIssue(message, code=code, location=tuple(location),
+                           owner='preserve',
+                           context={'wire_paths': [list(p) for p in paths]})
+
+
+def preserve_name_issues(
+    checkpoint: PreserveCheckpoint | None, chars,
+) -> list[ValidationIssue]:
+    """Preserve 自闸（CS-H H3，RC-64）：义务 statement／satisfaction 里的
+    **裸姓与未登记别名**在 Preserve 自己的接受循环里被逐条定位。
+
+    同一把尺＝下游材料归因的判据面（`positive_material_issues`／
+    `withheld_name_bindings`）：能被显示面投影的字面（唯一归属的带名称谓）
+    合法——它们在写手材料里确定性投影；**永不投影**的字面（裸姓／家族构词／
+    多义带名面——未登记别名因含裸姓成分同被查出）在义务文本里就是下游缺口，
+    这里带 `obligations[i]` 条目路径提前拦下，不再等跨节点回派。
+    quotes／anchors 是源文逐字证据，不在扫描面。纯函数、只读。
+    """
+    structure = chars.name_structure
+    if checkpoint is None or structure is None:
+        return []
+    projection = chars.name_projection()
+    registered = sorted(set(projection.proper_literals)
+                        | {s for entry in projection.by_person
+                           for s in entry.name_bearing_surfaces}
+                        | family_form_literals(structure))
+    bindable = {literal for literal, _cid, _enc in
+                withheld_name_bindings(registered, structure)}
+    # 闸面＝裸姓（家族字面本身，含复姓整字）。家族构词（「陆家」一类集体指称）
+    # 与可投影带名面作认领面——「陆」在「陆家」「陆大哥」里被更长登记面认领，
+    # 在「陆郎」「陆某」这类未登记别名里未被覆盖、如实报出（RC-64）。
+    gate = tuple(sorted({f.literal for f in structure.families.values()}))
+    if not gate:
+        return []
+    claim_face = tuple(sorted(set(registered) - set(gate) | bindable))
+    issues: list[ValidationIssue] = []
+    for index, obligation in enumerate(checkpoint.obligations):
+        for field in ('statement', 'satisfaction'):
+            text = getattr(obligation, field) or ''
+            if not text:
+                continue
+            claimed = claim_spans(text, claim_face)
+            for claim in uncovered_occurrences(text, gate, claimed):
+                issue = _preserve_issue(
+                    f'义务 {obligation.obligation_id} 的 {field} 含不可投影字面 '
+                    f'{claim.literal!r}（裸姓／家族构词／多义带名面——写手材料无法'
+                    '确定性投影，下游必成泄漏）：改用可用称呼或不含姓名字面的表述，'
+                    '保留 anchors 与原义务语义',
+                    'preserve_name_literal',
+                    ('preserve_name_literal', obligation.obligation_id, field, claim.literal),
+                    (('obligations', index),))
+                issue.context.update({'obligation_id': obligation.obligation_id,
+                                      'field': field, 'literal': claim.literal})
+                issues.append(issue)
+    return issues
+
+
+def _anchor_line(anchor: ObligationAnchor) -> str:
+    """锚点类型化拷贝 → 切片里的人读原子行（与投影视图同一语法，不新造语义）。"""
+    if anchor.source_kind == 'cognition':
+        statement = anchor.proposition_statement or ''
+        return (f'认知 {anchor.holder} {anchor.mode or ""} 命题 '
+                f'{anchor.proposition_ref or ""}'
+                + (f'「{statement}」' if statement else ''))
+    if anchor.source_kind == 'effect':
+        return (f'事实 {anchor.address or anchor.handle} '
+                f'{anchor.op or "set"} {anchor.value!r}'
+                + (f'（{anchor.modality}）' if anchor.modality else ''))
+    if anchor.source_kind == 'loop':
+        return f'悬念 {anchor.handle}：{anchor.question or ""}'
+    if anchor.source_kind == 'world_constraint':
+        return f'世界约束 {anchor.handle}：{anchor.value or ""}'
+    if anchor.source_kind == 'initial_state':
+        return f'初始事实 {anchor.address or anchor.handle} = {anchor.value!r}'
+    return f'{anchor.handle}（{anchor.source_kind}）'
+
+
+def preserve_patch_slice(
+    wire: dict[str, Any], characters: CharactersCore,
+    blueprint: BlueprintsArtifactV15, indices: Iterable[int],
+) -> dict[str, Any]:
+    """Preserve 条目返修的依赖切片（RC-64）：目标义务的源原子与证据窗口。
+
+    只带失败条目必需的材料——该义务 anchors 的类型化原子行与逐字引文；不带
+    整份投影视图，也不带其他义务的内容（M3 返修宽度；对照本根 54,390 输入的
+    整份重写）。纯函数。
+    """
+    index = _anchor_index(characters, blueprint)
+    raw = wire.get('obligations') or []
+    slices = []
+    for i in sorted(set(indices)):
+        if not 0 <= i < len(raw) or not isinstance(raw[i], dict):
+            continue
+        atoms = []
+        for handle in raw[i].get('anchors') or ():
+            anchor = index.get(handle)
+            if anchor is None:
+                continue
+            atoms.append({'handle': handle, 'line': _anchor_line(anchor),
+                          'quotes': list(anchor.quotes)})
+        slices.append({'index': i, 'obligation': raw[i], 'atoms': atoms})
+    return {'input_version': 'stage4-preserve-slice-v1', 'targets': slices}
 
 
 def required_releases(brief: ReconstructionBrief) -> dict[tuple[str, str, str], tuple[str, ...]]:

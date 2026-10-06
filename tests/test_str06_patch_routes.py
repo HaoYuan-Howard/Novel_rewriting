@@ -288,7 +288,7 @@ def _locate_callsites_without_paths() -> list[tuple[str, str, int]]:
     with_paths: set[str] = set()
     without: list[tuple[str, str, int]] = []
     entries = ('design_issue', 'issue', '_issue', '_guard_issue', '_lock_issue',
-               'compile_issue', '_binding_issue')
+               'compile_issue', '_binding_issue', '_preserve_issue')
     for rel in JUDGMENT_MODULES:
         tree = ast.parse((REPO / rel).read_text(encoding='utf-8'))
         for node in ast.walk(tree):
@@ -372,7 +372,8 @@ def _emission_site_passes_paths(code: str) -> bool:
                 continue
             name = getattr(node.func, 'id', '') or getattr(node.func, 'attr', '')
             if name not in ('design_issue', 'issue', '_issue', '_guard_issue',
-                            '_lock_issue', 'compile_issue', '_binding_issue'):
+                            '_lock_issue', 'compile_issue', '_binding_issue',
+                            '_preserve_issue'):
                 continue
             args = [_literal(a) for a in node.args]
             keywords = {k.arg: _literal(k.value) for k in node.keywords if k.arg == 'code'}

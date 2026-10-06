@@ -54,6 +54,7 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `chapter_plan_shape` | hard | 目标章数等于源章数、章序 1..N 连续非空；允许跨章重构 |
 | `length_budget_conserved` | hard | 章预算 largest-remainder 分配、总和守恒 |
 | `preserve_compile` | hard | Preserve checkpoint 编译闭合 |
+| `preserve_name_literal_gate` | hard | CS-H H3（RC-64）Preserve 自闸：义务文本里的裸姓／未登记别名带 `obligations[i]` 路径条目返修（与下游归因同一把尺） |
 | `binding_mechanical` | hard | CS-3：binding 派生错误并入 body_design 的 ask 同节点修订轮（≤2）；real 覆盖闸漏标即拦；耗尽/无进展 fail-fast |
 | `hook_design_mechanical` | hard | Hook 设计机械校验＋graph 唯一发布 |
 | `design_semantics_unver` | unver | 目标故事与导演说明的语义质量未评 |
@@ -79,5 +80,5 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `answer_reuse_four_conditions` | hard | R10a §二.4：已购回答复用四条件——模型输入未变→复用；验收条件变化→免费机械复验；实际写作材料变化→按请求身份判断新回答；仅审计/展示变化→不触发付费重写 |
 | `writer_packet_background_narrowing` | hard | R10b §R10b.3：背景投影规则——写手面背景只投书级初态立足点＋建立之后仍被消费的当前状态（消费者＝声明读取/读者确认目标/Hook 地址/锁键）；unset/unknown 不作背景；补齐面（依赖边生成）保持全量 |
 
-当前注册表共 **30 条**：**28 hard、1 metric、1 unver**（R10a 收口新增 6 hard；R10b 新增 1 hard：背景投影规则）。唯一注册表为
+当前注册表共 **31 条**：**29 hard、1 metric、1 unver**（R10a 收口新增 6 hard；R10b 新增 1 hard：背景投影规则）。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。

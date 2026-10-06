@@ -52,7 +52,9 @@ from novel.stages.stage4.fold import (
 )
 from novel.stages.stage4.grounding import (
     assemble_preserve, design_obligation_index, derive_semantic_binding,
-    obligation_core_id, project_brief, project_preserve_view, preserve_revision_wire,
+    fact_lock_subjects, obligation_core_id, preserve_name_issues,
+    preserve_patch_slice, project_brief, project_preserve_view,
+    preserve_revision_wire,
 )
 from novel.stages.stage4.preflight import (
     hook_combination_errors, inspect_body_materials, inspect_design_candidate,
@@ -71,7 +73,7 @@ from novel.stages.stage4.hook import (
 from novel.stages.stage4.hook_validation import validate_hook_design
 from novel.stages.stage4.hook_context import compile_hook_context
 from novel.stages.stage4.slim import design_fact_marks, design_placements
-from novel.stages.stage4.design_paths import locate_design_patches
+from novel.stages.stage4.design_paths import locate_design_patches, wire_paths_of
 
 __all__ = [
     'inspect_body_materials', 'inspect_design_candidate', 'plan_material_repairs',
@@ -86,10 +88,11 @@ __all__ = [
     'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
     'design_fact_marks', 'design_obligation_index', 'design_patch_legal_values',
     'design_patch_slice', 'design_placements',
-    'derive_semantic_binding', 'locate_design_patches',
+    'derive_semantic_binding', 'locate_design_patches', 'wire_paths_of',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
     'init_establishments', 'lock_order_violations', 'obligation_core_id',
-    'project_brief', 'project_design_input', 'project_hook_semantics', 'project_preserve_view', 'preserve_revision_wire',
+    'project_brief', 'project_design_input', 'project_hook_semantics', 'project_preserve_view',
+    'preserve_name_issues', 'preserve_patch_slice', 'preserve_revision_wire', 'fact_lock_subjects',
     'hook_combination_errors', 'hook_patch_legal_values', 'hook_patch_slice',
     'publish_graph', 'run_mechanical_guard', 'scene_order', 'validate_hook_design',
 ]

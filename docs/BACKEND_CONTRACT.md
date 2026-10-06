@@ -262,6 +262,7 @@ Stage4 的四个付费节点按固定序推进：`preserve`（保存策略义务
 | R-5.19 | **锁位置 Guard：信息披露顺序（R10a a5）**：kp 键知情升到某模式的位置、读者确认的位置不得早于**授权该模式的义务承载位置**（授权位＝必保义务 anchors 授权该 (holder, kp, mode) 的全部承载点最早者——支撑拍是承载的一部分，怀疑渐进到证实合法，P2）；initial_state 无披露时点不进判据；自由键不查（模式合法性归 R-5.17）；故事发生顺序不做机械 Guard（顺序三分，P5 合法倒叙不拦）。违例按 `epistemic_lock_order` 回派 `str06.stage4.body_design`（位置上下文＋源盲 core_id；披露顺序是 Design 的决定，Bind 只选承载位）。 | `HARD`（`novel/stages/stage4/guard.py::lock_order_violations`＋`novel/stages/chain.py::_backfill_epistemic_lock_order`；反例 `tests/test_str06_a5_positions.py`、`tests/hard_cases.py`） |
 | R-5.20 | **已购回答复用四条件（R10a §二.4；CS-H H1b 改写第三条件，RC-50～53）**：实际模型输入未变且已购回答仍适用→复用（重启不重复购买）；验收条件变化、模型输入未变→免费机械复验，失败按既有恢复规则；实际写作材料变化→**先走候选集合的免费判定**：对已购候选做兼容性检查（wire 协议字面量相同、可按当前 schema 构造、章数与篇幅约束未变）→上游差异（对候选生成时的上游版本与当前上游版本的修订对照 wire 按（kind, anchors）对齐分未变/变化/新增/删除）→按当前输入完整编译与预检→择优（全绿优先、剩余根因最少次之、同分取最近）；无差异、或差异只有被证明等价的变化条目（位置不变、自由文本称谓规范形相等、其余字段逐字相等；新增／删除条目与编号漂移不算）且预检全绿→**零调用采用**（成本链 `ledger-row` 指向原 attempt，本根只记一行零 token cached 行，修订记录 kind `carried_forward`），变化不能证明等价→只复核引用这些条目的承载拍（一轮条目返修，允许原值不变），删除条目→其承载拍进复核目标，新增条目→可选目标的条目返修（模型在给定拍闭集里选承载位）；**整份新购只限闭集原因**（没有候选／协议字面量不兼容／章数或篇幅约束变化／候选无法按当前 schema 构造／上游是全新回答无修订谱系）并留痕，局部称谓、单条义务、编译缺陷不得成为整份新购理由。仅审计或展示信息变化→不触发付费重写（时间戳等纯审计字段不进模型输入）。未受材料或验收条件影响的章节不重购；上游修订影响的章重新汇集正文与回执。 | `HARD`（`novel/stages/candidates.py` 候选集合与沿用判定＋`novel/llm/paid_requests.py::adopt_carried_forward`＋`novel/stages/chain.py::run_body_design`；反例 `tests/test_str06_candidate_preflight.py`、`tests/test_str06_candidates.py`、`tests/hard_cases.py`） |
 | R-5.21 | **必保揭名（CS-H H3，RC-61）**：`requires_released` 由三项类型化信号合取派生（identity／reveal 必保义务引用＋命题证据句段＝带名称谓首次出现句段＋命题文本含该称谓，不用文本共现）随 Brief 认知变化条目携带（句段号不进 Brief，保持源盲）；该 know 所在拍必须已释放所列称谓（同拍释放合法，拍前不可用），违例带 know 行路径可窄修；这类称谓不投影，承载章正文必现该字面（见 R-7.8）。漏检退化为普通投影，不比现状差。 | `HARD`（`novel/stages/stage4/grounding.py::project_brief`＋`novel/stages/stage4/design.py::_check_requires_released`；反例 `tests/test_str06_required_released.py`） |
+| R-5.22 | **Preserve 自闸（CS-H H3，RC-64）**：义务 statement／satisfaction 不得含**不可投影**的姓名字面——裸姓／家族构词／多义带名面（未登记别名因含裸姓成分同被查出）；判据与下游材料归因同一把尺（能被显示面投影的唯一归属带名面合法），违例带 `obligations[i]` 条目路径在 Preserve 自己的接受循环走**条目返修**（协议规则＋失败条目＋该义务 anchors 的源原子切片＋合法取值；无关义务字节不变），不再等跨节点回派。anchors／quotes 是源文逐字证据，不在扫描面。 | `HARD`（`novel/stages/stage4/grounding.py::preserve_name_issues`＋`novel/stages/chain.py::run_preserve`；反例 `tests/test_str06_preserve_gate.py`） |
 
 材料名称冲突的归因须使用正式字段来源、目标消费拍位和释放依据（RC-01～08）；
 不按源目标同号章二分路由。正确源命题的 know 拍位归 Design，Preserve 只修改自身
@@ -698,7 +699,7 @@ reasoning 是 completion 的子口径，不再累加。统一解析顶层与 com
 | 非正文剔除（`stage0`，**13 条现役**） | R-0 |
 | 分章（`stage1`，**9 条现役**） | R-1 |
 | 源语义与名称结构（`stage2`，**20 条现役**） | R-2、R-3 |
-| 目标故事与确定性编译（`stage4`，**30 条现役**） | R-5、R-6（含 Guard M1–M8） |
+| 目标故事与确定性编译（`stage4`，**31 条现役**） | R-5、R-6（含 Guard M1–M8） |
 | 按章正文与 Hook（`stage5`，**9 条现役**） | R-7、R-8 |
 | 命名与交付（`stage7`，**8 条现役**） | R-10 |
 

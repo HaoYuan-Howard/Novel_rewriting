@@ -63,7 +63,8 @@ from contracts.schema.hook import HookConstraints, HookReceipt
 from contracts.schema.design import DesignWireV8, STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
 from contracts.schema.workflow import (
-    OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1, STAGE4_PRESERVE_POLICY_VERSION,
+    OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1,
+    STAGE4_PRESERVE_POLICY_VERSION, STAGE4_PRESERVE_PROTOCOL,
     route_owner_issue,
 )
 from novel.config import Config, load_config
@@ -107,7 +108,9 @@ from novel.stages.stage4 import (
     assemble_preserve, compile_execution_plan, compile_hook_context,
     compile_writer_book_ir, design_obligation_index,
     knowledge_change_index, lock_order_violations, obligation_core_id,
-    project_brief, project_design_input, project_preserve_view, preserve_revision_wire, publish_graph,
+    preserve_name_issues, preserve_patch_slice, project_brief,
+    project_design_input, project_preserve_view, preserve_revision_wire,
+    publish_graph,
 )
 from contracts.schema.observation import STAGE2_NAMES_PROTOCOL
 from contracts.schema.orchestration import LegacyLlmProfile
@@ -115,6 +118,7 @@ from novel.stages.stage4 import (
     design_patch_legal_values, design_patch_slice, hook_combination_errors,
     hook_patch_legal_values, hook_patch_slice, inspect_body_materials,
     inspect_design_candidate, locate_design_patches, plan_material_repairs,
+    wire_paths_of,
 )
 from novel.core.validation import ValidationMessage, validation_identity
 from novel.stages.stage5 import (
@@ -736,13 +740,53 @@ def run_preserve(ctx: ChainContext) -> dict:
             PreserveCheckpoint.model_validate(payload)))
 
     def preserve_compile(w):
-        return assemble_preserve(w, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,
-                                 characters=core, blueprint=blueprint,
-                                 provider=ctx.provider, model=ctx.model,
-                                 request_sha256=ctx.digest(preserve_prompt))
+        checkpoint, errors = assemble_preserve(w, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,
+                                               characters=core, blueprint=blueprint,
+                                               provider=ctx.provider, model=ctx.model,
+                                               request_sha256=ctx.digest(preserve_prompt))
+        # CS-H H3（RC-64）自闸：义务文本里的裸姓／未登记别名在本接受循环里被
+        # 逐条定位（与下游材料归因同一把尺），不再等跨节点回派。
+        return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars)
+
+    def locate_preserve_patches(wire, errors):
+        """RC-64 条目定位器：自闸问题按 `obligations[i]` 给出最小可替换单元。"""
+        if not isinstance(wire, dict) or not errors:
+            return None
+        targets: dict[tuple, list] = {}
+        for error in errors:
+            paths = wire_paths_of(error)
+            if not paths:
+                return None
+            for path in paths:
+                if (len(path) != 2 or path[0] != 'obligations'
+                        or not isinstance(path[1], int)):
+                    return None
+                targets.setdefault(tuple(path), [])
+                if error not in targets[tuple(path)]:
+                    targets[tuple(path)].append(error)
+        covered = {id(e) for errs in targets.values() for e in errs}
+        if {id(e) for e in errors} != covered:
+            return None
+        return sorted(targets.items())
+
+    def preserve_narrow_context(base_wire, targets):
+        """RC-64 窄输入：协议规则＋失败条目＋该义务 anchors 的源原子与引文。"""
+        indices = {t.path[1] for t in targets if len(t.path) == 2}
+        return NarrowPatchRequest(
+            rules=PRESERVE_RULES,
+            dependency=json.dumps(preserve_patch_slice(base_wire, core, blueprint, indices),
+                                  ensure_ascii=False, separators=(',', ':')),
+            legal_values=json.dumps({
+                'obligation_keys': sorted(['kind', 'statement', 'anchors',
+                                           'must_preserve', 'satisfaction', 'requires']),
+                'obligation_count': len(base_wire.get('obligations') or []),
+                'protocol_version': STAGE4_PRESERVE_PROTOCOL,
+            }, ensure_ascii=False, separators=(',', ':')))
 
     pw, preserve_ref = ctx.ask('preserve', preserve_prompt,
-                               lambda w: preserve_compile(w)[1])
+                               lambda w: preserve_compile(w)[1],
+                               patch=locate_preserve_patches,
+                               narrow=preserve_narrow_context)
     checkpoint, errors = preserve_compile(pw)
     if errors:
         raise ValueError(errors)

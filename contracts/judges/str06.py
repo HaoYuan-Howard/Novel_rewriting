@@ -171,6 +171,10 @@ _hard('design_lock_acceptance', 'stage4',
       'reader known 锁；kf 事实锁在已选状态上用 lock 标注（stage4-design-v8）：'
       '时态锁标在同 modality 的 set、值未知锁标在 op=unknown、原文未回答锁是禁区不承载状态、'
       '一锁一承载且承载拍内地址唯一、映射随 Binding 发布不复制 value；必保锁兑现', 'R-5.17')
+_hard('preserve_name_literal_gate', 'stage4',
+      'Preserve 自闸（RC-64）：义务 statement／satisfaction 里的裸姓／家族构词／'
+      '多义带名面（未登记别名因含裸姓成分同被查出）在 Preserve 接受循环被逐条定位，'
+      '带 obligations[i] 条目路径走条目返修；同一把尺与下游材料归因共用', 'R-5.22')
 _hard('design_requires_released_gate', 'stage4',
       '必保揭名（RC-61）：requires_released 的 know 所在拍必须已释放所列称谓'
       '（同拍释放合法）；承载章正文必现该字面（Stage5 段落级修句闭合）', 'R-5.21')
@@ -315,6 +319,8 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'positive_material_leak': 'locate',
     'internal_id_leak': 'locate',
     'material_name_leak': 'stop',             # 材料归因回派（route_owner_issue）
+    # CS-H H3（RC-64）：Preserve 自闸——义务文本里的裸姓／未登记别名。
+    'preserve_name_literal': 'locate',        # obligations[i] 条目返修（最小可替换单元）
     # CS-H H3（RC-60「投影后的残余归属」）：Design 原文闸先投影再查的残余三态。
     'design_unreleased_reference': 'locate',  # 已绑定称谓但该位置无显示面：补释放／挪承载位／改指称
     'design_projection_lossy': 'locate',      # 无损性守卫触发：不可投影残余归 Design

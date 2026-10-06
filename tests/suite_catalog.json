@@ -1233,6 +1233,16 @@
         "test_first_person_focalizer_uses_the_role_word_in_the_packet": "stage"
       }
     },
+    "tests/test_str06_preserve_gate.py": {
+      "layer": "stage",
+      "stages": [
+        "stage2",
+        "stage4"
+      ],
+      "cases": {
+        "test_one_obligation_repair_sends_only_that_item_and_keeps_others_intact": "stage"
+      }
+    },
     "tests/test_str06_required_released.py": {
       "layer": "unit_contract",
       "stages": [
