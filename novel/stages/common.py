@@ -51,14 +51,16 @@ from contracts.schema.design import BodyDesign
 from contracts.schema.execution import (
     EffectDomain, Establishment, ExecutionPlan, ExecutionSlice,
 )
-from contracts.schema.state import StateAddress, WithheldNameBinding
+from contracts.schema.state import StateAddress, SurfaceIntroduction, WithheldNameBinding
 from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.workflow import STR06_RC_VERSION
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure, render_form
+from novel.core.name_materials import FIRST_PERSON_ROLE_WORD
 from novel.core.name_materials import expand_surface_releases, family_form_literals, withheld_name_literals
 from novel.core.text import count_non_whitespace_chars, kp_statement
 from novel.core.material_trace import (
     MaterialIssue, MaterialLines, MaterialPart, MaterialSource, NameProjectionHit,
+    ProjectionBlock,
 )
 from novel.core.validation import ValidationMessage
 
@@ -180,50 +182,126 @@ def positive_material_issues(
     return tuple(issues)
 
 
+#: 句末标点（含分句与换行）：无损性守卫的「一句」边界（RC-60）。
+_SENTENCE_END = re.compile(r'[。！？；…!?\n;]')
+
+
+def _sentence_span_of(text: str, position: int) -> int:
+    """位置 → 所属句的序号（按句末标点切分；守卫的分组键，不切文本）。"""
+    sentence = 0
+    for match in _SENTENCE_END.finditer(text):
+        if match.end() <= position:
+            sentence += 1
+        else:
+            break
+    return sentence
+
+
 def project_withheld_names(
     text: str, *, bindings: Iterable['WithheldNameBinding'], display: Mapping[str, str],
-) -> tuple[str, tuple[NameProjectionHit, ...]]:
-    """正向材料行里的**完整登记称谓**按本场已释放称谓确定性投影（CS-F2，RC-40/41）。
+) -> tuple[str, tuple[NameProjectionHit, ...], tuple[ProjectionBlock, ...]]:
+    """正向材料行里的**完整登记称谓**按显示面确定性投影（CS-F2，RC-40/41；
+    CS-H H3 补同位语折叠与无损性守卫，RC-60）。
 
-    只处理 `bindings`（章 IR 里 compile 时已证明唯一绑定人物的完整登记称谓）。扫描沿用
-    字面扫描的同一语义：绑定字面与包含它们的更长称谓（`enclosing`，已登记的禁用或已释放
-    称谓）一起长名优先认领，只替换认领到的绑定字面——更长称谓内部的子串因此不会被拆开
-    替换。人物在本场没有已释放称谓（`display` 无值）时保持原样，由后续字面检查如实
-    报告缺口。短姓、关系称呼、未登记表达、源引文均不在绑定表内，绝不替换。纯函数：
-    相同输入恒同输出，不改调用方；只依赖绑定表与本场称谓，不依赖验证材料字段。
+    只处理 `bindings`（已证明唯一绑定人物的完整登记称谓）。扫描沿用字面扫描的
+    同一语义：绑定字面与包含它们的更长称谓（`enclosing`）一起长名优先认领，只替换
+    认领到的绑定字面——更长称谓内部的子串因此不会被拆开替换。人物在本场没有
+    显示面（`display` 无值）时保持原样，由后续字面检查如实报告缺口。短姓、关系
+    称呼、未登记表达、源引文均不在绑定表内，绝不替换。纯函数：相同输入恒同输出。
+
+    两条文本规则（RC-60「投影」）：
+
+    · **同位语折叠**——替换后会与紧邻的同一字面连成重复（「表弟裴书远」投影为
+      「表弟」）时，丢弃该次替换、保留邻接的称谓，不再输出「表弟表弟」；
+    · **无损性守卫**——同一句里同一人物两个**不相邻的不同**绑定称谓都将换成同一
+      显示面时，视为不可投影：该人物在此句的投影全部拦下（`ProjectionBlock`
+      留痕），原文保留，归 owner 修（Design 挪拍位或改指称），不静默压缩。
     """
     table = {b.literal: b for b in bindings}
     if not table or not text:
-        return text, ()
+        return text, (), ()
     literals = set(table)
     for binding in table.values():
         literals.update(binding.enclosing)
-    out: list[str] = []
-    hits: list[NameProjectionHit] = []
-    cursor = 0
-    for claim in claim_spans(text, literals):
-        binding = table.get(claim.literal)
-        replacement = display.get(binding.char_id, '') if binding else ''
-        if not replacement:
+    claims = claim_spans(text, literals)
+    # 显示面可用的绑定认领（display 无值的不参与投影与守卫，保持原样）。
+    replaceable = {claim.start: table[claim.literal].char_id
+                   for claim in claims
+                   if claim.literal in table
+                   and display.get(table[claim.literal].char_id, '')}
+    # 无损性守卫：按句分组，同一人物两个不相邻的不同称谓都将被替换 → 整句拦下。
+    blocked_starts: set[int] = set()
+    by_sentence: dict[int, list[tuple]] = {}
+    for claim in claims:
+        if claim.start not in replaceable:
             continue
-        out.append(text[cursor:claim.start])
+        by_sentence.setdefault(_sentence_span_of(text, claim.start), []).append(
+            (claim.start, claim.end, claim.literal, replaceable[claim.start]))
+    for members in by_sentence.values():
+        by_char: dict[str, list[tuple]] = {}
+        for row in members:
+            by_char.setdefault(row[3], []).append(row)
+        for rows in by_char.values():
+            if len({row[2] for row in rows}) < 2:
+                continue
+            ordered = sorted(rows)
+            if any(b[0] - a[1] != 0 for a, b in zip(ordered, ordered[1:])):
+                blocked_starts.update(row[0] for row in rows)
+    out: list[str] = []
+    emitted = ''
+    hits: list[NameProjectionHit] = []
+    blocks: list[ProjectionBlock] = []
+    cursor = 0
+    for claim in claims:
+        if claim.start not in replaceable:
+            continue
+        char_id = replaceable[claim.start]
+        replacement = display.get(char_id, '')
+        if claim.start in blocked_starts:
+            blocks.append(ProjectionBlock(claim.literal, char_id))
+            continue
+        gap = text[cursor:claim.start]
+        # 同位语折叠：替换结果与紧邻的原文同面重复时丢弃替换，保留邻接称谓——
+        # 「表弟裴书远」投影为「表弟」，不输出「表弟表弟」。
+        if (emitted + gap).endswith(replacement) or text[claim.end:].startswith(replacement):
+            out.append(gap)
+            emitted += gap
+            hits.append(NameProjectionHit(claim.literal, char_id, replacement))
+            cursor = claim.end
+            continue
+        out.append(gap)
         out.append(replacement)
+        emitted += gap + replacement
         cursor = claim.end
-        hits.append(NameProjectionHit(claim.literal, binding.char_id, replacement))
+        hits.append(NameProjectionHit(claim.literal, char_id, replacement))
     out.append(text[cursor:])
-    return ''.join(out), tuple(hits)
+    return ''.join(out), tuple(hits), tuple(blocks)
 
 
 
 def _hook_projection(context: HookContext):
-    """Hook 渲染期的确定性称谓投影（CS-F2，rc16）：与正文章包同一把尺
-    （`project_withheld_names`）。绑定表随上下文携带（compile 按 Hook 自选的
-    surface_releases 算好）；本场显示面＝该人物在 Hook 已释放称谓的首个。"""
+    """Hook 渲染期的确定性称谓投影（CS-F2，rc16；CS-H H3 起显示面走 RC-60
+    解析）：与正文章包同一把尺（`project_withheld_names`，含同位语折叠与
+    无损性守卫）。绑定表随上下文携带（compile 按 Hook 自选的 surface_releases
+    算好）；显示面＝该人物的 Hook 释放面首个——尚无释放的非 concealed 人物
+    用 compile 期附带的回落纯称谓（concealed 不回落），第一人称聚焦人物用
+    角色词「我（叙述者）」。"""
+    faces = {r.char_id: r.surfaces for r in context.display_faces}
+    first_person = context.pov.person == 'first'
+    focalizers = set(context.pov.focalizers)
+
+    def display(char_id: str) -> str:
+        if first_person and char_id in focalizers:
+            return FIRST_PERSON_ROLE_WORD
+        row = faces.get(char_id)
+        return row[0] if row else ''
+
     def project(text: str):
-        return project_withheld_names(
+        projected, hits, _blocked = project_withheld_names(
             text, bindings=context.withheld_bindings,
-            display={b.char_id: surface_display(context.usable_surfaces, b.char_id)
+            display={b.char_id: display(b.char_id)
                      for b in context.withheld_bindings})
+        return projected, hits
     return project
 
 
@@ -244,14 +322,28 @@ def _hook_render(context: HookContext) -> tuple[list[str], tuple[dict, ...]]:
                      'replacement': hit.replacement} for hit in found)
         return projected
 
-    names = {r.char_id: r.surfaces for r in context.usable_surfaces}
+    names = {r.char_id: r.surfaces for r in context.display_faces}
+    _hook_first_person = context.pov.person == 'first'
+    _hook_focalizers = set(context.pov.focalizers)
 
     def _name(char_id: str) -> str:
+        if char_id == 'narrator':
+            return '旁白叙述'
+        if _hook_first_person and char_id in _hook_focalizers:
+            return FIRST_PERSON_ROLE_WORD
         faces = names.get(char_id)
-        return '旁白叙述' if char_id == 'narrator' else (faces[0] if faces else '')
+        return faces[0] if faces else ''
 
     person = '第一人称' if context.pov.person == 'first' else '第三人称'
-    focalizers = '、'.join(_name(f) for f in context.pov.focalizers)
+    # 视角行标注聚焦者**身份**（显示面，不用角色词——角色词会把不同聚焦者渲染成
+    # 同一「我（叙述者）」，视角信息就丢了）；材料行里对聚焦者的指称才用角色词。
+    def _focal_face(char_id: str) -> str:
+        if char_id == 'narrator':
+            return '旁白叙述'
+        faces = names.get(char_id)
+        return faces[0] if faces else ''
+
+    focalizers = '、'.join(_focal_face(f) for f in context.pov.focalizers)
     parts = ['【起笔已成立的事实】（开场前已成立；自然带过，不作为任务交代）']
     parts.extend(f'- {show(fact.text, f"opening_facts/{i}")}'
                  for i, fact in enumerate(context.opening_facts))
@@ -882,6 +974,10 @@ character_voices 声明，不举后段具体情节。
 每拍 release 只声明该位置首次允许的称谓 [{char_id,surfaces}]，不得一次放开
 该人物所有称谓；每个称谓字面只能取输入身份投影给出的可用称呼。
 initial_surfaces 是开场已放行的称谓面（同样的闭集约束）。
+称谓约定（显示面）：首个释放的称谓就是叙述中指称该人物的称谓——人物一被
+提及就应释放一个纯称谓（表弟、夫君一类不含姓名的称呼）；此后各自然语言字段
+（事件、导演说明、全书风格、声线）用已释放称谓指称人物，不用未释放的姓名。
+已提及但未出场的人物同样先释放一个纯称谓再提及。
 driver.focal_actor/immediate_want/opposition/turn 语义同前（写具体阻力，
 不写空转词）。每场 brief 必填非空：本场怎样演出来——重心、详略、转折、
 收束与衔接；不规定逐句正文，不逐拍复述事件。凡涉及关键行动、持久认知
@@ -1156,6 +1252,65 @@ def surface_engine_release(graph: BodyDesign, at_scene: str) -> tuple[SurfaceRel
             return tuple(SurfaceRelease(char_id=cid, surfaces=tuple(sorted(faces[cid])))
                          for cid in sorted(relevant & set(faces)))
     raise ValueError(f'未知场景 {at_scene}')
+
+
+class ReleasePrefixes:
+    """释放前缀索引（CS-H H3，RC-60「位置」）：保序、覆盖全体人物。
+
+    取代「只收本场参与者且 faces 按字典序排」的旧口径（被提及未出场的人物没有
+    显示面；丈夫从第 3 章起在妻子视角的包里被叫作「哥」）。按阅读序累积 Design
+    显式声明的释放（initial_surfaces 先于全书场景），三类取位：
+
+    · **拍行**（含本拍释放）：本拍正式介绍之后同拍可用，拍前不可用；
+    · **场级说明行**：取到场末（不参与揭名判定——揭名走 H3b 的 know 拍位闸）；
+    · **书级行**：取章首。
+
+    查询返回 ``{char_id: (按释放顺序的称谓, …)}``——显示面取首个（`display_surface`）。
+    faces 是原始释放面，不含登记家族构词（「陆家」一类构词不是指称某人的显示面）。
+    纯派生、只读；未知的场景／拍／章 fail fast，不兜底为空。
+    """
+
+    def __init__(self, graph: BodyDesign) -> None:
+        self._beat: dict[tuple[str, str], dict[str, tuple[str, ...]]] = {}
+        self._scene_end: dict[str, dict[str, tuple[str, ...]]] = {}
+        self._chapter_start: dict[int, dict[str, tuple[str, ...]]] = {}
+        faces: dict[str, list[str]] = {}
+
+        def _merged() -> dict[str, tuple[str, ...]]:
+            return {cid: tuple(dict.fromkeys(values)) for cid, values in faces.items() if values}
+
+        for intro in graph.initial_surfaces:
+            faces.setdefault(intro.char_id, []).extend(intro.surfaces)
+        chapter_of = {sid: ch.chapter_ordinal for ch in graph.chapters for sid in ch.scene_ids}
+        seen_chapters: set[int] = set()
+        for scene in graph.scenes:
+            ordinal = chapter_of.get(scene.scene_id)
+            if ordinal is not None and ordinal not in seen_chapters:
+                seen_chapters.add(ordinal)
+                self._chapter_start[ordinal] = _merged()
+            for beat in scene.beats:
+                for intro in beat.surface_introductions:
+                    faces.setdefault(intro.char_id, []).extend(intro.surfaces)
+                self._beat[(scene.scene_id, beat.beat_id)] = _merged()
+            self._scene_end[scene.scene_id] = _merged()
+
+    def beat_faces(self, scene_id: str, beat_id: str) -> dict[str, tuple[str, ...]]:
+        try:
+            return self._beat[(scene_id, beat_id)]
+        except KeyError:
+            raise ValueError(f'未知拍 {scene_id}#{beat_id}') from None
+
+    def scene_end_faces(self, scene_id: str) -> dict[str, tuple[str, ...]]:
+        try:
+            return self._scene_end[scene_id]
+        except KeyError:
+            raise ValueError(f'未知场景 {scene_id}') from None
+
+    def chapter_start_faces(self, chapter_ordinal: int) -> dict[str, tuple[str, ...]]:
+        try:
+            return self._chapter_start[chapter_ordinal]
+        except KeyError:
+            raise ValueError(f'未知章 {chapter_ordinal}') from None
 
 
 def pending_reader_confirmations(
@@ -1809,6 +1964,18 @@ def _names(releases) -> dict[str, tuple[str, ...]]:
     return {r.char_id: r.surfaces for r in releases}
 
 
+def _merge_faces(base: Mapping[str, Iterable[str]],
+                 intros: Iterable['SurfaceIntroduction']) -> dict[str, tuple[str, ...]]:
+    """显示面前缀＋新增释放的保序合并：新释放称谓排在既有之后——显示面取
+    **首个**释放的称谓（RC-60／Design 约定：首个释放即叙述指称），后释放的
+    面不抢占；未新增的人物保持原序。"""
+    faces = {cid: list(dict.fromkeys(values)) for cid, values in base.items()}
+    for intro in intros:
+        row = faces.setdefault(intro.char_id, [])
+        row.extend(s for s in intro.surfaces if s not in row)
+    return {cid: tuple(values) for cid, values in faces.items() if values}
+
+
 def _name(names: dict[str, tuple[str, ...]], char_id: str) -> str:
     """只解析已释放面；narrator／reader 是保留字，不以人物 slug 兜底。"""
     if char_id == 'narrator':
@@ -1818,16 +1985,16 @@ def _name(names: dict[str, tuple[str, ...]], char_id: str) -> str:
     return surface_display(names, char_id)
 
 
-def _subjects_line(names, subjects, holder=None) -> str:
-    who = '与'.join(_name(names, s) for s in subjects)
+def _subjects_line(name, subjects, holder=None) -> str:
+    who = '与'.join(name(s) for s in subjects)
     if holder:
-        who = f'{who}（{_name(names, holder)}）' if who else _name(names, holder)
+        who = f'{who}（{name(holder)}）' if who else name(holder)
     return who
 
 
-def _state_entry_line(names, entry: StateEntry) -> str:
+def _state_entry_line(name, entry: StateEntry) -> str:
     """入场/拍级/背景事实条目：主体＋维度措辞＋值（key／来源锚不进阅读面）。"""
-    who = _subjects_line(names, entry.subjects)
+    who = _subjects_line(name, entry.subjects)
     head = f'{who}：' if who else ''
     if entry.status == 'set':
         return f'{head}{entry.value}'
@@ -1836,15 +2003,15 @@ def _state_entry_line(names, entry: StateEntry) -> str:
     return f'{head}（值未知）'
 
 
-def _knowledge_entry_line(names, entry: KnowledgeEntry) -> str:
+def _knowledge_entry_line(name, entry: KnowledgeEntry) -> str:
     """知情条目：持有者＋模式＋命题。proposition 由 `project_context` 以
     `Brief.propositions` 回填为命题文本（kp=值 的机器拼接只活在 fold/闭包
     证明的机械面，不进阅读面——R10b「锁以内容送达」，D6 渲染修复）。"""
     mode = _KNOWLEDGE_WORDINGS.get(entry.mode, entry.mode)
-    return f'{_name(names, entry.holder)}{mode}「{entry.proposition}」'
+    return f'{name(entry.holder)}{mode}「{entry.proposition}」'
 
 
-def _delta_line(names, delta) -> str:
+def _delta_line(name, delta) -> str:
     """拍末效应条目（must_realize）：按域措辞；op 折进自然语言。
 
     R10b 起 `modality ≠ actual` 的事实 set 显式带「尚未发生」措辞（C2 的
@@ -1855,10 +2022,10 @@ def _delta_line(names, delta) -> str:
     if delta.domain is EffectDomain.KNOWLEDGE:
         if delta.op != 'set':
             action = '此项信息仍未知' if delta.op == 'unknown' else '解除此项知情状态'
-            return f'{_name(names, delta.holder or "")}：{action}'
+            return f'{name(delta.holder or "")}：{action}'
         mode = _KNOWLEDGE_WORDINGS.get(delta.knowledge_mode or 'known', '确知')
-        return f'{_name(names, delta.holder or "")}{mode}「{delta.value}」'
-    who = _subjects_line(names, delta.subjects, delta.holder)
+        return f'{name(delta.holder or "")}{mode}「{delta.value}」'
+    who = _subjects_line(name, delta.subjects, delta.holder)
     head = f'{who}：' if who else ''
     if delta.op == 'set':
         tense = _MODALITY_WORDINGS.get(delta.modality or '')
@@ -1923,19 +2090,36 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
     """
     chapter = packet.chapter
     brief = packet.book_brief
-    # 称谓投影（CS-F2）：书级行用章内首个已释放称谓，场景行用本场已释放称谓；
-    # 只投影章 IR 已证明唯一绑定人物的完整登记称谓，来源文本保持原字段原样。
-    chapter_names: dict[str, tuple[str, ...]] = {}
-    for context in chapter.scenes:
-        for char_id, faces in _names(context.verification_ir.released_surfaces).items():
-            chapter_names.setdefault(char_id, faces)
-    scope_names = chapter_names
+    # 显示面（CS-H H3，RC-60）：前缀保序、覆盖全体人物——被提及未出场的人物
+    # 也有显示面；尚无释放者的回落纯称谓由 compile 期算好随 ChapterIR.display_prefix
+    # 携带（渲染期不读 Characters，D2）。三类取位：书级行＝章首；场级说明行＝场末；
+    # 拍行＝拍前缀（含本拍释放，拍前不可用）。第一人称叙述的聚焦人物用角色词
+    # 「我（叙述者）」。投影仍只作用于章 IR 已证明唯一绑定人物的完整登记称谓，
+    # 来源文本保持原字段原样（CS-F2）；同位语折叠与无损性守卫见投影函数。
+    first_person = brief.narration.person == 'first'
+    focalizers = set(brief.narration.focalizers)
+    carry = {r.char_id: r.surfaces for r in chapter.display_prefix}
+    scope_faces: dict[str, tuple[str, ...]] = dict(carry)
+
+    def set_scope(faces: Mapping[str, tuple[str, ...]]) -> None:
+        scope_faces.clear()
+        scope_faces.update(faces)
+
+    def _name(char_id: str) -> str:
+        if char_id == 'narrator':
+            return '旁白叙述'
+        if char_id == 'reader':
+            return '读者'
+        if first_person and char_id in focalizers:
+            return FIRST_PERSON_ROLE_WORD
+        faces = scope_faces.get(char_id)
+        return faces[0] if faces else ''
 
     def project(text: str):
-        return project_withheld_names(
+        projected, hits, _blocked = project_withheld_names(
             text, bindings=chapter.withheld_bindings,
-            display={b.char_id: surface_display(scope_names, b.char_id)
-                     for b in chapter.withheld_bindings})
+            display={b.char_id: _name(b.char_id) for b in chapter.withheld_bindings})
+        return projected, hits
 
     must_realize = MaterialLines(project)
     must_respect = MaterialLines(project)
@@ -1970,8 +2154,8 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
         creative.append(f'表达机制：{choice.statement}',
                         source('expression', choice.ex_id, 'statement', choice.statement))
     for voice in brief.character_voices:
-        if chapter_names.get(voice.char_id):
-            creative.append(f'{_name(chapter_names, voice.char_id)}的声线：{voice.voice}',
+        if scope_faces.get(voice.char_id):
+            creative.append(f'{_name(voice.char_id)}的声线：{voice.voice}',
                             source('design', voice.char_id, 'voice', voice.voice))
     creative.append(f'本章目的（第{chapter.chapter_ordinal}章）：{chapter.purpose}',
                     source('design', f'chapter:{chapter.chapter_ordinal}', 'purpose', chapter.purpose))
@@ -1984,8 +2168,8 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
     else:
         line = (f'上一章收在「{ending.final_beat_event}」'
                 f'（转折：{ending.driver_turn}）')
-        present = '、'.join(_name(chapter_names, c) for c in ending.present_chars
-                           if chapter_names.get(c))
+        present = '、'.join(_name(c) for c in ending.present_chars
+                           if scope_faces.get(c))
         if present:
             line += f'，收尾时在场：{present}'
         line += f'；本章以{_TRANSITION_WORDINGS[entry.transition]}开场，' \
@@ -2017,12 +2201,15 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
         label = _scene_label(index)
         ir = context.verification_ir
         brief_view = context.writer_brief
-        names = _names(ir.released_surfaces)
-        scope_names = names          # 本场行按本场已释放称谓投影
+        # 场级说明行取到场末（RC-60「位置」）：本场全部拍级释放并入前缀；
+        # 拍行在拍循环内切回拍前缀（含本拍释放，拍前不可用）。
+        scene_end = _merge_faces(
+            carry, (intro for b in ir.beats for intro in b.release_introductions))
+        set_scope(scene_end)
         beat_no = {b.beat_ref.rsplit('#', 1)[-1]: i
                    for i, b in enumerate(ir.beats, start=1)}
         beat_event = {b.beat_ref.rsplit('#', 1)[-1]: b.event for b in ir.beats}
-        pov = '旁白叙述' if brief_view.pov == 'narrator' else _name(names, brief_view.pov)
+        pov = '旁白叙述' if brief_view.pov == 'narrator' else _name(brief_view.pov)
         creative.append(f'{label}（视角：{pov}；口吻：{brief_view.voice}）导演说明：'
                         f'{brief_view.realization_brief}',
                         source('design', context.scene_id, 'delivery.voice', brief_view.voice),
@@ -2042,18 +2229,22 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
             support_of.setdefault(carrier.accept_beat, []).extend(
                 carrier.supporting_beats)
         # 必须写出：按场→拍组织（事件＋承载义务＋表达任务＋拍末结果）
+        beat_intros: list = []
         for beat in ir.beats:
             beat_id = beat.beat_ref.rsplit('#', 1)[-1]
             no = beat_no[beat_id]
+            # 拍行按拍前缀（含本拍释放）：本拍正式介绍之后同拍可用（RC-60）。
+            beat_intros.extend(beat.release_introductions)
+            set_scope(_merge_faces(carry, beat_intros))
             line = f'{label}·第{no}拍：{beat.event}'
-            effects = [_delta_line(names, d) for d in beat.deltas]
+            effects = [_delta_line(_name, d) for d in beat.deltas]
             if effects:
                 line += '——拍末应成立：' + '；'.join(effects)
             must_realize.append(line, source('design', beat.beat_ref, 'event', beat.event, beat.beat_ref),
                                 *(fact_source(d, f'target_delta/{i}', beat.beat_ref)
                                   for i, d in enumerate(beat.deltas)))
-            reads = [_state_entry_line(names, r) if hasattr(r, 'value')
-                     else _knowledge_entry_line(names, r) for r in beat.reads]
+            reads = [_state_entry_line(_name, r) if hasattr(r, 'value')
+                     else _knowledge_entry_line(_name, r) for r in beat.reads]
             for read_index, (read, value) in enumerate(zip(reads, beat.reads)):
                 must_respect.append(f'{label}·第{no}拍依赖的事实：{read}',
                                     fact_source(value, f'reads/{read_index}', beat.beat_ref))
@@ -2081,31 +2272,33 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
                                         '（呈现目标——通过话语与内心反应的落差实现，'
                                         '不写成解释性总结句）',
                                         source('expression', ex_id, 'statement', statement, beat.beat_ref))
+        # 拍行结束：回到场末前缀（场级说明行的取位），并把本场累积并入章内前缀。
+        set_scope(scene_end)
         for op in ir.thread_ops:
             kind = _THREAD_KIND_WORDINGS[op.kind]
             thread_sources = tuple(source('design', op.ref, field, getattr(op, field), context.scene_id)
                                    for field in ('text', 'progress', 'resolution'))
             if op.op == 'open':
-                must_realize.append(f'{label}·开启线索：{_name(names, op.subject)}'
+                must_realize.append(f'{label}·开启线索：{_name(op.subject)}'
                                     f'的{kind}「{op.text}」', *thread_sources)
             elif op.op == 'advance':
-                must_realize.append(f'{label}·推进线索：{_name(names, op.subject)}'
+                must_realize.append(f'{label}·推进线索：{_name(op.subject)}'
                                     f'的{kind}「{op.text}」——{op.progress}', *thread_sources)
             else:
-                must_realize.append(f'{label}·收束线索：{_name(names, op.subject)}'
+                must_realize.append(f'{label}·收束线索：{_name(op.subject)}'
                                     f'的{kind}「{op.text}」——{op.resolution}', *thread_sources)
         # 不可违背：入场事实、知情边界、称谓许可（只在变化处）、场景 avoid
         for entry_index, entry_state in enumerate(ir.entry_state):
-            must_respect.append(f'{label}·入场已成立：{_state_entry_line(names, entry_state)}',
+            must_respect.append(f'{label}·入场已成立：{_state_entry_line(_name, entry_state)}',
                                 fact_source(entry_state, f'entry_state/{entry_index}', context.scene_id))
         for entry_index, knowledge in enumerate(ir.entry_knowledge):
-            must_respect.append(f'{label}·知情边界：{_knowledge_entry_line(names, knowledge)}',
+            must_respect.append(f'{label}·知情边界：{_knowledge_entry_line(_name, knowledge)}',
                                 fact_source(knowledge, f'entry_knowledge/{entry_index}', context.scene_id))
         fresh: list[str] = []
         for release in ir.released_surfaces:
             faces = tuple(s for s in release.surfaces if s not in listed_surfaces)
             if faces:
-                fresh.append(f'{_name(names, release.char_id)}（{"、".join(faces)}）')
+                fresh.append(f'{_name(release.char_id)}（{"、".join(faces)}）')
                 listed_surfaces.update(faces)
         if fresh:
             prefix = '本场可用称谓' if index == 0 else '本场新增可用称谓'
@@ -2124,7 +2317,7 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
                 continue
             seen_open_threads.add(thread.ref)
             continuity.append(f'仍影响人物选择的开放线索（不必点明）：'
-                              f'{_name(names, thread.subject)}的'
+                              f'{_name(thread.subject)}的'
                               f'{_THREAD_KIND_WORDINGS[thread.kind]}「{thread.text}」',
                               source('design', thread.ref, 'text', thread.text, context.scene_id))
         for fact_index, fact in enumerate(ir.continuity_fact_view):
@@ -2133,13 +2326,13 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
         # 背景：收窄后的入场基线；章内同一**条目**只列一次（章首一次、场内
         # 只补新条目——去重键是不带场标的条目内容，跨场重复的场标不算差异）
         for entry_index, state_entry in enumerate(ir.background_state):
-            key = _state_entry_line(names, state_entry)
+            key = _state_entry_line(_name, state_entry)
             if key not in seen_background:
                 seen_background.add(key)
                 background.append(f'{label}·{key}',
                                   fact_source(state_entry, f'background_state/{entry_index}', context.scene_id))
         for entry_index, knowledge in enumerate(ir.background_knowledge):
-            key = _knowledge_entry_line(names, knowledge)
+            key = _knowledge_entry_line(_name, knowledge)
             if key not in seen_background:
                 seen_background.add(key)
                 background.append(f'{label}·{key}',
@@ -2158,6 +2351,8 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
                 continue
             guard_only.append(f'未决问题「{thread.text}」不得在本场回答，'
                               '也不得主动向读者提起')
+        # 本场并入章内累积前缀：下一场的拍前缀以本场场末为基线。
+        carry = scene_end
     # 禁区：原文未回答的悬念（C9）——从承载位置所在章起每章一条，按章去重。
     for guard in _ordered_dedup(
             g.question for scene in chapter.scenes

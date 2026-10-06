@@ -145,6 +145,44 @@ def _source_owner(source: MaterialSource, *, brief: ReconstructionBrief, literal
     return '', '确定性投影来源尚未证明，须定位代码而非重购语义输出'
 
 
+def _released_char_faces(body: BodyDesign, structure: NameStructure | None,
+                         ) -> dict[str, tuple[str, ...]]:
+    """全书（含 initial）按人物累积的已释放称谓——「该人物是否曾有显示面」的判定面。"""
+    releases: dict[str, set[str]] = {}
+    for row in body.initial_surfaces:
+        releases.setdefault(row.char_id, set()).update(row.surfaces)
+    for scene in body.scenes:
+        for beat in scene.beats:
+            for row in beat.surface_introductions:
+                releases.setdefault(row.char_id, set()).update(row.surfaces)
+    return expand_surface_releases(releases, structure)
+
+
+def _no_display_anywhere(literal: str, body: BodyDesign,
+                         structure: NameStructure | None) -> bool:
+    """已绑定称谓的人物在**全书任何位置**都没有显示面（RC-60 残余归属表第一行）。
+
+    无释放且无回落：该人物全部登记称谓都含姓名部件（无纯称谓可回落）——
+    唯一修复面是 Design 的释放声明（补一行释放或挪承载位），与文本来源无关。
+    归属证明与 `withheld_name_bindings` 同一把尺：字面唯一绑定某一人物。
+    """
+    if structure is None:
+        return False
+    owners: dict[str, set[str]] = {}
+    for char_id, person in structure.people.items():
+        for surface in person.surface_forms:
+            owners.setdefault(surface, set()).add(char_id)
+    who = owners.get(literal, set())
+    if len(who) != 1:
+        return False
+    char_id = next(iter(who))
+    person = structure.people[char_id]
+    if any(form is None for form in person.surface_forms.values()):
+        return False    # 有纯称谓：显示面回落存在（RC-60 第 3 步）
+    released = _released_char_faces(body, structure)
+    return char_id not in released
+
+
 def plan_material_repairs(
     issues: Iterable[MaterialIssue], *, body: BodyDesign, binding: SemanticBinding,
     brief: ReconstructionBrief, structure: NameStructure | None = None,
@@ -152,6 +190,27 @@ def plan_material_repairs(
     """一条结果保留全部命中来源；缺失／不同owner多义／未登记均停止。"""
     result: list[MaterialRepair] = []
     for problem in issues:
+        # CS-H H3（RC-60 残余归属表第一行）：已绑定称谓但该人物全书无显示面
+        # ——补释放／挪承载位归 Design，先于按文本来源的归因（唯一修复面是
+        # Design 的释放声明，改义务或 Hook 文本都修不了「没有可指称的面」）。
+        if problem.code == 'positive_material_leak' \
+                and _no_display_anywhere(problem.literal, body, structure):
+            positions = _release_positions(body, problem.literal, structure)
+            fields = sorted({f'{s.ref}/{s.field}' for s in problem.sources})
+            issue = OwnerIssueV1(
+                code='material_name_leak',
+                item=f'chapter:{problem.chapter_ordinal}' if problem.chapter_ordinal else 'hook',
+                message=(f'{problem.literal!r} 已绑定人物全书没有任何显示面（无释放且无回落'
+                         f'纯称谓）；字段={fields or "未决"}；须由 Design 补一行释放或挪'
+                         f'承载位，目标释放位置={positions or "未声明"}'),
+                context={'literal': problem.literal, 'where': problem.where,
+                         'chapter_ordinal': problem.chapter_ordinal,
+                         'no_display_surface': True,
+                         'target_release_positions': list(positions),
+                         'material_identity': problem.identity})
+            action, target = route_owner_issue('material_name_leak', material_owner='design')
+            result.append(MaterialRepair(action, 'design', target, issue))
+            continue
         explanations = [_source_owner(source, brief=brief, body=body, binding=binding, literal=problem.literal)
                         for source in problem.sources]
         owners = {owner for owner, _ in explanations}

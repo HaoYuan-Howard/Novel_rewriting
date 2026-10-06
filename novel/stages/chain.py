@@ -1002,8 +1002,20 @@ def run_body_design(ctx: ChainContext) -> dict:
                 inspection.feedback(list(inspection.errors) + [
                     ValidationMessage(r.issue.message, r.issue.context['material_identity'])
                     for r in repairs]))
-        return inspection.feedback(list(inspection.errors) + [
-            ValidationMessage(r.issue.message, r.issue.context['material_identity']) for r in repairs])
+        # CS-H H3：Design 自有字段与写手材料同面镜像——同一字面已由 Design 原文闸
+        # （先投影再查）以带路径任务报出时，写手材料面的同源归因消息不再重复进反馈：
+        # 无路径的重复消息会让条目定位退整份返修、接受记录多计根因。
+        from novel.core.validation import ValidationIssue as _ValidationIssue
+        gated = {issue.location[-1] for issue in inspection.errors
+                 if isinstance(issue, _ValidationIssue)
+                 and issue.code in ('positive_material_leak', 'internal_id_leak',
+                                    'design_unreleased_reference',
+                                    'design_projection_lossy')}
+        mirrored = [ValidationMessage(r.issue.message, r.issue.context['material_identity'])
+                    for r in repairs
+                    if not (r.owner == 'design' and r.action != 'stop'
+                            and r.issue.context.get('literal') in gated)]
+        return inspection.feedback(list(inspection.errors) + mirrored)
 
     def route_upstream(inspection) -> None:
         """把候选的上游归属问题登记成回派；任何情形都抛出，不放行半份候选。"""
@@ -1355,7 +1367,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
                         for wc in brief.book_constraints}
     hook_context, errors = compile_hook_context(graph, projection, ctx.hook_constraints,
                                                 chars.name_structure, kp_statements,
-                                                world_statements)
+                                                world_statements,
+                                                characters=chars.core_view())
     if errors:
         raise MechanicalDefectStop(
             f'stage4 hook 上下文机械缺陷：{errors}',

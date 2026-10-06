@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from typing import Iterable, Mapping
 
-from contracts.schema.source import NameProjection, NameStructure, render_form
+from contracts.schema.source import (
+    CharacterEntry, CharactersCore, NameProjection, NameStructure, render_form,
+)
+
+#: 第一人称叙述的聚焦人物在材料里的角色词（CS-H H3，RC-60 显示面第 1 条）。
+FIRST_PERSON_ROLE_WORD = '我（叙述者）'
 
 
 def family_form_literals(structure: NameStructure | None) -> set[str]:
@@ -39,6 +44,68 @@ def withheld_name_literals(
     for entry in projection.by_person:
         names.update(entry.name_bearing_surfaces)
     return tuple(sorted(names - set(released) - {''}))
+
+
+def appellation_fallback(
+    char_id: str, entry: CharacterEntry | None, structure: NameStructure | None,
+) -> str:
+    """尚无释放时的回落称谓（RC-60 显示面第 3 条）：``canonical`` 是纯称谓就取它，
+    否则取源文**最早登记**的纯称谓（登记序＝``surfaces`` 列表序）；都没有返回 ''。
+
+    纯称谓＝名称结构里构词为 null 的 surface（不含姓名部件）。``structure`` 缺席时
+    无纯度信息，回落 canonical（与现役 NameProjectionEntry.display 同尺，不更严）。
+    """
+    if entry is None:
+        return ''
+    if structure is None:
+        return entry.canonical
+    person = structure.people.get(char_id)
+    forms = person.surface_forms if person is not None else {}
+    if forms.get(entry.canonical) is None:
+        return entry.canonical
+    for window in entry.surfaces:
+        if forms.get(window.surface) is None:
+            return window.surface
+    return ''
+
+
+def appellation_fallbacks(
+    characters: CharactersCore, structure: NameStructure | None,
+) -> dict[str, str]:
+    """整书回落表（char_id → 回落纯称谓；无回落的人物不进表）。
+
+    compile 期算好随 ChapterIR／HookContext 携带——渲染期只有章包/上下文，
+    不再接触 Characters（D2 同尺：显示面材料在 compile 时算好）。
+    """
+    return {char_id: fallback for char_id, fallback in
+            ((cid, appellation_fallback(cid, entry, structure))
+             for cid, entry in characters.characters.items()) if fallback}
+
+
+def display_surface(
+    char_id: str, released_faces: Iterable[str], *,
+    structure: NameStructure | None, entry: CharacterEntry | None = None,
+    first_person_focalizer: bool = False, allow_fallback: bool = True,
+) -> str:
+    """显示面解析（CS-H H3，RC-60）——正文、Hook、Design 原文闸共用的唯一函数。
+
+    1. 第一人称叙述的聚焦人物：角色词 ``我（叙述者）``（叙述里以「我」自称，
+       材料不替他选称谓）；
+    2. 其余人物：该位置之前**已释放**称谓里按释放顺序的第一个；
+    3. 尚无释放：``appellation_fallback``（canonical 纯称谓，否则最早登记纯称谓）；
+    4. 都没有：无显示面（返回 ``''``）。Hook 的 concealed 人物不走第 3 步
+       （``allow_fallback=False``）——隐藏人物不得借回落面获得指称。
+
+    纯函数；不修改输入，不据字符串相似性推断归属（I-20/I-21）。
+    """
+    if first_person_focalizer:
+        return FIRST_PERSON_ROLE_WORD
+    faces = tuple(dict.fromkeys(f for f in released_faces if f))
+    if faces:
+        return faces[0]
+    if not allow_fallback:
+        return ''
+    return appellation_fallback(char_id, entry, structure)
 
 
 def withheld_name_bindings(

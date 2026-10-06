@@ -48,7 +48,7 @@ from pydantic import Field, model_validator
 from contracts.schema.base import StrictModel
 from contracts.schema.design import TargetBeat, TargetDelta, ThreadKind
 from contracts.schema.execution import Establishment
-from contracts.schema.state import StateAddress, SurfaceRelease
+from contracts.schema.state import StateAddress, SurfaceIntroduction, SurfaceRelease
 from contracts.schema.grounding import SourceObligation
 from typing import Literal, Mapping, Sequence
 
@@ -94,6 +94,11 @@ class BeatIR(StrictModel):
     surface_introductions: tuple[str, ...] = Field(
         default=(), min_length=0,
         description='该拍首次释放的称谓字面（释放位置的可追溯投影）')
+    #: 带人物归属的同一释放投影（CS-H H3，RC-60）：显示面前缀按（场,拍）累积时
+    #: 需要知道每个字面属于谁；与 `surface_introductions` 同源同序，不另立真相。
+    release_introductions: tuple[SurfaceIntroduction, ...] = Field(
+        default=(), min_length=0,
+        description='该拍首次释放的（人物, 称谓）投影（显示面前缀的增量）')
     #: 拍级读取的解析值（R2，AUD-03）：定位到本拍的已声明读取在该拍定位点上
     #: 解析到的事实（先写后读），StateEntry＝非知情域、KnowledgeEntry＝知情域。
     #: 入场读取的值不在这里（在 entry_state／entry_knowledge——「起笔已成立」）。
@@ -343,5 +348,9 @@ def beats_ir(scene_id: str, beats: tuple[TargetBeat, ...],
                expression_refs=b.expression_refs,
                surface_introductions=tuple(
                    s for intro in b.surface_introductions for s in intro.surfaces),
+               # 显式构造：上游 model_copy 可能绕过校验放入同构的 SurfaceRelease。
+               release_introductions=tuple(
+                   SurfaceIntroduction(char_id=intro.char_id, surfaces=intro.surfaces)
+                   for intro in b.surface_introductions),
                reads=tuple(reads_by_beat.get(b.beat_id, ())))
         for b in beats)

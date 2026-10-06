@@ -125,7 +125,9 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         kp_statements = {p.kp_id: p.statement for p in brief.propositions}
         world_statements = {wc.constraint_id: wc.statement for wc in brief.book_constraints}
         hook_context, hook_errors = compile_hook_context(graph, projection, hook_constraints,
-                                                        chars.name_structure, kp_statements, world_statements)
+                                                        chars.name_structure, kp_statements,
+                                                        world_statements,
+                                                        characters=chars.core_view())
         errors.extend(hook_errors)
         if plan is not None and hook_context is not None:
             inspection = inspect_body_materials(graph, binding, brief, chars, budget=budget,

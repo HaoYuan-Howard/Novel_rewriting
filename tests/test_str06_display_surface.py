@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""test_str06_display_surface —— CS-H H3 判据①：显示面、投影与残余归属。
+
+规格（`docs/schema/repair_convergence.md` CS-H B 节，RC-60）的反例与绿对照：
+  · 显示面解析函数四条规则（聚焦角色词／释放顺序首个／canonical-纯称谓回落／
+    最早登记纯称谓回落）与 concealed 不回落；
+  · 释放前缀保序、覆盖全体人物（被提及未出场人物投影——丈夫不再被叫作「哥」）；
+  · 投影的同位语折叠与无损性守卫；裸姓不投影；
+  · 无显示面残余归 Design（`design_unreleased_reference`，带路径）。
+零付费：纯函数与真实 compile 入口。
+"""
+from __future__ import annotations
+
+from contracts.schema.state import WithheldNameBinding
+from novel.core.name_materials import (
+    FIRST_PERSON_ROLE_WORD, appellation_fallback, appellation_fallbacks,
+    display_surface,
+)
+from novel.stages.common import (
+    ReleasePrefixes, project_withheld_names, render_chapter_packet,
+)
+from tests.test_str06_hook import _characters
+from tests.test_str06_name_projection import _project_all
+
+
+# ───────────────────────── 显示面解析函数（RC-60 四条规则） ─────────────────────────
+
+def test_display_surface_rules_in_order():
+    """①聚焦角色词 → ②释放顺序首个 → ③canonical 纯称谓 → 最早登记纯称谓 → 无。"""
+    chars = _characters().core_view()
+    structure = _characters().name_structure
+    # ②释放顺序首个：陆大哥先释放、陆兄后释放 ⇒ 显示面是陆大哥（不是字典序）。
+    assert display_surface('fu_jun', ['陆大哥', '陆兄'],
+                           structure=structure, entry=chars.characters['fu_jun']) == '陆大哥'
+    # ③canonical 为纯称谓（yun_niang 无纯称谓、fu_jun 的 canonical 夫君是纯称谓）。
+    assert display_surface('fu_jun', (), structure=structure,
+                           entry=chars.characters['fu_jun']) == '夫君'
+    # ④canonical 含姓名部件 ⇒ 取源文最早登记的纯称谓；本夹具 yun_niang 全部登记
+    # 称谓都含姓名部件 ⇒ 无回落（无显示面）。
+    assert display_surface('yun_niang', (), structure=structure,
+                           entry=chars.characters['yun_niang']) == ''
+    # ①第一人称聚焦人物用角色词，优先于已释放称谓。
+    assert display_surface('fu_jun', ['陆大哥'], structure=structure,
+                           entry=chars.characters['fu_jun'],
+                           first_person_focalizer=True) == FIRST_PERSON_ROLE_WORD
+    # concealed 不回落（allow_fallback=False）：尚无释放即无显示面。
+    assert display_surface('fu_jun', (), structure=structure,
+                           entry=chars.characters['fu_jun'],
+                           allow_fallback=False) == ''
+
+
+def test_appellation_fallback_prefers_earliest_registered_pure_surface():
+    """canonical 不是纯称谓时，回落取源文**最早登记**的纯称谓（登记序）。"""
+    chars = _characters().core_view()
+    structure = _characters().name_structure
+    # 夹具里 yun_niang 无纯称谓；给她在最前面补一个纯称谓，回落应取它。
+    data = _characters().model_dump(mode='json')
+    data['characters']['yun_niang']['surfaces'].insert(0, {
+        'surface': '娘子', 'from_chapter': 1, 'until_chapter': None,
+        'source_refs': ['e01_01']})
+    data['name_structure']['people']['yun_niang']['surface_forms']['娘子'] = None
+    from contracts.schema.source import CharactersArtifactV4
+    amended = CharactersArtifactV4.model_validate(data)
+    assert appellation_fallback('yun_niang', amended.core_view().characters['yun_niang'],
+                                amended.name_structure) == '娘子'
+    assert appellation_fallbacks(amended.core_view(), amended.name_structure) == {
+        'fu_jun': '夫君', 'yun_niang': '娘子'}
+
+
+# ───────────────────────── 释放前缀：保序、覆盖全体人物 ─────────────────────────
+
+def _released_body():
+    """两章三场的绿基座：陆大哥第 1 章释放（夫君之后），第 2 章场提到未出场。"""
+    from tests.test_str06_r10b_writer_packet import _binding, _design
+    from contracts.schema.context import SurfaceRelease
+    body = _design()
+    scenes = list(body.scenes)
+    beats = list(scenes[0].beats)
+    beats[0] = beats[0].model_copy(update={'surface_introductions': (
+        SurfaceRelease(char_id='fu_jun', surfaces=('陆大哥',)),)})
+    scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})
+    body = body.model_copy(update={'scenes': tuple(scenes)})
+    return body, _binding(body)
+
+
+def test_release_prefixes_cover_all_characters_in_release_order():
+    """前缀对全体人物有效并保留释放顺序：拍前缀含本拍释放、场末含本场、章首不含本章。"""
+    body, _ = _released_body()
+    prefixes = ReleasePrefixes(body)
+    beat0 = prefixes.beat_faces('sc01', 'b01')
+    # 含本拍释放：b01 自己引入的陆大哥在本拍可用（本拍正式介绍之后同拍可用）。
+    assert beat0['fu_jun'][:2] == ('夫君', '陆大哥'), '释放顺序＝阅读序，不是字典序'
+    # 拍前不可用：b01 之前没有任何拍，陆大哥在 b01 引入 ⇒ 章首前缀没有它。
+    assert '陆大哥' not in prefixes.chapter_start_faces(1)['fu_jun']
+    # 第 2 章章首＝第 1 章场末：第 1 章的全部释放到达第 2 章（被提及未出场也有面）。
+    assert prefixes.chapter_start_faces(2)['fu_jun'][:2] == ('夫君', '陆大哥')
+    assert prefixes.scene_end_faces('sc03')['fu_jun'][:2] == ('夫君', '陆大哥')
+    # 未释放人物也保留在映射里（尚无面 ⇒ 不在；全体人物不因「本场参与者」被裁剪）。
+    assert 'yun_niang' in prefixes.chapter_start_faces(2)
+
+
+def test_mentioned_but_absent_character_projects_in_the_chapter_packet():
+    """判据①：被提及未出场的人物按书级前缀投影——第 2 章某拍只有芸娘在场，
+    事件文本提到未释放的『陆大哥』（绑定人物 fu_jun），fu_jun 本场不出场、
+    也不在该场任何读取里；显示面取其已释放的『夫君』，送达行投影、不再泄漏。
+    旧口径只收本场参与者：fu_jun 不在场面里 ⇒ 无显示面 ⇒ 泄漏回派。"""
+    from tests.test_str06_r10b_writer_packet import _binding, _design, _requirements
+    from novel.stages.stage4.book_ir import compile_writer_book_ir
+    from novel.stages.stage4.compile import compile_execution_plan
+    from novel.stages.common import project_chapter_packet
+    body = _design()
+    # sc03（第 2 章）：只有芸娘在场，事件文本提到未释放的陆大哥。
+    scenes = list(body.scenes)
+    beats = list(scenes[2].beats)
+    beats[0] = beats[0].model_copy(
+        update={'event': '芸娘翻出陆大哥的行囊', 'participants': ('yun_niang',)})
+    scenes[2] = scenes[2].model_copy(update={'beats': tuple(beats)})
+    body = body.model_copy(update={'scenes': tuple(scenes)})
+    binding = _binding(body)
+    plan, errors = compile_execution_plan(body, binding)
+    assert not errors, errors
+    chars = _characters()
+    brief = _requirements()
+    ir = compile_writer_book_ir(
+        graph=body, plan=plan, binding=binding, total_budget=4000,
+        length_band=(0.6, 1.3), projection=chars.name_projection(),
+        structure=chars.name_structure, fact_locks=brief.fact_locks,
+        kp_statements={p.kp_id: p.statement for p in brief.propositions},
+        display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure))
+    packet = project_chapter_packet(ir, 2)
+    view = render_chapter_packet(packet)
+    assert '陆大哥' not in view, '被提及未出场人物的完整称谓按显示面投影'
+    assert '芸娘翻出夫君的行囊' in view
+
+
+def test_first_person_focalizer_uses_the_role_word_in_the_packet():
+    """判据①：第一人称叙述的聚焦人物在材料里用角色词『我（叙述者）』。"""
+    from contracts.schema.hook import HookPov
+    from novel.stages.stage4.design import assemble_body_design
+    from tests.test_str06_r10b_writer_packet import (
+        _binding, _requirements, _wire,
+    )
+    from novel.stages.stage4.book_ir import compile_writer_book_ir
+    from novel.stages.stage4.compile import compile_execution_plan
+    from novel.stages.common import project_chapter_packet
+    brief = _requirements()
+    # 与 _design 同尺：事实锁兑现不进本用例（写手面测试），换第一人称叙述。
+    no_realize = brief.model_copy(update={'requirements': tuple(
+        r.model_copy(update={'realize_locks': ()}) for r in brief.requirements)})
+    first = HookPov(person='first', focalizers=('yun_niang',))
+    wire = _wire()
+    wire['narration'] = {'person': 'first', 'focalizers': ['yun_niang']}
+    body, errors = assemble_body_design(
+        wire, known_char_ids={'yun_niang', 'fu_jun'},
+        expression_requirements=brief.expression,
+        source_narration=first,
+        brief=no_realize)
+    assert body is not None and not errors, errors
+    binding = _binding(body)
+    plan, errors = compile_execution_plan(body, binding)
+    assert not errors, errors
+    chars = _characters()
+    ir = compile_writer_book_ir(
+        graph=body, plan=plan, binding=binding, total_budget=4000,
+        length_band=(0.6, 1.3), projection=chars.name_projection(),
+        structure=chars.name_structure, fact_locks=brief.fact_locks,
+        kp_statements={p.kp_id: p.statement for p in brief.propositions},
+        display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure))
+    view = render_chapter_packet(project_chapter_packet(ir, 2))
+    assert f'{FIRST_PERSON_ROLE_WORD}确知' in view, '知情条目的持有者按角色词呈现'
+    assert '苏芸娘确知' not in view and '芸娘确知' not in view
+
+
+# ───────────────────────── 投影：折叠、守卫、裸姓（判据①） ─────────────────────────
+
+def test_apposition_folds_instead_of_doubling():
+    """同位语折叠：「表弟裴书远」投影为「表弟」，不输出「表弟表弟」。"""
+    bindings = (WithheldNameBinding(literal='裴书远', char_id='cousin'),)
+    text, hits, blocked = project_withheld_names(
+        '表弟裴书远进门', bindings=bindings, display={'cousin': '表弟'})
+    assert text == '表弟进门'
+    assert [(h.literal, h.replacement) for h in hits] == [('裴书远', '表弟')]
+    assert blocked == ()
+    # 姓名在前、称谓在后同样折叠。
+    text, _hits, blocked = project_withheld_names(
+        '裴书远表弟进门', bindings=bindings, display={'cousin': '表弟'})
+    assert text == '表弟进门' and blocked == ()
+
+
+def test_bare_surname_is_never_projected():
+    """裸姓不投影：短姓／家族构词不在绑定表内，保持原样留给字面检查。"""
+    bindings = (WithheldNameBinding(literal='陆大哥', char_id='fu_jun'),)
+    text, hits, blocked = project_withheld_names(
+        '陆与陆家同在，陆大哥在门口。', bindings=bindings, display={'fu_jun': '夫君'})
+    assert text == '陆与陆家同在，夫君在门口。'
+    assert [h.literal for h in hits] == ['陆大哥'] and blocked == ()
+    assert '陆' in text and '陆家' in text
+
+
+def test_lossy_guard_keeps_original_and_reports_block():
+    """无损性守卫：一句内同一人物两个不相邻的不同称谓不可投影（原文保留＋留痕）。"""
+    text, hits, blocked = _project_all('陆大哥是陆兄的旧识，二人同在陆大哥门前。')
+    assert text == '陆大哥是陆兄的旧识，二人同在陆大哥门前。'
+    assert hits == ()
+    assert {(b.literal, b.char_id) for b in blocked} == {
+        ('陆大哥', 'fu_jun'), ('陆兄', 'fu_jun')}
+
+
+# ───────────────────────── Hook：concealed 不回落 ─────────────────────────
+
+def test_hook_concealed_characters_do_not_fall_back_but_others_do():
+    """concealed 人物不走第 3 步回落：未释放即无显示面；非 concealed 未释放者
+    在 compile 期附带回落纯称谓（夫君）——两条边界都在 display_faces 里。"""
+    from contracts.schema.hook import HookConstraints
+    from novel.stages.stage4.design import assemble_body_design
+    from novel.stages.stage4.hook import assemble_hook_design, publish_graph
+    from novel.stages.stage4.hook_context import compile_hook_context
+    from tests.str06_expression_inputs import sample_narration, sample_requirements
+    from tests.test_str06_hook import _body_wire, _hook_wire
+    chars = _characters()
+    known = set(chars.characters)
+    body, errors = assemble_body_design(
+        _body_wire(), known_char_ids=known,
+        expression_requirements=sample_requirements(), source_narration=sample_narration())
+    assert body is not None and not errors, errors
+    faces = {}
+
+    def build(concealed):
+        hook, errors = assemble_hook_design(
+            _hook_wire(concealed=concealed, surface_releases=[
+                {'char_id': 'yun_niang', 'surfaces': ['苏芸娘']}]),
+            body=body, known_char_ids=known, name_projection=chars.name_projection(),
+            name_structure=chars.name_structure)
+        assert hook is not None and not errors, errors
+        context, errors = compile_hook_context(
+            publish_graph(body, hook), chars.name_projection(),
+            HookConstraints(target_chars=280, hard_max_chars=360),
+            chars.name_structure, {}, {}, characters=chars.core_view())
+        assert context is not None and not errors, errors
+        return context
+
+    open_context = build(concealed=[])
+    faces['open'] = {r.char_id: r.surfaces for r in open_context.display_faces}
+    hidden_context = build(concealed=['fu_jun'])
+    faces['hidden'] = {r.char_id: r.surfaces for r in hidden_context.display_faces}
+    # 非 concealed：fu_jun 未在 Hook 释放，但回落纯称谓『夫君』随上下文携带。
+    assert faces['open']['fu_jun'] == ('夫君',)
+    # concealed：同一人物无显示面（不回落），投影保持原文、字面检查如实报告。
+    assert 'fu_jun' not in faces['hidden']
+    from novel.stages.common import hook_material_issues
+    assert any(i.literal == '陆大哥' for i in hook_material_issues(
+        hidden_context.model_copy(update={'design_brief': '陆大哥的身份不露'}),
+        internal_ids=set()))
+
+
+# ───────────────────────── 无显示面归 Design（残余归属表第一行） ─────────────────────────
+
+def _no_fallback_characters():
+    """fu_jun 去掉纯称谓（canonical 改陆大哥、去掉夫君登记）：无回落可证明。"""
+    base = _characters()
+    characters = {
+        **base.characters,
+        'fu_jun': base.characters['fu_jun'].model_copy(update={
+            'canonical': '陆大哥',
+            'surfaces': tuple(s for s in base.characters['fu_jun'].surfaces
+                              if s.surface != '夫君')})}
+    structure = base.name_structure.model_copy(update={'people': {
+        **base.name_structure.people,
+        'fu_jun': base.name_structure.people['fu_jun'].model_copy(
+            update={'surface_forms': {'陆大哥': '{family}大哥',
+                                      '陆兄': '{family}兄'}})}})
+    return base.model_copy(update={'characters': characters,
+                                   'name_structure': structure})
+
+
+def test_bound_name_without_display_routes_design_with_a_wire_path():
+    """判据①：已绑定称谓但该人物全书无显示面 ⇒ `design_unreleased_reference`
+    （补释放／挪承载位／改指称），带站点 wire 路径；同一字面有回落时不报。"""
+    from novel.stages.stage4.materials import validate_design_materials
+    from tests.test_str06_r10b_writer_packet import _design
+    body = _design()
+    # fu_jun 不释放任何面（去掉 initial 的夫君），事件文本用未释放的陆大哥。
+    scenes = list(body.scenes)
+    beats = list(scenes[0].beats)
+    beats[0] = beats[0].model_copy(update={'event': '陆大哥临行留赠玉簪'})
+    scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})
+    body = body.model_copy(update={
+        'scenes': tuple(scenes),
+        'initial_surfaces': tuple(s for s in body.initial_surfaces
+                                  if s.char_id != 'fu_jun')})
+
+    def resolve(site):
+        return ('scenes', 0, 'beats', 0)
+
+    # 无回落人物：陆大哥未释放且无纯称谓。
+    chars = _no_fallback_characters()
+    issues = validate_design_materials(
+        body, projection=chars.name_projection(), known_char_ids=set(chars.characters),
+        structure=chars.name_structure, resolve=resolve,
+        characters=chars.core_view())
+    matches = [i for i in issues if i.code == 'design_unreleased_reference']
+    assert matches, [str(i) for i in issues]
+    issue = matches[0]
+    assert '陆大哥' in str(issue) and 'fu_jun' in str(issue)
+    assert issue.context['wire_paths'], '残余带可编辑 wire 路径（locate）'
+    # 有回落（夫君是纯称谓）时同一文本不报——投影已把送达字节换成夫君。
+    plain = _characters()
+    plain_issues = validate_design_materials(
+        body, projection=plain.name_projection(), known_char_ids=set(plain.characters),
+        structure=plain.name_structure, resolve=resolve,
+        characters=plain.core_view())
+    assert not [i for i in plain_issues
+                if i.code in ('design_unreleased_reference', 'positive_material_leak')
+                and '陆大哥' in i.message], '回落显示面把残余消掉，不再报泄漏'

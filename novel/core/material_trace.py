@@ -32,6 +32,20 @@ class NameProjectionHit:
 
 
 @dataclass(frozen=True)
+class ProjectionBlock:
+    """一次被无损性守卫拦下的投影（CS-H H3，RC-60）：同一句里同一人物两个
+    **不相邻的不同**称谓若都换成显示面会压成一个，信息有损——保持原文，
+    该行不可投影，归 owner 修（Design 挪拍位或改指称）。
+
+    与 `NameProjectionHit` 分开留痕：命中是「已投影」的审计读数，拦截是
+    「投影被拒绝」的残余缺口（后续字面检查如实报告，不静默吞掉）。
+    """
+
+    literal: str
+    char_id: str
+
+
+@dataclass(frozen=True)
 class MaterialPart:
     text: str
     sources: tuple[MaterialSource, ...] = ()

@@ -180,6 +180,11 @@ class HookContext(StrictModel):
     withheld_literals: tuple[str, ...] = Field(default=(), min_length=0)
     #: 禁用字面中已证明唯一绑定人物的完整登记称谓（渲染期投影的验证材料，不进阅读面）。
     withheld_bindings: tuple[WithheldNameBinding, ...] = Field(default=(), min_length=0)
+    #: 显示面前缀（CS-H H3，RC-60）：每人按释放顺序的 Hook 自选释放面；尚无释放
+    #: 且**非 concealed** 的人物在末尾附回落纯称谓（concealed 不回落——隐藏人物
+    #: 不得借回落面获得指称）。只供显示面解析与渲染期投影，不充当「可用称谓」
+    #: （可用称谓仍以 `usable_surfaces` 为准）；渲染期不读 Characters（D2 同尺）。
+    display_faces: tuple[SurfaceRelease, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _length_window(self) -> 'HookContext':

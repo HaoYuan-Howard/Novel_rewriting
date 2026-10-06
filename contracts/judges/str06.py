@@ -308,6 +308,9 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'positive_material_leak': 'locate',
     'internal_id_leak': 'locate',
     'material_name_leak': 'stop',             # 材料归因回派（route_owner_issue）
+    # CS-H H3（RC-60「投影后的残余归属」）：Design 原文闸先投影再查的残余三态。
+    'design_unreleased_reference': 'locate',  # 已绑定称谓但该位置无显示面：补释放／挪承载位／改指称
+    'design_projection_lossy': 'locate',      # 无损性守卫触发：不可投影残余归 Design
 
     # ── 可选目标闭集（RC-58：责任位置须由模型决定） ───────────────────────────
     'design_carrier_missing': 'optional',    # 必保义务漏标 real：候选拍闭集里选承载位

@@ -106,15 +106,36 @@ BINDINGS = (WithheldNameBinding(literal='陆大哥', char_id='fu_jun', enclosing
 
 
 def _project(text, *, bindings=BINDINGS, display=None):
+    projected, hits, _blocked = project_withheld_names(
+        text, bindings=bindings, display={'fu_jun': '夫君'} if display is None else display)
+    return projected, hits
+
+
+def _project_all(text, *, bindings=BINDINGS, display=None):
+    """含无损性守卫拦截留痕的完整投影结果（CS-H H3）。"""
     return project_withheld_names(
         text, bindings=bindings, display={'fu_jun': '夫君'} if display is None else display)
 
 
 def test_full_registered_surface_becomes_the_allowed_surface_and_is_recorded():
-    text, hits = _project('陆大哥是陆兄的旧识，二人同在陆大哥门前。')
-    assert text == '夫君是夫君的旧识，二人同在夫君门前。'
+    text, hits = _project('陆大哥来了，陆大哥又走了。')
+    assert text == '夫君来了，夫君又走了。'
     assert [(h.literal, h.char_id, h.replacement) for h in hits] == [
-        ('陆大哥', 'fu_jun', '夫君'), ('陆兄', 'fu_jun', '夫君'), ('陆大哥', 'fu_jun', '夫君')]
+        ('陆大哥', 'fu_jun', '夫君'), ('陆大哥', 'fu_jun', '夫君')]
+
+
+def test_lossless_guard_blocks_two_distinct_forms_of_one_person_in_a_sentence():
+    """CS-H H3（RC-60 无损性守卫）：同一句里同一人物两个**不相邻的不同**称谓
+    都换成同一显示面会压成一个——不可投影，原文保留并留拦截痕，归 Design；
+    同一字面重复出现不触发守卫（上一用例）。"""
+    text, hits, blocked = _project_all('陆大哥是陆兄的旧识，二人同在陆大哥门前。')
+    assert text == '陆大哥是陆兄的旧识，二人同在陆大哥门前。', '整句不可投影'
+    assert hits == ()
+    assert {(b.literal, b.char_id) for b in blocked} == {
+        ('陆大哥', 'fu_jun'), ('陆兄', 'fu_jun')}
+    # 分句边界（；）两侧各自只有一个字面：两句分别投影，不互相拦。
+    text, hits, blocked = _project_all('陆大哥进门；陆兄也到了。')
+    assert text == '夫君进门；夫君也到了。' and blocked == ()
 
 
 def test_unbound_literals_are_reported_by_the_checker_not_rewritten():
@@ -156,7 +177,7 @@ def test_projection_is_pure_deterministic_and_idempotent():
     assert BINDINGS == bindings, '不改调用方的映射'
     assert _project('', display={'fu_jun': '夫君'}) == ('', ())
     assert project_withheld_names('陆大哥', bindings=(), display={'fu_jun': '夫君'}) == (
-        '陆大哥', ())
+        '陆大哥', (), ())
 
 
 # ───────────────────────── 真实章包：书级行与场景行都按本场称谓呈现 ─────────────────────────
@@ -297,22 +318,35 @@ def test_unregistered_alias_is_refused_for_lacking_registration_not_for_zero_occ
 
 
 def test_compiler_never_releases_a_full_name_early_to_clear_a_conflict(tmp_path):
-    """RC-43：Design 自有文本在第1章使用尚未释放的『陆大哥』——冲突如实报告，由 Design
-    重选释放位置或改写材料；compiler 不自动提前释放，候选与已构造的释放表保持原声明。"""
+    """RC-43＋CS-H H3：Design 自有文本在第1章使用尚未释放的『陆大哥』——靠**显示面
+    投影**（回落纯称谓『夫君』）送达，不靠提前释放；compiler 不自动提前释放，
+    候选与已构造的释放表保持 Design 原声明。"""
     from copy import deepcopy
-    from novel.stages.stage4 import chapter_surface_releases, inspect_design_candidate
-    from tests.test_str06_candidate_preflight import _bad_design, _prepare
+    from novel.stages.common import project_chapter_packet, render_chapter_packet
+    from novel.stages.stage4 import (
+        chapter_surface_releases, inspect_body_materials, inspect_design_candidate,
+    )
+    from tests.test_str06_candidate_preflight import _prepare
     _, wires, _, args = _prepare(tmp_path)
     wire = wires['design']
-    _bad_design(wire)
+    wire['scenes'][0]['beats'][0]['ev'] = '陆大哥拜堂成亲'
+    wire['scenes'][1]['beats'][0]['release'] = [
+        {'char_id': 'fu_jun', 'surfaces': ['陆大哥']}]
     before = deepcopy(wire)
     view = inspect_design_candidate(wire, **args)
-    assert any('陆大哥' in e for e in view.errors), '冲突被如实报告'
+    assert not any('陆大哥' in e for e in view.errors), '第1章文本经投影送达，不再以泄漏报出'
     assert wire == before, '候选 wire 不被改写'
     assert view.body is not None
     assert '陆大哥' not in chapter_surface_releases(view.body, 1, args['chars'].name_structure)
     assert '陆大哥' in chapter_surface_releases(view.body, 2, args['chars'].name_structure), \
         '释放位置保持 Design 原声明（第2章）'
+    packet = project_chapter_packet(inspect_body_materials(
+        view.body, view.binding, args['brief'], args['chars'],
+        budget=args['constraints'].total_length_budget,
+        length_band=args['length_band']).ir, 1)
+    prose_view = render_chapter_packet(packet)
+    assert '陆大哥' not in prose_view, '第1章写手面经显示面投影（RC-60 回落）'
+    assert '夫君拜堂成亲' in prose_view, '事件按显示面送达，情节不丢'
 
 
 # ───────────────────── Hook：自选释放面的渲染期投影（rc16，CS-F2） ─────────────────────
@@ -357,6 +391,8 @@ def test_hook_bindings_follow_the_hook_own_release_selection():
     assert '夫君' not in {b.literal for b in context.withheld_bindings}, '已释放字面不进绑定表'
     # 只释放芸娘（不释放苏芸娘）时，同一人物的显示面换成芸娘——同尺不同释放面；
     # 禁区行按原投影渲染主语（苏芸娘），同样在送达前投影（只减少暴露，不进字面检查）。
+    # CS-H H3（RC-60 第 1 条）：Hook POV 是第一人称、聚焦人物正是 yun_niang——
+    # 她自己的称谓按角色词「我（叙述者）」投影，不以释放面兜底。
     only_gui = _hook_context(concealed=[], surface_releases=[
         {'char_id': 'yun_niang', 'surfaces': ['芸娘']},
         {'char_id': 'fu_jun', 'surfaces': ['夫君']}])
@@ -364,24 +400,28 @@ def test_hook_bindings_follow_the_hook_own_release_selection():
     assert '苏芸娘' not in prompt, '本场未释放的完整姓名经投影隐藏'
     row = next(r for r in hook_name_projections(only_gui) if r['literal'] == '苏芸娘')
     assert row == {'field': 'forbidden_reveals/0', 'literal': '苏芸娘',
-                   'char_id': 'yun_niang', 'replacement': '芸娘'}
+                   'char_id': 'yun_niang', 'replacement': '我（叙述者）'}
 
 
 def test_hook_materials_project_bound_literals_and_keep_sources_original():
-    """正向材料行渲染期投影；上下文字段与来源归因保持原字段文本。"""
+    """正向材料行渲染期投影；上下文字段与来源归因保持原字段文本。
+
+    CS-H H3：本 Hook POV 为第一人称、聚焦 yun_niang——她自己的绑定称谓按角色词
+    「我（叙述者）」投影（RC-60 第 1 条）；fu_jun 按其释放面「夫君」投影。
+    """
     context = _hook_context(
         concealed=[], surface_releases=_released_both(),
         design_brief='从深夜冷开倒叙入新婚夜旧约，陆大哥的身份不露，苏姑娘只以闺名示人。')
     assert '陆大哥' in context.design_brief, '上下文字段保持原文本'
     prompt = render_hook_context(context)
     assert '陆大哥' not in prompt and '夫君的身份' in prompt
-    assert '苏姑娘' not in prompt and '苏芸娘只以闺名示人' in prompt
+    assert '苏姑娘' not in prompt and '我（叙述者）只以闺名示人' in prompt
     rows = hook_name_projections(context)
     assert rows and set(rows[0]) == {'field', 'literal', 'char_id', 'replacement'}
     assert {'field': 'design_brief', 'literal': '陆大哥', 'char_id': 'fu_jun',
             'replacement': '夫君'} in rows
     assert {'field': 'design_brief', 'literal': '苏姑娘', 'char_id': 'yun_niang',
-            'replacement': '苏芸娘'} in rows
+            'replacement': '我（叙述者）'} in rows
     assert hook_material_issues(context, internal_ids=set()) == (), '投影后无假泄漏'
     assert render_hook_context(context) == build_hook_user_prompt(context), \
         '请求与验证共用同一 renderer'
@@ -443,10 +483,13 @@ def test_hook_forbidden_lines_project_but_never_join_the_leak_check():
     assert {'field': 'forbidden_reveals/0', 'literal': '陆大哥',
             'char_id': 'fu_jun', 'replacement': '夫君'} in hook_name_projections(context)
     assert hook_material_issues(context, internal_ids=set()) == ()
-    # 无释放面时禁区保留完整称谓，也不扩大扫描面（禁区不验词）。
+    # 无显示面时（compile 期的显示面前缀也被去掉——H3 起显示面与可用称谓分开）
+    # 禁区保留完整称谓，也不扩大扫描面（禁区不验词）。
     hidden = context.model_copy(update={
         'usable_surfaces': tuple(r for r in context.usable_surfaces
-                                 if r.char_id != 'fu_jun')})
+                                 if r.char_id != 'fu_jun'),
+        'display_faces': tuple(r for r in context.display_faces
+                               if r.char_id != 'fu_jun')})
     assert '事件不得提前揭示：陆大哥拜堂成亲' in render_hook_context(hidden)
     assert hook_material_issues(hidden, internal_ids=set()) == ()
 

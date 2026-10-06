@@ -1221,6 +1221,17 @@
       "stages": [
         "stage4"
       ]
+    },
+    "tests/test_str06_display_surface.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4",
+        "stage5"
+      ],
+      "cases": {
+        "test_mentioned_but_absent_character_projects_in_the_chapter_packet": "stage",
+        "test_first_person_focalizer_uses_the_role_word_in_the_packet": "stage"
+      }
     }
   },
   "version": 1

@@ -32,10 +32,12 @@ from novel.stages.stage4.design_paths import wire_paths_of
 REPO = Path(__file__).resolve().parents[1]
 
 #: 判据模块 → 源码里出现的码字面量（本测试按 AST 抽，正则只做兜底核对）。
-#: 五个主判据模块（规格 D 表点名）＋同块的 hook/preflight，加上它们的共用发射面：
-#: `read_closure.py`（读取闭合码）、`fact_bindings.py`（事实锁码）、`common.py`
-#: （材料泄漏码）、`repair.py`（材料归因码）。`epistemic_lock_order` 由
+#: 五个主判据模块（规格 D 表点名）＋同块的 hook/preflight/materials，加上它们的
+#: 共用发射面：`read_closure.py`（读取闭合码）、`fact_bindings.py`（事实锁码）、
+#: `common.py`（材料泄漏码）、`repair.py`（材料归因码）。`epistemic_lock_order` 由
 #: `chain._backfill_epistemic_lock_order` 以 OwnerIssueV1 码发出（compile 回派面）。
+#: `materials.py`（CS-H H3 起）是 Design 原文闸的残余三态产地——先投影再查后，
+#: `design_unreleased_reference`／`design_projection_lossy` 在此发出并带站点路径。
 JUDGMENT_MODULES: tuple[str, ...] = (
     'novel/stages/stage4/design.py',
     'novel/stages/stage4/grounding.py',
@@ -44,6 +46,7 @@ JUDGMENT_MODULES: tuple[str, ...] = (
     'novel/stages/stage4/hook_validation.py',
     'novel/stages/stage4/hook.py',
     'novel/stages/stage4/preflight.py',
+    'novel/stages/stage4/materials.py',
     'novel/stages/stage4/read_closure.py',
     'novel/stages/stage4/fact_bindings.py',
     'novel/stages/common.py',
@@ -388,10 +391,12 @@ def _emission_site_passes_paths(code: str) -> bool:
     if code in WRAPPED_CODES:
         return True
     # 材料判据面：`MaterialIssue(CODE, …)` 由 `materials.validate_design_materials`
-    # 按站点换成 wire 路径（CS-F1 的站点→路径解析器）。
+    # 按站点换成 wire 路径（CS-F1 的站点→路径解析器；CS-H H3 起残余码在
+    # materials.py 就地铸 `design_issue(..., paths=…)`）。
     if code in MATERIAL_CODES:
         source = (REPO / 'novel/stages/stage4/materials.py').read_text(encoding='utf-8')
-        return "code=issue.code" in source
+        return ('code = issue.code' in source
+                or 'code=issue.code' in source)
     return False
 
 

@@ -12,10 +12,13 @@ from tests.test_str06_r10b_writer_packet import _design, _binding, _requirements
 def _conflict(*, ch1_has_allowed_surface: bool = False):
     """源第1章已合法出现的称谓，目标第二章才释放陆大哥。
 
-    默认（CS-F2 之后）夫君在第1章没有任何已释放称谓：知情命题里的完整登记称谓
-    『陆大哥』没有可用的本场称谓可替换，**无法投影**，泄漏如实保留并按原归因回派。
-    `ch1_has_allowed_surface=True` 时夫君初态已释放，同一字面被确定性投影成『夫君』
-    （RC-40/41），不再是泄漏——见 `test_registered_full_surface_is_projected_not_leaked`。
+    CS-H H3 起显示面有回落（RC-60 第 3 步）：夫君的 canonical『夫君』是纯称谓，
+    无释放也能投影——「无法投影」的构造改为该人物**没有任何纯称谓**（全部登记
+    称谓都含姓名部件）且未释放：`ch1_has_allowed_surface=False` 时夫君初态未
+    释放且名称结构去掉纯称谓，完整登记称谓『陆大哥』没有显示面，泄漏如实保留
+    并按 H3 残余归属（全书无显示面归 Design）回派。`True` 时夫君初态已释放
+    『夫君』，同一字面被确定性投影（RC-40/41）——见
+    `test_registered_full_surface_is_projected_not_leaked`。
     """
     body, chars, brief = _design(), _characters(), _requirements()
     scenes = list(body.scenes)
@@ -28,6 +31,17 @@ def _conflict(*, ch1_has_allowed_surface: bool = False):
     if not ch1_has_allowed_surface:
         updates['initial_surfaces'] = tuple(
             s for s in body.initial_surfaces if s.char_id != 'fu_jun')
+        chars = _characters().model_copy(update={'characters': {
+            **_characters().characters,
+            'fu_jun': _characters().characters['fu_jun'].model_copy(update={
+                'canonical': '陆大哥', 'surfaces': tuple(
+                    s for s in _characters().characters['fu_jun'].surfaces
+                    if s.surface != '夫君')})}})
+        structure = _characters().name_structure.model_copy(update={'people': {
+            **_characters().name_structure.people,
+            'fu_jun': _characters().name_structure.people['fu_jun'].model_copy(
+                update={'surface_forms': {'陆大哥': '{family}大哥', '陆兄': '{family}兄'}})}})
+        chars = chars.model_copy(update={'name_structure': structure})
     body = body.model_copy(update=updates)
     binding = _binding(body)
     brief = brief.model_copy(update={'propositions': (

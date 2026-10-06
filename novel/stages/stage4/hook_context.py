@@ -39,9 +39,12 @@ from contracts.schema.state import EffectDomain, WithheldNameBinding
 from contracts.schema.hook import (
     HookConstraints, HookContext, HookMaterialView, HookOpeningFact,
 )
-from contracts.schema.source import NameProjection, NameStructure
+from contracts.schema.source import (
+    CharactersCore, NameProjection, NameStructure,
+)
 from novel.core.name_materials import (
-    withheld_name_bindings, withheld_name_literals, expand_surface_releases,
+    appellation_fallbacks, withheld_name_bindings, withheld_name_literals,
+    expand_surface_releases,
 )
 from novel.core.text import kp_statement
 from novel.stages.stage4.hook_validation import validate_hook_design
@@ -143,8 +146,12 @@ def compile_hook_context(
     structure: NameStructure | None = None,
     kp_statements: Mapping[str, str] = (),
     world_statements: Mapping[str, str] = (),
+    characters: CharactersCore | None = None,
 ) -> tuple[HookContext | None, list[str]]:
-    """（完整 graph, 名称投影, 长度边界）→ HookContext。纯函数，不落盘。"""
+    """（完整 graph, 名称投影, 长度边界）→ HookContext。纯函数，不落盘。
+
+    `characters`（CS-H H3）只用于显示面回落表的 compile 期计算（RC-60 第 3 步）；
+    缺席时无回落——未释放人物没有显示面，投影保持原文、由字面检查如实报告。"""
     hook = graph.hook
     # schema只保引用存在；恢复/重编同样先复验时序、隐藏与称谓释放授权。
     errors = validate_hook_design(
@@ -153,8 +160,21 @@ def compile_hook_context(
     if errors:
         return None, errors
     display_names = expand_surface_releases({r.char_id: r.surfaces for r in hook.surface_releases}, structure)
+    # 显示面前缀（CS-H H3，RC-60）：每人按 Hook 自选释放顺序的面；尚无释放且非
+    # concealed 的人物附回落纯称谓（concealed 不回落——隐藏人物不得借回落面获得
+    # 指称，其姓名保持原文、由字面检查如实报告并归 Hook）。渲染期不读 Characters
+    # （D2 同尺），回落表在 compile 期算好随上下文携带。
+    concealed = set(hook.concealed)
+    fallbacks = appellation_fallbacks(characters, structure) if characters is not None else {}
+    display_rows = {r.char_id: list(r.surfaces) for r in hook.surface_releases}
+    for char_id, fallback in sorted(fallbacks.items()):
+        if fallback and char_id not in display_rows and char_id not in concealed:
+            display_rows[char_id] = [fallback]
+    display_faces = tuple(
+        SurfaceRelease(char_id=cid, surfaces=tuple(dict.fromkeys(row)))
+        for cid, row in sorted(display_rows.items()) if row)
     display_projection = projection.model_copy(update={'by_person': tuple(
-        entry.model_copy(update={'display': (display_names.get(entry.char_id) or ('',))[0]})
+        entry.model_copy(update={'display': (display_rows.get(entry.char_id) or ('',))[0]})
         for entry in projection.by_person)})
 
     def _render_or_error(projection_, key, delta, where) -> str | None:
@@ -283,4 +303,4 @@ def compile_hook_context(
         delivery_brief=hook.delivery_brief, target_chars=constraints.target_chars,
         hard_max_chars=constraints.hard_max_chars, usable_surfaces=usable,
         withheld_literals=tuple(sorted(withheld)),
-        withheld_bindings=bindings), []
+        withheld_bindings=bindings, display_faces=display_faces), []

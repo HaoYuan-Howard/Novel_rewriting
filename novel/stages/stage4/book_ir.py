@@ -38,13 +38,32 @@ from contracts.schema.design import BodyDesign, ChapterAssignment
 from contracts.schema.execution import ExecutionPlan
 from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.source import NameProjection, NameStructure
-from contracts.schema.state import WithheldNameBinding
+from contracts.schema.state import SurfaceRelease, WithheldNameBinding
 from novel.stages.stage4.fold import ThreadFold, fold_accepted_prefix
 from novel.core.name_materials import withheld_name_bindings
 from novel.stages.common import (
-    consumption_closure, project_context, unanswered_guards,
+    ReleasePrefixes, consumption_closure, project_context, unanswered_guards,
     withheld_name_literals, expand_surface_releases,
 )
+
+
+def chapter_display_prefix(
+    graph: BodyDesign, chapter_ordinal: int, *,
+    display_fallback: Mapping[str, str] | None = None,
+) -> tuple[SurfaceRelease, ...]:
+    """章首显示面前缀（CS-H H3，RC-60）：每人按释放顺序的已释放称谓，覆盖全体
+    已释放人物；尚无释放的人物附回落纯称谓（不充当称谓许可，见 ChapterIR 字段）。
+
+    保序取代旧的扁平并集／字典序口径：被提及未出场的人物也有显示面；同拍释放
+    顺序＝阅读序。纯函数。
+    """
+    start = ReleasePrefixes(graph).chapter_start_faces(chapter_ordinal)
+    entries = [SurfaceRelease(char_id=cid, surfaces=faces)
+               for cid, faces in sorted(start.items())]
+    for cid, fallback in sorted((display_fallback or {}).items()):
+        if fallback and cid not in start:
+            entries.append(SurfaceRelease(char_id=cid, surfaces=(fallback,)))
+    return tuple(entries)
 
 
 def chapter_surface_releases(graph: BodyDesign, chapter_ordinal: int, structure: NameStructure | None = None) -> set[str]:
@@ -178,6 +197,7 @@ def compile_writer_book_ir(
     fact_locks: tuple[BriefFactLock, ...] = (),
     kp_statements: Mapping[str, str] = {},
     world_statements: Mapping[str, str] = {},
+    display_fallback: Mapping[str, str] | None = None,
 ) -> WriterBookIR:
     """全书静态写作 IR 的唯一产地。纯函数：不落盘、不调 LLM、不修改输入。
 
@@ -229,7 +249,9 @@ def compile_writer_book_ir(
             withheld_bindings=tuple(
                 WithheldNameBinding(literal=literal, char_id=char_id, enclosing=enclosing)
                 for literal, char_id, enclosing
-                in withheld_name_bindings(withheld, structure, released_here))))
+                in withheld_name_bindings(withheld, structure, released_here)),
+            display_prefix=chapter_display_prefix(
+                graph, ordinal, display_fallback=display_fallback)))
         nav.append(ChapterNavEntry(
             chapter_ordinal=ordinal, purpose=assignment.purpose,
             scene_ids=tuple(assignment.scene_ids), scene_lines=tuple(lines)))

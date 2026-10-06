@@ -154,6 +154,13 @@ class ChapterIR(StrictModel):
     withheld_literals: tuple[str, ...] = Field(default=(), min_length=0)
     #: 禁用字面中已证明唯一绑定人物的完整登记称谓（渲染期投影的验证材料，不进阅读面）。
     withheld_bindings: tuple[WithheldNameBinding, ...] = Field(default=(), min_length=0)
+    #: 显示面前缀（CS-H H3，RC-60；**章首**取位）：每人按**释放顺序**的已释放称谓，
+    #: 覆盖全体已释放人物（不再只收本场参与者、不按字典序）；尚无释放的人物在末尾
+    #: 附回落纯称谓（canonical 为纯称谓否则最早登记纯称谓）。只供显示面解析与渲染期
+    #: 投影，**不充当称谓许可**（可用称谓仍以 Design 释放为准），也不含家族构词。
+    #: 章内场末／拍前缀（含本拍释放）由 renderer 从本表＋`BeatIR.release_introductions`
+    #: 确定性累积（同章数据自足，不读其他章 IR）。
+    display_prefix: tuple[SurfaceRelease, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _scenes_unique(self) -> 'ChapterIR':

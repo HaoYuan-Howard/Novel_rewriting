@@ -10,6 +10,7 @@ from contracts.schema.book_ir import WriterBookIR
 from contracts.schema.design import BodyDesign, DesignWireV8, STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.grounding import OutputConstraints, SemanticBinding
 from novel.core.material_trace import MaterialIssue
+from novel.core.name_materials import appellation_fallbacks
 from novel.core.text import kp_statement
 from novel.core.validation import (
     ValidationIssue, ValidationMessage, validation_identity,
@@ -164,7 +165,7 @@ def hook_combination_errors(hook, *, body, binding, chars, hook_constraints,
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
         graph, chars.name_projection(), hook_constraints, chars.name_structure,
-        kp_statements, world_statements)
+        kp_statements, world_statements, characters=chars.core_view())
     if context is None:
         return list(errors)
     return list(errors) + list(validate_hook_materials(
@@ -185,7 +186,7 @@ def inspect_design_candidate(wire, *, checkpoint, brief, obligations, chars,
         expression_requirements=brief.expression, source_narration=brief.source_narration,
         registered_surfaces={cid: {s.surface for s in c.surfaces}
                              for cid, c in chars.characters.items()},
-        brief=brief, obligations=obligations)
+        brief=brief, obligations=obligations, characters=chars.core_view())
     checks = [PreflightCheck('design', 'failed' if errors else 'passed')]
     binding = None
     # placements与事实锁标注只接受现役wire；即使Design构造失败也独立检查标注形状。
@@ -289,6 +290,7 @@ def inspect_body_materials(body, binding, brief, chars, *, budget, length_band,
         length_band=length_band, book_title=book_title,
         projection=chars.name_projection(), structure=chars.name_structure,
         fact_locks=brief.fact_locks,
+        display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure),
         kp_statements=propositions,
         world_statements={wc.constraint_id: wc.statement for wc in brief.book_constraints})
     identities = material_identities(body, binding, chars)

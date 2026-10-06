@@ -54,7 +54,7 @@ from contracts.schema.design import BodyDesign, ChapterEntry
 from contracts.schema.grounding import FactLockBinding, OutputConstraints, ReconstructionBrief
 from contracts.schema.state import EffectDomain
 from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
-from contracts.schema.source import NameProjection, NameStructure
+from contracts.schema.source import CharactersCore, NameProjection, NameStructure
 from novel.core.validation import ValidationIssue
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.fact_bindings import fact_binding_errors, fact_lock_carrier_errors
@@ -594,13 +594,15 @@ def assemble_body_design(
     source_narration,
     brief: ReconstructionBrief | None = None,
     obligations: Mapping[str, Any] | None = None,
+    characters: CharactersCore | None = None,
 ) -> tuple[BodyDesign | None, list[str]]:
     """正式组装出口保持失败关闭；候选检查另由 inspect_body_design 提供。"""
     body, errors = inspect_body_design(
         wire, known_char_ids=known_char_ids, constraints=constraints,
         registered_surfaces=registered_surfaces, name_projection=name_projection,
         name_structure=name_structure, expression_requirements=expression_requirements,
-        source_narration=source_narration, brief=brief, obligations=obligations)
+        source_narration=source_narration, brief=brief, obligations=obligations,
+        characters=characters)
     return (None, errors) if errors else (body, [])
 
 
@@ -614,6 +616,7 @@ def inspect_body_design(
     source_narration,
     brief: ReconstructionBrief | None = None,
     obligations: Mapping[str, Any] | None = None,
+    characters: 'CharactersCore | None' = None,
 ) -> tuple[BodyDesign | None, list[str]]:
     """Design wire（stage4-design-v5／v8）→ canonical BodyDesign。
 
@@ -900,5 +903,6 @@ def inspect_body_design(
     if name_projection is not None:
         errors.extend(validate_design_materials(
             body, projection=name_projection, known_char_ids=known_char_ids,
-            structure=name_structure, resolve=site_path if locatable else None))
+            structure=name_structure, resolve=site_path if locatable else None,
+            characters=characters))
     return body, errors

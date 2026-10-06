@@ -49,8 +49,13 @@ def _prepare(tmp_path, *, bad_preserve=False):
 
 
 def _bad_design(wire):
-    wire['scenes'][0]['beats'][0]['ev'] = '陆大哥拜堂成亲'
-    wire['scenes'][0]['beats'][1]['ev'] = '洞房夜陆大哥立约'
+    """坏稿：第1章自有文本里的**未登记别名**（陆郎——无绑定、无显示面，不可投影）。
+
+    CS-H H3（RC-60）起已绑定称谓（陆大哥）经显示面回落投影成『夫君』送达，不再
+    构成泄漏；坏稿的字面必须不可投影才能稳定触发 Design 自有文本判据。第2章才
+    释放陆大哥的对照保持不变。"""
+    wire['scenes'][0]['beats'][0]['ev'] = '陆郎拜堂成亲'
+    wire['scenes'][0]['beats'][1]['ev'] = '洞房夜陆郎立约'
     wire['scenes'][1]['beats'][0]['release'] = [
         {'char_id': 'fu_jun', 'surfaces': ['陆大哥']}]
 
@@ -117,9 +122,10 @@ def test_self_revision_stop_keeps_check_status_and_free_replay(tmp_path):
     with pytest.raises(ValidationStop) as stopped:
         run_body_design(ctx)
     assert stopped.value.context['candidate_preflight']['checks']
-    # Design自有文本的名称问题仍由Design接受判据报告；同一候选送达写手的材料里，已证明
-    # 唯一绑定人物的完整登记称谓（陆大哥）被确定性投影，不再算写手材料泄漏（CS-F2）。
-    assert 'design=failed' in str(stopped.value) and 'writer_materials=passed' in str(stopped.value)
+    # CS-H H3：已绑定称谓经显示面投影（含回落）后不再算泄漏；坏稿用未登记别名
+    # （陆郎——不可投影），Design 自有文本与送达写手的材料**同面如实报出**
+    # （同一字面、同一责任方），无假绿。
+    assert 'design=failed' in str(stopped.value) and 'writer_materials=failed' in str(stopped.value)
     calls = len(transport.calls)
     with pytest.raises(ValidationStop):
         run_body_design(ctx)

@@ -96,7 +96,8 @@ def preview_issue_correction(repository, owner: str, *, budget: int,
         target_chars=STR06_RUNTIME_CONFIG.hook_target_chars,
         hard_max_chars=STR06_RUNTIME_CONFIG.hook_hard_max_chars), chars.name_structure,
         {p.kp_id: p.statement for p in brief.propositions},
-        {w.constraint_id: w.statement for w in brief.book_constraints})
+        {w.constraint_id: w.statement for w in brief.book_constraints},
+        characters=chars.core_view())
     if errors:
         raise ValueError(f'Hook投影失败：{errors}')
     problems = (*inspection.materials, *hook_material_issues(

@@ -316,6 +316,25 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'writer_book_ir.chapters[].withheld_bindings[].enclosing', consumers=(_V,),
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
         note='包含绑定字面的更长称谓（含已释放）：渲染期先认领保护，避免拆开替换'),
+    # CS-H H3（RC-60 显示面）：章首显示面前缀与拍级释放增量。两表都不直接进阅读面，
+    # renderer 凭它们把正向材料行按位置显示面投影（写手视图摘要覆盖投影后的渲染字节）；
+    # 显示面不是称谓许可（可用称谓仍经场景级 released_surfaces 送达）。
+    'writer_book_ir.chapters[].display_prefix[].char_id': _spec(
+        'writer_book_ir.chapters[].display_prefix[].char_id', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='显示面前缀的人物身份：解析显示面用，内部句柄不进阅读面'),
+    'writer_book_ir.chapters[].display_prefix[].surfaces': _spec(
+        'writer_book_ir.chapters[].display_prefix[].surfaces', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='章首按释放顺序的显示面（含回落纯称谓）：投影依据，不充当称谓许可'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].release_introductions[].char_id': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].release_introductions[].char_id',
+        consumers=(_V,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='拍级释放的人物归属：显示面前缀按（场,拍）累积的增量（RC-60 取位）'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.beats[].release_introductions[].surfaces': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.beats[].release_introductions[].surfaces',
+        consumers=(_V,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='该拍首次释放的称谓（显示面前缀增量；含本拍释放——本拍正式介绍之后同拍可用）'),
     # ── WriterBookIR：章级承接数据面（R2.6 continuity 分区）────────────────
     'writer_book_ir.chapters[].continuity.entry.transition': _spec(
         'writer_book_ir.chapters[].continuity.entry.transition', consumers=(_W,),
@@ -1005,6 +1024,17 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'hook_context.withheld_bindings[].enclosing', consumers=(_V,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY,
         note='包含绑定字面的更长称谓（含已释放）：渲染期先认领保护，避免拆开替换'),
+    # CS-H H3（RC-60 显示面）：Hook 显示面前缀。表本身不进阅读面；renderer 凭它把
+    # 材料行按显示面投影（第一人称聚焦人物用角色词；concealed 不回落）。显示面不是
+    # 「可用称谓」（写手许可仍以 usable_surfaces 为准）。
+    'hook_context.display_faces[].char_id': _spec(
+        'hook_context.display_faces[].char_id', consumers=(_V,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='显示面前缀的人物身份：解析显示面用，内部句柄不进阅读面'),
+    'hook_context.display_faces[].surfaces': _spec(
+        'hook_context.display_faces[].surfaces', consumers=(_V,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='按 Hook 自选释放顺序的显示面（含非 concealed 人物的回落纯称谓）：投影依据'),
     # ── NameMapV5（改名面；不经任何写手）──────────────────────────────────
     'name_map.contract_version': _spec(
         'name_map.contract_version', consumers=(_N, _A), scope=_NAME,
