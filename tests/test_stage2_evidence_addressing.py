@@ -126,20 +126,21 @@ def test_rc26_multiline_segment_stops_before_request():
                                'e01_02': {'chapter': 1, 'text': '乙。\n丙。'}})
 
 
-# ── 2026-10-07：模型只选段，引文由代码切 ────────────────────────────────────
+# ── 2026-10-07：模型只选段，引文由代码切；CS-S 1a：区间由 start 派生 ─────────
 
-def _slim_chapter(src, basis, *, who='yun_niang'):
+def _slim_chapter(start, basis, *, who='yun_niang', beats=None):
     from contracts.schema.observation import STAGE2_CHAPTERS_WIRE_PROTOCOL
-    return {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL, 'beats': [
-        {'ev': '夫君送走表弟后安慰芸娘，说会再开导表弟。', 'who': ['fu_jun'],
-         'src': src, 'new_scene': True,
-         'know': [{'who': who, 'how': 'hears_claim', 'what': '夫君会再开导表弟',
-                   'evidence_refs': [basis]}]}]}
+    wire_beats = [{'ev': '夫君送走表弟后安慰芸娘，说会再开导表弟。', 'on_stage': ['fu_jun'],
+                   'start': start, 'new_scene': True,
+                   'know': [{'who': who, 'how': 'hears_claim', 'what': '夫君会再开导表弟',
+                             'evidence_refs': [basis]}]}]
+    return {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL,
+            'beats': beats if beats is not None else wire_beats}
 
 
 def test_chapter_basis_quote_is_derived_from_segment_text():
     evidence = _chapter_evidence(1)
-    wire = _slim_chapter('e01_01..e01_02', 'e01_01')
+    wire = _slim_chapter('e01_01', 'e01_01')
     original = deepcopy(wire)
     observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
     assert errors == [] and wire == original
@@ -149,16 +150,23 @@ def test_chapter_basis_quote_is_derived_from_segment_text():
                       'quote': '夫君将表弟送走后,叹息着安慰我:「娘子别担心,我再开导开导他。」'}]
 
 
-def test_basis_segment_outside_beat_refs_revises_whole_beat():
+def test_basis_segment_outside_derived_interval_revises_whole_beat():
     from novel.stages.stage2.chapters import chapter_patch_locate
     evidence = _chapter_evidence(1)
-    wire = _slim_chapter('e01_02', 'e01_01')
+    # 两拍：拍1 start=e01_01、拍2 start=e01_03；拍2 的证据指向拍1 区间内的段。
+    wire = _slim_chapter('e01_01', 'e01_01', beats=[
+        {'ev': '夫君送走表弟后安慰芸娘。', 'on_stage': ['fu_jun'], 'start': 'e01_01',
+         'new_scene': True},
+        {'ev': '夫君问为何。', 'on_stage': ['fu_jun'], 'start': 'e01_03',
+         'know': [{'who': 'yun_niang', 'how': 'hears_claim', 'what': '夫君会再开导表弟',
+                   'evidence_refs': ['e01_01']}]}])
     observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
     assert observation is None and len(errors) == 1
-    assert 'e01_01' in errors[0] and 'e01_02' in errors[0]
-    # 修正可能要改 src 也可能要换段——由模型在整拍内选择，代码不替它选。
+    assert 'e01_01' in errors[0] and 'e01_03' in errors[0]
+    assert '整章修订' in errors[0]
+    # 修正＝改选区间内的段，或移动 start（边界错位）——由模型在整拍内选择。
     assert chapter_patch_locate(wire, errors, evidence_ids=evidence, chapter=1) == [
-        (('beats', 0), errors)]
+        (('beats', 1), errors)]
 
 
 def test_basis_segment_absent_from_closed_set_revises_only_that_transfer():
@@ -199,9 +207,9 @@ def test_real_chain_publishes_derived_basis(tmp_path):
     book = {**_book_canonical(), 'protocol_version': STAGE2_BOOK_WIRE_PROTOCOL}
     wires = {
         'book': book,
-        'ch01': _slim_chapter('e01_01..e01_02', 'e01_01', who='fu_jun'),
+        'ch01': _slim_chapter('e01_01', 'e01_01', who='fu_jun'),
         'ch02': {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL, 'beats': [
-            {'ev': '次日清晨夫君出门。', 'who': ['fu_jun'], 'src': ['e02_01', 'e02_02'],
+            {'ev': '次日清晨夫君出门。', 'on_stage': ['fu_jun'], 'start': 'e02_01',
              'new_scene': True}]},
     }
     repo, session, transport = _make_session(tmp_path, wires)
@@ -215,26 +223,21 @@ def test_real_chain_publishes_derived_basis(tmp_path):
         {'segment': 'e01_01',
          'quote': '夫君将表弟送走后,叹息着安慰我:「娘子别担心,我再开导开导他。」'}]
     saved = json.loads(repo.path('stage2/observations/ch02.json').read_text(encoding='utf-8'))
+    # 单拍章：start 到章末的派生区间（v8）。
     assert saved['beats'][0]['source_refs'] == ['e02_01', 'e02_02']
 
 
-# ── RC-28：证据范围混合单段与区间 ──────────────────────────────────────────
+# ── RC-28 收口（v8）：区间语法关闭，只收单段 start ──────────────────────────
 
-def test_rc28_src_array_may_mix_single_ids_and_ranges():
-    from novel.stages.stage2.chapters import chapter_patch_locate
+def test_v8_range_and_array_syntax_are_closed():
+    """RC-28 曾允许 src 混合区间与数组；v8 收敛为单段 start（区间由代码派生）。
+    旧语法按协议形状拒收，不做推断采用（I-13）。"""
     evidence = _chapter_evidence(1)
-    wire = _slim_chapter(['e01_01', 'e01_03..e01_04'], 'e01_04')
-    observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
-    assert errors == []
-    assert observation.beats[0].source_refs == ('e01_01', 'e01_03', 'e01_04')
-    assert observation.beats[0].cognition[0].basis[0].segment == 'e01_04'
-    for bad in (['e01_01', 'e01_04..e01_03'], ['e01_01..e02_01']):
-        wire = _slim_chapter(bad, 'e01_04')
+    for legacy in ('e01_01..e01_02', ['e01_01', 'e01_03']):
+        wire = _slim_chapter(legacy, 'e01_01')
         observation, errors = compile_chapter_observation(
             wire, evidence_ids=evidence, chapter=1)
-        assert observation is None and errors
-        assert chapter_patch_locate(wire, errors, evidence_ids=evidence, chapter=1) == [
-            (('beats', 0), errors)]
+        assert observation is None and any('协议校验失败' in e for e in errors), errors
 
 
 # ── RC-29：条目返修轮收到整份回答 ───────────────────────────────────────────
@@ -313,11 +316,11 @@ def test_review_chapter_precheck_carries_segment_text():
     source = SimpleNamespace(chapters=_CHAPTERS, hook_copy=_HOOK)
     _request_view, validate = request_preview(
         _ReadOnlyBookRepo(), 'ch01', source, ExecutionProfile(Config(), 'high'))
-    assert validate(_slim_chapter('e01_01..e01_02', 'e01_01', who='fu_jun')) == []
+    assert validate(_slim_chapter('e01_01', 'e01_01', who='fu_jun')) == []
     # 同一合法 wire 在合成闭集（只 id 无文本）下必被误报——证明上面的零错误
     # 确实来自文本核对通过，而非判定面缺失。
     from novel.stages.stage2 import compile_chapter_observation
-    wire = _slim_chapter('e01_01..e01_02', 'e01_01')
+    wire = _slim_chapter('e01_01', 'e01_01')
     evidence = _chapter_evidence(1)
     assert compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)[1] == []
     frozen = compile_chapter_observation(

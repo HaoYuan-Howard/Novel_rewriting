@@ -1170,8 +1170,8 @@
         "stage2"
       ],
       "cases": {
-        "test_compile_routes_v3_to_expanded_pipeline": "stage",
-        "test_compile_v3_gates_use_slim_vocabulary": "stage",
+        "test_compile_routes_wire_to_expanded_pipeline": "stage",
+        "test_compile_gates_use_slim_vocabulary": "stage",
         "test_patch_locate_positions_slim_transfer_items": "stage"
       }
     },

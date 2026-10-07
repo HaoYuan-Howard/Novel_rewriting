@@ -63,6 +63,9 @@ def test_rc18_close_before_local_open_rejected_and_located(same_beat):
     wire = _chapter_v3(wires['ch01'], 1)
     opened = deepcopy(wire['beats'][0]['loops'][0])
     closed = deepcopy(wires['ch02']['beats'][0]['loops'][0])
+    # v8 起两拍需要两个不同的 start：给章 1 的闭集补一段合成段。
+    evidence = {**build_evidence(_chapters()),
+                'e01_02': {'chapter': 1, 'text': '芸娘回房歇下。'}}
     if same_beat:
         wire['beats'][0]['loops'] = [closed, opened]
     else:
@@ -70,10 +73,10 @@ def test_rc18_close_before_local_open_rejected_and_located(same_beat):
         later.pop('new_scene', None)
         later.pop('state', None)
         later.pop('know', None)
+        later['start'] = 'e01_02'
         wire['beats'][0]['loops'] = [closed]
         wire['beats'].append(later)
     original = deepcopy(wire)
-    evidence = build_evidence(_chapters())
     observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
     assert observation is None and errors
     issue, = errors

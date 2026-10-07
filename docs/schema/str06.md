@@ -190,9 +190,14 @@ Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14�
   已购相同请求可经 `--check-only` 免费重验；机械通过不证明关联语义正确。
 - **证据（a1）**：Stage2 canonical basis 是 `EvidenceQuote{segment, quote}`——该段
   属条目自身 source_refs 且 quote 是段全文（compiler 派生；canonical 直通面仍按
-  `verify_quote` 逐字复验，不模糊匹配）；2026-10-07 起三方 wire（book v7／
-  chapters v7／names v5）的 `evidence_refs` 只给段 id，引文由 `resolver.basis_quote`
-  按段全文切出；`Effect.modality` 闭集必填。Blueprint v15 派生证据窗口
+  `verify_quote` 逐字复验，不模糊匹配）；2026-10-07 起三方 wire（book v7→v8／
+  chapters v7→v8／names v5）的 `evidence_refs` 只给段 id，引文由 `resolver.basis_quote`
+  按段全文切出；`Effect.modality` 闭集必填。CS-S 1a（2026-10-07）：book／chapters
+  wire 升 v8——chapters wire 每拍只写单段 `start`（拍覆盖区间由代码派生：
+  `[start, 下一拍 start−1]`、末拍到章末、start 数值严格递增、首拍只允许跳过前导
+  e00 引子段），`who`→`on_stage`，SlimEffect 删 `scope`／`hidden`／`prop`
+  （404 效应实证 0 命中）；book wire 删 `InitialFactWire.knowledge`（初始知情
+  改由 Phase 2 的 facts `known_at_start` 承载）。Blueprint v15 派生证据窗口
   （被引段全文＋同章前后各一句、重叠机械合并）；Preserve 输入从整份 JSON 倾倒
   改为 `project_preserve_view` 确定性渲染（R10-0.3 实证 29.9k token/轮）。
 - **锚定与 series（a2）**：义务以 `anchors` 引用投影句柄（`b拍.e|c|l`／`s0_*`／

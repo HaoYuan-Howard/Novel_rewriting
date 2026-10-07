@@ -70,18 +70,28 @@ STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v4'
 #: 初态／世界约束的 evidence_refs 只给**段 id**（闭集成员），逐字引文由 compiler
 #: 按段全文派生（I-20/I-21：转写文本不进模型输出面）；compile 把它派生成
 #: `STAGE2_BOOK_PROTOCOL` 的 canonical。
-STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v7'
+#: CS-S 1a（2026-10-07）升 v8：`InitialFactWire.knowledge` 删——初始知情不再由
+#: 模型声明（使用率 0–8/13，语义含混：引子已披露的算不算 reader_knows 指不清），
+#: Phase 2 以 facts 的 known_at_start 补回该语义；canonical 的 `InitialFact.knowledge`
+#: 本批保留、1b 删。
+STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v8'
 
 #: 章观察的**瘦 wire 面**（CS-2 起；2026-10-07 basis 指针化；同日二次收口升 v7：
-#: evidence_refs 词汇＋scene_location 上移拍级元数据）：`str06.stage2.chapters`
-#: 的 LLM 输出协议——可机械推导的字段不让模型抄写（I-15/I-21：拍号、场景边界
-#: 默认、时态默认、op／modality／scope／disclosure 默认、target 四元组压成地址
-#: 串、命题句柄按文本归并、evidence_refs 只给段 id、引文＝段全文由 compiler
-#: 派生、scene_location 是拍级字段不进 state），落盘经
+#: evidence_refs 词汇＋scene_location 上移拍级元数据；CS-S 1a 升 v8：`src`→`start`
+#: ＋`who`→`on_stage`＋SlimEffect 删 `scope`/`hidden`/`prop`）：
+#: `str06.stage2.chapters` 的 LLM 输出协议——可机械推导的字段不让模型抄写
+#: （I-15/I-21：拍号、场景边界默认、时态默认、op／modality／scope／disclosure
+#: 默认、target 四元组压成地址串、命题句柄按文本归并、evidence_refs 只给段 id、
+#: 引文＝段全文由 compiler 派生、scene_location 是拍级字段不进 state）。
+#: v8 起**证据区间由代码派生**：模型每拍只写 `start`（单段 id），拍覆盖段＝
+#: `[start, 下一拍 start−1]`、末拍到章末——区间纪律从提示词纪律变成构造保证
+#: （今日两本 383 拍实证同章连续、仅 1 处 owner patch 造成的重叠），`hidden`／
+#: `prop`／`scope` 为死字段（5 观察集 404 效应 concealed 0、effect 命题 0、
+#: 表外 scene 作用域 0）。落盘经
 #: `novel/stages/stage2/slim.py::expand_chapter_wire` 派生回 canonical
 #: （`STAGE2_CHAPTERS_PROTOCOL`）形状，全部下游消费者不变（S-03：适配集中在
 #: slim 模块，删除条件＝下游消费迁移完成、canonical 自身瘦身时）。
-STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v7'
+STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v8'
 
 #: names 的 **wire 面**（2026-10-07 basis 指针化新增；同日二次收口升 v5：
 #: evidence_refs 词汇）：resolutions 的 evidence_refs 只给段 id，引文由 compiler
@@ -199,13 +209,13 @@ SegmentRef = Annotated[str, Field(pattern=r'^e\d+_\d+$')]
 
 
 class InitialFactWire(StrictModel):
-    """初态事实的 wire 面：与 `InitialFact` 同形，evidence_refs 只给段 id。"""
+    """初态事实的 wire 面：与 `InitialFact` 同形（除 knowledge，1a 删），
+    evidence_refs 只给段 id。"""
 
     target: StateTarget
     key: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_.-]*$')
     value: Any
     persistence: str = Field(pattern=r'^(stable|mutable)$')
-    knowledge: KnowledgeSpec | None = None
     source_refs: tuple[str, ...] = Field(min_length=1)
     evidence_refs: tuple[SegmentRef, ...] = Field(min_length=1)
 
@@ -225,7 +235,7 @@ class BookObservationWire(StrictModel):
     人物、称谓证据与表达观察的形状与 canonical 相同（称谓的 source_refs 是
     语义选择——选哪一处出现作锚点）。"""
 
-    protocol_version: Literal['stage2-book-v7']
+    protocol_version: Literal['stage2-book-v8']
     expression: ExpressionObservation
     characters: dict[str, CharacterCandidate] = Field(min_length=1)
     initial_state: tuple[InitialFactWire, ...] = Field(default=(), min_length=0)
@@ -266,25 +276,15 @@ class ChapterObservation(StrictModel):
 
 # ──────────── chapters 瘦 wire（CS-2 第一步；expand 后即上形，不落盘） ────────────
 
-class SlimConcealment(StrictModel):
-    """concealed 例外面：叙述确立但读者此刻不可见时才写（缺省＝on_page）。
-
-    `by` 是已知者（known_by，非空）；`what` 是命题文本——expand 按「文本
-    归并句柄」解析成 PropositionRef（首现建立、重现实引），揭示链的锚。
-    """
-
-    by: tuple[str, ...] = Field(min_length=1)
-    what: str = Field(min_length=1)
-
-
 class SlimEffect(StrictModel):
     """事实转移的瘦面：`at` 地址串＋例外字段。
 
     机械默认（expand 派生，模型只写例外）：op＝set、modality＝actual、
-    scope＝book（登记键由表固定，声明不写）、disclosure＝on_page。
+    scope＝登记键按表／表外一律 book（v8 起不进 wire；R-2.14 派生）、
+    disclosure 恒 on_page、effect 不带命题锚（v8 删 `hidden`／`prop`——
+    5 观察集 404 效应实证 concealed 0、effect 命题 0，死字段不再让模型抄）。
     `val` 只在 op 需要值时给（set／add／remove；unset／unknown 不带）。
-    `prop`：说辞被叙述证实时引用的命题文本（须与此前 know 的 what 归一后
-    相同）。evidence_refs 必填（R10a a1 语义不变）：wire 只给段 id，引文＝段
+    evidence_refs 必填（R10a a1 语义不变）：wire 只给段 id，引文＝段
     全文由 compiler 派生（2026-10-07 裁决）。**不得用 state 表达场景位置**：
     `scene_location` 是 `SlimBeat` 的拍级字段（compiler 合成登记键效应）。at
     只锁字符集，结构（单个 +、两端非空、不自环）由 expand 逐条校验——可条目
@@ -297,10 +297,7 @@ class SlimEffect(StrictModel):
     op: str | None = Field(default=None, pattern=r'^(set|unset|add|remove|unknown)$')
     modality: str | None = Field(default=None,
                                  pattern=r'^(actual|planned|expected|conditional)$')
-    scope: str | None = Field(default=None, pattern=r'^(book|scene)$')
     evidence_refs: tuple[SegmentRef, ...] = Field(min_length=1)
-    hidden: SlimConcealment | None = None
-    prop: str | None = Field(default=None, min_length=1)
 
 
 class SlimCognition(StrictModel):
@@ -318,20 +315,23 @@ class SlimCognition(StrictModel):
 
 
 class SlimBeat(StrictModel):
-    """一拍的瘦面：`src` 写单 id、同前缀连续区间，或由二者混合组成的数组
-    （RC-28：语法对组合闭合，数组元素同样可以是区间）。
+    """一拍的瘦面（v8）：`start` 只写**单段 id**，拍覆盖区间由代码派生——
+    `[start, 下一拍 start−1]`，末拍到章末（今日两本 383 拍实证同章连续，
+    区间纪律从提示词纪律变成构造保证）。start 按段号数值严格递增（≥100 段
+    的章不按字典序）；首拍必须是本章第一段（第 1 章允许跳过前导 e00 引子段
+    ——被跳过的引子段视为弃权）；start 之间的每一段（含「......」分隔段）
+    按构造归属其前最近一个 start 所在的拍，不再有未覆盖段或两拍共引一段。
 
     `new_scene`／`iterative` 只写例外（缺省 continue／single）；`scene_location`
     是拍级场景位置元数据（换景或首次交代位置时给，compiler 合成登记键
-    `scene_location` 的 world 效应，证据面＝本拍 src 全体——覆盖性证据不猜
-    具体句）；loops 保持原形状（悬念句柄仍由模型给——跨章开合配对靠它，D8）。
+    `scene_location` 的 world 效应，证据面＝本拍派生区间全体——覆盖性证据
+    不猜具体句）；loops 保持原形状（悬念句柄仍由模型给——跨章开合配对靠
+    它，D8）。
     """
 
     ev: str = Field(min_length=1)
-    who: tuple[str, ...] = Field(default=(), min_length=0)
-    src: str | tuple[str, ...] = Field(
-        min_length=1,
-        description='单 id（e01_03）、同前缀连续区间（e01_02..e01_05），或二者混合的数组')
+    on_stage: tuple[str, ...] = Field(default=(), min_length=0)
+    start: SegmentRef
     scene_location: str | None = Field(default=None, min_length=1)
     new_scene: bool = False
     iterative: bool = False
@@ -344,7 +344,7 @@ class ChapterObservationWire(StrictModel):
     """`str06.stage2.chapters` 的瘦输出面（传输面，不落盘；expand 成
     `ChapterObservation` 后进既有管道与盘面）。"""
 
-    protocol_version: Literal['stage2-chapters-v7']
+    protocol_version: Literal['stage2-chapters-v8']
     beats: tuple[SlimBeat, ...] = Field(min_length=1)
 
 

@@ -67,7 +67,6 @@ Golden_Set_v3.0 三本 yaml 的成书对比评估金标复认（2026-10-05 用�
 
 | 批 | 内容 | 状态 |
 |---|---|---|
-| 1a | book／chapters wire v8：`src`→`start`（单段 id，区间由代码派生：本拍 start 到下一拍 start−1，末拍到章末）、`who`→`on_stage`、SlimEffect 删 `scope`/`hidden`/`prop`；Book wire 删 `InitialFactWire.knowledge`；oracle＝今日两本 L1 观察以每拍首段作 start 重新派生区间 378/383 逐字一致 | 待做 |
 | 1b | L1／L2 死字段收口：`InitialFact.knowledge`、`ObsBeat.effects[].{disclosure,proposition,scope}`、`InitialStateAtom.knowledge`、`KnowledgeSpec`、`Disclosure` 删；book／chapters canonical v5、Characters V5／Blueprints V16、rc18；`R-2.14` 改读时按登记表派生；Stage4 grounding 知情面收口；死面守卫扩 `tests/test_retired_surface_scan.py` | 待做 |
 | 1c | names v6（A＋B＋C）：C＝wire 删 `surface_forms`，构词模板由 compiler 按 family／given／aliases 字面派生（`form_overrides` 例外）；B＝结构答案后代码生成变体候选（锚＝≥3 字含姓名部件 surface、同首字编辑距离 1），有候选才发新 owner `name_variants` 窄调用（`stage2-name-variants-v1`，逐条 same／unresolved／not_name）；A＝S2-10 反例守卫（增删拆合拒、same 仅证据段内局部替换、未决阻断发布） | 待做 |
 | Phase 2 | Book 增 `facts:[{statement, evidence_refs, known_at_start}]`（F 编号代码派发）＋chapters `know.fact` 引用；近义重复只报 candidate（确定性相似度），Associate 退为条目级窄 resolver（未决候选＋最小文本）；wire／L1 升版、rc19。默认裁决：D-3 不上 `address`（无消费者）；D-5 删 `public` 持有者 | 待做 |

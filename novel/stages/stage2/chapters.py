@@ -49,7 +49,9 @@ from contracts.schema.observation import (
 from contracts.schema.source import REGISTERED_STATE_KEYS, RETIRED_STATE_KEYS
 from novel.stages.common import CHAPTER_PROMPT, PRE_CHAPTER_RULE
 from novel.stages.stage2.resolver import EvidenceResolver, render_evidence_block
-from novel.stages.stage2.slim import expand_chapter_wire
+from novel.stages.stage2.slim import (
+    chapter_segment_sequence, expand_chapter_wire,
+)
 from novel.core.validation import ValidationIssue
 
 
@@ -217,13 +219,13 @@ def _conflict(statements: dict[str, str], prop: dict, where: str,
 def _derive_basis_quotes(canonical: Any, resolver: EvidenceResolver, *,
                          chapter: int | None, labels: tuple[str, str],
                          ) -> list[tuple[tuple[str | int, ...], str]]:
-    """wire 的 basis 段 id（``quote`` 为 None）在本拍 src 内派生段全文引文
-    （2026-10-07 裁决：模型只选段、代码切原文——段号与原文写回 compiler
-    副本，转写文本不进模型输出面）。
+    """wire 的 basis 段 id（``quote`` 为 None）在本拍派生区间内派生段全文引文
+    （2026-10-07 裁决：模型只选段、代码切原文；CS-S 1a 起区间由 start 派生）。
 
-    派生不了的逐条报告、不改 src 也不换段：段不在本章闭集 → 该转移路径
-    （换选闭集内的段）；段在本拍范围外 → 整拍路径（修正可能是扩 src，也可
-    能是换段，由语义单元在整拍内选）。只处理 quote 为 None 的条目——带引文
+    派生不了的逐条报告、不改区间也不换段：段不在本章闭集 → 该转移路径
+    （换选闭集内的段）；段在本拍派生区间外 → 整拍路径（修正＝改选区间内的
+    段；证据确实跨拍界时属于 start 边界错位——移动 start 会改变相邻拍的
+    派生区间，走整章修订）。只处理 quote 为 None 的条目——带引文
     的 canonical 直通照原规则逐字复验（`_chapter_issues`）。
     """
     eff_label, cog_label = labels
@@ -245,10 +247,17 @@ def _derive_basis_quotes(canonical: Any, resolver: EvidenceResolver, *,
                     if issue is None:
                         basis['quote'] = _quote
                         continue
-                    path: tuple[str | int, ...] = (
-                        ('beats', beat_index) if issue.code == 'basis_segment_outside_refs'
-                        else ('beats', beat_index, label, index))
-                    issues.append((path, f'{where} {label}[{index + 1}]：{issue.message}'))
+                    if issue.code == 'basis_segment_outside_refs':
+                        issues.append((
+                            ('beats', beat_index),
+                            f'{where}（证据范围＝本拍 start 起的派生区间 {list(refs)}）：'
+                            f'{issue.message}——改选区间内的段；证据确实横跨拍边界时'
+                            '属于 start 边界错位，须移动该拍 start（影响相邻拍区间，'
+                            '走整章修订）'))
+                    else:
+                        issues.append((
+                            ('beats', beat_index, label, index),
+                            f'{where} {label}[{index + 1}]：{issue.message}'))
     return issues
 
 
@@ -305,21 +314,24 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
     return issues
 
 
-def _route_wire(wire: Any, *, chapter: int | None
+def _route_wire(wire: Any, *, chapter: int | None, sequence: tuple[str, ...] | None = None,
                 ) -> tuple[Any, tuple[str, str], list[tuple[tuple[str | int, ...] | None, str]]]:
-    """按协议字面量路由章观察 wire（CS-2 起）。
+    """按协议字面量路由章观察 wire（CS-2 起；v8 起带章段序列派生区间）。
 
     瘦 wire（`STAGE2_CHAPTERS_WIRE_PROTOCOL`）经 `expand_chapter_wire` 派生成
     canonical 形状 dict 再进既有管道；canonical 形状直通——wire 领养与既有
     测试的读面（S-01 登记过的兼容层，删除条件＝canonical 自身瘦身升版）。
-    返回 (wire, 路径词汇, 条目级 issues)；issues 非空即本轮 wire 不可判（路径
-    None＝顶层形状失败走 R3 整份修订，否则可条目返修——判定与定位同一份材料。
+    `sequence` 是本章证据闭集的阅读序段序列（v8 区间派生的输入；缺省＝只含
+    各拍 start 的最小序，生产路径必须给完整序列）。返回 (wire, 路径词汇,
+    条目级 issues)；issues 非空即本轮 wire 不可判（路径 None＝顶层形状失败
+    走 R3 整份修订，否则可条目返修——判定与定位同一份材料。
     2026-10-07 二次收口④：wire 协议形状失败按 pydantic 路径定位条目，
     `beats[3].state[0]` 一类缺字段窄修该条目，不再一律整份）。
     """
     if isinstance(wire, dict) and wire.get('protocol_version') == STAGE2_CHAPTERS_WIRE_PROTOCOL:
         try:
-            expanded, issues = expand_chapter_wire(wire, chapter=chapter)
+            expanded, issues = expand_chapter_wire(wire, chapter=chapter,
+                                                   sequence=sequence)
         except ValidationError as exc:
             from novel.stages.common import wire_shape_issues
             located = wire_shape_issues(exc, kind='chapters')
@@ -344,12 +356,15 @@ def _compile_view(wire: dict, *, evidence_ids, chapter: int | None,
 
     `evidence_ids` 传 Mapping（段 id→{chapter,text}）时 basis 可派生与逐字
     判定；只传 id 的合成闭集只做闭集核对（无文本可查，派生与逐字判定如实
-    报错）。
+    报错）。v8 区间派生的段序列由闭集按章前缀过滤派生（数值阅读序）——
+    全书闭集与章内闭集给同一章派生出同一序列，纪律不依赖调用方闭集宽窄。
     """
     resolver = EvidenceResolver(evidence_ids if isinstance(evidence_ids, Mapping)
                                 else list(evidence_ids))
     slugs = frozenset(character_slugs) if character_slugs is not None else None
-    routed, labels, route_issues = _route_wire(wire, chapter=chapter)
+    sequence = chapter_segment_sequence(evidence_ids, chapter)
+    routed, labels, route_issues = _route_wire(wire, chapter=chapter,
+                                               sequence=sequence)
     if route_issues:
         return None, route_issues
     canonical = deepcopy(routed)

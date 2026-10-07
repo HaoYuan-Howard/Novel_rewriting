@@ -68,7 +68,7 @@ def request_preview(repository, owner, source, profile):
         local = _chapter_evidence(evidence, n)
         prompt = chapter_observation_prompt(chapter=n, book=book, chapters=source.chapters, evidence=local)
         # 闭集须与生产同形（段 id→{chapter,text} 映射）：只传 id 的合成闭集
-        # 无文本可查，v7 的 basis 引文派生会全数误报 unknown_segment（2026-10-07
+        # 无文本可查，wire 的 basis 引文派生会全数误报 unknown_segment（2026-10-07
         # ch04 收口实证），预检就此失去判别力。
         validate = lambda w: chapter_acceptance(w, chapter=n, evidence_ids=local,
                                                character_slugs=frozenset(book.characters),
