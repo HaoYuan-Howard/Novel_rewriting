@@ -136,7 +136,9 @@ from novel.llm.paid_requests import candidate_contract_identity
 # 身份（book／ch{nn}／blueprints／characters／fold／brief／semantic_binding——
 # ObligationAnchor.visibility 删）；RC 版式头升 rc18。旧 rc17 根只读拒收；
 # 原因见 REQUIREMENTS CS-S。
-FROZEN_CONTRACT_IDENTITY = '5a97e27eb6570afa3db0be0ed71e9bb3b93a5e8ce31de6d1355dd762f5283ef4'
+# rc18 续（2026-10-07 CS-S 1c）：names 观察 canonical 升 v4（构词派生＋变体窄调用、
+# resolutions 增 not_name）——names.json 行随批换 rc18 身份。
+FROZEN_CONTRACT_IDENTITY = 'f38e4f8b6bfe5471e2e1f5f0d5a1a3e50ce123dd41d556e41ddf1a67a1e6da7e'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -227,7 +229,7 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     # scope 死字段收口；旧 v4 盘面关闭式拒读。
     'STAGE2_BOOK_PROTOCOL': 'stage2-book-v5',
     'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v5',
-    'STAGE2_NAMES_PROTOCOL': 'stage2-names-v3',
+    'STAGE2_NAMES_PROTOCOL': 'stage2-names-v4',
     # rc17（CS-H H4，RC-65）：associate 升 v3——same_state_dimension 改配维度
     # 句柄（（作用对象，键）地址聚合）；旧 v2 wire 关闭式拒读。
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v3',

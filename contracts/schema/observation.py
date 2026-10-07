@@ -42,8 +42,8 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.source import (
-    Cognition, Effect, EvidenceQuote, LoopAction, NameStructure,
-    StateTarget,
+    AliasEntry, Cognition, Effect, EvidenceQuote, FamilyEntry, LoopAction,
+    NameStructure, StateTarget,
 )
 
 #: 观察协议的版本字面量（进请求身份与盘面信封；I-13 显式版本化）。升版 =
@@ -61,7 +61,10 @@ from contracts.schema.source import (
 #: 新增独立 wire 面 v4；canonical 三者不动（EvidenceQuote 仍是段号＋引文，
 #: 引文＝段全文，整段天然满足「quote 逐字在段内」），旧 canonical 盘面照读。
 STAGE2_OBSERVATION_PROTOCOL: Final = 'stage2-observation-v1'
-STAGE2_NAMES_PROTOCOL: Final = 'stage2-names-v3'
+#: CS-S 1c（2026-10-07）：names canonical 升 v4——resolutions 增 `not_name`
+#: （变体候选的完整性证明）、构词 surface_forms 改由 compiler 派生（wire 不
+#: 再携带）；同名判定走新窄调用 wire `stage2-name-variants-v1`。
+STAGE2_NAMES_PROTOCOL: Final = 'stage2-names-v4'
 #: CS-S 1b（2026-10-07）：book／chapters canonical 升 v5——`InitialFact.knowledge`
 #: 与 effect 的 `disclosure`／`proposition`／`scope` 删（wire 面 1a 已先行），
 #: 旧 v4 观察按版本字面量关闭式拒读（rc17 根只读，新根全量重购）。
@@ -96,12 +99,23 @@ STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v8'
 #: slim 模块，删除条件＝下游消费迁移完成、canonical 自身瘦身时）。
 STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v8'
 
-#: names 的 **wire 面**（2026-10-07 basis 指针化新增；同日二次收口升 v5：
-#: evidence_refs 词汇）：resolutions 的 evidence_refs 只给段 id，引文由 compiler
-#: 按段全文派生。canonical（`STAGE2_NAMES_PROTOCOL`
-#: v3，resolutions basis 仍是 `EvidenceQuote`）不变——旧 names.json 照常可读；
-#: 旧 wire 回答（模型手抄段号＋引文／v4 basis 词汇）按版本拒收，不做推断采用。
-STAGE2_NAMES_WIRE_PROTOCOL: Final = 'stage2-names-v5'
+#: names 的 **结构 wire 面**（CS-S 1c，2026-10-07 升 v6）：模型只登记姓氏家族
+#: （含家族级 forms）、名、化名与**歧义例外** `form_overrides`——每个 surface
+#: 的构词模板由 compiler 按 family／given／aliases 字面对源部件做**占位符最大
+#: 替换**机械派生（今日两本 51/51 逐条一致；无身份字面＝纯称谓 None，同位
+#: 同长多解＝须 form_overrides，S2-10/I-20/I-21）。同一性判定不再混在结构答案
+#: 里：候选由代码给出（无候选＝零调用），判定走独立窄调用 wire
+#: `stage2-name-variants-v1`。旧 v5 结构回答（带 surface_forms／resolutions）
+#: 按版本字面量拒收，不做推断采用。
+STAGE2_NAMES_WIRE_PROTOCOL: Final = 'stage2-names-v6'
+
+#: names 的**变体窄调用 wire 面**（CS-S 1c 新增）：输入＝代码生成的候选清单
+#: （锚＝≥3 字含姓名部件的登记 surface、同首字编辑距离 1、未登记、非任一登记
+#: surface 子串），输出逐条 verdict——same（带 char_id＋surface）／unresolved／
+#: not_name（不是人名，只作完整性证明）；每候选恰答一次，漏答／多答＝机械
+#: 缺陷按条目窄修。evidence_refs 只给段 id（闭集＝该候选的出现段），引文由
+#: compiler 按段全文派生。
+STAGE2_NAME_VARIANTS_WIRE_PROTOCOL: Final = 'stage2-name-variants-v1'
 
 #: 关联协议（associate 独立）的版本字面量（R1，2026-09-28 升 v2；CS-H H4，
 #: 2026-10-06 升 v3，RC-65）：v2＝typed 作用对象显式序列化＋状态句柄位置编码；
@@ -428,12 +442,64 @@ class AssociateObservation(StrictModel):
 
 # ───────────────────────── names 观察（str06.stage2.names） ─────────────────────────
 
+class PersonNameStructureWire(StrictModel):
+    """结构答案里一个人物的 wire 面（CS-S 1c）：无 `surface_forms`（构词模板
+    由 compiler 派生，I-20/I-21）、无 resolutions 字段（模型无处凭空造同一性
+    判定——候选由代码给出，判定走窄调用）；`form_overrides` 只在派生歧义
+    （同位同长多解）时写例外。"""
+
+    family_id: str | None = None
+    given: str | None = None
+    aliases: tuple[AliasEntry, ...] = ()
+    form_overrides: dict[str, str | None] = Field(default_factory=dict)
+
+
+class NamesStructureWire(StrictModel):
+    """`str06.stage2.names` 的结构 wire 面（v6）：families（含家族级 forms）
+    ＋people（部件与歧义例外）。每个 surface 的构词模板由 compiler 派生。"""
+
+    protocol_version: Literal['stage2-names-v6']
+    families: dict[str, FamilyEntry] = Field(min_length=1)
+    people: dict[str, PersonNameStructureWire]
+
+
+class NameVariantVerdict(StrictModel):
+    """一个候选字面的窄调用判定（CS-S 1c）：same／unresolved／not_name。"""
+
+    literal: str = Field(min_length=1)
+    verdict: str = Field(pattern=r'^(same|unresolved|not_name)$')
+    char_id: str | None = None
+    surface: str | None = None
+    evidence_refs: tuple[SegmentRef, ...] = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _verdict_shape(self) -> 'NameVariantVerdict':
+        if self.verdict == 'same' and (not self.char_id or not self.surface):
+            raise ValueError('same 必须指向人物与已登记称谓')
+        if self.verdict != 'same' and (self.char_id is not None
+                                       or self.surface is not None):
+            raise ValueError('非 same 不得暗含已接受的名称映射')
+        return self
+
+
+class NameVariantsWire(StrictModel):
+    """`name_variants` 窄调用的 wire 面：逐候选恰答一次（闭集核对归
+    compile，漏答／多答按条目窄修）。"""
+
+    protocol_version: Literal['stage2-name-variants-v1']
+    variants: tuple[NameVariantVerdict, ...] = Field(min_length=1)
+
+
 class NamesObservation(StrictModel):
-    """`str06.stage2.names` 的落盘观察：源名称结构（家族、名、化名、称谓构词）。
+    """`str06.stage2.names` 的落盘观察：源名称结构（家族、名、化名、称谓构词）
+    ＋同一性判定。
 
     名称结构形状与 `NameStructure` 同源（I-11）；compile 是 Characters 的
-    唯一 writer。v2 增加有证据的名称同一性判断，未决时禁止下游归一。
+    唯一 writer。v2 增加有证据的名称同一性判断，未决时禁止下游归一；v4
+    （CS-S 1c）：构词模板由 compiler 派生进 structure、同一性判定来自变体
+    窄调用（resolutions 增 not_name——完整性证明，不参与归一）。
     """
 
-    protocol_version: Literal['stage2-names-v3']
+    protocol_version: Literal['stage2-names-v4']
     structure: NameStructure

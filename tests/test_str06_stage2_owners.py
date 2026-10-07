@@ -24,8 +24,8 @@ from contracts.invariants import (
     PIPELINE_BOOK_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
 )
 from contracts.schema.observation import (
-    STAGE2_CHAPTERS_PROTOCOL, STAGE2_NAMES_WIRE_PROTOCOL,
-    STAGE2_OBSERVATION_PROTOCOL,
+    STAGE2_CHAPTERS_PROTOCOL, STAGE2_NAMES_PROTOCOL,
+    STAGE2_NAMES_WIRE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL,
 )
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.paid_requests import PaidRequestSession
@@ -99,14 +99,13 @@ def _chapter_wire(*beats: dict) -> dict:
 
 
 def _names_wire() -> dict:
+    # CS-S 1c：v6 结构 wire——无 surface_forms／resolutions（构词派生＋窄调用）。
     return {
-        'protocol_version': STAGE2_NAMES_WIRE_PROTOCOL, 'resolutions': [],
+        'protocol_version': STAGE2_NAMES_WIRE_PROTOCOL,
         'families': {'f_lu': {'literal': '陆', 'forms': []}},
         'people': {
-            'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
-                       'surface_forms': {'夫君': None}},
-            'yun_niang': {'family_id': None, 'given': None, 'aliases': [],
-                          'surface_forms': {'云娘': None}},
+            'fu_jun': {'family_id': None, 'given': None, 'aliases': []},
+            'yun_niang': {'family_id': None, 'given': None, 'aliases': []},
         },
     }
 
@@ -346,7 +345,7 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
         artifact = repo.inspect(rel)
         assert artifact['protocol_version'] == (
             'stage2-book-v5' if rel.endswith('/book.json')
-            else 'stage2-names-v3' if rel.endswith('/names.json')
+            else STAGE2_NAMES_PROTOCOL if rel.endswith('/names.json')
             else STAGE2_CHAPTERS_PROTOCOL), rel
         assert '_provenance' in artifact, rel
     assert not (repo.root / 'stage2/characters/characters.json').exists(), \

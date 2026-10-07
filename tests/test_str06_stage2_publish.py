@@ -129,6 +129,7 @@ def _associate_wire(**over) -> dict:
 
 
 def _names_structure() -> dict:
+    """canonical NameStructure 形（供直接构造 NamesObservation 的用例）。"""
     return {'resolutions': [], 'families': {'f_lu': {'literal': '陆', 'forms': []}},
             'people': {
                 'fu_jun': {'family_id': 'f_lu', 'given': None, 'aliases': [],
@@ -138,7 +139,9 @@ def _names_structure() -> dict:
 
 
 def _names_wire() -> dict:
-    return {'protocol_version': PV, **_names_structure()}
+    # CS-S 1c：v6 结构 wire——surface_forms 由程序派生、resolutions 走窄调用。
+    from tests.str06_facilities import names_v6_wire
+    return names_v6_wire(_names_structure())
 
 
 def _full_stage2_wires() -> dict:
@@ -301,7 +304,7 @@ def test_same_name_two_persons_stay_separate(tmp_path):
         'fu_jun_jr': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e03_01']}]}})
     wires['names']['people']['fu_jun_jr'] = {
-        'family_id': 'f_lu', 'given': None, 'aliases': [], 'surface_forms': {'夫君': None}}
+        'family_id': 'f_lu', 'given': None, 'aliases': []}
     repo, _ask, _report = _run_stage2(tmp_path, 'two_persons', wires)
     chars = repo.inspect('stage2/characters/characters.json')
     assert set(chars['characters']) == {'fu_jun', 'fu_jun_jr', 'yun_niang'}
@@ -740,8 +743,17 @@ def test_loop_pairing_conflict_is_rejected_before_acceptance_and_publication(kin
     book = BookObservation.model_validate(bad['book'])
     chapters = {n: ChapterObservation.model_validate(bad[f'ch{n:02d}'])
                 for n in (1, 2, 3)}
+    from novel.stages.stage2 import character_core_view as _core_view
+    from novel.stages.stage2.names import compile_name_structure
+    from tests.str06_facilities import names_v6_wire
+    core, _core_errors = _core_view(book, evidence=EVIDENCE)
+    assert core is not None and not _core_errors, _core_errors
+    structure, struct_errors = compile_name_structure(
+        names_v6_wire(_names_structure()), core, '陆家夫君与云娘夜话。',
+        evidence=EVIDENCE)
+    assert structure is not None and not struct_errors, struct_errors
     names = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL,
-                             structure=NameStructure.model_validate({k: v for k, v in bad['names'].items() if k != 'protocol_version'}))
+                             structure=structure)
     space = project_association_space(book, chapters)
     before = deepcopy(bad)
     observation, errors = compile_associate_observation(bad['associate'], space)

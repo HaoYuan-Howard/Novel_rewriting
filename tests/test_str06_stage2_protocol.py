@@ -105,7 +105,8 @@ def test_observation_artifacts_are_registered_with_independent_versions():
     for rel in ('stage2/observations/ch{nn}.json',
                 'stage2/observations/names.json'):
         assert rel in ARTIFACT_PATHS and rel in ARTIFACT_SPECS
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/names.json'] == 'str06-rc15'
+    # rc18 续（CS-S 1c）：names canonical 升 v4——构词派生＋变体窄调用。
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/names.json'] == 'str06-rc18'
     # R1：associate 观察独立升版（stage2-associate-v2），形状升 rc9；三类观察
     # 冻结在 rc6（B2 身份）不动。RC 版式头随 R1 升 rc9。
     # rc17（CS-H H4，RC-65）：associate 协议升 v3（维度句柄）——同键配对按构造
@@ -330,7 +331,7 @@ def test_associate_observation_shape_and_closed_handle_charset():
 
 def test_names_observation_wraps_name_structure():
     obs = NamesObservation.model_validate({
-        'protocol_version': 'stage2-names-v3',
+        'protocol_version': 'stage2-names-v4',
         'structure': {
             'families': {'f_lu': {'literal': '陆', 'forms': []}},
             'people': {'fu_jun': {'family_id': 'f_lu', 'given': '夫君',

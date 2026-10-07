@@ -309,9 +309,15 @@ class EvidenceQuote(StrictModel):
 
 
 class SourceNameResolution(StrictModel):
-    """Stage2语义判断的局部姓名同一性；证据原字面不改，未决不得归一。"""
+    """Stage2语义判断的局部姓名同一性；证据原字面不改，未决不得归一。
+
+    CS-S 1c（2026-10-07）增 `not_name`：候选字面经窄调用判定为「不是人名」
+    （笔误假设否决、亦非同一人物）——只作完整性证明，不参与归一（归一只
+    消费 same），也不阻断发布（阻断只对 unresolved）；naming 投影不读
+    resolutions，改名面不受影响。
+    """
     literal: str = Field(min_length=1)
-    status: Literal['same', 'unresolved']
+    status: Literal['same', 'unresolved', 'not_name']
     char_id: str | None
     surface: str | None
     basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
@@ -321,8 +327,8 @@ class SourceNameResolution(StrictModel):
     def resolution_shape(self):
         if self.status == 'same' and (not self.char_id or not self.surface):
             raise ValueError('same必须指向人物与已登记称谓')
-        if self.status == 'unresolved' and (self.char_id is not None or self.surface is not None):
-            raise ValueError('unresolved不得暗含已接受的名称映射')
+        if self.status != 'same' and (self.char_id is not None or self.surface is not None):
+            raise ValueError('非same不得暗含已接受的名称映射')
         return self
 
 

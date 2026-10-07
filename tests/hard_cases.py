@@ -619,7 +619,7 @@ def _stage2_outcome(*, book=None, chapters=None, names=None, associate=None):
         chapters={no: ChapterObservation.model_validate(ch_wires[f'ch{no:02d}'])
                   for no in range(1, len(ch_wires) + 1)},
         names=NamesObservation.model_validate({
-            'protocol_version': 'stage2-names-v3',
+            'protocol_version': 'stage2-names-v4',
             'structure': names if names is not None else _names_structure()}),
         associate=AssociateObservation.model_validate(
             associate if associate is not None else _associate_wire()),
@@ -733,7 +733,8 @@ def _surface_anchor_without_literal() -> list:
 
 
 def _names_structure_uncovered() -> list:
-    """名称结构编译闭合：surface_forms 未恰好覆盖全部 surface。"""
+    """名称结构编译闭合：form_overrides 指向未登记 surface（CS-S 1c 的 v6 面
+    ——构词模板由程序派生并恰好覆盖，私自加称谓面即拒，A/S2-10）。"""
     from contracts.schema.source import (
         CharacterEntry, CharactersCore, SurfaceWindow,
     )
@@ -741,15 +742,13 @@ def _names_structure_uncovered() -> list:
     core = CharactersCore(characters={'ch1': CharacterEntry(
         canonical='夫君',
         surfaces=(SurfaceWindow(surface='夫君', from_chapter=1,
-                                source_refs=('e01_01',)),
-                  SurfaceWindow(surface='陆大哥', from_chapter=1,
-                                source_refs=('e01_01',))))})
+                                source_refs=('e01_01',)),))})
     _structure, errors = compile_name_structure(
-        {'protocol_version': 'stage2-names-v5', 'resolutions': [],
+        {'protocol_version': 'stage2-names-v6',
          'families': {'fam_lu': {'literal': '陆', 'forms': []}},
          'people': {'ch1': {'family_id': 'fam_lu', 'given': None, 'aliases': [],
-                            'surface_forms': {'夫君': None}}}},
-        core, '夫君与陆大哥夜话。')
+                            'form_overrides': {'陆大哥': None}}}},
+        core, '夫君与陆家大哥夜话。')
     return errors
 
 
@@ -779,7 +778,7 @@ CASES.update({
     'source_surface_anchor_literal': Case(
         'stage2', _surface_anchor_without_literal, '锚点不含该字面'),
     'names_structure_compile': Case(
-        'stage2', _names_structure_uncovered, '未恰好覆盖'),
+        'stage2', _names_structure_uncovered, 'form_overrides 指向未登记 surface'),
     'names_coverage': Case('stage2', _names_coverage_missing_entry, '漏项'),
 })
 

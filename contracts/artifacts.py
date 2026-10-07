@@ -252,7 +252,9 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 与 effect 的 disclosure／proposition／scope 删；旧 rc15 根只读拒收。
     'stage2/observations/book.json': 'str06-rc18',
     'stage2/observations/ch{nn}.json': 'str06-rc18',
-    'stage2/observations/names.json': 'str06-rc15',
+    # rc18（CS-S 1c）：names canonical 升 v4——构词 surface_forms 由 compiler
+    # 派生、resolutions 来自变体窄调用（增 not_name）。
+    'stage2/observations/names.json': 'str06-rc18',
     # rc9（2026-09-28 R1 关联无损）：associate 协议独立升版 stage2-associate-v2
     # ——typed 作用对象显式序列化＋状态句柄位置编码（ch{nn}.b{拍}.e{效应序}.{key}
     # ／book.e{条目序}.{key}）。三类观察协议字面量与请求逐字不变；canonical

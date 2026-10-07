@@ -67,7 +67,6 @@ Golden_Set_v3.0 三本 yaml 的成书对比评估金标复认（2026-10-05 用�
 
 | 批 | 内容 | 状态 |
 |---|---|---|
-| 1c | names v6（A＋B＋C）：C＝wire 删 `surface_forms`，构词模板由 compiler 按 family／given／aliases 字面派生（`form_overrides` 例外）；B＝结构答案后代码生成变体候选（锚＝≥3 字含姓名部件 surface、同首字编辑距离 1），有候选才发新 owner `name_variants` 窄调用（`stage2-name-variants-v1`，逐条 same／unresolved／not_name）；A＝S2-10 反例守卫（增删拆合拒、same 仅证据段内局部替换、未决阻断发布） | 待做 |
 | Phase 2 | Book 增 `facts:[{statement, evidence_refs, known_at_start}]`（F 编号代码派发）＋chapters `know.fact` 引用；近义重复只报 candidate（确定性相似度），Associate 退为条目级窄 resolver（未决候选＋最小文本）；wire／L1 升版、rc19。默认裁决：D-3 不上 `address`（无消费者）；D-5 删 `public` 持有者 | 待做 |
 | Phase 3 | closed change keys（从 ≥3 本书真实键聚类定稿）＋`state→change`、`ev→event`；拍级 `access`（获知通道枚举按真实分布冻结）；reader 知情由 compile 派生、`know.who` 禁 reader；`same_state_dimension` 消失（associate 协议升版）；免费 oracle＝rc15 冻结根 25 条模型自写 reader 条目对比派生结果 | 待做 |
 

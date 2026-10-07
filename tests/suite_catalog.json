@@ -799,6 +799,13 @@
         "stage4"
       ]
     },
+    "tests/test_str06_name_variants.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2"
+      ],
+      "cases": {}
+    },
     "tests/test_str06_naming.py": {
       "layer": "unit_contract",
       "stages": [

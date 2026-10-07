@@ -619,7 +619,8 @@ def semantic_revision_rules(owner: str) -> str:
     else:
         rule = {
             'book': '依据原文，允许纠正本单位的书级观察与证据；不得改写原文。',
-            'names': '依据原文及人物表，允许纠正名称结构和同一性判断并保留证据。',
+            'names': '依据原文及人物表，允许纠正名称结构部件（姓／名／化名／歧义例外）并保留证据。',
+            'name_variants': '依据候选出现段原文，允许纠正本单位对候选字面的判定并保留证据。',
             'associate': '正式观察与给定句柄为只读；只能纠正本单位配对选择，不能改观察的事实、open或close。',
             'preserve': '源事实与证据为只读；可纠正本单位的义务观察、保存判断和满足条件，源证据冲突按协议报告。',
             'design': '完整义务、锁及约束为只读；可纠正本单位在合法范围内的目标设计、承载和披露选择。',
@@ -1072,33 +1073,51 @@ def design_rules(*, known_char_ids: set[str] | None = None,
 
 DESIGN_RULES = design_rules()
 
-NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化名与每个表层称谓的构词）。
-只依据正文与人物账，不猜、不补造。
+NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化名）。
+只依据正文与人物账，不猜、不补造。构词模板（每个称谓怎么由姓名部件组成）
+由程序按你登记的部件机械派生——你**不输出** surface_forms。
 1. families：每个姓氏家族一条 {family_id, literal, forms}：
    - family_id：fam_ 前缀 slug；同一家的亲属共享一个 family_id；同姓但无亲属关系的
      不同人各用各的 family_id；
    - literal：姓字面，复姓（如皇甫、欧阳）必须完整登记，不得截成首字；
    - forms：家族级称谓的构词，如「陆家」= {literal:"陆家", form:"{family}家", source_refs}；
      没有就给空数组。
-2. people：每个人物一条（必须覆盖人物账全部人物）：
+2. people：每个人物一条（必须恰好覆盖人物账全部人物——不得增删或拆合人物）：
    - family_id：本人姓氏家族 id（无姓给 null）；given：名（无名给 null）；
    - aliases：独立化名 [{alias_id:al_ 前缀 slug, literal}]，没有给空数组；
-   - surface_forms：该人物每个 surface 恰好一条 {surface: 构词模板或 null}：键必须逐字等于
-     人物账里该人物的 surface，不多不少；正文出现而人物账没有登记的称谓不要私自加键
-     （漏收是 book 级抽取的账，不在本调用补）；
-     · 含姓含名的写 {family}{given}，如「沈知言」；
-     · 姓+称谓写 {family}<称谓>，如「沈公子」= "{family}公子"、"姓沈的" = "姓{family}的"；
-     · 单名写 {given}；化名写 {alias:al_x}；
-     · 纯称谓（夫君、表弟、嫂嫂等不含姓名部件的）写 null；
-     · 模板渲染结果必须与 surface 逐字一致；纯称谓里不得含本人姓或名字面。
-3. resolutions：核验原文的疑似姓名异写／笔误，逐条给 {literal,status,char_id,surface,evidence_refs,reason}。
-   literal原样抄原字面；evidence_refs给证据清单中的段 id（如["e03_05"]，不抄原文——逐字引文由程序
-   按段全文切出），所选段必须实际出现该异常字面并承载判断上下文。
-   上下文足以证明同一人物时status="same"，char_id与surface指向人物账已有称谓，reason说明依据；
-   只在异常字面出现的证据局部授权归一，不授权全书替换。证据不足／有不同解释时status="unresolved"，
-   char_id与surface均null并说明歧义；不得凭读音、字形或常见姓名猜测，也不得把真实化名误当笔误。
-   没有发现给空数组；同一局部字面不可有相互冲突的指向。原文、引文与逐章观察不由本节点改写。
-输出 JSON 顶层：{"protocol_version":"stage2-names-v5","families":{...},"people":{...},"resolutions":[]}"""
+   - form_overrides（可选，只在例外时写）：{surface: 模板或 null}——程序按
+     「最长身份字面优先替换」派生模板，只有当该 surface 的部件归属有真歧义
+     （同一片段无法确定来自姓、名还是化名）时才写例外；键必须是该人物在
+     人物账已登记的 surface；模板渲染结果须与 surface 逐字一致。
+     · 派生规则示例（供你核对部件登记是否正确）：「沈知言」在 family=沈／
+       given=知言 时派生 {given}；「沈公子」→ {family}公子；「姓沈的」→
+       姓{family}的；化名「柳青」→ {alias:al_x}；「夫君」「表弟」这类不含
+       姓名部件的纯称谓派生 null。
+疑似姓名异写／笔误不在本调用处理：候选由程序从原文挑出，判定走后续的
+窄调用（无候选＝不再打扰）。
+输出 JSON 顶层：{"protocol_version":"stage2-names-v6","families":{...},"people":{...}}"""
+
+#: CS-S 1c：变体窄调用的规则面（wire `stage2-name-variants-v1`）。候选由
+#: 代码给出（锚＝≥3 字含姓名部件的登记 surface、同首字、编辑距离 1、未登记、
+#: 非登记 surface 子串），模型只做逐条判定——无处凭空造候选或异写。
+NAME_VARIANTS_RULES = """任务：判定疑似姓名异写候选。程序已从原文按确定性规则挑出候选字面
+（与某登记称谓同首字、差一个字：替换／多一字／少一字）。你逐条判定它是什么，
+不做全书替换、不改任何观察。
+
+{candidates}
+
+【判定规则】每条候选恰答一次，verdict 只能取：
+- same：上下文足以证明是**同一人物**的异写／笔误。char_id 与 surface 指向
+  上述候选信息里给出的近似锚人物及其已登记称谓（只能取该人物已登记的
+  surface）；evidence_refs 从该候选的出现段中选（只写段 id，如
+  ["e03_05"]——逐字引文由程序按段全文切出），所选段必须实际出现该字面
+  并承载判断上下文；reason 说明依据。归一只授权在这些证据段局部，不授权
+  全书替换。
+- unresolved：证据不足或有不同解释（char_id 与 surface 均 null），说明歧义。
+- not_name：该字面根本不是人名（如普通词、地名巧合），char_id 与 surface
+  均 null。
+不得凭读音、字形或常见姓名猜测；不得把真实化名误当笔误；同一字面只答一次。
+输出 JSON 顶层：{{"protocol_version":"{protocol}","variants":[{{"literal":"…","verdict":"same|unresolved|not_name","char_id":…,"surface":…,"evidence_refs":["…"],"reason":"…"}}]}}"""
 
 HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。brief 明确入口知识、跳时定位与末尾悬念；POV 可以与正文不同，事实和披露边界一致。只输出设计 JSON，不写 prose
 （wire 协议 stage4-hook-design-v1）。位置引用只给分量（scene=场景 id、beat=拍 id，
@@ -2829,6 +2848,14 @@ def wire_shape_issues(
                     path = path + ('surfaces', loc[3])
             elif loc[:1] == ('expression',):
                 path = ('expression',)
+        elif kind == 'names':
+            # CS-S 1c：names 结构 wire 的条目面（families.{fid}／people.{slug}）
+            # 与变体窄调用 wire 的条目面（variants[i]）。
+            if loc[:1] in (('families',), ('people',)) and len(loc) >= 2:
+                path = (loc[0], loc[1])
+            elif loc[:1] == ('variants',) and len(loc) >= 2 \
+                    and isinstance(loc[1], int):
+                path = ('variants', loc[1])
         message = (f'wire 协议校验失败：{error.get("msg")}'
                    f'（{".".join(map(str, loc))}）')
         issues.append(((path,) if path is not None else None, message))

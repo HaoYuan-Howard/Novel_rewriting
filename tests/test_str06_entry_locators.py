@@ -138,20 +138,19 @@ def _names_inputs():
 
 
 def _names_wire() -> dict:
-    return {'protocol_version': 'stage2-names-v5', 'resolutions': [],
+    # CS-S 1c：v6 结构 wire——surface_forms 由程序派生（夫君／云娘均无部件→None）。
+    return {'protocol_version': 'stage2-names-v6',
             'families': {'f_lu': {'literal': '陆', 'forms': []}},
             'people': {
-                'fu_jun': {'family_id': 'f_lu', 'given': None, 'aliases': [],
-                           'surface_forms': {'夫君': None}},
-                'yun_niang': {'family_id': None, 'given': None, 'aliases': [],
-                              'surface_forms': {'云娘': None}}}}
+                'fu_jun': {'family_id': 'f_lu', 'given': None, 'aliases': []},
+                'yun_niang': {'family_id': None, 'given': None, 'aliases': []}}}
 
 
 def test_names_patch_locate_maps_family_and_person_entries():
     core, source = _names_inputs()
     wire = _names_wire()
     wire['families']['f_lu']['literal'] = '鲁'      # 未在源文出现
-    wire['people']['yun_niang']['given'] = '娘'     # 名字面未在源文出现
+    wire['people']['yun_niang']['given'] = '婉'     # 名字面未在源文出现
     _structure, errors = compile_name_structure(wire, core, source)
     assert len(errors) == 2, errors
     targets = names_patch_locate(wire, errors, core, source)

@@ -45,8 +45,10 @@ from novel.stages.stage2.compile import (
     initial_snapshot, source_fold,
 )
 from novel.stages.stage2.names import (
-    NAMES_INPUT_VERSION, normalize_name_observations, validate_name_resolutions,
-    ProbeFinding, compile_name_structure, merge_name_structure, names_evidence_view,
+    NAMES_INPUT_VERSION, NameVariantCandidate, normalize_name_observations,
+    validate_name_resolutions, ProbeFinding, compile_name_structure,
+    compile_name_variants, derive_surface_forms, merge_name_structure,
+    name_variant_candidates, name_variants_prompt, names_evidence_view,
     names_patch_locate, surname_construction_probe,
 )
 from novel.stages.stage2.resolver import (
@@ -57,7 +59,7 @@ from novel.stages.stage2.slim import expand_chapter_wire, slim_chapter_wire
 __all__ = [
     'AnchorHit', 'AssociationSpace', 'AssociateObservation', 'BeatHandle',
     'BookObservation', 'ChapterObservation', 'CompileOutcome',
-    'DimensionHandle', 'EvidenceResolver', 'FoldResult',
+    'DimensionHandle', 'EvidenceResolver', 'FoldResult', 'NameVariantCandidate',
     'LoopHandle',
     'NAMES_INPUT_VERSION', 'NamesObservation', 'ProbeFinding', 'PropositionHandle', 'ResolverIssue',
     'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_CHAPTERS_WIRE_PROTOCOL',
@@ -72,7 +74,9 @@ __all__ = [
     'compile_name_structure', 'compile_source_truth', 'evidence_metrics',
     'normalize_name_observations', 'validate_name_resolutions',
     'initial_snapshot',
-    'merge_name_structure', 'names_evidence_view', 'names_patch_locate',
+    'compile_name_variants', 'derive_surface_forms', 'merge_name_structure',
+    'name_variant_candidates', 'name_variants_prompt',
+    'names_evidence_view', 'names_patch_locate',
     'project_association_space',
     'serialize_target', 'state_dimension_address',
     'source_fold', 'surname_construction_probe', 'target_label',

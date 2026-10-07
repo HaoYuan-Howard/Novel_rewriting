@@ -1,4 +1,10 @@
-"""RC-17：名称同一性留证、局部归一与歧义停止；真实 Stage2 发布到 Preserve 消费。"""
+"""RC-17／CS-S 1c：名称同一性走候选先行窄调用——留证、局部归一与歧义停止；
+真实 Stage2 发布到 Preserve 消费。
+
+召回边界（如实登记）：候选只收「≥3 字含姓名部件的登记 surface 的同首字
+编辑距离 1 邻域」——两字称谓的异写（如旧例 云孃／云娘）不在确定性召回类内，
+本套件改用 ≥3 字姓名面（苏芸娘→苏芸孃）复现同一判据链。
+"""
 from copy import deepcopy
 
 import pytest
@@ -9,28 +15,42 @@ from contracts.schema.source import NameStructure
 from novel.llm.ledger import CostLedger
 from novel.stages.chain import build_evidence, run_workflow
 from novel.stages.owner_revision import MechanicalDefectStop
-from novel.stages.stage2 import character_core_view, compile_name_structure, normalize_name_observations
+from novel.stages.stage2 import (
+    character_core_view, compile_name_structure, normalize_name_observations,
+)
+from novel.stages.stage2.names import (
+    compile_name_variants, name_variant_candidates,
+)
 from novel.stages.stage4 import project_preserve_view
 from novel.store import Str06Repository
-from tests.str06_facilities import make_context
+from tests.str06_facilities import make_context, names_v6_wire
 from tests.test_str06_stage2_publish import (
     CHAPTERS, HOOK, STAGE2_NODES, _AcceptingAsk, _beat, _full_stage2_wires,
 )
 
 
 def _case():
+    """书级加「苏芸娘」姓名面（≥3 字、含部件——变体候选的确定性锚）；
+    ch02 追加一段含异写「苏芸孃」的正文。"""
     chapters = deepcopy(CHAPTERS)
-    chapters[1]['text'] += '\n云孃决定次日出门。'  # 新的一段 → e02_03（RC-26）
+    chapters[0]['text'] += '\n苏芸娘在灯下缝衣。'   # → e01_03（锚点段）
+    chapters[1]['text'] += '\n苏芸孃决定次日出门。'  # 新的一段 → e02_03（RC-26）
     wires = _full_stage2_wires()
-    # names wire 的 basis 只给段 id（2026-10-07 裁决）；ch02 是 canonical 直通
-    # 面，basis 保持 {segment, quote} 形。
-    row = {'literal': '云孃', 'status': 'same', 'char_id': 'yun_niang', 'surface': '云娘',
-           'evidence_refs': ['e02_03'], 'reason': '上下文延续同一人物，原文该处异写。'}
-    wires['names']['resolutions'] = [row]
-    wires['ch02']['beats'].append(_beat('云孃决定次日出门', ('e02_03',),
-        cognition=[{'proposition': {'ref': 'p_out', 'statement': '云孃决定次日出门'},
+    wires['book']['characters']['yun_niang']['surfaces'].append(
+        {'surface': '苏芸娘', 'source_refs': ['e01_03']})
+    wires['names']['families']['f_su'] = {'literal': '苏', 'forms': []}
+    wires['names']['people']['yun_niang'] = {
+        'family_id': 'f_su', 'given': '芸娘', 'aliases': []}
+    wires['name_variants'] = {
+        'protocol_version': 'stage2-name-variants-v1',
+        'variants': [{'literal': '苏芸孃', 'verdict': 'same',
+                      'char_id': 'yun_niang', 'surface': '苏芸娘',
+                      'evidence_refs': ['e02_03'],
+                      'reason': '上下文延续同一人物，原文该处异写。'}]}
+    wires['ch02']['beats'].append(_beat('苏芸孃决定次日出门', ('e02_03',),
+        cognition=[{'proposition': {'ref': 'p_out', 'statement': '苏芸孃决定次日出门'},
                     'holder': 'reader', 'mode': 'learns',
-                    'basis': [{'segment': 'e02_03', 'quote': '云孃决定次日出门'}]}]))
+                    'basis': [{'segment': 'e02_03', 'quote': '苏芸孃决定次日出门'}]}]))
     return chapters, wires
 
 
@@ -44,6 +64,49 @@ def _run(tmp_path, chapters, wires, ask):
     return repo
 
 
+def _structure_and_candidates(chapters, wires):
+    evidence = build_evidence(chapters, HOOK)
+    core, errors = character_core_view(
+        BookObservation.model_validate(wires['book']), evidence=evidence)
+    assert core is not None and not errors, errors
+    full = '\n'.join(c['text'] for c in chapters)
+    structure, errors = compile_name_structure(wires['names'], core, full,
+                                               evidence=evidence)
+    assert structure is not None and not errors, errors
+    return core, structure, name_variant_candidates(structure, core, evidence), evidence
+
+
+def test_variant_candidate_generation_is_deterministic_and_narrow():
+    """B：候选由代码给出——苏芸孃（替换一字、同首字、未登记、互不为子串）
+    进候选；苏芸娘跟随字／标点类插入噪声不进（互为子串滤除）。"""
+    chapters, wires = _case()
+    _core, structure, candidates, evidence = _structure_and_candidates(chapters, wires)
+    assert [c.literal for c in candidates] == ['苏芸孃']
+    cand = candidates[0]
+    assert (cand.char_id, cand.anchor, cand.segments) == \
+        ('yun_niang', '苏芸娘', ('e02_03',))
+    assert 'name_variants' not in _full_stage2_wires() or True
+    # 无异写文本 → 无候选（零调用的判定面）。
+    plain_wires = _full_stage2_wires()
+    plain_chapters = deepcopy(CHAPTERS)
+    plain_chapters[0]['text'] += '\n苏芸娘在灯下缝衣。'
+    plain_wires = _full_stage2_wires()
+    plain_wires['book']['characters']['yun_niang']['surfaces'].append(
+        {'surface': '苏芸娘', 'source_refs': ['e01_03']})
+    plain_wires['names']['families']['f_su'] = {'literal': '苏', 'forms': []}
+    plain_wires['names']['people']['yun_niang'] = {
+        'family_id': 'f_su', 'given': '芸娘', 'aliases': []}
+    evidence_plain = build_evidence(plain_chapters, HOOK)
+    core_plain, errors = character_core_view(
+        BookObservation.model_validate(plain_wires['book']), evidence=evidence_plain)
+    structure_plain, errors = compile_name_structure(
+        plain_wires['names'], core_plain,
+        '\n'.join(c['text'] for c in plain_chapters),
+        evidence=evidence_plain)
+    assert structure_plain is not None and not errors, errors
+    assert name_variant_candidates(structure_plain, core_plain, evidence_plain) == ()
+
+
 def test_proved_variant_reaches_canonical_and_preserve_without_changing_quotes(tmp_path):
     chapters, wires = _case()
     before = deepcopy(wires)
@@ -55,24 +118,27 @@ def test_proved_variant_reaches_canonical_and_preserve_without_changing_quotes(t
     assert names_input['input_version'] == NAMES_INPUT_VERSION == 'stage2-names-input-v2'
     assert 'text' not in names_input
     assert names_input['evidence'] == names_evidence_view(build_evidence(chapters, HOOK))
+    assert '苏芸孃' in ask.prompts['name_variants'] and '苏芸娘' in ask.prompts['name_variants']
     observation = repo.read_model('stage2/observations/ch02.json')
     blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
     chars = repo.read_model('stage2/characters/characters.json')
-    assert observation.beats[-1].event == '云孃决定次日出门'
+    assert observation.beats[-1].event == '苏芸孃决定次日出门'
     beat = blueprint.chapters[1].beats[-1]
-    assert beat.event == '云娘决定次日出门'
-    assert beat.cognition[0].basis[0].quote == '云孃决定次日出门'
-    assert '云娘决定次日出门' in ask.prompts['associate']
-    assert '云孃决定次日出门' not in ask.prompts['associate']
+    assert beat.event == '苏芸娘决定次日出门'
+    assert beat.cognition[0].basis[0].quote == '苏芸孃决定次日出门'
+    assert '苏芸娘决定次日出门' in ask.prompts['associate']
+    assert '苏芸孃决定次日出门' not in ask.prompts['associate']
     view = project_preserve_view(chars.core_view(), blueprint)
-    assert '云娘决定次日出门' in view and '云孃决定次日出门' in view
+    assert '苏芸娘决定次日出门' in view and '苏芸孃决定次日出门' in view
     assert chars.name_structure.resolutions[0].char_id == 'yun_niang'
+    assert chars.name_structure.resolutions[0].status == 'same'
     assert wires == before
 
 
 def test_unresolved_identity_stops_before_associate_purchase_and_publish(tmp_path):
     chapters, wires = _case()
-    wires['names']['resolutions'][0].update(status='unresolved', char_id=None, surface=None)
+    wires['name_variants']['variants'][0].update(
+        verdict='unresolved', char_id=None, surface=None)
     ask = _AcceptingAsk(wires)
     with pytest.raises(MechanicalDefectStop, match='名称同一性未闭合'):
         _run(tmp_path, chapters, wires, ask)
@@ -81,54 +147,74 @@ def test_unresolved_identity_stops_before_associate_purchase_and_publish(tmp_pat
     assert not (tmp_path / 'stage2/blueprints/chapter_blueprints.json').exists()
 
 
-@pytest.mark.parametrize('defect,expected', [
-    ('literal', '原字面'), ('segment', '不在证据闭集内'), ('target', '未登记'),
-    ('registered', '已在人物表'), ('conflict', '冲突'),
-    ('old', 'stage2-names-v5'),
-])
-def test_name_proof_refuses_bad_evidence_target_conflict_and_old_protocol(defect, expected):
+def test_not_name_verdict_completes_without_normalization(tmp_path):
+    """not_name：完整性证明——不参与归一、不阻断发布；语义文本保持原字面。"""
     chapters, wires = _case()
-    evidence = build_evidence(chapters, HOOK)
-    core, errors = character_core_view(BookObservation.model_validate(wires['book']), evidence=evidence)
-    assert not errors
-    wire = wires['names']
-    row = wire['resolutions'][0]
-    if defect == 'literal':
-        # 段在闭集但不含异写字面——引文＝段全文由代码切出，「原字面未出现」
-        # 的锚定检查照拦（比旧手抄引文形态更强：整段可查）。
-        row['evidence_refs'] = ['e01_01']
-    elif defect == 'segment':
+    wires['name_variants']['variants'][0].update(
+        verdict='not_name', char_id=None, surface=None,
+        reason='原文该处是动宾短语，非人名。')
+    ask = _AcceptingAsk(wires)
+    repo = _run(tmp_path, chapters, wires, ask)
+    chars = repo.read_model('stage2/characters/characters.json')
+    assert chars.name_structure.resolutions[0].status == 'not_name'
+    blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
+    assert blueprint.chapters[1].beats[-1].event == '苏芸孃决定次日出门'
+
+
+@pytest.mark.parametrize('defect,expected', [
+    ('segment', '出现段之外'), ('target', '未登记'),
+    ('registered', '不在候选清单内'), ('missing', '漏答'),
+    ('duplicate', '重复作答'), ('old', 'stage2-name-variants'),
+])
+def test_variant_verdict_refuses_bad_evidence_target_and_old_protocol(defect, expected):
+    chapters, wires = _case()
+    core, _structure, candidates, evidence = _structure_and_candidates(chapters, wires)
+    wire = deepcopy(wires['name_variants'])
+    row = wire['variants'][0]
+    if defect == 'segment':
         row['evidence_refs'] = ['e99_01']
     elif defect == 'target':
         row['surface'] = '未登记称谓'
     elif defect == 'registered':
-        row.update(literal='云娘', basis=['e01_02'])
-    elif defect == 'conflict':
-        wire['resolutions'].append({**row, 'char_id': 'fu_jun', 'surface': '夫君'})
+        row['literal'] = '苏芸娘'
+    elif defect == 'missing':
+        row['literal'] = '凭空的字面'
+    elif defect == 'duplicate':
+        wire['variants'] = [deepcopy(row), deepcopy(row)]
     else:
         wire.pop('protocol_version')
     before = deepcopy(wire)
-    value, errors = compile_name_structure(wire, core, '\n'.join(c['text'] for c in chapters), evidence=evidence)
-    assert value is None and any(expected in e for e in errors), errors
+    value, located = compile_name_variants(wire, candidates, evidence=evidence,
+                                           characters=core)
+    assert value is None and any(expected in message
+                                 for _path, message in located), located
     assert wire == before
 
 
 def test_mapping_is_local_and_idempotent():
-    _, wires = _case()
+    chapters, wires = _case()
     # 相同字面在未获同一性证明的另一句段不能被全局替换。
-    wires['ch01']['beats'][0]['event'] = '云孃旁观'
+    wires['ch01']['beats'][0]['event'] = '苏芸孃旁观'
     book = BookObservation.model_validate(wires['book'])
-    chapters = {n: ChapterObservation.model_validate(wires[f'ch{n:02d}']) for n in (1, 2, 3)}
-    # canonical NameStructure：basis 是段号＋派生引文（wire 的 evidence_refs
-    # 裸段 id 经 compile 派生后的形态；构造时剥掉 wire 键）。
-    canonical = {k: v for k, v in wires['names'].items() if k != 'protocol_version'}
-    canonical['resolutions'] = [dict(
-        {k: v for k, v in canonical['resolutions'][0].items() if k != 'evidence_refs'},
-        basis=[{'segment': 'e02_03', 'quote': '云孃决定次日出门。'}])]
-    structure = NameStructure.model_validate(canonical)
-    normalized = normalize_name_observations(book, chapters, structure)
-    assert normalized[1][1].beats[0].event == '云孃旁观'
-    assert normalized[1][2].beats[-1].event == '云娘决定次日出门'
+    chapters_obs = {n: ChapterObservation.model_validate(wires[f'ch{n:02d}'])
+                    for n in (1, 2, 3)}
+    # canonical NameStructure：basis 是段号＋派生引文（窄调用 wire 的
+    # evidence_refs 裸段 id 经 compile 派生后的形态）。
+    resolution = {'literal': '苏芸孃', 'status': 'same', 'char_id': 'yun_niang',
+                  'surface': '苏芸娘', 'reason': '同一人物异写',
+                  'basis': [{'segment': 'e02_03', 'quote': '苏芸孃决定次日出门。'}]}
+    structure = NameStructure.model_validate({
+        'families': {'f_lu': {'literal': '陆', 'forms': []},
+                     'f_su': {'literal': '苏', 'forms': []}},
+        'people': {
+            'fu_jun': {'family_id': 'f_lu', 'given': None, 'aliases': [],
+                       'surface_forms': {'夫君': None}},
+            'yun_niang': {'family_id': 'f_su', 'given': '芸娘', 'aliases': [],
+                          'surface_forms': {'云娘': None, '苏芸娘': '{family}{given}'}}},
+        'resolutions': [resolution]})
+    normalized = normalize_name_observations(book, chapters_obs, structure)
+    assert normalized[1][1].beats[0].event == '苏芸孃旁观'
+    assert normalized[1][2].beats[-1].event == '苏芸娘决定次日出门'
     assert normalize_name_observations(*normalized, structure) == normalized
 
 

@@ -59,6 +59,20 @@ def v13_chapter(*beats: dict, causal_edges: tuple = ()) -> dict:
     return {'beats': list(beats), 'causal_edges': list(causal_edges)}
 
 
+def names_v6_wire(structure: dict) -> dict:
+    """canonical NameStructure dump → v6 结构 wire（CS-S 1c 夹具助手）：
+    剥 people 的 surface_forms（构词由程序派生）与顶层 resolutions（同一性
+    走窄调用）；form_overrides 默认空（派生结果应与原 surface_forms 一致——
+    不一致的夹具会在断言处暴露）。"""
+    people = {}
+    for slug, person in (structure.get('people') or {}).items():
+        people[slug] = {key: value for key, value in person.items()
+                        if key != 'surface_forms'}
+    return {'protocol_version': 'stage2-names-v6',
+            'families': structure.get('families') or {},
+            'people': people}
+
+
 def anchor_stub(handle: str = 's0_01') -> tuple:
     """R10a a2 fixture：手工构造 checkpoint 的最小 anchors（不经 assemble_preserve
     的下游测试统一引用；正式 anchors 由 assemble 从投影句柄类型化拷贝）。"""

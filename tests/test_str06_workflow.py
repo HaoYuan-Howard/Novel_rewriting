@@ -100,13 +100,11 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                                   'basis': [{'segment': 'e01_01',
                                              'quote': '云娘提出约定'}]}])]},
         'names': {
-            'protocol_version': 'stage2-names-v5', 'resolutions': [],
+            'protocol_version': 'stage2-names-v6',
             'families': {'fam_yun': {'literal': '云', 'forms': []}},
             'people': {
-                'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
-                           'surface_forms': {'夫君': None}},
-                'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': [],
-                        'surface_forms': {'云娘': '{family}{given}'}}},
+                'fu_jun': {'family_id': None, 'given': None, 'aliases': []},
+                'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': []}},
         },
         'associate': {'protocol_version': 'stage2-associate-v3',
                       'same_proposition': [], 'same_state_dimension': [],
@@ -400,13 +398,11 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
     wires = {
         'book': book, 'ch01': ch01,
         'names': {
-            'protocol_version': 'stage2-names-v5', 'resolutions': [],
+            'protocol_version': 'stage2-names-v6',
             'families': {'fam_yun': {'literal': '云', 'forms': []}},
             'people': {
-                'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
-                           'surface_forms': {'夫君': None}},
-                'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': [],
-                        'surface_forms': {'云娘': '{family}{given}'}}}},
+                'fu_jun': {'family_id': None, 'given': None, 'aliases': []},
+                'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': []}}},
         'associate': {'protocol_version': 'stage2-associate-v3',
                       'same_proposition': [], 'same_state_dimension': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],

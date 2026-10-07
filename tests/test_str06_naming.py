@@ -82,6 +82,9 @@ def _chars(**people_over) -> CharactersArtifactV5:
             'people': people}})
 
 
+from tests.str06_facilities import names_v6_wire
+
+
 def _surface(name: str) -> dict:
     return {'surface': name, 'from_chapter': 1, 'until_chapter': None,
             'source_refs': ['e01_01']}
@@ -96,7 +99,7 @@ def _naming_wire(entries) -> dict:
 def test_name_structure_compile_green_and_refusals():
     core = _chars().core_view()
     structure = _chars().name_structure
-    wire = {'protocol_version': 'stage2-names-v5', **structure.model_dump(mode='json')}
+    wire = names_v6_wire(structure.model_dump(mode='json'))
     compiled, errors = compile_name_structure(wire, core, SRC)
     assert compiled is not None and not errors, errors
 
@@ -115,22 +118,39 @@ def test_name_structure_compile_green_and_refusals():
     _, errors = compile_name_structure(bad, core, SRC)
     assert any('缺少人物条目' in e for e in errors)
 
-    # 模板渲染等式：构词与 surface 对不上即拒
+    # 模板渲染等式：form_overrides 的构词与 surface 对不上即拒（CS-S 1c：
+    # 派生模板按构造满足等式，例外 override 的等式在构造期复检）。
     bad = {**wire, 'families': wire['families'], 'people': {
         **wire['people'],
         'chen_yan': {**wire['people']['chen_yan'],
-                     'surface_forms': {'陈砚': '{given}', '砚哥': '{given}哥'}}}}
+                     'form_overrides': {'陈砚': '{given}'}}}}
     _, errors = compile_name_structure(bad, core, SRC)
     assert any('渲染不一致' in e for e in errors)
 
-    # 纯称谓含本人姓名字面 → 防漏标拒绝
+    # 纯称谓含本人姓名字面 → 防漏标拒绝（override 写 null 掩盖不了部件包含）
     bad = {**wire, 'families': wire['families'], 'people': {
         **wire['people'],
-        'fu_ren': {**wire['people']['fu_ren'],
-                   'family_id': 'fam_chen',
-                   'surface_forms': {'夫人': None, '陈夫人': None}}}}
+        'fu_ren': {'family_id': 'fam_chen', 'given': None, 'aliases': [],
+                   'form_overrides': {'陈夫人': None}}}}
+    from contracts.schema.source import CharactersCore
+    core_with_surface = CharactersCore.model_validate({
+        'characters': {**core.model_dump()['characters'],
+                       'fu_ren': {'canonical': '夫人', 'surfaces': [
+                           {'surface': '夫人', 'from_chapter': 1,
+                            'until_chapter': None, 'source_refs': ['e01_01']},
+                           {'surface': '陈夫人', 'from_chapter': 1,
+                            'until_chapter': None, 'source_refs': ['e01_01']}]}},
+        'initial_state': []})
+    _, errors = compile_name_structure(bad, core_with_surface, SRC)
+    assert any('防漏标' in e for e in errors), errors
+
+    # form_overrides 指向未登记 surface → 拒（A：不得私自加称谓面）
+    bad = {**wire, 'families': wire['families'], 'people': {
+        **wire['people'],
+        'fu_ren': {'family_id': None, 'given': None, 'aliases': [],
+                   'form_overrides': {'陈夫人': None}}}}
     _, errors = compile_name_structure(bad, core, SRC)
-    assert any('防漏标' in e for e in errors)
+    assert any('form_overrides 指向未登记 surface' in e for e in errors), errors
 
     # 字面必须在源文中出现
     bad = {**wire, 'families': {**wire['families'],
@@ -145,7 +165,7 @@ def test_family_redundant_id_normalized_or_mismatch_rejected():
     不一致时报错（wire 白名单不静默）。"""
     core = _chars().core_view()
     structure = _chars().name_structure
-    wire = {'protocol_version': 'stage2-names-v5', **structure.model_dump(mode='json')}
+    wire = names_v6_wire(structure.model_dump(mode='json'))
     wire['families']['fam_chen']['family_id'] = 'fam_chen'  # 冗余但一致
     compiled, errors = compile_name_structure(wire, core, SRC)
     assert compiled is not None and not errors, errors
@@ -164,7 +184,7 @@ def test_surname_probe_reports_and_never_blocks():
     assert multi and all(f.strict for f in multi)                  # 复姓：逐处严格
     # 探针不阻断：同一 structure 照常编译
     compiled, errors = compile_name_structure(
-        {'protocol_version': 'stage2-names-v5', **structure.model_dump(mode='json')}, core, SRC)
+        names_v6_wire(structure.model_dump(mode='json')), core, SRC)
     assert compiled is not None and not errors
 
 

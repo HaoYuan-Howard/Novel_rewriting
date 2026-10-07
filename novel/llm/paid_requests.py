@@ -145,6 +145,9 @@ _NODE_PREFIX = 'str06.'
 _RUNNER_OWNER_ALIASES: Final[dict[str, str]] = {
     'design': 'body_design',
     'hook_writer': 'hook',
+    # CS-S 1c：names 节点内的变体窄调用 owner——归属 str06.stage2.names
+    # （不增节点，T-3）；owner 字符串进请求身份，两个 owner 的请求互不混用。
+    'name_variants': 'names',
 }
 
 

@@ -96,10 +96,12 @@ from novel.stages.stage2 import (
     compile_associate_observation, associate_observation_prompt,
     associate_patch_locate,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
+    compile_name_variants, name_variant_candidates, name_variants_prompt,
     compile_source_truth, project_association_space,
     first_appearance_anchors, first_appearance_issues, NAMES_INPUT_VERSION,
     names_evidence_view, normalize_name_observations, validate_name_resolutions,
 )
+from contracts.schema.source import SourceNameResolution
 from novel.stages.owner_revision import (
     MechanicalDefectStop, OwnerRevisionRequired, OwnerRevisionStop,
     discover_owner_issues, open_issue_record, owner_product_digest,
@@ -448,12 +450,14 @@ def run_chapters(ctx: ChainContext) -> dict:
 # ─── stage2 names ────────────────────────────────────────────────────────────
 
 def run_names(ctx: ChainContext) -> dict:
-    """`str06.stage2.names`：源名称结构观察（引擎不变，D9 只重挂输入）。
+    """`str06.stage2.names`：源名称结构观察＋条件变体窄调用（CS-S 1c）。
 
-    输入改挂书级观察（`stage2/observations/book.json` 的人物表投影）＋完整
-    MainText 与 hook_copy 的逐段证据；不再把同一正文另发一遍。名称结构 wire
-    落 `stage2/observations/names.json`。
-    Characters 的合并发布归 compile（S2-5 唯一 writer），本节点不再写
+    结构答案（wire v6）只登记部件（姓／名／化名／歧义例外）；构词模板由
+    compiler 派生（`derive_surface_forms`）。随后代码生成变体候选
+    （`name_variant_candidates`——无候选＝零调用，S2-10 的 B）：有候选才发
+    节点内窄调用 `name_variants`（wire `stage2-name-variants-v1`，逐条
+    verdict），判定合入 structure.resolutions（not_name 只作完整性证明）。
+    Characters 的合并发布归 compile（S2-5 唯一 writer），本节点不写
     characters.json。
     """
     repository = ctx.repository
@@ -481,11 +485,48 @@ def run_names(ctx: ChainContext) -> dict:
     structure, errors = compile_name_structure(names_wire, core, full, evidence=evidence)
     if errors:
         raise ValueError(errors)
+    resolutions: tuple = ()
+    # B：候选由代码给出——有候选才发窄调用（同节点第二 ask，owner 别名归
+    # str06.stage2.names，请求身份含 owner 字符串，与结构答案互不混用）。
+    candidates = name_variant_candidates(structure, core, evidence)
+    if candidates:
+        def _validate_variants(w):
+            derived, located = compile_name_variants(
+                w, candidates, evidence=evidence, characters=core)
+            return [message for _path, message in located]
+
+        def _locate_variants(w, errs):
+            derived, located = compile_name_variants(
+                w, candidates, evidence=evidence, characters=core)
+            if not located or any(path is None for path, _message in located):
+                return None
+            if len(errs) != len(located) or sorted(errs) != sorted(
+                    message for _path, message in located):
+                return None
+            grouped: dict[tuple, list] = {}
+            for path, message in located:
+                grouped.setdefault(path, []).append(message)
+            return list(grouped.items())
+
+        variants_wire, _variants_ref = ctx.ask(
+            'name_variants', name_variants_prompt(candidates, evidence),
+            _validate_variants, patch=_locate_variants)
+        derived, located = compile_name_variants(
+            variants_wire, candidates, evidence=evidence, characters=core)
+        assert derived is not None and not located, located
+        resolutions = tuple(
+            SourceNameResolution.model_validate(item) for item in derived)
+        structure = structure.model_copy(update={'resolutions': resolutions})
+        validation = validate_name_resolutions(structure, core, evidence=evidence)
+        if validation:
+            raise MechanicalDefectStop('变体判定不闭合', node='str06.stage2.names',
+                                       issues=tuple(validation))
     observation = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL,
                                    structure=structure)
     repository.write('stage2/observations/names.json', observation,
                      owners=('names',), refs=(names_ref,))
-    return {'name_structure_people': len(structure.people)}
+    return {'name_structure_people': len(structure.people),
+            'name_variant_candidates': len(candidates)}
 
 
 # ─── stage2 associate／compile（B2 五节点：关联与双真源发布，D8/D9） ─────────
