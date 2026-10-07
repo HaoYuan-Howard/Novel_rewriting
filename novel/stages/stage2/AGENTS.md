@@ -39,6 +39,9 @@ Canonical = truth → Projection = expose → Validator = enforce。
 | S2-5 | `str06.stage2.compile` 是 Characters（`stage2/characters/characters.json`）与 Blueprint（`stage2/blueprints/chapter_blueprints.json`）两份真源的**唯一 writer**（D9）：解析证据、生成 ID、执行关联后以同一提交记录发布；存在未决项时拒绝发布并按 item 报告（D8），恢复走 owner patch 或 associate 定向修订。派生输入 `stage2/compiled/book_extraction.json` 与逐章输入快照已退役（D3/D9），Stage4 一律改读 canonical（人物 core 由 Characters 投影）。下游 owner 的单节点输入从盘面闭合，不靠内存传递。 |
 | S2-6 | Stage2 只产出 artifact、projection 与机械证明。是否进入下一节点由 orchestrator 决定；producer／compile 不得顺手启动下游节点。 |
 | S2-7 | `str06.stage2.associate` 只建立同一性与引用（D8）：输入是 compiler 投影的**已给句柄闭集及最小文本**，输出只选已给句柄；缺项、歧义、冲突保持未决——不默认合并，也不默认不同；不移动事实成立、角色知情或读者揭示时点。 |
+| S2-8 | Book／Chapters／Names／Associate 均为中间观察或解析产物，不得成为 Characters／Blueprints 之外的第三套 canonical story state。Book 的 facts／address／mechanisms 是后续抽取的共享词表：由 compile 分流进 canonical（初始即成立→Characters；随剧情产生或被知晓→Blueprint 拍内转移；静态世界约束→Blueprint）后不再作独立真源（S2-1／S2-5 补「词表不是真源」）。 |
+| S2-9 | （GOAL）正常路径中 Associate 不重新理解整章或整书；只消费 compile 无法确定性闭合的 unresolved candidates，做条目级窄解析；候选由代码给出，无候选＝零调用。过渡例外（现役整书投影＋`cross_chapter_cause`／`scene_continuation`）的删除条件登记在 `docs/REQUIREMENTS.md` 兼容层表。 |
+| S2-10 | Names＝词面解析，人物同一性归 Book：names 不得增删或拆合人物；归一只按显式 `same`＋证据段内局部替换，不全局替换、不模糊匹配、不猜笔误；变体候选由代码给出，未判定者保持 `unresolved` 并阻断发布；构词模板由 compiler 派生。 |
 
 章内同一悬念句柄的open／close各最多一次，本地close不得早于本地open（拍序及
 同拍条目序）；没有本地open的close仍走跨章配对。接受与下游预检复用只读判据；存量

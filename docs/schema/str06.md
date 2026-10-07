@@ -303,6 +303,13 @@ Resolver
 R1 升 rc9、H4 升 rc17）；associate／compile
 的引擎与 Stage4 改读 canonical 已随 B2 第三步闭合。
 
+**CS-S 观察面收敛路线（2026-10-07）**：Stage2 观察面按 Phase 收敛——wire v8
+（`start`／`on_stage`、区间代码派生）→ L1／L2 死字段清除（rc18）→ names A＋B＋C
+（候选先行的条件窄调用＋构词模板 compiler 派生）→ facts＋knowledge transitions＋
+associate 条目级窄 resolver（rc19）→ closed change keys＋拍级 access＋reader 派生。
+观察层是抽取／消歧／编译输入，不是第三套 canonical（S2-8～10 与批次进度见
+`docs/REQUIREMENTS.md` 的 CS-S 节；裁决见 `docs/DECISIONS.md` 2026-10-07 行）。
+
 ## Stage4：把章依赖编译完整（目标）
 
 **落地状态（2026-09-27，B3 前半＋后半，rc7）**：四协议独立版化与 Design 瘦身已落地

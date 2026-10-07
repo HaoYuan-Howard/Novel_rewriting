@@ -56,11 +56,32 @@ Golden_Set_v3.0 三本 yaml 的成书对比评估金标复认（2026-10-05 用�
 - **token 量级表**：新量级由账与补证逐节点重建（旧 B0／F5e／F9 量级仅作诊断参照，非现役报价，见 `e84a169b` 历史表）；
   异常先回查输入和协议；JSON 字符下降只证明 wire 瘦身，未证明整书费用下降；已退役 bind 不再作为预算项。
 
+### CS-S · Stage2 观察面收敛（2026-10-07 立项）
+
+背景：当日跑书产物审阅暴露四类问题——字段长尾与死字段、区间与证据错位靠人工 owner patch
+收口、names 变体字面靠模型通读全书发现、`initial_state.knowledge` 含义含混。路线＝把观察面
+收敛到「观察、判断、消歧、编译输入」，不是第三套故事事实（S2-8）。**验收方式（用户同日
+指令）**：不执行原方案的度量装置与付费 A/B 臂（0b／0c／1d 不做）；1a–1c、Phase 2、Phase 3
+完成后由用户手动经 CLI 逐节点跑书验收，自行判断首答通过率、token 消耗与产物质量。
+工程验证全程零付费（fake transport＋免费测试）；任何付费跑书由用户自跑，不走本路线预算。
+
+| 批 | 内容 | 状态 |
+|---|---|---|
+| 1a | book／chapters wire v8：`src`→`start`（单段 id，区间由代码派生：本拍 start 到下一拍 start−1，末拍到章末）、`who`→`on_stage`、SlimEffect 删 `scope`/`hidden`/`prop`；Book wire 删 `InitialFactWire.knowledge`；oracle＝今日两本 L1 观察以每拍首段作 start 重新派生区间 378/383 逐字一致 | 待做 |
+| 1b | L1／L2 死字段收口：`InitialFact.knowledge`、`ObsBeat.effects[].{disclosure,proposition,scope}`、`InitialStateAtom.knowledge`、`KnowledgeSpec`、`Disclosure` 删；book／chapters canonical v5、Characters V5／Blueprints V16、rc18；`R-2.14` 改读时按登记表派生；Stage4 grounding 知情面收口；死面守卫扩 `tests/test_retired_surface_scan.py` | 待做 |
+| 1c | names v6（A＋B＋C）：C＝wire 删 `surface_forms`，构词模板由 compiler 按 family／given／aliases 字面派生（`form_overrides` 例外）；B＝结构答案后代码生成变体候选（锚＝≥3 字含姓名部件 surface、同首字编辑距离 1），有候选才发新 owner `name_variants` 窄调用（`stage2-name-variants-v1`，逐条 same／unresolved／not_name）；A＝S2-10 反例守卫（增删拆合拒、same 仅证据段内局部替换、未决阻断发布） | 待做 |
+| Phase 2 | Book 增 `facts:[{statement, evidence_refs, known_at_start}]`（F 编号代码派发）＋chapters `know.fact` 引用；近义重复只报 candidate（确定性相似度），Associate 退为条目级窄 resolver（未决候选＋最小文本）；wire／L1 升版、rc19。默认裁决：D-3 不上 `address`（无消费者）；D-5 删 `public` 持有者 | 待做 |
+| Phase 3 | closed change keys（从 ≥3 本书真实键聚类定稿）＋`state→change`、`ev→event`；拍级 `access`（获知通道枚举按真实分布冻结）；reader 知情由 compile 派生、`know.who` 禁 reader；`same_state_dimension` 消失（associate 协议升版）；免费 oracle＝rc15 冻结根 25 条模型自写 reader 条目对比派生结果 | 待做 |
+
+批完成即撤行（验证分母与命令写提交说明）。Phase 4（devices A/B）未立项，不随本路线执行。
+
 ## 待删除的兼容层与删除条件
 
 过渡例外必须在此登记删除条件；新增兼容层先取得用户裁决。
 
 | 对象 | 有效义务与删除条件 |
+|---|---|
+| associate 整书投影（S2-9 过渡例外） | 现役 associate 仍整书投影并生产 `cross_chapter_cause`／`scene_continuation`。删除条件＝CS-S Phase 2 落地：输入面改为「代码给出的未决候选＋最小文本」（近义命题对并入 facts 候选；悬念配对候选＝跨章 open×close；`cross_chapter_cause` 按 D-2 A 保留为独立窄任务——候选＝loop 配对＋fact 流给出的拍对，模型只选 kind 或否决；续场候选按相邻章 seam 投影）；无候选＝零调用。落地并验证后删除本行 |
 |---|---|
 | rc12／rc13 五类产物 adapter | `novel/store.py::_upgrade_rc12_payload` 只迁移白名单无损信息（rc17 起 brief／writer_book_ir 的 rc12／rc13 载荷迁移目标直接钉 rc17；盘上 rc14～rc16 载荷不在白名单内，随模型字面量按契约表漂移拒读——`ChapterIR.display_prefix` 语义已变，不能当缺省字段读入；旧根续跑同样按候选契约表拒收）；旧 Brief 缺认知模式免费重放 Preserve，旧 Design 缺 confirms 走显式 owner patch。存量全部重建或退役后删除此 adapter 及 Str06Repository.read_graph_hook 的旧组件迁移，禁止无限新增版本 |
 | OwnerIssue v1／v2 读兼容 | v3 显式 dispatch_pending、指纹历史与更正记录；只经 `contracts/schema/workflow.py::owner_issue_record_of_payload` 集中解码；所有存量 v1／v2 根只读归档／不再续跑后删除。旧错误路由账的更正按 RC-15 显式恢复，不重置轮数 |
