@@ -162,9 +162,8 @@ def test_expand_defaults_addresses_and_intervals():
     for eff in (char_eff, rel_eff, world_eff):
         assert eff['op'] == 'set'
         assert eff['modality'] == 'actual'
-        assert eff['scope'] == 'book'
-        assert eff['disclosure'] == {'visibility': 'on_page', 'known_by': []}
-        assert eff['proposition'] is None
+        # CS-S 1b：scope／disclosure／proposition 不再进 canonical。
+        assert set(eff) == {'target', 'key', 'op', 'value', 'modality', 'basis'}
 
 
 def test_scene_location_is_beat_metadata_not_a_state_effect():
@@ -180,8 +179,6 @@ def test_scene_location_is_beat_metadata_not_a_state_effect():
     assert scene == {
         'target': {'kind': 'world', 'char_id': None, 'subject': None, 'object': None},
         'key': 'scene_location', 'op': 'set', 'modality': 'actual', 'value': '婚房',
-        'scope': 'scene', 'disclosure': {'visibility': 'on_page', 'known_by': []},
-        'proposition': None,
         'basis': [{'segment': 'e01_01', 'quote': None},
                   {'segment': 'e01_02', 'quote': None},
                   {'segment': 'e01_03', 'quote': None}],
@@ -198,17 +195,19 @@ def test_scene_location_is_beat_metadata_not_a_state_effect():
     assert '拍级字段' in issues[0][1]
 
 
-def test_registered_scope_still_derives_from_table_for_state_keys():
-    """表外不写 scope 的规则不变：登记键的作用域由表固定（本例 body_* → book），
-    模型不写、表外键一律 book（v8 删 scope 后无第二来源）。"""
+def test_registered_keys_compile_with_derived_scope():
+    """登记键照常编译：作用域读时按表派生（fold 侧 REGISTERED_STATE_KEYS），
+    canonical 效应不再携带 scope 字段。"""
     wire = _slim_wire()
     wire['beats'][0]['state'][0] = {
         'at': 'yun_niang', 'key': 'body_head_covering', 'val': '头套',
         'evidence_refs': ['e01_01'],
     }
-    rc12, issues = expand_chapter_wire(wire, chapter=1, sequence=SEQUENCE)
-    assert issues == []
-    assert rc12['beats'][0]['effects'][0]['scope'] == 'book'
+    observation, errors = compile_chapter_observation(
+        wire, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
+    assert errors == [] and observation is not None
+    assert set(observation.beats[0].effects[0].model_dump()) == {
+        'target', 'key', 'op', 'value', 'modality', 'basis'}
 
 
 def test_wire_rejects_dead_fields_scope_hidden_prop():
@@ -427,9 +426,7 @@ def test_round_trip_rich_observation():
                     'target': {'kind': 'character', 'char_id': 'lu_fujun',
                                'subject': None, 'object': None},
                     'key': 'body_condition', 'op': 'set', 'modality': 'actual',
-                    'value': '伤了根本', 'scope': 'book',
-                    'disclosure': {'visibility': 'on_page', 'known_by': []},
-                    'proposition': None,
+                    'value': '伤了根本',
                     'basis': [{'segment': 'e01_01', 'quote': '新婚夜,夫君坦白：幼时落水,伤了根本,不能生,也不能行房。'}],
                 }],
                 'cognition': [{
@@ -448,18 +445,14 @@ def test_round_trip_rich_observation():
                     {'target': {'kind': 'world', 'char_id': None,
                                 'subject': None, 'object': None},
                      'key': 'scene_location', 'op': 'set', 'modality': 'actual',
-                     'value': '婚房', 'scope': 'scene',
-                     'disclosure': {'visibility': 'on_page', 'known_by': []},
-                     'proposition': None,
+                     'value': '婚房',
                      'basis': [{'segment': 'e01_03', 'quote': '芸娘落泪。'},
                                {'segment': 'e01_04',
                                 'quote': '夫君提出向表弟借种,一家三口过日子。'}]},
                     {'target': {'kind': 'relation', 'char_id': None,
                                 'subject': 'lu_fujun', 'object': 'pei_shuyuan'},
                      'key': 'trust', 'op': 'unset', 'modality': 'expected',
-                     'value': None, 'scope': 'book',
-                     'disclosure': {'visibility': 'on_page', 'known_by': []},
-                     'proposition': None,
+                     'value': None,
                      'basis': [{'segment': 'e01_04', 'quote': '夫君提出向表弟借种,一家三口过日子。'}],
                      },
                 ],

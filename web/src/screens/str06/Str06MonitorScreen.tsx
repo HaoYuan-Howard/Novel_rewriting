@@ -321,8 +321,6 @@ function BlueprintPane({ blueprint }: { blueprint: NonNullable<Monitor['blueprin
                           {String((eff as Record<string, unknown>).op)}
                           {' '}
                           {String((eff as Record<string, unknown>).value ?? '')}
-                          {((eff as Record<string, unknown>).disclosure as Record<string, unknown> | undefined)?.visibility === 'concealed'
-                            ? '（隐蔽）' : ''}
                         </span>
                       ))}
                     </span>

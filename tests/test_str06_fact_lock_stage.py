@@ -31,11 +31,11 @@ def _wires(*, marked: bool = True, unknown: bool = False) -> dict:
     wires = deepcopy(_full_chain_wires())
     wires['ch01']['beats'][0]['effects'] = (
         *wires['ch01']['beats'][0]['effects'],
+        # CS-S 1b：effect 无 scope／proposition／disclosure——时态锁由
+        # modality 派生（expected／unknown 本就独立于命题锚）。
         {'target': {'kind': 'world'}, 'key': 'return_time',
          'op': 'unknown' if unknown else 'set', 'value': None if unknown else '约半月',
-         'scope': 'book', 'modality': 'actual' if unknown else 'expected',
-         'proposition': {'ref': 'p_return', 'statement': '夫君约半月后归家'},
-         'disclosure': {'visibility': 'on_page'},
+         'modality': 'actual' if unknown else 'expected',
          'basis': ({'segment': 'e01_01', 'quote': '苏芸娘嫁入陆家'},)})
     wires['preserve']['obligations'].append({
         'kind': 'event_core', 'statement': '夫君归期未知' if unknown else '夫君约定归期（预计，尚未发生）',
@@ -80,7 +80,7 @@ def test_body_design_publishes_binding_with_lock_mapping_and_no_kf_state_key(tmp
     repo = ctx.repository
     body = repo.read_model('stage4/design/body_design.json')
     binding = repo.read_model('stage4/grounding/semantic_binding.json')
-    assert binding.contract_version == 'str06-rc17'
+    assert binding.contract_version == 'str06-rc18'
     [mapping] = binding.fact_bindings
     assert (mapping.kf_id, mapping.beat_ref) == (KF_PLAN, 'sc01#b03')
     assert (mapping.address.domain.value, mapping.address.key) == ('world', 'return_time')

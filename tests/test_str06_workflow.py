@@ -32,7 +32,7 @@ from tests.str06_expression_inputs import (
     sample_book_expression, sample_design_expression,
 )
 
-PV = 'stage2-chapters-v4'   # R10a a1：章观察独立协议字面量（names 无字面量面）
+PV = 'stage2-chapters-v5'   # R10a a1：章观察独立协议字面量（names 无字面量面）
 
 
 def _design_wire_v7():
@@ -72,7 +72,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v4', 'characters': {
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v5', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
@@ -80,7 +80,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         'initial_state': [
             {'target': {'kind': 'character', 'char_id': 'fu_jun'},
              'key': 'birthright', 'value': '养子', 'persistence': 'stable',
-             'knowledge': None, 'source_refs': ['e01_01'],
+             'source_refs': ['e01_01'],
              'basis': [{'segment': 'e01_01', 'quote': '云娘提出约定'}]}],
         'world_constraints': []}
     wires = {
@@ -91,8 +91,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                       effects=[{'target': {'kind': 'relation', 'subject': 'fu_jun',
                                            'object': 'yun'},
                                 'key': 'covenant', 'op': 'set', 'value': '成立',
-                                'scope': 'book', 'modality': 'actual',
-                                'disclosure': {'visibility': 'on_page'},
+                                'modality': 'actual',
                                 'basis': [{'segment': 'e01_01',
                                            'quote': '云娘提出约定'}]}],
                       cognition=[{'proposition': {'ref': 'p_known',
@@ -263,7 +262,7 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
-                {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v4', 'characters': {
+                {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v5', 'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
@@ -342,7 +341,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v4', 'characters': {
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v5', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
@@ -350,18 +349,17 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         'initial_state': [], 'world_constraints': []}
     ch01 = {'protocol_version': PV, 'beats': [
         _obs_beat('夫君佯称离开，实则藏身床底', ('e01_01',), participants=('fu_jun',),
+                  # CS-S 1b：concealed／effect 命题删——藏身是普通 scene_location
+                  # 效应；读者确认链走 cognition（b01_02.c1 的 reader learns）。
                   effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                             'key': 'scene_location', 'op': 'set', 'value': '床底',
-                            'scope': 'scene', 'modality': 'actual',
-                            'disclosure': {'visibility': 'concealed',
-                                           'known_by': ['fu_jun']},
-                            'proposition': {'ref': 'p_hide',
-                                            'statement': '夫君藏身床底'},
+                            'modality': 'actual',
                             'basis': [{'segment': 'e01_01',
                                        'quote': '夫君与云娘一处住着'}]}]),
         _obs_beat('床板响动，读者与云娘确认床底有人', ('e01_01',),
                   participants=('yun', 'fu_jun'), scene_boundary='continue',
-                  cognition=[{'proposition': {'ref': 'p_hide'},
+                  cognition=[{'proposition': {'ref': 'p_hide',
+                                              'statement': '夫君藏身床底'},
                               'holder': 'reader', 'mode': 'learns',
                               'basis': [{'segment': 'e01_01',
                                          'quote': '夫君与云娘一处住着'}]}])]}
@@ -440,9 +438,9 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         ask_body=lambda owner, prompt: (_ for _ in ()).throw(AssertionError('不跑正文 owner')),
         budget=800)
     assert report['guard_errors'] == []
-    # 源侧 fold：读者已在 b01_02 确认 ⇒ 未揭示 concealed 报告为空
+    # 源侧 fold：读者已在 b01_02 确认（CS-S 1b：concealed 读数删，确认由
+    # 认知转移承载）
     fold = repo.inspect('stage2/acceptance/fold.json')
-    assert fold['concealed_unrevealed'] == []
     assert fold['chapters']['1']['empty_transition_beats'] == 0
     # 写手 IR：确认前（s01）列出该事实；确认场（s02）标注确认拍
     writer_ir = repo.inspect('stage4/ir/writer_book_ir.json')

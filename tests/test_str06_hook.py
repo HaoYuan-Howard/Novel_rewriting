@@ -24,7 +24,7 @@ from contracts.schema.hook import (
     HookConstraints, HookDesign, HookPov, HookReceipt,
 )
 from contracts.schema.source import (
-    CharactersArtifactV4, NameStructure,
+    CharactersArtifactV5, NameStructure,
 )
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.hook_context import compile_hook_context
@@ -51,8 +51,8 @@ SRC = '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄�
 
 # ───────────────────────── fixture 构造器 ─────────────────────────
 
-def _characters() -> CharactersArtifactV4:
-    return CharactersArtifactV4.model_validate({
+def _characters() -> CharactersArtifactV5:
+    return CharactersArtifactV5.model_validate({
             'characters': {
                 'fu_jun': {'canonical': '夫君', 'surfaces': [
                     {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
@@ -747,7 +747,7 @@ def _full_chain_wires():
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
                                 for s in entry.surfaces]}
             for slug, entry in chars.characters.items()}),
-        'protocol_version': 'stage2-book-v4',
+        'protocol_version': 'stage2-book-v5',
         'characters': {
             slug: {'canonical': entry.canonical,
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
@@ -770,17 +770,16 @@ def _full_chain_wires():
          'keep_reason': None}]}
     return {
         'book': book,
-        'ch01': {'protocol_version': 'stage2-chapters-v4', 'beats': [
+        'ch01': {'protocol_version': 'stage2-chapters-v5', 'beats': [
             beat('苏芸娘嫁入陆家，夫君立下旧约。', ('e01_01',),
                  participants=('yun_niang', 'fu_jun'),
                  effects=({'target': {'kind': 'relation', 'subject': 'yun_niang',
                                       'object': 'fu_jun'},
                            'key': 'marital_status', 'op': 'set', 'value': '夫妻',
-                           'scope': 'book', 'modality': 'actual',
-                           'disclosure': {'visibility': 'on_page'},
+                           'modality': 'actual',
                            'basis': ({'segment': 'e01_01',
                                       'quote': '苏芸娘嫁入陆家'},)},))]},
-        'ch02': {'protocol_version': 'stage2-chapters-v4', 'beats': [
+        'ch02': {'protocol_version': 'stage2-chapters-v5', 'beats': [
             beat('夫君夜半离家，芸娘发现玉佩之秘。', ('e02_01',),
                  participants=('yun_niang', 'fu_jun'))]},
         'names': {'protocol_version': 'stage2-names-v5', **chars.name_structure.model_dump(mode='json')},

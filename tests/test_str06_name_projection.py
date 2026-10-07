@@ -65,7 +65,7 @@ def test_pure_appellations_and_ambiguous_literals_are_never_bound():
 
 def _ambiguous_appellation_characters():
     """同一字面既是甲的化名，也是乙的纯职称；两条登记都通过正式 schema。"""
-    from contracts.schema.source import CharactersArtifactV4
+    from contracts.schema.source import CharactersArtifactV5
     data = _characters().model_dump(mode='json')
     for char_id in ('fu_jun', 'yun_niang'):
         data['characters'][char_id]['surfaces'].append({
@@ -75,7 +75,7 @@ def _ambiguous_appellation_characters():
     person['aliases'].append({'alias_id': 'al_abbot', 'literal': '方丈'})
     person['surface_forms']['方丈'] = '{alias:al_abbot}'
     data['name_structure']['people']['yun_niang']['surface_forms']['方丈'] = None
-    return CharactersArtifactV4.model_validate(data)
+    return CharactersArtifactV5.model_validate(data)
 
 
 def test_name_bearing_surface_shared_with_a_pure_appellation_is_not_bound():

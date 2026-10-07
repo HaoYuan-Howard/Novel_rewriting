@@ -39,7 +39,7 @@ from contracts.schema.grounding import (
     BookConstraint, _lock_id,
 )
 from contracts.schema.source import (
-    BlueprintsArtifactV15, CharactersCore,
+    BlueprintsArtifactV16, CharactersCore,
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
 from novel.core.name_materials import (
@@ -93,7 +93,7 @@ def _render_target(target: Any) -> str:
 
 
 def _anchor_index(
-    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV16,
 ) -> dict[str, ObligationAnchor]:
     """投影句柄 → 类型化拷贝（compiler 拷贝，模型不复述；I-15/I-21）。
 
@@ -116,15 +116,13 @@ def _anchor_index(
         for beat in chapter_bp.beats:
             for n, effect in enumerate(beat.effects, 1):
                 handle = f'{beat.beat_id}.e{n}'
-                prop = effect.proposition
+                # CS-S 1b：effect 删 disclosure／proposition——锚点不再拷贝
+                # 可见性与命题（命题锚只在 cognition 上）。
                 index[handle] = ObligationAnchor(
                     handle=handle, source_kind='effect',
                     address=f'{_render_target(effect.target)}.{effect.key}',
                     value=effect.value, modality=effect.modality,
                     op=effect.op,
-                    visibility=effect.disclosure.visibility,
-                    proposition_ref=prop.ref if prop else None,
-                    proposition_statement=prop.statement if prop else None,
                     quotes=tuple(b.quote for b in effect.basis))
             for n, cognition in enumerate(beat.cognition, 1):
                 handle = f'{beat.beat_id}.c{n}'
@@ -144,7 +142,7 @@ def _anchor_index(
 
 def _derive_lineage(
     handles: tuple[str, ...], index: dict[str, ObligationAnchor],
-    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV16,
 ) -> SourceLineage:
     """义务 anchors → SourceLineage（I-15/I-21：compiler 派生，wire 不再输出）。
 
@@ -200,7 +198,7 @@ def _derive_lineage(
 
 
 def project_preserve_view(
-    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV16,
 ) -> str:
     """R10a a2：Preserve 的源证据投影（确定性渲染，取代 Blueprint JSON 倾倒）。
 
@@ -216,15 +214,11 @@ def project_preserve_view(
         lines.append('【书级初始事实（故事开始前成立）】')
         for atom in characters.initial_state:
             cited.update(atom.source_refs)
-            knowledge = ''
-            if atom.knowledge is not None:
-                known = list(atom.knowledge.known_by)
-                if atom.knowledge.reader_knows:
-                    known.append('reader')
-                if known:
-                    knowledge = f'；初始已知: {",".join(known)}'
+            # CS-S 1b：初始已知后缀删（initial_state.knowledge 已删——语义缺口
+            # 如实登记：Preserve 视图暂无「初始已知」面，Phase 2 由 facts
+            # known_at_start 补回）。
             lines.append(f'[{atom.state_id}] {_render_target(atom.target)}.'
-                         f'{atom.key} = {atom.value!r}（{atom.persistence}{knowledge}）')
+                         f'{atom.key} = {atom.value!r}（{atom.persistence}）')
             for basis in atom.basis:
                 lines.append(f'  依据 {basis.segment}：「{basis.quote}」')
     if blueprint.world_constraints:
@@ -274,14 +268,8 @@ def project_preserve_view(
 def _transfer_line(kind: str, transfer: Any) -> str:
     """直接投影正式转移；锚点摘要不含完整作用域，不能充当输入真相。"""
     if kind == 'e':
-        line = (f'事实 {_render_target(transfer.target)}.{transfer.key}'
-                f' {transfer.op} {transfer.value!r}（{transfer.modality}；'
-                f'{transfer.scope}；{transfer.disclosure.visibility}；'
-                f'已知 {",".join(transfer.disclosure.known_by) or "未声明"}')
-        if transfer.proposition:
-            p = transfer.proposition
-            line += f'；命题 {p.ref}' + (f'「{p.statement}」' if p.statement is not None else '（引用）')
-        return line + '）'
+        return (f'事实 {_render_target(transfer.target)}.{transfer.key}'
+                f' {transfer.op} {transfer.value!r}（{transfer.modality}）')
     if kind == 'c':
         p = transfer.proposition
         return (f'认知 {transfer.holder} {transfer.mode} 命题 {p.ref}'
@@ -362,7 +350,7 @@ def _preserve_shape_errors(wire: Any) -> list[str]:
 def assemble_preserve(
     wire: Any, *,
     policy_id: str, policy_version: int,
-    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV16,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
     """Preserve wire（stage4-preserve-v2）→ checkpoint。
@@ -616,7 +604,7 @@ def fact_lock_subjects(obligations: Iterable[SourceObligation]) -> dict[str, fro
 
 
 def _unanswered_loops(
-    blueprint: BlueprintsArtifactV15,
+    blueprint: BlueprintsArtifactV16,
 ) -> list[tuple[str, str]]:
     """canonical 里 open 而从未 close 的悬念（原文未回答锁的输入，§二.1）。
 
@@ -677,15 +665,14 @@ def _requires_released_surfaces(
 
 
 def _derive_brief_locks(
-    checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV15,
+    checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV16,
     characters: CharactersCore | None = None, structure=None,
 ) -> tuple[tuple[BriefProposition, ...], tuple[BriefKnowledgeLock, ...],
            tuple[BriefFactLock, ...], dict[str, dict[str, tuple]]]:
     """义务 anchors＋canonical loops → Brief 锁定项（a4 唯一派生点）。
 
-    · kp 命题登记：anchors 引用到的全部命题（effect 的 concealed 命题与
-      cognition 命题同注册——揭示链经同一命题 ref 闭合，D3/D5）；
-      asserts 认知转 `publicly_claimed_by`，不铸知情锁。
+    · kp 命题登记：anchors 引用到的全部命题（CS-S 1b 起 effect 不带命题锚，
+      命题面只在 cognition 上；asserts 认知转 `publicly_claimed_by`，不铸知情锁）。
     · 知情锁：cognition anchors 按唯一映射铸 {holder, kp, mode}；
       holder=public 跳过。
     · 事实锁：effect anchors——op=unknown → unknown_value（值未知，目标
@@ -710,13 +697,10 @@ def _derive_brief_locks(
             for window in entry.surfaces:
                 if window.source_refs:
                     first_appearance.setdefault(window.surface, window.source_refs[0])
+    # CS-S 1b：prop_segments 只收 cognition（effect 不再带命题锚）。
     prop_segments: dict[str, set[str]] = {}
     for chapter_bp in blueprint.chapters:
         for beat in chapter_bp.beats:
-            for effect in beat.effects:
-                if effect.proposition is not None and effect.proposition.ref:
-                    prop_segments.setdefault(effect.proposition.ref, set()).update(
-                        basis.segment for basis in effect.basis)
             for cognition in beat.cognition:
                 if cognition.proposition.ref:
                     prop_segments.setdefault(cognition.proposition.ref, set()).update(
@@ -761,15 +745,12 @@ def _derive_brief_locks(
                             'publicly_claimed_by': (*entry.publicly_claimed_by,
                                                     anchor.holder)})
             elif anchor.source_kind == 'effect':
-                kp = _register_proposition(anchor)
                 lock = _anchor_fact_lock(anchor)
                 if lock is not None:
                     facts[lock.kf_id] = lock
                     derived.append(lock.kf_id)
                     if obligation.must_preserve:
                         realize_locks.append(lock.kf_id)
-                if kp is not None:
-                    derived.append(kp)
         deduped = []
         for item in derived:
             if item not in deduped:
@@ -791,7 +772,7 @@ def _derive_brief_locks(
 
 def project_brief(
     checkpoint: PreserveCheckpoint, characters: CharactersCore,
-    blueprint: BlueprintsArtifactV15, structure=None,
+    blueprint: BlueprintsArtifactV16, structure=None,
 ) -> tuple[ReconstructionBrief, tuple[IdentityProjection, ...]]:
     """checkpoint → (Brief, IdentityProjection)。Design 的全部语义输入。
 
@@ -959,7 +940,7 @@ def _anchor_line(anchor: ObligationAnchor) -> str:
 
 def preserve_patch_slice(
     wire: dict[str, Any], characters: CharactersCore,
-    blueprint: BlueprintsArtifactV15, indices: Iterable[int],
+    blueprint: BlueprintsArtifactV16, indices: Iterable[int],
 ) -> dict[str, Any]:
     """Preserve 条目返修的依赖切片（RC-64）：目标义务的源原子与证据窗口。
 

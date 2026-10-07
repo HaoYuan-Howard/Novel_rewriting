@@ -46,7 +46,7 @@ from pydantic import ValidationError
 from contracts.schema.observation import (
     STAGE2_CHAPTERS_WIRE_PROTOCOL, ChapterObservation,
 )
-from contracts.schema.source import REGISTERED_STATE_KEYS, RETIRED_STATE_KEYS
+from contracts.schema.source import RETIRED_STATE_KEYS
 from novel.stages.common import CHAPTER_PROMPT, PRE_CHAPTER_RULE
 from novel.stages.stage2.resolver import EvidenceResolver, render_evidence_block
 from novel.stages.stage2.slim import (
@@ -150,33 +150,6 @@ def chapter_observation_prompt(*, chapter: int, book: Any, chapters: list[dict],
         pre_chapter=PRE_CHAPTER_RULE if chapter == 1 else '')
 
 
-def _normalize_registered_scopes(wire: Any, errors: list[str]) -> Any:
-    """登记键作用域按表绑定（`R-2.14`）：模型声明不符即归一化，不改写其余键。
-
-    在协议校验前施行的 compiler 归一（I-15：作用域是契约固定事实，不让模型
-    声明）；退役位置键在此拒识（指向分轴后的键）。在副本上操作，原 wire
-    不被修改（I-24）。
-    """
-    normalized = deepcopy(wire)
-    for raw in normalized.get('beats') or []:
-        if not isinstance(raw, dict):
-            continue
-        for eff in raw.get('effects') or []:
-            if not isinstance(eff, dict):
-                continue
-            key = eff.get('key')
-            if key in RETIRED_STATE_KEYS:
-                errors.append(
-                    f'位置键 {key} 已退役：当前位置用 scene_location（场景作用域）、'
-                    '长期居所用 residence（book 作用域）、身体状态各自一键，'
-                    '不得塞进同一个位置值')
-                continue
-            registered = REGISTERED_STATE_KEYS.get(key)
-            if registered is not None:
-                eff['scope'] = registered
-    return normalized
-
-
 def _chapter_handle_discipline(
         beats: list[Any],
         issues: list[tuple[tuple[str | int, ...] | None, str]],
@@ -272,7 +245,9 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
     的投影。
 
     `labels` 只是**词汇**不是判据：瘦 wire（CS-2）的路径与消息用 state／
-    know 命名（模型看得到、patch 找得到），检查项与顺序逐字不变。
+    know 命名（模型看得到、patch 找得到），检查项与顺序逐字不变。CS-S 1b：
+    退役位置键拒识从 `_normalize_registered_scopes` 迁到本视图（作用域归一
+    已删——作用域读时按登记表派生，R-2.14）。
     """
     eff_label, cog_label = labels
     issues: list[tuple[tuple[str | int, ...] | None, str]] = []
@@ -293,6 +268,13 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
             for index, transfer in enumerate(raw.get(kind) or (), 1):
                 if not isinstance(transfer, dict):
                     continue
+                if kind == 'effects' and transfer.get('key') in RETIRED_STATE_KEYS:
+                    issues.append((beat_path + (label, index - 1),
+                                   f'{where} {label}[{index}] 位置键 '
+                                   f'{transfer.get("key")} 已退役：'
+                                   '当前位置用 scene_location（场景作用域）、'
+                                   '长期居所用 residence（book 作用域）、'
+                                   '身体状态各自一键，不得塞进同一个位置值'))
                 for basis in transfer.get('basis') or ():
                     if not isinstance(basis, dict) or basis.get('segment') is None \
                             or basis.get('quote') is None:
@@ -455,15 +437,16 @@ def compile_chapter_observation(
         return None, ['chapter wire 必须是 JSON object']
     # basis 派生先于全部判定：validate 回调与正式 compile 走同一函数，
     # 两路结果逐字节一致（I-30 幂等）；条目定位（patch）复用同一视图。
+    # CS-S 1b：作用域归一步骤删（作用域读时按登记表派生，R-2.14）——退役
+    # 位置键拒识已在 `_chapter_issues` 内按条目报告。
     canonical, issues = _compile_view(wire, evidence_ids=evidence_ids, chapter=chapter,
                                       character_slugs=character_slugs)
     errors: list = [message for _path, message in issues]
     if canonical is None:
         return None, errors
-    normalized = _normalize_registered_scopes(canonical, errors)
     try:
         observation = ChapterObservation.model_validate(
-            _shape_view(normalized) if errors else normalized)
+            _shape_view(canonical) if errors else canonical)
     except ValidationError as exc:
         return None, errors + [f'章观察协议校验失败：{exc}']
     if errors:

@@ -70,16 +70,16 @@ def _book_wire(*, extra_characters: dict | None = None) -> dict:
             {'surface': '云娘', 'source_refs': ['e01_02']}]},
     }
     characters.update(extra_characters or {})
-    return {**sample_book_expression(characters), 'protocol_version': 'stage2-book-v4', 'characters': characters,
+    return {**sample_book_expression(characters), 'protocol_version': 'stage2-book-v5', 'characters': characters,
             'initial_state': [], 'world_constraints': []}
 
 
-def _hide_effect(*, known_by=('fu_jun',), ref: str = 'e01_01') -> dict:
+def _hide_effect(*, ref: str = 'e01_01') -> dict:
+    # CS-S 1b：concealed／effect 命题已删——藏身事实是普通 scene_location 效应，
+    # 命题 p_hide 的登记走 cognition（ch01 同拍 asserts／learns）。
     return {'target': {'kind': 'character', 'char_id': 'fu_jun'},
-            'key': 'scene_location', 'op': 'set', 'value': '床底', 'scope': 'scene',
+            'key': 'scene_location', 'op': 'set', 'value': '床底',
             'modality': 'actual',
-            'disclosure': {'visibility': 'concealed', 'known_by': list(known_by)},
-            'proposition': {'ref': 'p_hide', 'statement': '夫君藏身床底'},
             'basis': _basis(ref)}
 
 
@@ -87,7 +87,10 @@ def _chapter_wires() -> dict[str, dict]:
     """三章观察：ch1 建立 concealed p_hide＋悬念 q_id；ch3 跨章 close＋读者揭示。"""
     ch01 = {'protocol_version': CPV, 'beats': [
         _beat('夫君藏进床底', ('e01_01',), participants=('fu_jun',),
-              effects=[_hide_effect()]),
+              effects=[_hide_effect()],
+              cognition=[{'proposition': {'ref': 'p_hide', 'statement': '夫君藏身床底'},
+                          'holder': 'yun_niang', 'mode': 'suspects',
+                          'basis': _basis('e01_01')}]),
         _beat('床底是谁的悬念开场', ('e01_02',), scene_boundary='continue',
               loops=[{'ref': 'q_id', 'op': 'open', 'question': '床底的人是谁？'}]),
     ]}
@@ -102,8 +105,7 @@ def _chapter_wires() -> dict[str, dict]:
         _beat('床底的人现身', ('e03_01',), participants=('fu_jun',),
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                         'key': 'scene_location', 'op': 'set', 'value': '床沿',
-                        'scope': 'scene', 'modality': 'actual',
-                        'disclosure': {'visibility': 'on_page'},
+                        'modality': 'actual',
                         'basis': _basis('e03_01')}]),
         _beat('读者与云娘确认床底的人是夫君', ('e03_01',), scene_boundary='continue',
               participants=('yun_niang', 'fu_jun'),
@@ -326,7 +328,7 @@ def test_paired_normalized_identical_statements_merge_into_one_formal_id(tmp_pat
     repo, _ask, _report = _run_stage2(tmp_path, 'synonym', wires)
     bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
     ch1, ch2, ch3 = bp['chapters']
-    assert ch1['beats'][0]['effects'][0]['proposition']['ref'] == 'k01'
+    assert ch1['beats'][0]['cognition'][0]['proposition']['ref'] == 'k01'
     assert ch2['beats'][0]['cognition'][0]['proposition']['ref'] == 'k01', \
         '归一全等配对后引用同一正式 ID'
     assert ch3['beats'][1]['cognition'][0]['proposition']['ref'] == 'k01'
@@ -349,12 +351,10 @@ def test_paired_synonymous_statements_merge_without_moving_disclosure(tmp_path):
     assert wires == original, 'compiler 不改写输入观察'
     bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
     ch1, ch2, ch3 = bp['chapters']
-    props = (ch1['beats'][0]['effects'][0]['proposition'],
+    props = (ch1['beats'][0]['cognition'][0]['proposition'],
              ch2['beats'][0]['cognition'][0]['proposition'],
              ch3['beats'][1]['cognition'][0]['proposition'])
     assert props == ({'ref': 'k01', 'statement': '夫君藏身床底'},) * 3
-    assert ch1['beats'][0]['effects'][0]['disclosure'] == {
-        'visibility': 'concealed', 'known_by': ['fu_jun']}
     assert ch2['beats'][0]['cognition'][0]['holder'] == 'yun_niang'
     assert ch2['beats'][0]['cognition'][0]['mode'] == 'learns'
     assert ch2['beats'][0]['cognition'][0]['basis'] == _basis('e02_01')
@@ -471,11 +471,13 @@ def test_without_pairing_same_text_props_stay_separate(tmp_path):
     wires = _full_stage2_wires()
     wires['ch02'] = {'protocol_version': CPV, 'beats': [
         _beat('床底有人这件事再次被独立建立', ('e02_01',), participants=('yun_niang',),
-              effects=[_hide_effect(ref='e02_01')])]}  # 同 statement 文本、新本地句柄
+              cognition=[{'proposition': {'ref': 'p_hide2', 'statement': '夫君藏身床底'},
+                          'holder': 'yun_niang', 'mode': 'learns',
+                          'basis': _basis('e02_01')}])]}  # 同 statement 文本、新本地句柄
     repo, _ask, report = _run_stage2(tmp_path, 'no_pair', wires)
     assert report['undecided'] == 0
     bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
-    refs = [bp['chapters'][i]['beats'][0]['effects'][0]['proposition']['ref']
+    refs = [bp['chapters'][i]['beats'][0]['cognition'][0]['proposition']['ref']
             for i in (0, 1)]
     assert refs[0] != refs[1], '未配对的同名命题不合并，也不报未决'
 
@@ -486,12 +488,11 @@ def test_state_key_near_synonyms_unify_to_canonical_key(tmp_path):
     wires['book']['initial_state'] = [
         {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
          'key': 'trust', 'value': '低', 'persistence': 'mutable',
-         'knowledge': None, 'source_refs': ['e00_01'], 'basis': _basis('e00_01')}]
+         'source_refs': ['e00_01'], 'basis': _basis('e00_01')}]
     wires['ch02']['beats'][0]['effects'] = [{
         'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
-        'key': 'trust_level', 'op': 'set', 'value': '回升', 'scope': 'book',
-        'modality': 'actual',
-        'disclosure': {'visibility': 'on_page'}, 'basis': _basis('e02_01')}]
+        'key': 'trust_level', 'op': 'set', 'value': '回升',
+        'modality': 'actual', 'basis': _basis('e02_01')}]
     rel = {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'}
     wires['associate']['same_state_dimension'] = [
         {'left': _dim_handle(wires, rel, 'trust'),
@@ -503,7 +504,7 @@ def test_state_key_near_synonyms_unify_to_canonical_key(tmp_path):
     bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
     effect = bp['chapters'][1]['beats'][0]['effects'][0]
     assert effect['key'] == 'trust', '近义键归一到最早确立者的 canonical key'
-    assert effect['scope'] == 'book'
+    assert set(effect) == {'target', 'key', 'op', 'value', 'modality', 'basis'},         'CS-S 1b：效应不再携带 scope／disclosure／proposition'
 
 
 def test_cross_chapter_cause_lands_in_the_to_chapter(tmp_path):
@@ -573,24 +574,23 @@ def test_later_confirmation_does_not_rewrite_earlier_facts(tmp_path):
     wires['book']['initial_state'] = [
         {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
          'key': 'marital_status', 'value': '夫妻', 'persistence': 'stable',
-         'knowledge': None, 'source_refs': ['e00_01'], 'basis': _basis('e00_01')}]
+         'source_refs': ['e00_01'], 'basis': _basis('e00_01')}]
     repo, _ask, _report = _run_stage2(tmp_path, 'no_rewrite', wires)
     chars = repo.inspect('stage2/characters/characters.json')
     bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
     # 初态原样保留（stable，且不被后文改写）
     assert chars['initial_state'][0]['value'] == '夫妻'
     assert chars['initial_state'][0]['persistence'] == 'stable'
-    # ch1 的 concealed 建立拍仍是 b01_01；ch3 的读者确认仍记在 ch3 自己的拍
+    # ch3 的读者确认仍记在 ch3 自己的拍（CS-S 1b：concealed 读数已删，
+    # 揭示时点由认知转移承载）
     fold = repo.inspect('stage2/acceptance/fold.json')
-    assert fold['concealed_unrevealed'] == [], '配对后读者已在 ch3 确认'
     knowledge = [line for line in fold['snapshots']['3'] if line.startswith('prop')]
     assert any('reader=learns(b03_02)' in line for line in knowledge), knowledge
     assert any('yun_niang=learns(b02_01)' in line for line in knowledge), \
         'ch2 的知情记录保留在自己的拍上'
-    # 建立拍未被移动：ch1 effect 的 proposition 仍锚在 b01_01
+    # 建立拍未被移动：ch1 的怀疑记录仍锚在 b01_01
     assert bp['chapters'][0]['beats'][0]['beat_id'] == 'b01_01'
-    assert bp['chapters'][0]['beats'][0]['effects'][0]['disclosure'] == {
-        'visibility': 'concealed', 'known_by': ['fu_jun']}
+    assert bp['chapters'][0]['beats'][0]['cognition'][0]['proposition']['ref'] == 'k01'
 
 
 # ───────────────────────── compile：未决项与机械缺陷（反例） ─────────────────────────
@@ -648,8 +648,9 @@ def test_time_inverted_pairing_is_undecided(tmp_path):
     wires['ch01']['beats'][1]['cognition'] = [
         {'proposition': {'ref': 'p_fwd'}, 'holder': 'yun_niang', 'mode': 'suspects',
          'basis': _basis('e01_02')}]
-    wires['ch03']['beats'][0]['effects'][0]['proposition'] = {
-        'ref': 'p_late', 'statement': '夫君现身床沿'}
+    wires['ch03']['beats'][0]['cognition'] = [
+        {'proposition': {'ref': 'p_late', 'statement': '夫君现身床沿'},
+         'holder': 'yun_niang', 'mode': 'learns', 'basis': _basis('e03_01')}]
     wires['associate']['same_proposition'] = [
         {'left': 'ch01.p_hide', 'right': 'ch03.p_hide'},
         {'left': 'ch01.p_fwd', 'right': 'ch03.p_late'}]
@@ -834,11 +835,12 @@ def test_scene_continuation_layout_violations_are_undecided(tmp_path):
 
 
 def test_wrong_nesting_and_missing_evidence_rejected_at_owners():
-    """错误嵌套（proposition 误置 disclosure）在章观察协议层拒；book 观察拒悬空证据。"""
+    """死字段嵌回（effect 携带已删的 disclosure）在章观察协议层拒；book 观察拒悬空证据。"""
     from novel.stages.stage2 import compile_chapter_observation
     wire = _chapter_wires()['ch01']
-    wire['beats'][0]['effects'][0]['disclosure']['proposition'] = {
-        'ref': 'p_hide', 'statement': '夫君藏身床底'}
+    wire['beats'][0]['effects'][0]['disclosure'] = {
+        'visibility': 'on_page', 'proposition': {
+            'ref': 'p_hide', 'statement': '夫君藏身床底'}}
     _obs, errors = compile_chapter_observation(wire, evidence_ids=_chapter_evidence(1))
     assert any('协议校验失败' in e for e in errors), errors
     from novel.stages.stage2 import compile_book_observation
@@ -878,16 +880,15 @@ REL_YF = {'kind': 'relation', 'subject': 'yun_niang', 'object': 'fu_jun'}
 WORLD = {'kind': 'world'}
 
 
-def _plain_effect(target: dict, key: str, value, scope: str = 'book',
+def _plain_effect(target: dict, key: str, value,
                   ref: str = 'e01_01') -> dict:
     return {'target': dict(target), 'key': key, 'op': 'set', 'value': value,
-            'scope': scope, 'modality': 'actual',
-            'disclosure': {'visibility': 'on_page'}, 'basis': _basis(ref)}
+            'modality': 'actual', 'basis': _basis(ref)}
 
 
 def _initial_atom(target: dict, key: str, value) -> dict:
     return {'target': dict(target), 'key': key, 'value': value,
-            'persistence': 'mutable', 'knowledge': None, 'source_refs': ['e00_01'],
+            'persistence': 'mutable', 'source_refs': ['e00_01'],
             'basis': _basis('e00_01')}
 
 

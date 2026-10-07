@@ -130,7 +130,13 @@ from novel.llm.paid_requests import candidate_contract_identity
 # stage2-associate-v3（维度句柄，RC-65）；六份产物换身份（brief／semantic_binding／
 # writer_book_ir／hook／章回执／associate 观察）。旧 rc16 根（含 csf4_restore_20261005）
 # 按契约表漂移只读拒收；原因见 REQUIREMENTS CS-H。
-FROZEN_CONTRACT_IDENTITY = 'c16785377e0fc8144b1e73274dd913219e9f6a286a52ce9523084ddacb9735e8'
+# rc18（2026-10-07 CS-S 1b，用户批准的观察面收敛批）：Stage2 死字段收口——
+# 观察 canonical book／chapters 升 v5（InitialFact.knowledge 与 effect 的
+# disclosure／proposition／scope 删）、Blueprints v16／Characters v5；七份产物换
+# 身份（book／ch{nn}／blueprints／characters／fold／brief／semantic_binding——
+# ObligationAnchor.visibility 删）；RC 版式头升 rc18。旧 rc17 根只读拒收；
+# 原因见 REQUIREMENTS CS-S。
+FROZEN_CONTRACT_IDENTITY = '5a97e27eb6570afa3db0be0ed71e9bb3b93a5e8ce31de6d1355dd762f5283ef4'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -200,7 +206,7 @@ def test_frozen_rc_version_label():
     # rc13（CS-3 余项：D5 统一＋world 规则 id）——五产物形状变化升版，其余
     # 产物表条目保持 rc12（形状未变）。rc15：证据寻址（RC-26/27）；rc16：事实锁引用（CS-F2）；
     # rc17：CS-H H3 称谓面＋H4 associate v3（用户裁决随 H4 集中升一次）。
-    assert STR06_RC_VERSION == 'str06-rc17'
+    assert STR06_RC_VERSION == 'str06-rc18'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是
@@ -217,8 +223,10 @@ def test_frozen_rc_version_label():
 #: project_preserve_view 确定性渲染）。
 #: 旧盘面按版本关闭式拒识（协议不兼容），不计语义检出。
 FROZEN_SEMANTIC_PROTOCOLS = {
-    'STAGE2_BOOK_PROTOCOL': 'stage2-book-v4',
-    'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v4',
+    # rc18（CS-S 1b）：观察 canonical 升 v5——knowledge／disclosure／proposition／
+    # scope 死字段收口；旧 v4 盘面关闭式拒读。
+    'STAGE2_BOOK_PROTOCOL': 'stage2-book-v5',
+    'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v5',
     'STAGE2_NAMES_PROTOCOL': 'stage2-names-v3',
     # rc17（CS-H H4，RC-65）：associate 升 v3——same_state_dimension 改配维度
     # 句柄（（作用对象，键）地址聚合）；旧 v2 wire 关闭式拒读。

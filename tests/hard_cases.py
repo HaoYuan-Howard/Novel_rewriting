@@ -277,7 +277,7 @@ def _preserve_bad_wire() -> list:
     from novel.stages.stage4.grounding import assemble_preserve
 
     from contracts.schema.source import (
-        BlueprintsArtifactV15, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV16, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_facilities import anchor_stub, v13_beat, v13_effect
@@ -291,7 +291,7 @@ def _preserve_bad_wire() -> list:
             canonical='苏姑娘',
             surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                     source_refs=('e01_01',)),))}),
-        blueprint=BlueprintsArtifactV15(source_expression=sample_blueprint_expression(), chapters=(
+        blueprint=BlueprintsArtifactV16(source_expression=sample_blueprint_expression(), chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat('b01_01', 'e', effects=(
                                  v13_effect({'kind': 'world'}, 'fate', '多舛'),)),),
@@ -654,7 +654,7 @@ def _chapter_blueprint_bad_wire() -> list:
     """章观察编译闭合：participants 引用书级人物账之外的人物（闭集归 compile，R-2.3）。"""
     from tests.test_str06_stage2_publish import _chapter_wires
     outcome = _stage2_outcome(chapters={**_chapter_wires(), 'ch01': {
-        'protocol_version': 'stage2-chapters-v4', 'beats': [
+        'protocol_version': 'stage2-chapters-v5', 'beats': [
             {'event': '开篇', 'participants': ['ghost'],
              'source_refs': ['e01_01'], 'scene_boundary': 'new',
              'temporal_mode': 'single', 'effects': [], 'cognition': [],
@@ -674,7 +674,7 @@ def _loop_reopened() -> list:
     """R-2.11：同一悬念句柄本章内重复 open（章观察 owner 的自含纪律）。"""
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v4', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v5', 'beats': [
         {'event': '开悬念', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single', 'effects': [],
          'cognition': [],
@@ -697,41 +697,21 @@ def _proposition_dangling() -> list:
     return outcome.errors + outcome.undecided
 
 
-def _concealed_without_known_by() -> list:
-    """R-2.13：concealed 效应不声明已知者（揭示链无从闭合）。"""
-    from tests.test_str06_stage2_publish import EVIDENCE
-    from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v4', 'beats': [
-        {'event': '藏身不声明已知者', 'participants': [], 'source_refs': ['e01_01'],
-         'scene_boundary': 'new', 'temporal_mode': 'single',
-         'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
-                      'key': 'scene_location', 'op': 'set', 'value': '床底',
-                      'scope': 'scene', 'modality': 'actual',
-                      'disclosure': {'visibility': 'concealed'},
-                      'basis': [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}],
-         'cognition': [], 'loops': []},
-    ]}
-    _observation, errors = compile_chapter_observation(
-        wire, evidence_ids=EVIDENCE)
-    return errors
-
-
 def _registered_key_wrong_scope() -> list:
     """R-2.14：已退役的位置键（whereabouts 一值多义）在 wire 出现即拒。
 
-    表内登记键的作用域由 compiler 绑定（I-15，声明不符归一化不拒绝）；这一条
-    红例守的是退役键拒识与指针。
+    CS-S 1b：作用域读时按登记表派生（wire 不再携带 scope）；这一条红例守的
+    是退役键拒识与指针。
     """
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v4', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v5', 'beats': [
         {'event': '旧位置键借道', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single',
          'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                       'key': 'whereabouts', 'op': 'set',
-                      'value': '陆家卧房内，藏于床底', 'scope': 'book',
+                      'value': '陆家卧房内，藏于床底',
                       'modality': 'actual',
-                      'disclosure': {'visibility': 'on_page'},
                       'basis': [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}],
          'cognition': [], 'loops': []},
     ]}
@@ -794,7 +774,6 @@ CASES.update({
     'source_loop_lifecycle': Case('stage2', _loop_reopened, '重复 open'),
     'source_proposition_closure': Case(
         'stage2', _proposition_dangling, '悬空的跨章引用'),
-    'source_effect_disclosure': Case('stage2', _concealed_without_known_by, 'known_by'),
     'source_registered_key_scope': Case(
         'stage2', _registered_key_wrong_scope, '已退役'),
     'source_surface_anchor_literal': Case(
@@ -843,7 +822,7 @@ def _preserve_unknown_anchor() -> list:
     from novel.stages.stage4.grounding import assemble_preserve
 
     from contracts.schema.source import (
-        BlueprintsArtifactV15, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV16, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_facilities import v13_beat, v13_effect
@@ -856,7 +835,7 @@ def _preserve_unknown_anchor() -> list:
             canonical='苏姑娘',
             surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                     source_refs=('e01_01',)),))}),
-        blueprint=BlueprintsArtifactV15(source_expression=sample_blueprint_expression(), chapters=(
+        blueprint=BlueprintsArtifactV16(source_expression=sample_blueprint_expression(), chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat('b01_01', 'e', effects=(
                                  v13_effect({'kind': 'world'}, 'fate', '多舛'),)),),

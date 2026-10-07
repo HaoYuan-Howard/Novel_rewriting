@@ -126,22 +126,19 @@ class StateTarget(StrictModel):
         return self
 
 
-class KnowledgeSpec(StrictModel):
-    """「谁知道」构成后续约束时才给；记录故事开始那一刻，不是读完全书后。"""
-
-    known_by: tuple[str, ...] = Field(min_length=1)
-    reader_knows: bool
-
-
 class InitialStateAtom(StrictModel):
-    """第 1 章第一拍之前已经成立的地基事实（书级初始事实的 Characters 部分）。"""
+    """第 1 章第一拍之前已经成立的地基事实（书级初始事实的 Characters 部分）。
+
+    CS-S 1b（2026-10-07）删 `knowledge`：初始知情不再挂在初态原子上（使用率
+    0–8/13，「故事开始那一刻谁知道」在含引子的书里指不清）——Phase 2 由 Book
+    facts 的 `known_at_start` 承载该语义，读者确认时点由认知转移落账。
+    """
 
     state_id: str = Field(pattern=r'^s0_[A-Za-z0-9_-]+$')
     target: StateTarget
     key: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_.-]*$')
     value: Any
     persistence: str = Field(pattern=r'^(stable|mutable)$')
-    knowledge: KnowledgeSpec | None = None
     source_refs: tuple[str, ...] = Field(min_length=1)
     #: R10a a1：逐字证据（必填 ≥1，段属自身 source_refs）。
     basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
@@ -178,10 +175,6 @@ class CharactersCore(StrictModel):
             for ref in refs:
                 if ref not in slugs:
                     raise ValueError(f'initial_state {atom.state_id} 引用未知人物 {ref}')
-            if atom.knowledge:
-                for who in atom.knowledge.known_by:
-                    if who not in slugs:
-                        raise ValueError(f'{atom.state_id} known_by 引用未知人物 {who}')
         return self
 
 
@@ -388,13 +381,15 @@ class NameProjection(StrictModel):
         return next((e for e in self.by_person if e.char_id == char_id), None)
 
 
-class CharactersArtifactV4(CharactersCore):
-    """`stage2/characters/characters.json` 目标 v4（RC3）。
+class CharactersArtifactV5(CharactersCore):
+    """`stage2/characters/characters.json` 目标 v5（RC3 起 v4；CS-S 1b 升 v5）。
 
     `name_structure` 是 RC 字段，经反例定版；core view（characters +
-    initial_state）形状与 RC2 相同。rc15（RC-26，2026-10-04）：source_refs／
-    basis 段号按自然段寻址，声明随产物表换版。"""
-    contract_version: str = Field(default='str06-rc15', pattern=r'^str06-rc[0-9]+$')
+    initial_state）形状与 RC2 相同。v5：initial_state 原子删 `knowledge`
+    （初始知情由 Phase 2 的 facts known_at_start 承载）；rc18（RC-26 段号＋
+    本批）——旧 rc17 根按版本关闭式拒读。
+    """
+    contract_version: str = Field(default='str06-rc18', pattern=r'^str06-rc[0-9]+$')
     name_structure: NameStructure | None = None
     #: 来源账（F7a）：盘上键 `_provenance`。`exclude=True` 让内存态 dump 不带
     #: 它——prompt／请求字节与 F5e 已购身份逐字不变；落盘由 repository 注入。
@@ -418,7 +413,7 @@ class CharactersArtifactV4(CharactersCore):
              'initial_state': [a.model_dump() for a in self.initial_state]})
 
     @model_validator(mode='after')
-    def _structure_closes(self) -> 'CharactersArtifactV4':
+    def _structure_closes(self) -> 'CharactersArtifactV5':
         ns = self.name_structure
         if ns is None:
             return self
@@ -469,20 +464,6 @@ class EffectTarget(StrictModel):
         return self
 
 
-class Disclosure(StrictModel):
-    """effect 的可见性（D3，必填）：on_page＝叙述对读者明示；concealed＝叙述确立
-    但读者此刻不可见——必须声明已知者，并由后续 cognition 经同一命题记录揭示。"""
-
-    visibility: str = Field(pattern=r'^(on_page|concealed)$')
-    known_by: tuple[str, ...] = Field(default=(), min_length=0)
-
-    @model_validator(mode='after')
-    def _concealed_declares_known(self) -> 'Disclosure':
-        if self.visibility == 'concealed' and not self.known_by:
-            raise ValueError('concealed 效应必须声明已知者（known_by 非空）')
-        return self
-
-
 class PropositionRef(StrictModel):
     """命题引用（D2/D12）：同章用 wire 本地标签，跨章用 prompt 列出的正式 ID。
 
@@ -497,7 +478,13 @@ class PropositionRef(StrictModel):
 
 class Effect(StrictModel):
     """事实转移（D1/D2）：叙述确立的事实变化。只记叙述确立的事实（含 unknown）；
-    「谁认为、谁声称什么」只进 cognition，不在这里设 fact/belief/claim 之分。"""
+    「谁认为、谁声称什么」只进 cognition，不在这里设 fact/belief/claim 之分。
+
+    CS-S 1b（2026-10-07）删 `disclosure`／`proposition`／`scope`：404 效应实证
+    concealed 0、effect 命题 0；作用域改**读时按登记表派生**
+    （`REGISTERED_STATE_KEYS`：scene_location＝scene，其余＝book，R-2.14）——
+    字段不再进 canonical。命题锚只在 cognition 上（揭示链由认知转移承载）。
+    """
 
     target: EffectTarget
     key: str = Field(min_length=1)
@@ -506,10 +493,6 @@ class Effect(StrictModel):
     #: 「约半个月便回」是 expected，不是 actual 的既成时长。
     modality: str = Field(pattern=r'^(actual|planned|expected|conditional)$')
     value: Any = None
-    scope: str = Field(pattern=r'^(book|scene)$')
-    disclosure: Disclosure
-    #: 命题锚：concealed 必带（揭示链的锚，D3）；说辞被证实时引用同一命题（D5）。
-    proposition: PropositionRef | None = None
     #: R10a a1：逐字证据（必填 ≥1）——条目声称的判断必须能在所引句段内
     #: 逐字定位；缺引文的判断不被接受。
     basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
@@ -522,12 +505,6 @@ class Effect(StrictModel):
             raise ValueError('unset/unknown 不得伪造值')
         if self.op in ('add', 'remove') and self.value is None:
             raise ValueError('add/remove 需要显式值')
-        if self.disclosure.visibility == 'concealed' and self.proposition is None:
-            raise ValueError('concealed 效应必须带命题（后续 cognition 经它记录揭示）')
-        registered = REGISTERED_STATE_KEYS.get(self.key)
-        if registered is not None and registered != self.scope:
-            raise ValueError(
-                f'登记键 {self.key} 的作用域固定为 {registered}，拍上声明了 {self.scope}')
         return self
 
 
@@ -642,8 +619,8 @@ class ChapterBlueprint(StrictModel):
 from contracts.schema.expression import SourceExpression
 
 
-class BlueprintsArtifactV15(StrictModel):
-    """`stage2/blueprints/chapter_blueprints.json` 目标 v15（RC）。
+class BlueprintsArtifactV16(StrictModel):
+    """`stage2/blueprints/chapter_blueprints.json` 目标 v16（CS-S 1b，rc18）。
 
     v13（质量改进批次二）：拍模型从 effects/reveals 改为 effects／cognition／loops
     三类转移，拍上带场景边界与时间模式，章蓝图带 compiler 生成的场景分段。跨章
@@ -653,6 +630,8 @@ class BlueprintsArtifactV15(StrictModel):
     v15（R10a a1）：转移带逐字 basis（Effect 另有 modality 闭集）；compiler 派生
     `evidence` 证据窗口（被引句段全文＋同章前后各一句，机械合并；精确支持引用
     在条目 basis 里，邻句送达≠邻句为证据）。
+    v16（CS-S 1b，2026-10-07）：Effect 删 `disclosure`／`proposition`／`scope`
+    （作用域读时按登记表派生）；作用域语义见 `REGISTERED_STATE_KEYS`。
     """
 
     provenance: FreeProvenance | LlmProvenance | None = Field(
@@ -665,7 +644,7 @@ class BlueprintsArtifactV15(StrictModel):
     evidence: dict[str, str] = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _chapters_contiguous(self) -> 'BlueprintsArtifactV15':
+    def _chapters_contiguous(self) -> 'BlueprintsArtifactV16':
         ordinals = [c.chapter for c in self.chapters]
         if sorted(ordinals) != list(range(1, len(ordinals) + 1)):
             raise ValueError(f'章号必须从 1 连续，实得 {sorted(ordinals)}')

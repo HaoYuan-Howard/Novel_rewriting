@@ -74,10 +74,9 @@ _hard('source_proposition_closure', 'stage2',
       '命题引用闭合：同章重抄与本章登记一致；跨章同义由 associate 声明，'
       '正式 ID 可解析且统一采用最早建立的代表文本；同维状态配维度句柄'
       '（键不同但同维才配，规范键按地址传播整类）', 'R-2.12')
-_hard('source_effect_disclosure', 'stage2',
-      'effect 可见性形状：必填 on_page/concealed；concealed 必声明已知者并带命题锚', 'R-2.13')
 _hard('source_registered_key_scope', 'stage2',
-      '登记键闭集与作用域：表内键作用域由 compiler 绑定（scene/residence/身体状态键）；退役位置键拒识', 'R-2.14')
+      '登记键闭集与作用域：作用域读时按表派生（scene_location＝scene、'
+      'residence＝book、身体状态键各自一键；表外键一律 book）；退役位置键拒识', 'R-2.14')
 _hard('source_fold_consistent', 'stage2',
       'source fold 事件与 Blueprint canonical 一致', 'R-2.4')
 _hard('names_structure_compile', 'stage2',
@@ -87,12 +86,10 @@ _hard('names_coverage', 'stage2',
 _unver('source_semantics_unver', 'stage2',
        '源语义（命题同一性、归因、因果、揭示）未经语义审阅，保持未评披露', 'R-3.3')
 _metric('source_fold_events', 'stage2', 'fold 事件计数与章分布读数', 'R-2.7')
-_metric('source_fold_concealed_unrevealed', 'stage2',
-        '书末仍未向读者确认的 concealed 命题（只读报告，不阻断）', 'R-2.15')
 _metric('source_fold_empty_transition_ratio', 'stage2',
         '每章空转移拍比例（三类转移全空的拍所占比例；D7 连续性读数）', 'R-2.16')
 _metric('source_fold_knowledge', 'stage2',
-        '知情 fold 读数（按命题＋持有者＋模式；读者确认时点）', 'R-2.17')
+        '知情 fold 读数（按命题＋持有者＋模式折叠；度量不是门）', 'R-2.17')
 # R10a a1（收口批登记）：引文证据与事件时态的源侧硬闸（C2/C4）。
 _hard('source_basis_quote_literal', 'stage2',
       'basis 引文定位：quote 逐字存在于所引句段且句段属条目自身 source_refs'

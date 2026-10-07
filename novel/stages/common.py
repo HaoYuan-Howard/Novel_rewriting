@@ -816,7 +816,7 @@ PRESERVE_RULES = f"""任务：从源证据投影视图选择改写不可丢失�
 s0_*、世界约束 wc_*、拍内转移 b拍号.e序/.c序/.l序——e＝事实、c＝认知、
 l＝悬念），随后是类型化内容（认知带持有者与模式 learns/suspects/confirms/
 hears_claim/believes/asserts；事实带 modality：actual＝已发生／planned＝已定
-计划／expected＝预计／conditional＝条件性执行，与可见性 on_page/concealed）
+计划／expected＝预计／conditional＝条件性执行）
 和**逐字引文**（依据 e段号：「原句」）。文末证据窗口给被引句段全文（含同章
 前后各一句——邻句是上下文，不是该命题的证据）。锚定以引文为准，不以邻句为准。
 
@@ -834,9 +834,8 @@ hears_claim/believes/asserts；事实带 modality：actual＝已发生／planned
 - 说辞与行为的反差：人物自称／对外表态（cognition 的 asserts／hears_claim／
   believes，或 event 里的自述）与实际行为（事实与 event 的行动）矛盾时，
   保的是这层反差本身——不得把自述升格为已成立的内在准则，也不得只留一面；
-- 隐藏与揭示的时点：concealed 的事实（视图标注已知者）与后续认知对同一命题的
-  揭示（持有者＋模式）是两件事：reveal 类义务必须写清**谁在何时确认**（含读者），
-  不能只保事实成立。
+- 事实成立与揭示的时点：事实成立与后续认知对同一命题的揭示（持有者＋模式）
+  是两件事：reveal 类义务必须写清**谁在何时确认**（含读者），不能只保事实成立。
 
 【satisfaction 写"改写后必须成立什么，才能保住同样的作用"】
 触发与后果的连接点、误会如何形成、何时由谁确认（含读者）、成立的喜剧或反讽效果。

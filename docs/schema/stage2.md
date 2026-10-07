@@ -132,28 +132,27 @@ book 观察与全文（字面校验含章前文字）；`str06.stage2.associate`
 | `source_chapter_blueprint` | hard | 章观察编译闭合（三类转移、场景分段、闭集；章观察只含章内本地句柄） |
 | `source_loop_lifecycle` | hard | loops 只许 open/close：loop 一次性 open、close 必带 resolution、问题文本不可改写 |
 | `source_proposition_closure` | hard | 命题引用闭合：章内本地句柄可解析、新建带 statement、引用不重抄文本；跨章同一性配对归 associate |
-| `source_effect_disclosure` | hard | effect 可见性形状：必填 on_page/concealed；concealed 必声明已知者并带命题锚 |
-| `source_registered_key_scope` | hard | 登记键闭集与作用域：表内键作用域由 compiler 绑定（scene/residence/身体状态键）；退役位置键拒识 |
+| `source_registered_key_scope` | hard | 登记键闭集与作用域：作用域读时按表派生（scene_location＝scene、residence＝book、身体状态键各自一键；表外键一律 book）；退役位置键拒识 |
 | `source_fold_consistent` | hard | fold 事件与 Blueprint canonical 一致（含 e00 只读读数） |
 | `source_fold_events` | metric | fold 事件计数与章分布读数 |
-| `source_fold_concealed_unrevealed` | metric | 书末仍未向读者确认的 concealed 命题（只读报告） |
 | `source_fold_empty_transition_ratio` | metric | 每章空转移拍比例（三类转移全空的拍所占比例） |
-| `source_fold_knowledge` | metric | 知情 fold 读数（按命题＋持有者＋模式；读者确认时点） |
+| `source_fold_knowledge` | metric | 知情 fold 读数（按命题＋持有者＋模式折叠；度量不是门） |
 | `source_basis_quote_literal` | hard | R10a a1：basis 段属条目自身 source_refs 且引文逐字存在于所引句段（canonical 直通面不归一化、不模糊匹配；C4；wire 面只给段 id、引文＝段全文由 compiler 派生，2026-10-07）；Blueprint v15 证据窗口（被引段全文＋同章前后各句、重叠机械合并）由 compiler 派生——邻句被送达≠邻句成为证据 |
 | `source_effect_modality` | hard | R10a a1：Effect.modality 闭集 actual/planned/expected/conditional 必填（C2 源侧）——计划/预计/条件与已发生分开；认识限定不混入命题文本；源文未说明不得自动填 actual |
 | `names_structure_compile` | hard | Characters v4 名称结构编译闭合 |
 | `names_coverage` | hard | 应改名集合覆盖源名称结构（名称位一致） |
 | `source_semantics_unver` | unver | 源语义与关联决定未经语义审阅，保持未评披露 |
 
-当前注册表共 **20 条**：**15 hard、4 metric、1 unver**（R10a a1 收口新增 2 hard）。唯一注册表为
+当前注册表共 **18 条**：**14 hard、3 metric、1 unver**（CS-S 1b 删 source_effect_disclosure 与 source_fold_concealed_unrevealed）。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）；修复路由见各判据的 `fix`
 字段——确定性节点默认重跑即 0 成本修复，付费节点重跑是新购，`fix` 留空。
 
 ## 拍模型与登记键（v13 延续，B2 起为观察面）
 
 每一拍是一次状态转移：`event` 是给人读的事件表述；需要延续的变化全部由三类转移承载——
-`effects`（叙述确立的事实；必填 `scope` 与 `disclosure`，concealed 须声明 known_by 并带
-命题锚）、`cognition`（谁对哪条命题持什么模式；holder 为人物 id 或 reader/public，
+`effects`（叙述确立的事实；作用域读时按登记表派生——CS-S 1b 起 effect 不再携带
+`scope`／`disclosure`／`proposition`，命题锚只在 cognition 上）、`cognition`（谁对哪条
+命题持什么模式；holder 为人物 id 或 reader/public，
 mode 为 learns/suspects/confirms/hears_claim/believes/asserts）、`loops`（悬念；op 只有
 open/close，close 必带 resolution）。拍上另带 `scene_boundary`（new/continue）与
 `temporal_mode`（single/iterative）；章蓝图带 compiler 生成的 `scenes` 分段（跨章场景在

@@ -25,7 +25,7 @@ from copy import deepcopy
 import pytest
 
 from contracts.schema.grounding import PreserveCheckpoint, ReconstructionBrief
-from contracts.schema.source import BlueprintsArtifactV15, CharactersCore
+from contracts.schema.source import BlueprintsArtifactV16, CharactersCore
 from contracts.schema.workflow import route_owner_issue
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.grounding import (
@@ -68,8 +68,8 @@ def _expression():
         'readings': sample_readings().model_dump(mode='json')})
 
 
-def _blueprint() -> BlueprintsArtifactV15:
-    return BlueprintsArtifactV15.model_validate({
+def _blueprint() -> BlueprintsArtifactV16:
+    return BlueprintsArtifactV16.model_validate({
         'source_expression': _expression().model_dump(mode='json'),
         'world_constraints': [],
         'chapters': [
@@ -116,11 +116,10 @@ def _blueprint() -> BlueprintsArtifactV15:
                      'b01_05', '约定归期（预计）', participants=('fu_jun',),
                      source_refs=('e01_05',),
                      effects=(
+                         # CS-S 1b：effect 命题锚删——时态锁由 modality 派生。
                          v13_effect(
                              {'kind': 'world'}, 'return_time', '约半月',
                              modality='expected',
-                             proposition={'ref': 'p_return',
-                                          'statement': '夫君约半月后归家'},
                              basis=({'segment': 'e01_05', 'quote': '约莫半月便回'},),
                          ),
                      ),
@@ -700,7 +699,7 @@ def test_preserve_model_validation_error_feeds_revision_not_crash():
     把 ValidationError 归入 errors（同节点修订轮带精确问题重问）。"""
     from novel.stages.stage4.grounding import assemble_preserve
     from contracts.schema.source import (
-        BlueprintsArtifactV15, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV16, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_expression_inputs import sample_blueprint_expression
@@ -722,7 +721,7 @@ def test_preserve_model_validation_error_feeds_revision_not_crash():
                 canonical='苏姑娘',
                 surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                         source_refs=('e01_01',)),))}),
-            blueprint=BlueprintsArtifactV15(
+            blueprint=BlueprintsArtifactV16(
                 source_expression=sample_blueprint_expression(),
                 chapters=(ChapterBlueprint(
                     chapter=1,

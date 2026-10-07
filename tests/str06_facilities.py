@@ -31,25 +31,16 @@ def make_context(root: Path, *, ledger: CostLedger, node: str = 'str06.stage2.bo
         configured_model=configured_model, readonly=readonly)
 
 
-def v13_effect(target: dict, key: str, value, *, op: str = 'set', scope: str = 'book',
-               visibility: str = 'on_page', known_by: tuple[str, ...] = (),
-               modality: str = 'actual', proposition: dict | None = None,
+def v13_effect(target: dict, key: str, value, *, op: str = 'set',
+               modality: str = 'actual',
                basis: tuple[dict, ...] | None = None) -> dict:
-    """v13 effect（R10a a1 起带 modality 与逐字 basis）：必填 scope 与
-    disclosure；concealed 必声明已知者并带命题。basis 缺省给 e01_01 一条
-    （引用方保证段文本含该引文）。"""
-    eff: dict = {'target': target, 'key': key, 'op': op, 'value': value,
-                 'scope': scope, 'modality': modality,
-                 'disclosure': {'visibility': visibility},
-                 'basis': list(basis) if basis is not None
-                 else [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}
-    if visibility == 'concealed':
-        eff['disclosure']['known_by'] = list(known_by)
-        eff['proposition'] = proposition or {
-            'ref': f'p_{key}', 'statement': f'{key} 的隐藏事实'}
-    elif proposition is not None:
-        eff['proposition'] = proposition
-    return eff
+    """v13 effect（R10a a1 起带 modality 与逐字 basis；CS-S 1b 起无
+    scope／disclosure／proposition——作用域读时按登记表派生）。basis 缺省给
+    e01_01 一条（引用方保证段文本含该引文）。"""
+    return {'target': target, 'key': key, 'op': op, 'value': value,
+            'modality': modality,
+            'basis': list(basis) if basis is not None
+            else [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}
 
 
 def v13_beat(beat_id: str, event: str, *, participants: tuple[str, ...] = (),

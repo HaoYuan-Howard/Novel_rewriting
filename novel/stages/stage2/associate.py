@@ -282,7 +282,8 @@ def project_association_space(
                         effect.target, where=f'{where}.e{effect_ordinal}'),
                     key=effect.key, op=effect.op, value=effect.value))
             statements: dict[str, str] = {}
-            for transition in (*beat.effects, *beat.cognition):
+            # CS-S 1b：命题面只在 cognition 上（effect 命题锚已删）。
+            for transition in beat.cognition:
                 prop = transition.proposition
                 if prop is None:
                     continue

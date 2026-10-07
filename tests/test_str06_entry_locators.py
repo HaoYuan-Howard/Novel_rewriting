@@ -40,15 +40,17 @@ def test_group_located_errors_reconciles_collapses_and_fans_out():
 # ───────────────────────── book ──────────────────────────────────────────────
 
 def test_book_patch_locate_maps_entry_errors_to_wire_paths():
+    # CS-S 1b：initial_state 的 knowledge 已删（wire 携带即协议拒），本例改用
+    # surface 重复登记作第二个条目级错误。
     wire = _book_wire()
     wire['characters']['fu_jun']['canonical'] = '夫'
-    wire['initial_state'][0]['knowledge'] = {
-        'known_by': ['reader'], 'reader_knows': False}
+    wire['characters']['yun_niang']['surfaces'].append(
+        dict(wire['characters']['yun_niang']['surfaces'][0]))
     _obs, errors = compile_book_observation(wire, evidence=EVIDENCE)
     assert len(errors) == 2, errors
     targets = book_patch_locate(wire, errors, evidence=EVIDENCE)
     assert targets == [(('characters', 'fu_jun'), [errors[0]]),
-                       (('initial_state', 0), [errors[1]])], targets
+                       (('characters', 'yun_niang'), [errors[1]])], targets
     assert targets[0][1][0] is errors[0], '返回传入的同一批错误对象'
 
 

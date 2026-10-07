@@ -40,7 +40,7 @@ from novel.stages.stage2.chapters import (
     compile_chapter_observation, chapter_loop_issues,
 )
 from novel.stages.stage2.compile import (
-    CompileOutcome, CONFIRMING_MODES, FoldResult, compile_source_truth,
+    CompileOutcome, FoldResult, compile_source_truth,
     evidence_metrics, first_appearance_anchors, first_appearance_issues,
     initial_snapshot, source_fold,
 )
@@ -57,7 +57,7 @@ from novel.stages.stage2.slim import expand_chapter_wire, slim_chapter_wire
 __all__ = [
     'AnchorHit', 'AssociationSpace', 'AssociateObservation', 'BeatHandle',
     'BookObservation', 'ChapterObservation', 'CompileOutcome',
-    'CONFIRMING_MODES', 'DimensionHandle', 'EvidenceResolver', 'FoldResult',
+    'DimensionHandle', 'EvidenceResolver', 'FoldResult',
     'LoopHandle',
     'NAMES_INPUT_VERSION', 'NamesObservation', 'ProbeFinding', 'PropositionHandle', 'ResolverIssue',
     'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_CHAPTERS_WIRE_PROTOCOL',

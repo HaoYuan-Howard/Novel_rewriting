@@ -27,7 +27,7 @@ from contracts.schema.grounding import (
     ReconstructionBrief,
 )
 from contracts.schema.source import (
-    BlueprintsArtifactV15, CharactersCore, SourceExpression,
+    BlueprintsArtifactV16, CharactersCore, SourceExpression,
 )
 from novel.stages.stage4.design import assemble_body_design, inspect_body_design
 from novel.stages.stage4.grounding import (
@@ -69,8 +69,8 @@ def _expression() -> SourceExpression:
         'readings': sample_readings().model_dump(mode='json')})
 
 
-def _blueprint() -> BlueprintsArtifactV15:
-    return BlueprintsArtifactV15.model_validate({
+def _blueprint() -> BlueprintsArtifactV16:
+    return BlueprintsArtifactV16.model_validate({
         'source_expression': _expression().model_dump(mode='json'),
         'world_constraints': [],
         'chapters': [
@@ -79,10 +79,10 @@ def _blueprint() -> BlueprintsArtifactV15:
                  v13_beat('b01_01', '夫君藏进床底，约半月便回', participants=('fu_jun',),
                           source_refs=('e01_01',),
                           effects=(
+                              # CS-S 1b：effect 命题锚删——p_return 的登记走
+                              # b01_01 的 cognition（时态锁仍由 modality 派生）。
                               v13_effect({'kind': 'world'}, 'return_time', '约半月',
                                          modality='expected',
-                                         proposition={'ref': 'p_return',
-                                                      'statement': '夫君约半月后归家'},
                                          basis=BASIS),
                               v13_effect({'kind': 'character', 'char_id': 'fu_jun'},
                                          'whereabouts_during_leave', None, op='unknown',
@@ -90,6 +90,10 @@ def _blueprint() -> BlueprintsArtifactV15:
                           cognition=({'proposition': {'ref': 'p_x',
                                                       'statement': '夫君像是看穿了什么'},
                                       'holder': 'yun_niang', 'mode': 'suspects',
+                                      'basis': BASIS},
+                                     {'proposition': {'ref': 'p_return',
+                                                      'statement': '夫君约半月后归家'},
+                                      'holder': 'yun_niang', 'mode': 'hears_claim',
                                       'basis': BASIS},),
                           loops=({'ref': 'q_a', 'op': 'open',
                                   'question': '床底箱子里是什么？'},)),
@@ -210,7 +214,9 @@ def test_brief_derives_propositions_locks_and_fact_locks():
     kinds = {f.kind for f in brief.fact_locks}
     assert kinds == {'expected', 'unknown_value', 'unanswered'}
     tense = next(f for f in brief.fact_locks if f.kind == 'expected')
-    assert tense.modality == 'expected' and tense.statement == '夫君约半月后归家'
+    # CS-S 1b：effect 命题锚删——事实锁陈述回落到地址＝值的确定性渲染
+    # （命题文本面在 kp 登记里，走 cognition）。
+    assert tense.modality == 'expected' and tense.statement == "world.return_time = '约半月'"
     unanswered = next(f for f in brief.fact_locks if f.kind == 'unanswered')
     assert unanswered.statement == '婆母到底瞒着什么？'
 

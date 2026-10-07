@@ -60,8 +60,8 @@ def test_appellation_fallback_prefers_earliest_registered_pure_surface():
         'surface': '娘子', 'from_chapter': 1, 'until_chapter': None,
         'source_refs': ['e01_01']})
     data['name_structure']['people']['yun_niang']['surface_forms']['娘子'] = None
-    from contracts.schema.source import CharactersArtifactV4
-    amended = CharactersArtifactV4.model_validate(data)
+    from contracts.schema.source import CharactersArtifactV5
+    amended = CharactersArtifactV5.model_validate(data)
     assert appellation_fallback('yun_niang', amended.core_view().characters['yun_niang'],
                                 amended.name_structure) == '娘子'
     assert appellation_fallbacks(amended.core_view(), amended.name_structure) == {

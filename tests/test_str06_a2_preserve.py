@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from contracts.schema.grounding import ObligationSeries, PreserveCheckpoint
 from contracts.schema.source import (
-    BlueprintsArtifactV15, ChapterBlueprint, CharactersCore,
+    BlueprintsArtifactV16, ChapterBlueprint, CharactersCore,
 )
 from novel.stages.stage4.grounding import (
     assemble_preserve, project_preserve_view,
@@ -38,12 +38,12 @@ def _characters() -> CharactersCore:
         'initial_state': [
             {'state_id': 's0_01', 'target': {'kind': 'character', 'char_id': 'fu_jun'},
              'key': 'birthright', 'value': '养子', 'persistence': 'stable',
-             'knowledge': None, 'source_refs': ['e01_01'], 'basis': [BASIS[0]]}],
+             'source_refs': ['e01_01'], 'basis': [BASIS[0]]}],
     })
 
 
-def _blueprint() -> BlueprintsArtifactV15:
-    return BlueprintsArtifactV15.model_validate({
+def _blueprint() -> BlueprintsArtifactV16:
+    return BlueprintsArtifactV16.model_validate({
         'source_expression': sample_blueprint_expression(),
         'world_constraints': [
             {'constraint_id': 'wc_01', 'kind': 'hard_rule',
@@ -56,9 +56,7 @@ def _blueprint() -> BlueprintsArtifactV15:
                           source_refs=('e01_01',),
                           effects=(v13_effect(
                               {'kind': 'character', 'char_id': 'fu_jun'},
-                              'scene_location', '床底', scope='scene',
-                              visibility='concealed', known_by=('fu_jun',),
-                              proposition={'ref': 'p_hide', 'statement': '夫君藏身床底'},
+                              'scene_location', '床底',
                               basis=BASIS),),
                           cognition=({'proposition': {'ref': 'p_guess',
                                                       'statement': '夫君像是看穿了什么'},
@@ -109,10 +107,12 @@ def test_project_preserve_view_renders_handles_quotes_and_windows():
     for handle in ('[s0_01]', '[wc_01]', '[b01_01.e1]', '[b01_01.c1]', '[b01_02.c1]'):
         assert handle in view, handle
     assert '「夫君藏进床底」' in view, '逐字引文按 basis 渲染'
-    assert 'concealed' in view and 'expected' not in view.split('【证据窗口')[0]
-    # 事实行带 modality/可见性与命题（命题按 canonical 的正式 ref 原样渲染）
+    assert 'expected' not in view.split('【证据窗口')[0]
+    # 事实行带 modality（CS-S 1b：scope／可见性／effect 命题不再渲染）；认知行
+    # 带命题（按 canonical 的正式 ref 原样渲染）
     assert 'actual' in view and 'suspects' in view
-    assert '命题 p_hide「夫君藏身床底」' in view
+    assert '命题 p_guess「夫君像是看穿了什么」' in view
+    assert '命题 p_hide（引用）' in view
     # 证据窗口：被引段全文（含邻段合并文本）
     assert 'e01_01：' in view and '夫君藏进床底' in view.split('【证据窗口')[1]
 
@@ -136,9 +136,9 @@ def test_preserve_input_keeps_operations_scope_known_holders_loops_and_causality
     second['effects'] = [{**first['effects'][0], 'op': 'unset', 'value': None}]
     raw['chapters'][0]['causal_edges'] = [
         {'from_beat': 'b01_01', 'to_beat': 'b01_02', 'kind': 'causes'}]
-    view = project_preserve_view(_characters(), BlueprintsArtifactV15.model_validate(raw))
+    view = project_preserve_view(_characters(), BlueprintsArtifactV16.model_validate(raw))
     assert 'stage4-preserve-input-v2' in view
-    assert 'scene；concealed；已知 fu_jun' in view
+    assert '（actual）' in view
     assert 'scene_location unset None' in view
     assert 'loop_noise open：谁在床底？' in view
     assert 'loop_noise close：夫君藏身床底。' in view
@@ -159,7 +159,6 @@ def test_green_wire_publishes_with_derived_lineage_and_typed_anchors():
     assert set(first.lineage.character_ids) == {'fu_jun'}
     assert first.anchors[0].source_kind == 'effect'
     assert first.anchors[0].modality == 'actual'
-    assert first.anchors[0].visibility == 'concealed'
     second = checkpoint.obligations[1]
     assert second.lineage.blueprint_refs == ('b01_01', 'b01_02')
     assert second.lineage.character_ids == ('yun_niang',)

@@ -67,7 +67,7 @@ def _book_wire() -> dict:
             'yun_niang': {'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'source_refs': ['e01_02']}]},
         }),
-        'protocol_version': 'stage2-book-v4',
+        'protocol_version': 'stage2-book-v5',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
@@ -77,7 +77,7 @@ def _book_wire() -> dict:
         'initial_state': [
             {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
              'key': 'marital_status', 'value': '夫妻', 'persistence': 'stable',
-             'knowledge': None, 'source_refs': ['e00_01'], 'basis': _basis('e00_01')},
+             'source_refs': ['e00_01'], 'basis': _basis('e00_01')},
         ],
         'world_constraints': [
             {'kind': 'setting_constant', 'statement': '故事发生在古代江南',
@@ -143,7 +143,9 @@ def test_book_observation_refuses_unclosed_canonical_and_duplicate_surface():
     assert any('surface 重复登记' in e for e in errors), errors
 
 
-def test_book_observation_refuses_scene_scope_initial_key_and_unknown_known_by():
+def test_book_observation_refuses_scene_scope_initial_key_and_dead_knowledge():
+    """CS-S 1b：initial_state 的 knowledge 已删——wire 携带即按协议拒收
+    （初始知情由 Phase 2 的 facts known_at_start 承载）。"""
     wire = _book_wire()
     wire['initial_state'][0]['key'] = 'scene_location'
     wire['initial_state'].append(
@@ -153,7 +155,7 @@ def test_book_observation_refuses_scene_scope_initial_key_and_unknown_known_by()
          'source_refs': ['e00_01'], 'basis': _basis('e00_01')})
     _obs, errors = compile_book_observation(wire, evidence=EVIDENCE)
     assert any('场景作用域' in e and 'residence' in e for e in errors), errors
-    assert any('known_by 引用未知人物 reader' in e for e in errors), errors
+    assert any('knowledge' in e and 'Extra inputs' in e for e in errors), errors
 
 
 def test_book_observation_never_modifies_the_wire():
@@ -212,17 +214,15 @@ def test_chapter_observation_binds_registered_key_scope_and_refuses_retired():
     assert 'whereabouts' in RETIRED_STATE_KEYS
     wire = _chapter_wire(_beat('云娘握紧剪刀', ('e02_02',), effects=(
         {'target': {'kind': 'character', 'char_id': 'yun_niang'}, 'key': 'residence',
-         'op': 'set', 'value': '陆家', 'scope': 'scene', 'modality': 'actual',
-         'disclosure': {'visibility': 'on_page'}, 'basis': _basis('e02_02')},)))
+         'op': 'set', 'value': '陆家', 'modality': 'actual', 'basis': _basis('e02_02')},)))
     raw = json.dumps(wire, ensure_ascii=False)
     obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
-    assert errors == [] and obs.beats[0].effects[0].scope == 'book', \
-        'R-2.14：表内键作用域由 compiler 按表绑定（归一化，不整章拒）'
-    assert json.dumps(wire, ensure_ascii=False) == raw, '归一在副本上，原 wire 不改（I-24）'
+    assert errors == [] and obs is not None, \
+        'R-2.14：登记键照常编译（作用域读时按表派生，不再整章归一）'
+    assert json.dumps(wire, ensure_ascii=False) == raw, '判定在副本上，原 wire 不改（I-24）'
     wire = _chapter_wire(_beat('云娘握紧剪刀', ('e02_02',), effects=(
         {'target': {'kind': 'character', 'char_id': 'yun_niang'}, 'key': 'whereabouts',
-         'op': 'set', 'value': '床底', 'scope': 'scene', 'modality': 'actual',
-         'disclosure': {'visibility': 'on_page'}, 'basis': _basis('e02_02')},)))
+         'op': 'set', 'value': '床底', 'modality': 'actual', 'basis': _basis('e02_02')},)))
     _obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
     assert any('whereabouts' in e and '退役' in e for e in errors), errors
 
@@ -345,7 +345,7 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
                 'stage2/observations/names.json'):
         artifact = repo.inspect(rel)
         assert artifact['protocol_version'] == (
-            'stage2-book-v4' if rel.endswith('/book.json')
+            'stage2-book-v5' if rel.endswith('/book.json')
             else 'stage2-names-v3' if rel.endswith('/names.json')
             else STAGE2_CHAPTERS_PROTOCOL), rel
         assert '_provenance' in artifact, rel

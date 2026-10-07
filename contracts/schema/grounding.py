@@ -46,8 +46,9 @@ class ObligationAnchor(StrictModel):
 
     Preserve 只给句柄（如 ``b06_21.e1``／``s0_01``／``wc_01``）；本模型的内容
     全部由 compiler 从 canonical 拷贝（持有者、mode、命题、效应目标/值/
-    modality/可见性、逐字引文），不由模型复述（I-15/I-21）。a4 的知情/时态
-    锁直接消费 holder／mode／proposition_ref／modality。
+    modality、逐字引文），不由模型复述（I-15/I-21）。a4 的知情/时态锁直接
+    消费 holder／mode／proposition_ref／modality。CS-S 1b：`visibility` 删
+    （effect.disclosure 已删——单写者、零逻辑读者的死字段）。
     """
 
     handle: str = Field(min_length=1)
@@ -59,7 +60,7 @@ class ObligationAnchor(StrictModel):
     #: 效应操作（effect.op；其余 None）。a4 的 unknown 值锁输入（op=unknown
     #: ＝维度已确立但源文未给值——目标不得补值，与 modality 锁同一消费面）。
     op: str | None = None
-    #: 命题正式 ID（effect.proposition.ref／cognition.proposition.ref；无则 None）
+    #: 命题正式 ID（cognition.proposition.ref；无则 None——effect 命题锚已删）
     proposition_ref: str | None = None
     proposition_statement: str | None = None
     #: 效应渲染地址（如 char:fu_jun.scene_location；初态/约束同形）
@@ -67,8 +68,6 @@ class ObligationAnchor(StrictModel):
     value: object = None
     #: 效应时态（effect.modality；其余 None）。a4 时态锁（kf）的输入。
     modality: str | None = None
-    #: 效应可见性（effect.disclosure.visibility；其余 None）
-    visibility: str | None = None
     #: 悬念问题或收束（loop.question／resolution）
     question: str | None = None
     #: 逐字引文（basis quotes 原样拷贝；段归属已在 Stage2 判定，不重验证）
@@ -330,7 +329,7 @@ class ReconstructionBrief(StrictModel):
     不得经状态或说明改写；兑现与越权校验归 assemble_body_design。
     """
 
-    contract_version: Literal['str06-rc17'] = 'str06-rc17'
+    contract_version: Literal['str06-rc18'] = 'str06-rc18'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
@@ -445,7 +444,7 @@ class SemanticBinding(StrictModel):
     产物没有该映射，由 `contract_version` 字面量拒读——缺省空表不会冒充旧产物。
     """
 
-    contract_version: Literal['str06-rc17'] = 'str06-rc17'
+    contract_version: Literal['str06-rc18'] = 'str06-rc18'
     binding_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     obligations: tuple[SourceObligation, ...] = Field(min_length=1)

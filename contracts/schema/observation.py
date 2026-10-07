@@ -42,7 +42,7 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.source import (
-    Cognition, Effect, EvidenceQuote, KnowledgeSpec, LoopAction, NameStructure,
+    Cognition, Effect, EvidenceQuote, LoopAction, NameStructure,
     StateTarget,
 )
 
@@ -62,8 +62,11 @@ from contracts.schema.source import (
 #: 引文＝段全文，整段天然满足「quote 逐字在段内」），旧 canonical 盘面照读。
 STAGE2_OBSERVATION_PROTOCOL: Final = 'stage2-observation-v1'
 STAGE2_NAMES_PROTOCOL: Final = 'stage2-names-v3'
-STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v4'
-STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v4'
+#: CS-S 1b（2026-10-07）：book／chapters canonical 升 v5——`InitialFact.knowledge`
+#: 与 effect 的 `disclosure`／`proposition`／`scope` 删（wire 面 1a 已先行），
+#: 旧 v4 观察按版本字面量关闭式拒读（rc17 根只读，新根全量重购）。
+STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v5'
+STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v5'
 
 #: 书级观察的 **wire 面**（2026-10-07 裁决：模型只选段、代码切原文；同日二次
 #: 收口：wire/canonical 词汇分层——wire 用 `evidence_refs`，canonical 用 basis）：
@@ -153,15 +156,15 @@ class CharacterCandidate(StrictModel):
 class InitialFact(StrictModel):
     """初态事实（第 1 章第一拍之前已经成立的地基）。
 
-    **没有** `state_id`：compiler 生成 `s0_*`（I-21）。target/knowledge 形状
-    与 v13 `InitialStateAtom` 同源（`StateTarget`／`KnowledgeSpec` 复用）。
+    **没有** `state_id`：compiler 生成 `s0_*`（I-21）。target 形状与 v13
+    `InitialStateAtom` 同源（`StateTarget` 复用）。CS-S 1b：`knowledge` 删
+    （Phase 2 由 facts `known_at_start` 承载初始知情）。
     """
 
     target: StateTarget
     key: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_.-]*$')
     value: Any
     persistence: str = Field(pattern=r'^(stable|mutable)$')
-    knowledge: KnowledgeSpec | None = None
     source_refs: tuple[str, ...] = Field(min_length=1)
     #: R10a a1：逐字证据（必填 ≥1，段属自身 source_refs；wire 与 canonical 同形）。
     basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
@@ -188,7 +191,7 @@ class BookObservation(StrictModel):
     初态、世界约束。作用域＝书；输入是全书原文（含 e00 引子句段）与证据句段
     清单。basis 的段号由 compile 按引文定位后写入（RC-27）。"""
 
-    protocol_version: Literal['stage2-book-v4']
+    protocol_version: Literal['stage2-book-v5']
     expression: ExpressionObservation
     characters: dict[str, CharacterCandidate] = Field(min_length=1)
     initial_state: tuple[InitialFact, ...] = Field(default=(), min_length=0)
@@ -270,7 +273,7 @@ class ChapterObservation(StrictModel):
     配不上即未决——不默认合并）。participants／holder 闭集与证据闭合归 compile。
     """
 
-    protocol_version: Literal['stage2-chapters-v4']
+    protocol_version: Literal['stage2-chapters-v5']
     beats: tuple[ObsBeat, ...] = Field(min_length=1)
 
 

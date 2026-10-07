@@ -116,7 +116,7 @@ def _failed_candidate_root(tmp_path) -> Path:
 def test_views_cover_the_whole_delivered_chain(base):
     name = 'cand'
     chars = views.characters_view(base, name)
-    assert chars.present and chars.contract_version == 'str06-rc15'  # rc15 证据寻址
+    assert chars.present and chars.contract_version == 'str06-rc18'  # rc18 CS-S 1b 死字段收口
     assert {c.char_id for c in chars.characters} == {'fu_jun', 'yun_niang'}
     assert chars.name_structure is not None
     assert chars.name_structure.families == {'fam_lu': '陆', 'fam_su': '苏'}

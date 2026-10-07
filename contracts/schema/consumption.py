@@ -478,11 +478,6 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         '.anchors[].op', consumers=(_A,), scope=_SCENE,
         mode=DeliveryMode.AUDIT_ONLY, note='效应操作（a4 值未知锁输入，审计位）'),
     'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
-    '.anchors[].visibility': _spec(
-        'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
-        '.anchors[].visibility', consumers=(_A,), scope=_SCENE,
-        mode=DeliveryMode.AUDIT_ONLY, note='效应可见性（审计位）'),
-    'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
     '.anchors[].question': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.obligations[]'
         '.anchors[].question', consumers=(_A,), scope=_SCENE,

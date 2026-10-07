@@ -313,7 +313,9 @@ def _compile_book_view(
             fail(('characters', slug), message)
             errors.append(message)
 
-    # ④ 初态与约束的引用闭合：目标人物、known_by、场景作用域键（R-2.9 一族）
+    # ④ 初态与约束的引用闭合：目标人物、场景作用域键（R-2.9 一族）。
+    # CS-S 1b：knowledge／known_by 闭合检查删（字段已删——初始知情由
+    # Phase 2 的 facts known_at_start 承载）。
     for atom_index, atom in enumerate(wire.get('initial_state') or []):
         if not isinstance(atom, Mapping):
             continue
@@ -324,13 +326,6 @@ def _compile_book_view(
         for ref in refs:
             if ref is not None and ref not in slugs:
                 message = f'initial_state {atom.get("key")} 引用未知人物 {ref}'
-                fail(path, message)
-                errors.append(message)
-        knowledge = atom.get('knowledge')
-        for who in (knowledge.get('known_by') or []) if isinstance(knowledge, Mapping) else []:
-            if who not in slugs:
-                message = (f'initial_state {atom.get("key")} 的 known_by 引用未知人物 {who}'
-                           '（读者知情用 reader_knows 表达）')
                 fail(path, message)
                 errors.append(message)
         if REGISTERED_STATE_KEYS.get(atom.get('key')) == 'scene':

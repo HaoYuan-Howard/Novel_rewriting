@@ -639,7 +639,7 @@ def _book_observation_payload() -> dict:
                 ],
             },
         }),
-        'protocol_version': 'stage2-book-v4',
+        'protocol_version': 'stage2-book-v5',
         'characters': {
             'char_001': {
                 'canonical': '甲',
@@ -652,7 +652,7 @@ def _book_observation_payload() -> dict:
         'initial_state': [
             {'target': {'kind': 'character', 'char_id': 'char_001'},
              'key': 'debt', 'value': '身负重债', 'persistence': 'stable',
-             'knowledge': None, 'source_refs': ['e01_01'],
+             'source_refs': ['e01_01'],
              'basis': [{'segment': 'e01_01', 'quote': '身负重债'}]},
         ],
         'world_constraints': [],
@@ -2724,7 +2724,8 @@ def test_upgrade_rc12_brief_structurizes_book_constraints():
         {'contract_version': 'str06-rc12',
          'book_constraints': ['术法须以寿命为代价', '官府不涉异事']})
     # rc17（CS-H H3）：Brief 形状再升（新字段可缺省读入），迁移直接钉 rc17。
-    assert data['contract_version'] == 'str06-rc17'
+    # CS-S 1b：brief 迁移目标随产物表钉 rc18（ObligationAnchor.visibility 删）。
+    assert data['contract_version'] == 'str06-rc18'
     assert data['book_constraints'] == [
         {'constraint_id': 'wc_01', 'statement': '术法须以寿命为代价'},
         {'constraint_id': 'wc_02', 'statement': '官府不涉异事'}]

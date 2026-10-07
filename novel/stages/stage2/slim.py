@@ -48,7 +48,6 @@ from typing import Any, Iterable
 from contracts.schema.observation import (
     STAGE2_CHAPTERS_PROTOCOL, STAGE2_CHAPTERS_WIRE_PROTOCOL, ChapterObservationWire,
 )
-from contracts.schema.source import REGISTERED_STATE_KEYS
 from novel.core.text import norm
 
 #: 代码派发的章内命题本地句柄：k01..（OBSERVATION_HANDLE_PATTERN 内）。
@@ -243,18 +242,13 @@ def expand_chapter_wire(
             if target_error is not None:
                 issues.append((('beats', index, 'state', j), target_error))
                 continue
-            # 登记键的作用域由表固定（R-2.14 的派生在适配层先行；v8 起表外键
-            # 一律 book、wire 不再携带 scope）；disclosure 恒 on_page、effect
-            # 不带命题锚（v8 删 hidden/prop——404 效应实证 0 命中）。
-            scope = REGISTERED_STATE_KEYS.get(effect.key) or 'book'
+            # 登记键的作用域读时按表派生（R-2.14，CS-S 1b：scope 不再进 canonical）；
+            # disclosure／effect 命题锚已删——揭示链由 cognition 承载。
             effects_out.append({
                 'target': target, 'key': effect.key,
                 'op': effect.op or 'set',
                 'modality': effect.modality or 'actual',
                 'value': effect.val,
-                'scope': scope,
-                'disclosure': {'visibility': 'on_page', 'known_by': []},
-                'proposition': None,
                 'basis': [{'segment': ref, 'quote': None} for ref in effect.evidence_refs],
             })
         if beat.scene_location is not None:
@@ -265,9 +259,6 @@ def expand_chapter_wire(
                            'subject': None, 'object': None},
                 'key': 'scene_location', 'op': 'set',
                 'modality': 'actual', 'value': beat.scene_location,
-                'scope': REGISTERED_STATE_KEYS.get('scene_location') or 'scene',
-                'disclosure': {'visibility': 'on_page', 'known_by': []},
-                'proposition': None,
                 'basis': [{'segment': ref, 'quote': None} for ref in refs],
             })
         cognition_out: list[dict] = []
