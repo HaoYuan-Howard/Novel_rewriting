@@ -45,12 +45,12 @@ def _slim_wire(**overrides):
         'state': [{
             'at': 'lu_fujun', 'key': 'body_condition',
             'val': '幼时落水伤了根本，不能生育，不能行房事',
-            'basis': ['e01_01'],
+            'evidence_refs': ['e01_01'],
         }],
         'know': [{
             'who': 'yun_niang', 'how': 'learns',
             'what': '夫君幼时落水伤了根本，不能生育，也不能行房事',
-            'basis': ['e01_01'],
+            'evidence_refs': ['e01_01'],
         }],
     }
     beat.update(overrides)
@@ -63,15 +63,15 @@ def test_expand_defaults_addresses_and_range():
     wire = _slim_wire()
     wire['beats'][0]['state'].append({
         'at': 'lu_fujun+pei_shuyuan', 'key': 'kinship', 'val': 'cousins',
-        'basis': ['e01_01'],
+        'evidence_refs': ['e01_01'],
     })
     wire['beats'][0]['state'].append({
         'at': 'world', 'key': 'social_norm', 'val': 'women_cannot_stand_alone',
-        'basis': ['e01_02'],
+        'evidence_refs': ['e01_02'],
     })
     wire['beats'][0]['know'].append({
         'who': 'reader', 'how': 'learns', 'what': '夫君求娶芸娘是为报恩',
-        'basis': ['e01_02'],
+        'evidence_refs': ['e01_02'],
     })
     rc12, issues = expand_chapter_wire(wire, chapter=1)
     assert issues == []
@@ -109,16 +109,47 @@ def test_expand_defaults_on_omitted_exception_flags():
     assert beat['source_refs'] == ['e01_01', 'e01_04']
 
 
-def test_expand_registered_scope_derives_from_table():
-    """登记键（scene_location）的作用域由表固定，模型不写、写错也被覆盖。"""
+def test_scene_location_is_beat_metadata_not_a_state_effect():
+    """拍级 scene_location（2026-10-07 二次收口③）：compiler 合成登记键 world
+    效应（作用域由表固定为 scene、op/modality/disclosure 全默认），证据面＝
+    本拍 src 全体；state 里出现 scene_location 即按条目拒（单一通路，S-04）——
+    ch07 实证的两处 basis 缺字段失败从 contract 上消失。"""
+    wire = _slim_wire()
+    wire['beats'][0]['scene_location'] = '婚房'
+    rc12, issues = expand_chapter_wire(wire, chapter=1)
+    assert issues == []
+    scene = rc12['beats'][0]['effects'][0]
+    assert scene == {
+        'target': {'kind': 'world', 'char_id': None, 'subject': None, 'object': None},
+        'key': 'scene_location', 'op': 'set', 'modality': 'actual', 'value': '婚房',
+        'scope': 'scene', 'disclosure': {'visibility': 'on_page', 'known_by': []},
+        'proposition': None,
+        'basis': [{'segment': 'e01_01', 'quote': None},
+                  {'segment': 'e01_02', 'quote': None}],
+    }
+    # 单一通路：state 里再写 scene_location → 该条目 issue（可条目返修）。
+    wire = _slim_wire()
+    wire['beats'][0]['state'].append({
+        'at': 'world', 'key': 'scene_location', 'val': '婚房',
+        'evidence_refs': ['e01_01'],
+    })
+    rc12, issues = expand_chapter_wire(wire, chapter=1)
+    assert rc12 is None
+    assert issues[0][0] == ('beats', 0, 'state', 1)
+    assert '拍级字段' in issues[0][1]
+
+
+def test_registered_scope_still_derives_from_table_for_state_keys():
+    """表外不写 scope 的规则不变：登记键的作用域由表固定（本例 body_* → book），
+    模型不写、写错也被覆盖。"""
     wire = _slim_wire()
     wire['beats'][0]['state'][0] = {
-        'at': 'yun_niang', 'key': 'scene_location', 'val': '婚房',
-        'basis': ['e01_01'],
+        'at': 'yun_niang', 'key': 'body_head_covering', 'val': '头套',
+        'evidence_refs': ['e01_01'],
     }
     rc12, issues = expand_chapter_wire(wire, chapter=1)
     assert issues == []
-    assert rc12['beats'][0]['effects'][0]['scope'] == 'scene'
+    assert rc12['beats'][0]['effects'][0]['scope'] == 'book'
 
 
 def test_expand_concealed_and_prop_text_resolution():
@@ -126,7 +157,7 @@ def test_expand_concealed_and_prop_text_resolution():
     wire = _slim_wire()
     wire['beats'][0]['know'].append({
         'who': 'lu_fujun', 'how': 'asserts', 'what': '借种计划仍在推进',
-        'basis': ['e01_04'],
+        'evidence_refs': ['e01_04'],
     })
     second = {
         'ev': '深夜，夫君仍按计划行事。',
@@ -135,15 +166,15 @@ def test_expand_concealed_and_prop_text_resolution():
         'state': [{
             'at': 'lu_fujun', 'key': 'plan', 'val': '借种计划仍在推进',
             'hidden': {'by': ['lu_fujun'], 'what': '借种计划仍在推进'},
-            'basis': ['e01_04'],
+            'evidence_refs': ['e01_04'],
         }, {
             'at': 'world', 'key': 'narration_fact', 'val': '表弟确已到府',
             'prop': '表弟确已到府',
-            'basis': ['e01_04'],
+            'evidence_refs': ['e01_04'],
         }],
         'know': [{
             'who': 'reader', 'how': 'learns', 'what': '借种计划仍在推进',
-            'basis': ['e01_04'],
+            'evidence_refs': ['e01_04'],
         }],
     }
     wire['beats'].append(second)
@@ -168,11 +199,11 @@ def test_expand_prop_handles_norm_merge_and_fork():
     text = '夫君幼时落水伤了根本，不能生育，也不能行房事'
     wire['beats'][0]['know'].append({       # 标点宽度漂移的重引
         'who': 'reader', 'how': 'learns', 'what': '夫君幼时落水伤了根本,不能生育,也不能行房事',
-        'basis': ['e01_01'],
+        'evidence_refs': ['e01_01'],
     })
     wire['beats'][0]['know'].append({       # 真改写 → 新句柄
         'who': 'yun_niang', 'how': 'suspects', 'what': '夫君另有隐情未全说',
-        'basis': ['e01_01'],
+        'evidence_refs': ['e01_01'],
     })
     rc12, issues = expand_chapter_wire(wire, chapter=1)
     assert issues == []
@@ -257,7 +288,7 @@ def test_compile_v3_gates_use_slim_vocabulary():
 def test_patch_locate_positions_slim_transfer_items():
     """know 条目的 basis 段不在闭集 → 定位到 ('beats', 0, 'know', 0)。"""
     wire = _slim_wire()
-    wire['beats'][0]['know'][0]['basis'] = ['e01_99']
+    wire['beats'][0]['know'][0]['evidence_refs'] = ['e01_99']
     observation, errors = compile_chapter_observation(
         wire, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
     assert observation is None and errors
@@ -269,10 +300,21 @@ def test_patch_locate_positions_slim_transfer_items():
                for message in messages)
 
 
-def test_patch_locate_falls_back_when_unlocatable():
-    """协议形状失败（多余字段）不可条目定位 → 退整份返修。"""
+def test_patch_locate_falls_back_only_for_top_level_shape_failures():
+    """2026-10-07 二次收口④：形状错误按 pydantic 路径的可修性路由——条目内
+    多余字段（beats[0].surprise）定位到该拍窄修；顶层多余字段没有可编辑条目，
+    退整份返修。"""
     wire = _slim_wire()
     wire['beats'][0]['surprise'] = 'unknown field'
+    observation, errors = compile_chapter_observation(
+        wire, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
+    assert observation is None and errors
+    assert chapter_patch_locate(wire, errors, evidence_ids=EVIDENCE,
+                                chapter=1, character_slugs=SLUGS) == [
+        (('beats', 0), errors)]
+
+    wire = _slim_wire()
+    wire['surprise'] = 'unknown top-level field'
     observation, errors = compile_chapter_observation(
         wire, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
     assert observation is None and errors
@@ -280,17 +322,18 @@ def test_patch_locate_falls_back_when_unlocatable():
                                 chapter=1, character_slugs=SLUGS) is None
 
 
-def test_wire_rejects_quote_text_in_basis():
-    """2026-10-07 裁决的形状闸：basis 只收段 id——旧协议的逐字引文字符串
-    （哪怕逐字正确）在 wire 形状层拒收，退整份返修；转写失败类错误构造上
-    不再存在（I-13：换字面量 v6，旧 v5 回答不做推断采用）。"""
+def test_wire_rejects_quote_text_in_evidence_refs():
+    """2026-10-07 裁决的形状闸：evidence_refs 只收段 id——旧协议的逐字引文
+    字符串（哪怕逐字正确）按条目定位窄修；转写失败类错误构造上不再存在
+    （I-13：换字面量 v7，旧回答不做推断采用）。"""
     wire = _slim_wire()
-    wire['beats'][0]['state'][0]['basis'] = ['新婚夜,夫君坦白：幼时落水,伤了根本。']
+    wire['beats'][0]['state'][0]['evidence_refs'] = ['新婚夜,夫君坦白：幼时落水,伤了根本。']
     observation, errors = compile_chapter_observation(
         wire, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
     assert observation is None and any('协议校验失败' in e for e in errors), errors
     assert chapter_patch_locate(wire, errors, evidence_ids=EVIDENCE,
-                                chapter=1, character_slugs=SLUGS) is None
+                                chapter=1, character_slugs=SLUGS) == [
+        (('beats', 0, 'state', 0), errors)]
 
 
 # ── 回归：expand(slim(x)) == x（模本地句柄重命名） ─────────────────────────
@@ -344,16 +387,28 @@ def test_round_trip_rich_observation():
                 'event': '次日芸娘自问。', 'participants': ['yun_niang'],
                 'source_refs': ['e01_01', 'e01_03', 'e01_04'],
                 'scene_boundary': 'continue', 'temporal_mode': 'iterative',
-                'effects': [{
-                    'target': {'kind': 'relation', 'char_id': None,
-                               'subject': 'lu_fujun', 'object': 'pei_shuyuan'},
-                    'key': 'trust', 'op': 'unset', 'modality': 'expected',
-                    'value': None, 'scope': 'scene',
-                    'disclosure': {'visibility': 'concealed',
-                                   'known_by': ['lu_fujun']},
-                    'proposition': {'ref': 'p_hidden', 'statement': '借种仍在推进'},
-                    'basis': [{'segment': 'e01_04', 'quote': '夫君提出向表弟借种,一家三口过日子。'}],
-                }],
+                'effects': [
+                    {'target': {'kind': 'world', 'char_id': None,
+                                'subject': None, 'object': None},
+                     'key': 'scene_location', 'op': 'set', 'modality': 'actual',
+                     'value': '婚房', 'scope': 'scene',
+                     'disclosure': {'visibility': 'on_page', 'known_by': []},
+                     'proposition': None,
+                     'basis': [{'segment': 'e01_01',
+                                'quote': '新婚夜,夫君坦白：幼时落水,伤了根本,不能生,也不能行房。'},
+                               {'segment': 'e01_03', 'quote': '芸娘落泪。'},
+                               {'segment': 'e01_04',
+                                'quote': '夫君提出向表弟借种,一家三口过日子。'}]},
+                    {'target': {'kind': 'relation', 'char_id': None,
+                                'subject': 'lu_fujun', 'object': 'pei_shuyuan'},
+                     'key': 'trust', 'op': 'unset', 'modality': 'expected',
+                     'value': None, 'scope': 'scene',
+                     'disclosure': {'visibility': 'concealed',
+                                    'known_by': ['lu_fujun']},
+                     'proposition': {'ref': 'p_hidden', 'statement': '借种仍在推进'},
+                     'basis': [{'segment': 'e01_04', 'quote': '夫君提出向表弟借种,一家三口过日子。'}],
+                     },
+                ],
                 'cognition': [
                     {'proposition': {'ref': 'p_impotent', 'statement': None},
                      'holder': 'reader', 'mode': 'confirms',
@@ -376,11 +431,13 @@ def test_round_trip_rich_observation():
     assert first['state'][0]['at'] == 'lu_fujun' and 'op' not in first['state'][0]
     assert first['loops'] == observation['beats'][0]['loops']
     assert 'new_scene' not in second and second['iterative'] is True
+    # scene_location 效应还原为拍级字段（合成效应的逆），不留在 state。
+    assert second['scene_location'] == '婚房'
     assert second['state'][0] == {
         'at': 'lu_fujun+pei_shuyuan', 'key': 'trust', 'op': 'unset',
         'modality': 'expected', 'scope': 'scene',
         'hidden': {'by': ['lu_fujun'], 'what': '借种仍在推进'},
-        'basis': ['e01_04'],
+        'evidence_refs': ['e01_04'],
     }
     assert second['src'] == ['e01_01', 'e01_03', 'e01_04']
     assert second['know'][0]['what'] == '夫君不能生育'      # 重引文本经句柄表还原

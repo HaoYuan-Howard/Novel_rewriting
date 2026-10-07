@@ -218,7 +218,7 @@ HookContext.display_faces/avoid_lines、BODY_VALIDATOR v2（新字段均可缺�
 | 字符串判据身份 | `novel/core/validation.py::validation_identity` 集中解码仍现役字符串判据；材料、章内悬念冲突与关联问题已用结构化身份。剩余判据全部提供稳定身份后删除字符串前缀兼容，不在各节点扩散解析 |
 | 旧 associate 误派更正 | `novel/stages/issue_recovery.py::_legacy_loop_correction` 只从完整正式章观察重建历史重复 close 错误，证明旧问题全部覆盖后才显式 superseded；不解析文案猜 owner、不退费、不重置轮数。旧字符串 association_undecided 账全部只读归档且不再恢复后删除该兼容分支 |
 | 已退役链 | 拒识legacy_incompatible，RETIRED_ARTIFACT_PATHS和盘面探测维持闭合；守卫`tests/test_retired_surface_scan.py`，不复活历史解码面。三批退役名册统一登记在`tests/test_retired_surface_scan.py::CLEANUP_2026_10_04_MODULES`，回来即红 |
-| basis wire 引文面（v5／names v3 wire） | 2026-10-07 指针化（用户裁决「模型只选段、代码切原文」）：wire basis 只收段 id（book/chapters v6、names wire v4），旧 v5/v3 wire 回答按协议字面量关闭式拒收、不做推断采用（prompt 变化本就换请求身份）；`locate_quote`/`canonical_quote`/`content_equivalent_slice`/`norm_index` 已随批删除。canonical 三者（v4/v4/v3）不动照读——canonical 直通读面（`{segment,quote}` 形 basis）作为 S-01 登记过的兼容层保留，删除条件＝canonical 自身瘦身升版时与 slim 适配层一并退役（见 `novel/stages/stage2/slim.py` 模块头） |
+| basis wire 引文面（≤v6／names ≤v4 wire） | 2026-10-07 指针化（用户裁决「模型只选段、代码切原文」）＋同日二次收口（wire 词汇 `evidence_refs`、book/chapters wire v7、names wire v5）：旧 wire 回答（逐字引文、或 v6/v4 段 id 词汇）按协议字面量关闭式拒收、不做推断采用（prompt 变化本就换请求身份）；`locate_quote`/`canonical_quote`/`content_equivalent_slice`/`norm_index` 已随批删除。canonical 三者（v4/v4/v3）不动照读——canonical 直通读面（`{segment,quote}` 形 basis）作为 S-01 登记过的兼容层保留，删除条件＝canonical 自身瘦身升版时与 slim 适配层一并退役（见 `novel/stages/stage2/slim.py` 模块头） |
 
 ### 候选根运行记录映射与删除条件
 

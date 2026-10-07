@@ -313,13 +313,22 @@ def _route_wire(wire: Any, *, chapter: int | None
     canonical 形状 dict 再进既有管道；canonical 形状直通——wire 领养与既有
     测试的读面（S-01 登记过的兼容层，删除条件＝canonical 自身瘦身升版）。
     返回 (wire, 路径词汇, 条目级 issues)；issues 非空即本轮 wire 不可判（路径
-    None＝形状失败走 R3 整份修订，否则可条目返修——判定与定位同一份材料）。
+    None＝顶层形状失败走 R3 整份修订，否则可条目返修——判定与定位同一份材料。
+    2026-10-07 二次收口④：wire 协议形状失败按 pydantic 路径定位条目，
+    `beats[3].state[0]` 一类缺字段窄修该条目，不再一律整份）。
     """
     if isinstance(wire, dict) and wire.get('protocol_version') == STAGE2_CHAPTERS_WIRE_PROTOCOL:
         try:
             expanded, issues = expand_chapter_wire(wire, chapter=chapter)
         except ValidationError as exc:
-            return None, ('state', 'know'), [(None, f'章观察瘦 wire 协议校验失败：{exc}')]
+            from novel.stages.common import wire_shape_issues
+            located = wire_shape_issues(exc, kind='chapters')
+            if not located or any(paths is None for paths, _message in located):
+                return None, ('state', 'know'), [
+                    (None, f'章观察瘦 wire 协议校验失败：{exc}')]
+            return None, ('state', 'know'), [
+                (paths[0], f'章观察瘦 {message}')
+                for paths, message in located]
         if expanded is None:
             return None, ('state', 'know'), issues
         return expanded, ('state', 'know'), []

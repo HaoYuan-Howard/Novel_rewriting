@@ -121,19 +121,28 @@ LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模
 r10b 实证：wire 体积降至 56%，`expand(slim(现产物)) == 现产物` 11/11 章
 （模本地句柄重命名）；basis 逐字证据、闭集闸、D2 引文归一判据不放宽。
 
-**证据寻址改版（RC-26～29，2026-10-04，rc15；2026-10-07 basis 指针化收口）**：
+**证据寻址改版（RC-26～29，2026-10-04，rc15；2026-10-07 basis 指针化＋二次收口）**：
 cs_golden 三书全部停在 `str06.stage2.chapters`，根因是证据切分只在「。」后切——
 对白收尾「」」落到下一段、问号叹号收尾的多个自然段并成一段，段号标签悬在上一段
 文字下方；模型系统性把引文挂到偏大的段号上（61 份被拒回答 52 份只因段号），返修在
 「地址错／不在 src」间来回。改为：① 证据段＝一个非空自然段，请求一段一行
 （`build_evidence`、`render_evidence_block`）；② src 数组元素可为区间；③ 条目返修轮
 收到整份回答按整份验收。RC-27 先把段号交给代码（wire 只给引文）；2026-10-07
-用户裁决「模型只选段、代码切原文」完成另一半——book／chapters 的 wire basis 只给
-**段 id**（`stage2-book-v6`／`stage2-chapters-v6`），引文＝段全文由 compiler 派生
-（`resolver.basis_quote`），转写失败类错误构造上消失；names 同批新增 wire 面
-`stage2-names-v4`（canonical 三者 v4/v4/v3 不变，旧盘面照读）。规格
-`docs/specs/repair_convergence.feature` RC-26～29，反例
-`tests/test_stage2_evidence_addressing.py`。
+用户裁决「模型只选段、代码切原文」完成另一半——book／chapters 的 wire 只给
+**段 id**，引文＝段全文由 compiler 派生（`resolver.basis_quote`），转写失败类
+错误构造上消失；names 同批新增独立 wire 面（canonical 三者 v4/v4/v3 不变，旧盘面
+照读）。**同日二次收口（用户四项裁决，flash/low 首跑实证 ch01/ch07 各因 state 漏
+basis 字段整份返修后）**：① wire 词汇改 `evidence_refs`（与 canonical 的 basis
+分层）——book/chapters wire 升 v7、names wire 升 v5；② `scene_location` 上移
+`SlimBeat` 拍级字段（compiler 合成登记键 world 效应、证据面＝本拍 src 全体，
+state 里出现即拒——单一通路）；③ wire 形状失败按 pydantic 路径条目级窄修
+（`wire_shape_issues`：`beats[i].state[j]`／`initial_state[i]` 一类缺字段窄修该
+条目，级联派生错误同根因只报最深一条，仅顶层结构／协议字面量失败退整份）；
+④ 已核实的 ②既有事实——op/modality/scope/disclosure/proposition 默认、target
+地址串、命题句柄、knowledge 缺省均已是 compiler-owned（瘦 wire 本就如此，verbose
+null 四元组只存在于 canonical）。规格 `docs/specs/repair_convergence.feature`
+RC-26～29，反例 `tests/test_stage2_evidence_addressing.py`、
+`tests/test_str06_chapter_slim.py`。
 
 **设计瘦 wire（CS-3 审阅修复，2026-10-03；事实锁引用升 v8，2026-10-04）**：LLM 输出为
 `stage4-design-v8`（`contracts/schema/design.py::DesignWireV8`）。`real` 保留
@@ -181,9 +190,9 @@ Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14�
   已购相同请求可经 `--check-only` 免费重验；机械通过不证明关联语义正确。
 - **证据（a1）**：Stage2 canonical basis 是 `EvidenceQuote{segment, quote}`——该段
   属条目自身 source_refs 且 quote 是段全文（compiler 派生；canonical 直通面仍按
-  `verify_quote` 逐字复验，不模糊匹配）；2026-10-07 起三方 wire（book v6／
-  chapters v6／names v4）的 basis 只给段 id，引文由 `resolver.basis_quote` 按段
-  全文切出；`Effect.modality` 闭集必填。Blueprint v15 派生证据窗口
+  `verify_quote` 逐字复验，不模糊匹配）；2026-10-07 起三方 wire（book v7／
+  chapters v7／names v5）的 `evidence_refs` 只给段 id，引文由 `resolver.basis_quote`
+  按段全文切出；`Effect.modality` 闭集必填。Blueprint v15 派生证据窗口
   （被引段全文＋同章前后各一句、重叠机械合并）；Preserve 输入从整份 JSON 倾倒
   改为 `project_preserve_view` 确定性渲染（R10-0.3 实证 29.9k token/轮）。
 - **锚定与 series（a2）**：义务以 `anchors` 引用投影句柄（`b拍.e|c|l`／`s0_*`／

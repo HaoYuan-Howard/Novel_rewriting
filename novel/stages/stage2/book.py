@@ -105,20 +105,23 @@ def _basis_label(group: str, atom: Mapping[str, Any]) -> str:
 
 
 def _expand_wire_basis(wire: dict) -> dict:
-    """RC-27 起点上的指针化（2026-10-07 裁决）：book wire
-    （`STAGE2_BOOK_WIRE_PROTOCOL`）→ canonical 形状副本。
+    """wire（`STAGE2_BOOK_WIRE_PROTOCOL`，evidence_refs 只给段 id）→ canonical
+    形状副本（2026-10-07 裁决：模型只选段、代码切原文）。
 
-    初态／约束的 basis 段 id 串变成 ``{'segment': id, 'quote': None}``，引文
-    由 `_derive_basis_quotes` 按段全文填入。非字符串条目原样保留，交 wire
-    模型校验报告（不宽松接纳坏输入）。不改调用方对象（I-24）。
+    初态／约束的 evidence_refs 段 id 串变成 canonical 的
+    ``basis: [{'segment': id, 'quote': None}]``，引文由 `_derive_basis_quotes`
+    按段全文填入。非列表形状原样保留，交 wire 模型校验报告（不宽松接纳坏
+    输入）。不改调用方对象（I-24）。
     """
     expanded = deepcopy(wire)
     expanded['protocol_version'] = STAGE2_BOOK_PROTOCOL
     for group in ('initial_state', 'world_constraints'):
         for atom in expanded.get(group) or ():
-            if isinstance(atom, dict) and isinstance(atom.get('basis'), list):
-                atom['basis'] = [{'segment': item, 'quote': None} if isinstance(item, str)
-                                 else item for item in atom['basis']]
+            if isinstance(atom, dict) and isinstance(atom.get('evidence_refs'), list):
+                atom['basis'] = [{'segment': item, 'quote': None}
+                                 if isinstance(item, str) else item
+                                 for item in atom['evidence_refs']]
+                del atom['evidence_refs']
     return expanded
 
 
@@ -164,6 +167,12 @@ def _shape_view(wire: dict) -> dict:
                         basis['segment'] = _UNLOCATED_SEGMENT
                     if basis.get('quote') is None:
                         basis['quote'] = _UNDERIVED_QUOTE
+            # wire 形状失败（如漏 evidence_refs）时 basis 可能整键缺失——补占位
+            # 让其余字段照常过形状复验；该错误已由 ⑤ 的 wire 闸按路径报告，
+            # 这里不重复整份化（2026-10-07 二次收口④）。
+            if isinstance(atom, dict) and not atom.get('basis'):
+                atom['basis'] = [{'segment': _UNLOCATED_SEGMENT,
+                                  'quote': _UNDERIVED_QUOTE}]
     return view
 
 
@@ -362,13 +371,17 @@ def _compile_book_view(
         errors.append(message)
 
     # ⑤ 协议形状（版本字面量、slug 形状、target 形状、转移原子闭集）；LLM
-    # 输出面另按 wire 模型复验（basis 只收段 id 串，不宽松接纳 canonical 形状）。
+    # 输出面另按 wire 模型复验（evidence_refs 只收段 id 串，不宽松接纳 canonical
+    # 形状）。形状失败按 pydantic 路径定位条目（2026-10-07 二次收口④：
+    # initial_state[i]／characters.{slug} 一类窄修该条目，顶层失败退整份）。
     if is_wire:
         try:
             BookObservationWire.model_validate(original)
         except ValidationError as exc:
-            fail(None, f'book 观察 wire 协议校验失败：{exc}')
-            errors.append(f'book 观察 wire 协议校验失败：{exc}')
+            from novel.stages.common import wire_shape_issues
+            for paths, message in wire_shape_issues(exc, kind='book'):
+                fail(paths[0] if paths else None, f'book 观察 {message}')
+                errors.append(f'book 观察 {message}')
     try:
         # 占位段号只在本轮已带错（必不发布）时用于形状复验，见 `_UNLOCATED_SEGMENT`。
         observation = BookObservation.model_validate(_shape_view(wire) if errors else wire)

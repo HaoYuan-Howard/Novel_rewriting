@@ -25,7 +25,7 @@ def _case():
     # names wire 的 basis 只给段 id（2026-10-07 裁决）；ch02 是 canonical 直通
     # 面，basis 保持 {segment, quote} 形。
     row = {'literal': '云孃', 'status': 'same', 'char_id': 'yun_niang', 'surface': '云娘',
-           'basis': ['e02_03'], 'reason': '上下文延续同一人物，原文该处异写。'}
+           'evidence_refs': ['e02_03'], 'reason': '上下文延续同一人物，原文该处异写。'}
     wires['names']['resolutions'] = [row]
     wires['ch02']['beats'].append(_beat('云孃决定次日出门', ('e02_03',),
         cognition=[{'proposition': {'ref': 'p_out', 'statement': '云孃决定次日出门'},
@@ -84,7 +84,7 @@ def test_unresolved_identity_stops_before_associate_purchase_and_publish(tmp_pat
 @pytest.mark.parametrize('defect,expected', [
     ('literal', '原字面'), ('segment', '不在证据闭集内'), ('target', '未登记'),
     ('registered', '已在人物表'), ('conflict', '冲突'),
-    ('old', 'stage2-names-v4'),
+    ('old', 'stage2-names-v5'),
 ])
 def test_name_proof_refuses_bad_evidence_target_conflict_and_old_protocol(defect, expected):
     chapters, wires = _case()
@@ -96,9 +96,9 @@ def test_name_proof_refuses_bad_evidence_target_conflict_and_old_protocol(defect
     if defect == 'literal':
         # 段在闭集但不含异写字面——引文＝段全文由代码切出，「原字面未出现」
         # 的锚定检查照拦（比旧手抄引文形态更强：整段可查）。
-        row['basis'] = ['e01_01']
+        row['evidence_refs'] = ['e01_01']
     elif defect == 'segment':
-        row['basis'] = ['e99_01']
+        row['evidence_refs'] = ['e99_01']
     elif defect == 'target':
         row['surface'] = '未登记称谓'
     elif defect == 'registered':
@@ -119,10 +119,12 @@ def test_mapping_is_local_and_idempotent():
     wires['ch01']['beats'][0]['event'] = '云孃旁观'
     book = BookObservation.model_validate(wires['book'])
     chapters = {n: ChapterObservation.model_validate(wires[f'ch{n:02d}']) for n in (1, 2, 3)}
-    # canonical NameStructure：basis 是段号＋派生引文（wire 的裸段 id 经 compile 派生后的形态）。
+    # canonical NameStructure：basis 是段号＋派生引文（wire 的 evidence_refs
+    # 裸段 id 经 compile 派生后的形态；构造时剥掉 wire 键）。
     canonical = {k: v for k, v in wires['names'].items() if k != 'protocol_version'}
-    canonical['resolutions'] = [dict(canonical['resolutions'][0], basis=[
-        {'segment': 'e02_03', 'quote': '云孃决定次日出门。'}])]
+    canonical['resolutions'] = [dict(
+        {k: v for k, v in canonical['resolutions'][0].items() if k != 'evidence_refs'},
+        basis=[{'segment': 'e02_03', 'quote': '云孃决定次日出门。'}])]
     structure = NameStructure.model_validate(canonical)
     normalized = normalize_name_observations(book, chapters, structure)
     assert normalized[1][1].beats[0].event == '云孃旁观'

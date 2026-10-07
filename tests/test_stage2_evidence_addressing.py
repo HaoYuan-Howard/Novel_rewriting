@@ -134,7 +134,7 @@ def _slim_chapter(src, basis, *, who='yun_niang'):
         {'ev': '夫君送走表弟后安慰芸娘，说会再开导表弟。', 'who': ['fu_jun'],
          'src': src, 'new_scene': True,
          'know': [{'who': who, 'how': 'hears_claim', 'what': '夫君会再开导表弟',
-                   'basis': [basis]}]}]}
+                   'evidence_refs': [basis]}]}]}
 
 
 def test_chapter_basis_quote_is_derived_from_segment_text():
@@ -179,7 +179,7 @@ def test_book_basis_quote_is_derived_within_item_refs():
             'initial_state': [{
                 'target': {'kind': 'character', 'char_id': 'fu_jun'},
                 'key': 'has_cousin', 'value': '有个表弟', 'persistence': 'stable',
-                'source_refs': ['e00_02'], 'basis': ['e00_02']}]}
+                'source_refs': ['e00_02'], 'evidence_refs': ['e00_02']}]}
     original = deepcopy(wire)
     observation, errors = compile_book_observation(wire, evidence=evidence)
     assert errors == [] and wire == original

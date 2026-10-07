@@ -390,7 +390,7 @@ def test_quote_repair_can_update_parent_refs_in_one_round(tmp_path):
         'ev': '夫君向芸娘坦白不能生育。', 'who': ['fu_jun', 'yun_niang'],
         'src': 'e01_01', 'new_scene': True,
         'know': [{'who': 'yun_niang', 'how': 'learns', 'what': '夫君不能生育',
-                  'basis': ['e01_02']}],
+                  'evidence_refs': ['e01_02']}],
     }, {'ev': '芸娘进房。', 'who': ['yun_niang'], 'src': 'e01_01'}]}
 
     def validate(value):
@@ -422,7 +422,7 @@ def test_parent_patch_absorbs_child_errors_without_overlapping_paths():
     from tests.test_str06_chapter_slim import _slim_wire, EVIDENCE, SLUGS
     wire = _slim_wire()
     wire['beats'][0]['who'].append('ghost')
-    wire['beats'][0]['know'][0]['basis'] = ['e01_99']
+    wire['beats'][0]['know'][0]['evidence_refs'] = ['e01_99']
     _, errors = compile_chapter_observation(wire, evidence_ids=EVIDENCE,
         chapter=1, character_slugs=SLUGS)
     assert len(errors) == 2
@@ -438,15 +438,53 @@ def test_basis_pointer_inside_src_needs_no_quote_copy():
     from novel.stages.stage2 import chapter_patch_locate, compile_chapter_observation
     from tests.test_str06_chapter_slim import _slim_wire, EVIDENCE, SLUGS
     wire = _slim_wire()
-    wire['beats'][0]['know'][0]['basis'] = ['e01_02']
+    wire['beats'][0]['know'][0]['evidence_refs'] = ['e01_02']
     observation, errors = compile_chapter_observation(wire, evidence_ids=EVIDENCE,
         chapter=1, character_slugs=SLUGS)
     assert errors == []
     stored = observation.beats[0].cognition[0].basis[0]
     assert stored.segment == 'e01_02' and stored.quote == EVIDENCE['e01_02']['text']
-    wire['beats'][0]['know'][0]['basis'] = ['e01_99']
+    wire['beats'][0]['know'][0]['evidence_refs'] = ['e01_99']
     _, errors = compile_chapter_observation(wire, evidence_ids=EVIDENCE,
         chapter=1, character_slugs=SLUGS)
     assert len(errors) == 1
     assert chapter_patch_locate(wire, errors, evidence_ids=EVIDENCE,
         chapter=1, character_slugs=SLUGS) == [(('beats', 0, 'know', 0), errors)]
+
+
+def test_missing_evidence_refs_field_is_repaired_path_locally():
+    """2026-10-07 二次收口④（ch01 实证形态）：state 转移漏带 evidence_refs 的
+    形状失败按 pydantic 路径窄修该条目（beats[0].state[0]），不再整份重写。"""
+    from novel.stages.stage2 import chapter_patch_locate, compile_chapter_observation
+    from tests.test_str06_chapter_slim import _slim_wire, EVIDENCE, SLUGS
+    wire = _slim_wire()
+    del wire['beats'][0]['state'][0]['evidence_refs']
+    observation, errors = compile_chapter_observation(wire, evidence_ids=EVIDENCE,
+        chapter=1, character_slugs=SLUGS)
+    assert observation is None and len(errors) == 1
+    assert 'Field required' in errors[0] and 'evidence_refs' in errors[0]
+    assert chapter_patch_locate(wire, errors, evidence_ids=EVIDENCE,
+        chapter=1, character_slugs=SLUGS) == [(('beats', 0, 'state', 0), errors)]
+
+
+def test_book_missing_evidence_refs_field_is_repaired_path_locally():
+    """同尺的书级面：initial_state 条目漏 evidence_refs → 窄修该条目。"""
+    from novel.stages.chain import build_evidence
+    from novel.stages.stage2 import book_patch_locate, compile_book_observation
+    from tests.str06_expression_inputs import sample_book_expression
+    chapters = [{'chapter_ordinal': 1, 'text': '夫君谋划向他表弟借种。'}]
+    evidence = build_evidence(chapters)
+    characters = {'fu_jun': {'canonical': '夫君', 'surfaces': [
+        {'surface': '夫君', 'source_refs': ['e01_01']}]}}
+    wire = {'protocol_version': 'stage2-book-v7',
+            **sample_book_expression(characters), 'characters': characters,
+            'initial_state': [{
+                'target': {'kind': 'character', 'char_id': 'fu_jun'},
+                'key': 'has_cousin', 'value': '有个表弟', 'persistence': 'stable',
+                'source_refs': ['e01_01']}],
+            'world_constraints': []}
+    observation, errors = compile_book_observation(wire, evidence=evidence)
+    assert observation is None and len(errors) == 1, errors
+    assert 'Field required' in errors[0] and 'evidence_refs' in errors[0]
+    assert book_patch_locate(wire, errors, evidence=evidence) == [
+        (('initial_state', 0), errors)]

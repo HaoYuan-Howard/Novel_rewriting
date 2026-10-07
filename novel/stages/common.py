@@ -37,7 +37,7 @@ import json
 import re
 from typing import Any, Callable, Iterable, Mapping, NamedTuple, Protocol, Sequence
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from contracts.schema.book_ir import (
     ChapterIR, ChapterWriterPacket, PacketBrief, RealizationContract,
@@ -686,14 +686,14 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
 【证据段 id 清单】（每行一个自然段，行首方括号内是该段的 id；source_refs 只能从中选）
 {evidence}
 
-输出 JSON 顶层：{{"protocol_version":"stage2-book-v6","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
+输出 JSON 顶层：{{"protocol_version":"stage2-book-v7","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
 个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。
 
-【证据段指针】（R10a a1）initial_state 与 world_constraints 的每个条目必须带 basis：
+【证据段指针】（R10a a1）initial_state 与 world_constraints 的每个条目必须带 evidence_refs：
 ["e00_02", ...]（至少 1 条，只写段 id、不抄原文——逐字引文由程序按段全文切出）。
-basis 段 id 必须出自该条目自身的 source_refs（引你所引：先在 source_refs 里列段，
-再从中选 basis）；不拿人名或动作词凑数；判断依据含限定（以为／觉得／像是／预计／
-约／几天后）时，所选段必须实际承载该限定原文。"""
+evidence_refs 必须出自该条目自身的 source_refs（引你所引：先在 source_refs 里列段，
+再从中选 evidence_refs）；不拿人名或动作词凑数；判断依据含限定（以为／觉得／像是／
+预计／约／几天后）时，所选段必须实际承载该限定原文。"""
 
 CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：ev 是给人读的事件表述，需要延续的变化全部由三类转移承载——state（事实）、know（认知）、loops（悬念）。机械字段（拍号、默认值、命题句柄等）由 compiler 派生，你只写判断与例外。
 
@@ -723,7 +723,7 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      同一场景，第一拍不写 new_scene，否则写；
    - iterative：重复行为（如"连续三夜"）才写 true；缺省＝单次行为。
 2. state：事实的 postcondition——本拍结束后仍成立、且后续涉及该维度时必须以它为准的
-   **叙述确立的**事实。每项 {{"at","key","val"[,"op","modality","scope","basis","hidden","prop"]}}：
+   **叙述确立的**事实。每项 {{"at","key","val"[,"op","modality","scope","evidence_refs","hidden","prop"]}}：
    - at：作用地址——人物 slug｜关系 "subject+object"（顺序＝作用方向）｜"world"；
    - 只记叙述确立的事实（含 unknown）："谁认为、谁声称什么"只进 know；
      自述与行为、内心矛盾时，事实层只记行为与叙述确立的事实，自述记进 ev；
@@ -732,8 +732,10 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    - 同一语义变化只选一个最自然的 owner：人物自己的意图/心态归其 slug；双方已形成的
      关系事实归 "a+b"；客观环境归 "world"；未决问题归 loops。不为"完整"把同一变化
      在人物和关系各写一遍；
-   - 位置分轴（登记键，作用域由 compiler 按表固定）：当前位置 scene_location（场景
-     作用域，换场即失效）、长期居所 residence（book 作用域，换场不清除）；身体状态
+   - 位置分轴（作用域由 compiler 按表固定）：**当前位置是拍级字段 scene_location**
+     （与 new_scene／iterative 同级，换景或首次交代位置时给，如 "scene_location":"饭厅"；
+     不写进 state——compiler 会把它编成场景作用域的登记效应）；长期居所 residence 是
+     book 作用域的普通 state 键（换场不清除）；身体状态
      各自一键（body_consciousness／body_restraint／body_head_covering 或新的英文蛇形
      键），不塞进位置值；whereabouts／hiding_place／location 已退役，用了即拒；
    - op 缺省＝set（赋新值）；另可选 unset(清除，不带 val)／add(集合加入)／remove
@@ -776,13 +778,13 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    合法，但请节制；这类拍的比例会被按章报出，供离线核读。
 6. 前文与正文的关系：上方前文原文是只读参考——本拍事实以本章正文原文为准，不得为迁就
    前文改写施事、受事或动作主体；前文与正文不一致时，按正文记录。
-7. 证据段指针与时态（R10a a1）：state 与 know 的每条转移必须带 basis：
+7. 证据段指针与时态（R10a a1）：state 与 know 的每条转移必须带 evidence_refs：
    ["e01_03", ...]（至少 1 条，只写段 id、不抄原文——逐字引文由程序按段全文切出）。
-   basis 段 id 必须属于本拍 src 覆盖的段（引你所引：先在 src 里圈段，再从中选 basis）。
-   认识限定（觉得像是／以为／听说）只进 know 的 how（suspects／believes／
-   hears_claim），what 写命题本身；所选段必须实际承载该限定原文。
+   evidence_refs 必须属于本拍 src 覆盖的段（引你所引：先在 src 里圈段，再从中选
+   evidence_refs）。认识限定（觉得像是／以为／听说）只进 know 的 how（suspects／
+   believes／hears_claim），what 写命题本身；所选段必须实际承载该限定原文。
 
-输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v6","beats":[...]}}
+输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v7","beats":[...]}}
 不要把财富、位置等不同维度塞入同一个 key。"""
 
 #: 七类保存类别与 `contracts/schema/policy.py::PreserveKind` 同源（B2）：定义只在
@@ -1096,14 +1098,14 @@ NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化
      · 单名写 {given}；化名写 {alias:al_x}；
      · 纯称谓（夫君、表弟、嫂嫂等不含姓名部件的）写 null；
      · 模板渲染结果必须与 surface 逐字一致；纯称谓里不得含本人姓或名字面。
-3. resolutions：核验原文的疑似姓名异写／笔误，逐条给 {literal,status,char_id,surface,basis,reason}。
-   literal原样抄原字面；basis给证据清单中的段 id（如["e03_05"]，不抄原文——逐字引文由程序
+3. resolutions：核验原文的疑似姓名异写／笔误，逐条给 {literal,status,char_id,surface,evidence_refs,reason}。
+   literal原样抄原字面；evidence_refs给证据清单中的段 id（如["e03_05"]，不抄原文——逐字引文由程序
    按段全文切出），所选段必须实际出现该异常字面并承载判断上下文。
    上下文足以证明同一人物时status="same"，char_id与surface指向人物账已有称谓，reason说明依据；
    只在异常字面出现的证据局部授权归一，不授权全书替换。证据不足／有不同解释时status="unresolved"，
    char_id与surface均null并说明歧义；不得凭读音、字形或常见姓名猜测，也不得把真实化名误当笔误。
    没有发现给空数组；同一局部字面不可有相互冲突的指向。原文、引文与逐章观察不由本节点改写。
-输出 JSON 顶层：{"protocol_version":"stage2-names-v4","families":{...},"people":{...},"resolutions":[]}"""
+输出 JSON 顶层：{"protocol_version":"stage2-names-v5","families":{...},"people":{...},"resolutions":[]}"""
 
 HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。brief 明确入口知识、跳时定位与末尾悬念；POV 可以与正文不同，事实和披露边界一致。只输出设计 JSON，不写 prose
 （wire 协议 stage4-hook-design-v1）。位置引用只给分量（scene=场景 id、beat=拍 id，
@@ -2792,3 +2794,49 @@ def group_located_errors(
             if not any(item is hit for item in bucket):
                 bucket.append(hit)
     return list(grouped.items())
+
+
+def wire_shape_issues(
+    exc: ValidationError, *, kind: str,
+) -> list[tuple[Sequence[EntryPath] | None, str]]:
+    """wire 协议形状失败 → 条目级 located issue（2026-10-07 二次收口④：
+    形状错误按 pydantic 路径的可修性路由，不按「形状=整份」粗分类）。
+
+    `beats[3].state[0].evidence_refs` 缺字段一类错误给出条目路径（patch 协议
+    窄修该条目）；顶层结构／协议字面量失败没有可编辑条目 → None（退整份）。
+    返回形状与 `group_located_errors` 的 `located` 入参一致（每条错误一项，
+    None＝wire 级）。`kind`：``'chapters'`` 映射拍/转移条目，``'book'`` 映射
+    人物/初态/约束/表达条目。
+    """
+    issues: list[tuple[Sequence[EntryPath] | None, str]] = []
+    raw = exc.errors()
+    # 级联派生错误过滤：缺字段会让所在 tuple 校验连锁报 too_short／missing
+    #（loc 是同根因更长 loc 的严格前缀，无条目坐标）——同根因只报最深一条，
+    # 不让级联项把可窄修的条目错误拖成整份返修。
+    locs = [tuple(error.get('loc') or ()) for error in raw]
+    keep = [i for i, loc in enumerate(locs)
+            if not any(other != loc and other[:len(loc)] == loc for other in locs)]
+    for i in keep:
+        error = raw[i]
+        loc = locs[i]
+        path: EntryPath | None = None
+        if kind == 'chapters':
+            if loc[:1] == ('beats',) and len(loc) >= 2 and isinstance(loc[1], int):
+                path = ('beats', loc[1])
+                if len(loc) >= 4 and loc[2] in ('state', 'know') \
+                        and isinstance(loc[3], int):
+                    path = path + (loc[2], loc[3])
+        elif kind == 'book':
+            if loc[:1] in (('initial_state',), ('world_constraints',)) \
+                    and len(loc) >= 2 and isinstance(loc[1], int):
+                path = (loc[0], loc[1])
+            elif loc[:1] == ('characters',) and len(loc) >= 2:
+                path = ('characters', loc[1])
+                if len(loc) >= 4 and loc[2] == 'surfaces' and isinstance(loc[3], int):
+                    path = path + ('surfaces', loc[3])
+            elif loc[:1] == ('expression',):
+                path = ('expression',)
+        message = (f'wire 协议校验失败：{error.get("msg")}'
+                   f'（{".".join(map(str, loc))}）')
+        issues.append(((path,) if path is not None else None, message))
+    return issues

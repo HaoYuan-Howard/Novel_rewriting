@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """slim —— 章观察瘦 wire 的确定性适配层（CS-2 第一步，2026-10-03；RC-27/28
-升 stage2-chapters-v5，2026-10-04；2026-10-07 basis 指针化升 v6）。
+升 v5，2026-10-04；2026-10-07 basis 指针化升 v6；同日二次收口升 v7——
+wire/canonical 词汇分层：evidence_refs 只给段 id，scene_location 上移拍级）。
 
 【职责】LLM 面与 canonical 面之间的唯一转换：`expand_chapter_wire` 把瘦 wire
 派生成 canonical（`STAGE2_CHAPTERS_PROTOCOL`）形状的 dict，`slim_chapter_wire`
 是它的逆（迁移与回归用：expand(slim(现产物)) 再经段派生 == 现产物）。纯函数、
 不改输入（I-24）、不落盘——落盘仍是 `ChapterObservation`，下游消费者不变。
-basis 在 wire 上只是段 id（2026-10-07 裁决：模型只选段、代码切原文）：
+evidence_refs 在 wire 上只是段 id（2026-10-07 裁决：模型只选段、代码切原文）：
 expand 产出 ``{'segment': id, 'quote': None}``，引文由 chapters 管道的
-Resolver 派生步按段全文填入（本模块不看原文）。
+Resolver 派生步按段全文填入（本模块不看原文）。拍级 `scene_location` 由
+expand 合成登记键 world 效应（首条），证据面＝本拍 src 全体；state 里出现
+scene_location 即拒（防双路径，S-04）。
 
 【瘦在哪（r10b 全产物实证，132 拍／85 效应／60 认知）】
   • 默认值派生：scene_boundary 112/132 continue、temporal_mode 121/132 single、
@@ -127,12 +130,13 @@ class _PropRegistry:
 def expand_chapter_wire(
     wire: Any, *, chapter: int | None = None,
 ) -> tuple[dict | None, list[tuple[tuple[str | int, ...], str]]]:
-    """瘦 wire（v5）→ canonical 形状 dict（`STAGE2_CHAPTERS_PROTOCOL`）＋条目级 issue。
+    """瘦 wire（v7）→ canonical 形状 dict（`STAGE2_CHAPTERS_PROTOCOL`）＋条目级 issue。
 
-    纯派生（I-15）：默认值回填、地址串展开、src 区间枚举、命题句柄派发；
-    返回的 dict 交给 `compile_chapter_observation` 的既有管道（引文归一／
-    机械闸／协议校验）——本函数不做语义判定，只做可机械推导的字段。issue
-    带 wire 的 JSON 路径（条目级返修面，CS-patch）。
+    纯派生（I-15）：默认值回填、地址串展开、src 区间枚举、命题句柄派发、
+    拍级 scene_location 合成登记键效应；返回的 dict 交给
+    `compile_chapter_observation` 的既有管道（段派生／机械闸／协议校验）——
+    本函数不做语义判定，只做可机械推导的字段。issue 带 wire 的 JSON 路径
+    （条目级返修面，CS-patch；wire 协议形状失败由调用方按 pydantic 路径定位）。
     """
     model = ChapterObservationWire.model_validate(wire)
     issues: list[tuple[tuple[str | int, ...], str]] = []
@@ -145,6 +149,14 @@ def expand_chapter_wire(
             issues.append((('beats', index), src_error))
         effects_out: list[dict] = []
         for j, effect in enumerate(beat.state):
+            if effect.key == 'scene_location':
+                # 单一通路（S-04）：场景位置走拍级字段，state 里出现即拒——
+                # 双路径会让 canonical 出现两种来源的同一登记键。
+                issues.append((
+                    ('beats', index, 'state', j),
+                    f'{where} state[{j + 1}] 用 scene_location 表达场景位置——'
+                    'scene_location 是拍级字段（beats[i].scene_location），不进 state'))
+                continue
             target, target_error = _target_of(effect.at, where)
             if target_error is not None:
                 issues.append((('beats', index, 'state', j), target_error))
@@ -172,7 +184,21 @@ def expand_chapter_wire(
                 'scope': scope,
                 'disclosure': disclosure,
                 'proposition': proposition,
-                'basis': [{'segment': ref, 'quote': None} for ref in effect.basis],
+                'basis': [{'segment': ref, 'quote': None} for ref in effect.evidence_refs],
+            })
+        if beat.scene_location is not None:
+            # 拍级场景位置 → 登记键 world 效应（R-2.14 表固定 scene 作用域）。
+            # 证据面＝本拍 src 全体（覆盖性证据，不猜具体句，I-21）。
+            effects_out.insert(0, {
+                'target': {'kind': 'world', 'char_id': None,
+                           'subject': None, 'object': None},
+                'key': 'scene_location', 'op': 'set',
+                'modality': 'actual', 'value': beat.scene_location,
+                'scope': REGISTERED_STATE_KEYS.get('scene_location') or 'scene',
+                'disclosure': {'visibility': 'on_page', 'known_by': []},
+                'proposition': None,
+                'basis': [{'segment': ref, 'quote': None}
+                          for ref in (refs or [str(beat.src)])],
             })
         cognition_out: list[dict] = []
         for j, entry in enumerate(beat.know):
@@ -181,7 +207,7 @@ def expand_chapter_wire(
                 'proposition': {'ref': handle,
                                 'statement': entry.what if first else None},
                 'holder': entry.who, 'mode': entry.how,
-                'basis': [{'segment': ref, 'quote': None} for ref in entry.basis],
+                'basis': [{'segment': ref, 'quote': None} for ref in entry.evidence_refs],
             })
         beats_out.append({
             'event': beat.ev,
@@ -238,17 +264,28 @@ def slim_chapter_wire(observation: dict) -> dict:
 
     beats_out = []
     for beat in observation.get('beats') or []:
+        # 拍级 scene_location：从登记键 world 效应还原（compiler 合成的对应逆）。
+        scene_location = None
+        effects = []
+        for effect in beat.get('effects') or ():
+            if (effect.get('key') == 'scene_location'
+                    and (effect.get('target') or {}).get('kind') == 'world'):
+                scene_location = effect.get('value')
+                continue
+            effects.append(effect)
         slim_beat: dict[str, Any] = {
             'ev': beat['event'],
             'who': list(beat.get('participants') or ()),
             'src': _compact_src(list(beat['source_refs'])),
         }
+        if scene_location is not None:
+            slim_beat['scene_location'] = scene_location
         if beat['scene_boundary'] == 'new':
             slim_beat['new_scene'] = True
         if beat['temporal_mode'] == 'iterative':
             slim_beat['iterative'] = True
         state_out = []
-        for effect in beat.get('effects') or ():
+        for effect in effects:
             slim_effect: dict[str, Any] = {
                 'at': _address_of(effect['target']),
                 'key': effect['key'],
@@ -262,7 +299,7 @@ def slim_chapter_wire(observation: dict) -> dict:
             if (effect['scope'] != 'book'
                     and effect['key'] not in REGISTERED_STATE_KEYS):
                 slim_effect['scope'] = effect['scope']
-            slim_effect['basis'] = [basis['segment'] for basis in effect['basis']]
+            slim_effect['evidence_refs'] = [b['segment'] for b in effect['basis']]
             if effect['disclosure']['visibility'] == 'concealed':
                 slim_effect['hidden'] = {
                     'by': list(effect['disclosure']['known_by']),
@@ -274,7 +311,7 @@ def slim_chapter_wire(observation: dict) -> dict:
         know_out = [{
             'who': entry['holder'], 'how': entry['mode'],
             'what': _prop_text(entry.get('proposition')) or '',
-            'basis': [basis['segment'] for basis in entry['basis']],
+            'evidence_refs': [basis['segment'] for basis in entry['basis']],
         } for entry in beat.get('cognition') or ()]
         if state_out:
             slim_beat['state'] = state_out

@@ -244,18 +244,27 @@ def _compile_name_structure_located(
                 errors.append(message)
     if errors:
         return None, issues
-    # basis 指针派生（2026-10-07 裁决：模型只选段、代码切原文）：resolutions
-    # 的 basis 段 id 在证据闭集内核对后按段全文派生引文——转写文本不进模型
-    # 输出面，原字面「literal ∈ 引文」的锚定检查保留且更强（整段可查）。
-    # 派生失败逐条报 wire 级 issue（resolutions 条目不可部分替换，退整份）。
+    # 证据指针派生（2026-10-07 裁决：模型只选段、代码切原文）：resolutions 的
+    # evidence_refs 段 id 在证据闭集内核对后按段全文派生 canonical 的 basis
+    # 引文——转写文本不进模型输出面，原字面「literal ∈ 引文」的锚定检查保留
+    # 且更强（整段可查）。派生失败逐条报 wire 级 issue（resolutions 条目不可
+    # 部分替换，退整份）。
     resolver = EvidenceResolver(evidence or {})
     derived_resolutions: list[Any] = []
     for index, item in enumerate(wire.get('resolutions') or ()):
-        if not isinstance(item, dict) or not isinstance(item.get('basis'), list):
+        if not isinstance(item, dict):
+            derived_resolutions.append(item)
+            continue
+        refs = item.get('evidence_refs')
+        if not isinstance(refs, list):
+            message = (f'名称同一性[{index}]：evidence_refs 必须是段 id 数组'
+                       '（引文由程序按段全文切出）')
+            fail(None, message)
+            errors.append(message)
             derived_resolutions.append(item)
             continue
         derived_basis = []
-        for basis in item['basis']:
+        for basis in refs:
             if isinstance(basis, str):
                 quote, issue = resolver.basis_quote(basis, (basis,))
                 if issue is not None:
@@ -264,14 +273,15 @@ def _compile_name_structure_located(
                 else:
                     derived_basis.append({'segment': basis, 'quote': quote})
             else:
-                # 形状闸：wire 的 basis 只收段 id——canonical 形（自带引文字典）
-                # 不宽松接纳，防模型借字典回到手抄引文（I-34）。
-                message = (f'名称同一性[{index}]：basis 条目只收段 id 字符串'
+                # 形状闸：wire 的 evidence_refs 只收段 id——canonical 形（自带
+                # 引文字典）不宽松接纳，防模型借字典回到手抄引文（I-34）。
+                message = (f'名称同一性[{index}]：evidence_refs 条目只收段 id 字符串'
                            '（引文由程序按段全文切出），不收引文对象')
                 fail(None, message)
                 errors.append(message)
         derived = dict(item)
         derived['basis'] = derived_basis
+        del derived['evidence_refs']
         derived_resolutions.append(derived)
     if errors:
         return None, issues
