@@ -270,3 +270,56 @@ def test_rc29_full_answer_in_patch_round_is_accepted_as_full_revision(tmp_path):
     assert '【条目返修】' in transport.calls[1].user
     assert data == full and len(transport.calls) == 2
     assert not answer.cached and answer.content == json.dumps(full, ensure_ascii=False)
+
+
+# ── 2026-10-07 词汇漂移闸：prompt 字段清单与瘦 wire schema 逐名相等 ─────────
+
+def test_chapter_prompt_field_lists_match_wire_schema():
+    """实证反例（2026-10-07，cli_walk 收口）：v7 收口把 wire 词汇统一为
+    `evidence_refs` 时，CHAPTER_PROMPT 第 3 条 know 清单仍写旧词 `basis`——
+    一本书 22 章主响应全数被 StrictModel 拒（Extra inputs: know[].basis），
+    21 章靠返修轮碰运气救回、ch04 两轮未救成即停机。prompt 声明的字段清单
+    必须与瘦 wire schema 的字段集合逐名相等，词汇漂移在此闸拦截。"""
+    import re
+    from contracts.schema.observation import SlimCognition, SlimEffect
+    from novel.stages.common import CHAPTER_PROMPT
+
+    def declared(section: str) -> set[str]:
+        m = re.search(re.escape(section) + r'.*?每项 \{\{(.*?)\}\}',
+                      CHAPTER_PROMPT, re.DOTALL)
+        assert m, f'CHAPTER_PROMPT 缺 {section} 的「每项 {{…}}」字段清单'
+        return {f.strip('"\',[] ') for f in m.group(1).split(',') if f.strip()}
+
+    assert declared('2. state：') == set(SlimEffect.model_fields)
+    assert declared('3. know：') == set(SlimCognition.model_fields)
+
+
+def test_review_chapter_precheck_carries_segment_text():
+    """实证反例（2026-10-07，ch04 owner patch 收口）：str06_review 的 ch owner
+    预检把闭集传成 `frozenset(local)`（只 id 无文本的合成闭集），v7 的 basis
+    引文派生全数如实误报 unknown_segment，掩盖候选的真实错误面。预检闭集必须
+    与生产同形（段 id→{chapter,text} 映射），合法 wire 预检应零错误。"""
+    from types import SimpleNamespace
+    from novel.config import Config
+    from novel.stages.chain import ExecutionProfile
+    from tools.str06_review import request_preview
+
+    class _ReadOnlyBookRepo:
+        def read_model(self, rel):
+            assert rel == 'stage2/observations/book.json'
+            from contracts.schema.observation import BookObservation
+            return BookObservation.model_validate(_book_canonical())
+
+    source = SimpleNamespace(chapters=_CHAPTERS, hook_copy=_HOOK)
+    _request_view, validate = request_preview(
+        _ReadOnlyBookRepo(), 'ch01', source, ExecutionProfile(Config(), 'high'))
+    assert validate(_slim_chapter('e01_01..e01_02', 'e01_01', who='fu_jun')) == []
+    # 同一合法 wire 在合成闭集（只 id 无文本）下必被误报——证明上面的零错误
+    # 确实来自文本核对通过，而非判定面缺失。
+    from novel.stages.stage2 import compile_chapter_observation
+    wire = _slim_chapter('e01_01..e01_02', 'e01_01')
+    evidence = _chapter_evidence(1)
+    assert compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)[1] == []
+    frozen = compile_chapter_observation(
+        wire, evidence_ids=frozenset(evidence), chapter=1)[1]
+    assert any('不在证据闭集内' in e for e in frozen)

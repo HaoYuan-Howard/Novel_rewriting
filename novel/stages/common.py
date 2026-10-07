@@ -752,7 +752,7 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      替换对应维度的新值——去向未知就写"去向未交代"或 unknown（op），不得留旧值让
      下游补造；不另开新键；
    - 无 postcondition 的拍 state 给空数组。
-3. know：认知的 postcondition——谁对哪条命题持什么模式。每项 {{"who","how","what","basis"}}：
+3. know：认知的 postcondition——谁对哪条命题持什么模式。每项 {{"who","how","what","evidence_refs"}}：
    - who：人物 slug 或 reader／public；
    - how：learns(确凿得知)/suspects(起疑)/confirms(证实怀疑)/hears_claim(听到说法
      未知真假)/believes(以为为真，不代表世界为真)/asserts(公开主张)；
