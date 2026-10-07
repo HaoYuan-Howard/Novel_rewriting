@@ -24,7 +24,7 @@ import pytest
 
 from contracts.schema.observation import (
     STAGE2_ASSOCIATE_PROTOCOL as APV, STAGE2_CHAPTERS_PROTOCOL as CPV,
-    STAGE2_NAMES_PROTOCOL as PV,
+    STAGE2_NAMES_WIRE_PROTOCOL as PV,
 )
 from novel.llm.ledger import CostLedger
 from novel.store import Str06Repository
@@ -732,13 +732,14 @@ def test_loop_pairing_conflict_is_rejected_before_acceptance_and_publication(kin
     """真实 owner 判据与已购 typed 观察的 compiler 兜底拒绝同一种歧义。"""
     from contracts.schema.observation import (
         AssociateObservation, BookObservation, ChapterObservation, NamesObservation,
+        STAGE2_NAMES_PROTOCOL,
     )
     from contracts.schema.source import NameStructure
     bad, corrected, message = _loop_pairing_conflict(kind)
     book = BookObservation.model_validate(bad['book'])
     chapters = {n: ChapterObservation.model_validate(bad[f'ch{n:02d}'])
                 for n in (1, 2, 3)}
-    names = NamesObservation(protocol_version=PV,
+    names = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL,
                              structure=NameStructure.model_validate({k: v for k, v in bad['names'].items() if k != 'protocol_version'}))
     space = project_association_space(book, chapters)
     before = deepcopy(bad)

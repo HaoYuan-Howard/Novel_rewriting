@@ -22,13 +22,15 @@ def _case():
     chapters = deepcopy(CHAPTERS)
     chapters[1]['text'] += '\n云孃决定次日出门。'  # 新的一段 → e02_03（RC-26）
     wires = _full_stage2_wires()
-    basis = [{'segment': 'e02_03', 'quote': '云孃决定次日出门'}]
+    # names wire 的 basis 只给段 id（2026-10-07 裁决）；ch02 是 canonical 直通
+    # 面，basis 保持 {segment, quote} 形。
     row = {'literal': '云孃', 'status': 'same', 'char_id': 'yun_niang', 'surface': '云娘',
-           'basis': basis, 'reason': '上下文延续同一人物，原文该处异写。'}
+           'basis': ['e02_03'], 'reason': '上下文延续同一人物，原文该处异写。'}
     wires['names']['resolutions'] = [row]
     wires['ch02']['beats'].append(_beat('云孃决定次日出门', ('e02_03',),
         cognition=[{'proposition': {'ref': 'p_out', 'statement': '云孃决定次日出门'},
-                    'holder': 'reader', 'mode': 'learns', 'basis': basis}]))
+                    'holder': 'reader', 'mode': 'learns',
+                    'basis': [{'segment': 'e02_03', 'quote': '云孃决定次日出门'}]}]))
     return chapters, wires
 
 
@@ -80,8 +82,9 @@ def test_unresolved_identity_stops_before_associate_purchase_and_publish(tmp_pat
 
 
 @pytest.mark.parametrize('defect,expected', [
-    ('quote', '原字面'), ('segment', 'unknown_segment'), ('target', '未登记'),
-    ('registered', '已在人物表'), ('conflict', '冲突'), ('old', 'stage2-names-v3'),
+    ('literal', '原字面'), ('segment', '不在证据闭集内'), ('target', '未登记'),
+    ('registered', '已在人物表'), ('conflict', '冲突'),
+    ('old', 'stage2-names-v4'),
 ])
 def test_name_proof_refuses_bad_evidence_target_conflict_and_old_protocol(defect, expected):
     chapters, wires = _case()
@@ -90,14 +93,16 @@ def test_name_proof_refuses_bad_evidence_target_conflict_and_old_protocol(defect
     assert not errors
     wire = wires['names']
     row = wire['resolutions'][0]
-    if defect == 'quote':
-        row['basis'][0]['quote'] = '决定次日出门'
+    if defect == 'literal':
+        # 段在闭集但不含异写字面——引文＝段全文由代码切出，「原字面未出现」
+        # 的锚定检查照拦（比旧手抄引文形态更强：整段可查）。
+        row['basis'] = ['e01_01']
     elif defect == 'segment':
-        row['basis'][0]['segment'] = 'e99_01'
+        row['basis'] = ['e99_01']
     elif defect == 'target':
         row['surface'] = '未登记称谓'
     elif defect == 'registered':
-        row.update(literal='云娘', basis=[{'segment': 'e01_02', 'quote': '云娘听见床板响动'}])
+        row.update(literal='云娘', basis=['e01_02'])
     elif defect == 'conflict':
         wire['resolutions'].append({**row, 'char_id': 'fu_jun', 'surface': '夫君'})
     else:
@@ -114,7 +119,11 @@ def test_mapping_is_local_and_idempotent():
     wires['ch01']['beats'][0]['event'] = '云孃旁观'
     book = BookObservation.model_validate(wires['book'])
     chapters = {n: ChapterObservation.model_validate(wires[f'ch{n:02d}']) for n in (1, 2, 3)}
-    structure = NameStructure.model_validate({k: v for k, v in wires['names'].items() if k != 'protocol_version'})
+    # canonical NameStructure：basis 是段号＋派生引文（wire 的裸段 id 经 compile 派生后的形态）。
+    canonical = {k: v for k, v in wires['names'].items() if k != 'protocol_version'}
+    canonical['resolutions'] = [dict(canonical['resolutions'][0], basis=[
+        {'segment': 'e02_03', 'quote': '云孃决定次日出门。'}])]
+    structure = NameStructure.model_validate(canonical)
     normalized = normalize_name_observations(book, chapters, structure)
     assert normalized[1][1].beats[0].event == '云孃旁观'
     assert normalized[1][2].beats[-1].event == '云娘决定次日出门'

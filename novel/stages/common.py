@@ -686,14 +686,14 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
 【证据段 id 清单】（每行一个自然段，行首方括号内是该段的 id；source_refs 只能从中选）
 {evidence}
 
-输出 JSON 顶层：{{"protocol_version":"stage2-book-v5","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
+输出 JSON 顶层：{{"protocol_version":"stage2-book-v6","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
 个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。
 
-【逐字证据】（R10a a1）initial_state 与 world_constraints 的每个条目必须带 basis：
-["原句逐字引文", ...]（至少 1 条，只写引文、不写段号——所在段由程序按引文查出）。
-引文必须出自该条目 source_refs 所列的某一段，逐字摘抄，不转写、不缩写、不跨段拼接，
-不摘人名或动作词凑数；判断依据含限定（以为／觉得／像是／预计／约／几天后）时，
-引文必须包含该限定原文。"""
+【证据段指针】（R10a a1）initial_state 与 world_constraints 的每个条目必须带 basis：
+["e00_02", ...]（至少 1 条，只写段 id、不抄原文——逐字引文由程序按段全文切出）。
+basis 段 id 必须出自该条目自身的 source_refs（引你所引：先在 source_refs 里列段，
+再从中选 basis）；不拿人名或动作词凑数；判断依据含限定（以为／觉得／像是／预计／
+约／几天后）时，所选段必须实际承载该限定原文。"""
 
 CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：ev 是给人读的事件表述，需要延续的变化全部由三类转移承载——state（事实）、know（认知）、loops（悬念）。机械字段（拍号、默认值、命题句柄等）由 compiler 派生，你只写判断与例外。
 
@@ -776,13 +776,13 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    合法，但请节制；这类拍的比例会被按章报出，供离线核读。
 6. 前文与正文的关系：上方前文原文是只读参考——本拍事实以本章正文原文为准，不得为迁就
    前文改写施事、受事或动作主体；前文与正文不一致时，按正文记录。
-7. 逐字证据与时态（R10a a1）：state 与 know 的每条转移必须带 basis：
-   ["原句逐字引文", ...]（至少 1 条，只写引文、不写段号——所在段由程序按引文查出）。
-   引文必须出自本拍 src 覆盖的某一段，逐字摘抄，不转写、不缩写、不跨段拼接。
+7. 证据段指针与时态（R10a a1）：state 与 know 的每条转移必须带 basis：
+   ["e01_03", ...]（至少 1 条，只写段 id、不抄原文——逐字引文由程序按段全文切出）。
+   basis 段 id 必须属于本拍 src 覆盖的段（引你所引：先在 src 里圈段，再从中选 basis）。
    认识限定（觉得像是／以为／听说）只进 know 的 how（suspects／believes／
-   hears_claim），what 写命题本身；引文保留原限定。
+   hears_claim），what 写命题本身；所选段必须实际承载该限定原文。
 
-输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v5","beats":[...]}}
+输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v6","beats":[...]}}
 不要把财富、位置等不同维度塞入同一个 key。"""
 
 #: 七类保存类别与 `contracts/schema/policy.py::PreserveKind` 同源（B2）：定义只在
@@ -1097,12 +1097,13 @@ NAMES_RULES = """任务：登记全书源名称结构（姓氏家族、名、化
      · 纯称谓（夫君、表弟、嫂嫂等不含姓名部件的）写 null；
      · 模板渲染结果必须与 surface 逐字一致；纯称谓里不得含本人姓或名字面。
 3. resolutions：核验原文的疑似姓名异写／笔误，逐条给 {literal,status,char_id,surface,basis,reason}。
-   literal原样抄原字面；basis给证据清单中的{segment,quote}，引文逐字保留并覆盖异常字面及判断上下文。
+   literal原样抄原字面；basis给证据清单中的段 id（如["e03_05"]，不抄原文——逐字引文由程序
+   按段全文切出），所选段必须实际出现该异常字面并承载判断上下文。
    上下文足以证明同一人物时status="same"，char_id与surface指向人物账已有称谓，reason说明依据；
    只在异常字面出现的证据局部授权归一，不授权全书替换。证据不足／有不同解释时status="unresolved"，
    char_id与surface均null并说明歧义；不得凭读音、字形或常见姓名猜测，也不得把真实化名误当笔误。
    没有发现给空数组；同一局部字面不可有相互冲突的指向。原文、引文与逐章观察不由本节点改写。
-输出 JSON 顶层：{"protocol_version":"stage2-names-v3","families":{...},"people":{...},"resolutions":[]}"""
+输出 JSON 顶层：{"protocol_version":"stage2-names-v4","families":{...},"people":{...},"resolutions":[]}"""
 
 HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。brief 明确入口知识、跳时定位与末尾悬念；POV 可以与正文不同，事实和披露边界一致。只输出设计 JSON，不写 prose
 （wire 协议 stage4-hook-design-v1）。位置引用只给分量（scene=场景 id、beat=拍 id，

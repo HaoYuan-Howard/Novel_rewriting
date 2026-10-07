@@ -24,7 +24,8 @@ from contracts.invariants import (
     PIPELINE_BOOK_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
 )
 from contracts.schema.observation import (
-    STAGE2_CHAPTERS_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL,
+    STAGE2_CHAPTERS_PROTOCOL, STAGE2_NAMES_WIRE_PROTOCOL,
+    STAGE2_OBSERVATION_PROTOCOL,
 )
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.paid_requests import PaidRequestSession
@@ -99,7 +100,7 @@ def _chapter_wire(*beats: dict) -> dict:
 
 def _names_wire() -> dict:
     return {
-        'protocol_version': 'stage2-names-v3', 'resolutions': [],
+        'protocol_version': STAGE2_NAMES_WIRE_PROTOCOL, 'resolutions': [],
         'families': {'f_lu': {'literal': '陆', 'forms': []}},
         'people': {
             'fu_jun': {'family_id': None, 'given': None, 'aliases': [],

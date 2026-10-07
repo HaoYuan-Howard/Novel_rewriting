@@ -765,7 +765,7 @@ def _names_structure_uncovered() -> list:
                   SurfaceWindow(surface='陆大哥', from_chapter=1,
                                 source_refs=('e01_01',))))})
     _structure, errors = compile_name_structure(
-        {'protocol_version': 'stage2-names-v3', 'resolutions': [],
+        {'protocol_version': 'stage2-names-v4', 'resolutions': [],
          'families': {'fam_lu': {'literal': '陆', 'forms': []}},
          'people': {'ch1': {'family_id': 'fam_lu', 'given': None, 'aliases': [],
                             'surface_forms': {'夫君': None}}}},

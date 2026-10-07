@@ -377,8 +377,8 @@ def test_chapter_patch_locate_maps_and_guards():
 
 
 def test_quote_repair_can_update_parent_refs_in_one_round(tmp_path):
-    """引文在本拍 src 之外（RC-27 quote_outside_refs）：修正可能要扩 src，
-    返修定位到整拍，模型一轮内同时改 src／引文，不被锁在转移条目上。"""
+    """basis 段在本拍 src 之外（basis_segment_outside_refs）：修正可能要扩 src，
+    返修定位到整拍，模型一轮内同时改 src／basis，不被锁在转移条目上。"""
     from copy import deepcopy
     from contracts.schema.observation import STAGE2_CHAPTERS_WIRE_PROTOCOL
     from novel.stages.stage2 import chapter_patch_locate, compile_chapter_observation
@@ -390,7 +390,7 @@ def test_quote_repair_can_update_parent_refs_in_one_round(tmp_path):
         'ev': '夫君向芸娘坦白不能生育。', 'who': ['fu_jun', 'yun_niang'],
         'src': 'e01_01', 'new_scene': True,
         'know': [{'who': 'yun_niang', 'how': 'learns', 'what': '夫君不能生育',
-                  'basis': ['夫君坦白自己不能生育。']}],
+                  'basis': ['e01_02']}],
     }, {'ev': '芸娘进房。', 'who': ['yun_niang'], 'src': 'e01_01'}]}
 
     def validate(value):
@@ -422,7 +422,7 @@ def test_parent_patch_absorbs_child_errors_without_overlapping_paths():
     from tests.test_str06_chapter_slim import _slim_wire, EVIDENCE, SLUGS
     wire = _slim_wire()
     wire['beats'][0]['who'].append('ghost')
-    wire['beats'][0]['know'][0]['basis'] = ['正文没有这句话']
+    wire['beats'][0]['know'][0]['basis'] = ['e01_99']
     _, errors = compile_chapter_observation(wire, evidence_ids=EVIDENCE,
         chapter=1, character_slugs=SLUGS)
     assert len(errors) == 2
@@ -432,17 +432,19 @@ def test_parent_patch_absorbs_child_errors_without_overlapping_paths():
 
 
 
-def test_quote_inside_beat_refs_needs_no_segment_choice():
-    """引文落在本拍 src 的任一段即由 Resolver 定位（RC-27）：模型不指认段号，
-    「挂错段号」这一类返修不再存在；全章无命中才回派该转移（窄返修）。"""
+def test_basis_pointer_inside_src_needs_no_quote_copy():
+    """basis 只给段 id（2026-10-07 裁决）：模型不抄原文，「引文不在原文中」
+    这一类返修不再存在；段不在闭集才回派该转移（窄返修）。"""
     from novel.stages.stage2 import chapter_patch_locate, compile_chapter_observation
     from tests.test_str06_chapter_slim import _slim_wire, EVIDENCE, SLUGS
     wire = _slim_wire()
-    wire['beats'][0]['know'][0]['basis'] = ['夫君说求娶是为报恩。']
+    wire['beats'][0]['know'][0]['basis'] = ['e01_02']
     observation, errors = compile_chapter_observation(wire, evidence_ids=EVIDENCE,
         chapter=1, character_slugs=SLUGS)
-    assert errors == [] and observation.beats[0].cognition[0].basis[0].segment == 'e01_02'
-    wire['beats'][0]['know'][0]['basis'] = ['求娶是为了还债。']
+    assert errors == []
+    stored = observation.beats[0].cognition[0].basis[0]
+    assert stored.segment == 'e01_02' and stored.quote == EVIDENCE['e01_02']['text']
+    wire['beats'][0]['know'][0]['basis'] = ['e01_99']
     _, errors = compile_chapter_observation(wire, evidence_ids=EVIDENCE,
         chapter=1, character_slugs=SLUGS)
     assert len(errors) == 1

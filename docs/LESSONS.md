@@ -233,7 +233,10 @@ F6d 的登记表每条 target 用四种可核对格式（文件/符号/dict 键/
 互相牵制的判据间来回。修法是让段＝自然段、一段一行，并把可由引文推导的段号交给 Resolver
 （RC-26/27）。只改反馈措辞（「该引文命中于句段 X」）或扩大返修范围都是补丁。另：reasoning 模型
 一次条目返修的输出 token 接近首答（实测 17.8K 对 23.6K），降本靠首答通过率，不靠缩小返修条目。
-落点：`novel/stages/chain.py::build_evidence`、`novel/stages/stage2/resolver.py::locate_quote`。
+落点：`novel/stages/chain.py::build_evidence`、`novel/stages/stage2/resolver.py::basis_quote`。
+（2026-10-07 收口：RC-27 只把段号交给代码，引文仍由模型逐字抄——flash/low 两轮漏抄「在冬日」
+触发 validation_no_progress 实证这一半仍是模型负担。用户裁决「模型只选段、代码切原文」：wire 的
+basis 只给段 id，引文＝段全文由 compiler 派生，转写失败类错误构造上消失——本条教训的完整版。）
 
 ## 42. 标定 LLM 前先自证装置的量程与渲染；判官与被测执行器不得同源
 

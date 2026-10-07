@@ -181,8 +181,9 @@ HookContext.display_faces/avoid_lines、BODY_VALIDATOR v2（新字段均可缺�
 
 - **CS-A 证据寻址（RC-26～29，rc15）**：另两本《三人成行》《夫君不行但我有孕啦》在 rc15 根只完成 book 与章观察（17／22 章），
   names／associate／compile 未运行（需付费授权）；完整首答通过率等下一本新书实测。
-- **CS-2 后续**：book 观察仍同时使用全文排版与证据地址，不能未经语义充分性证明删除；`basis.quote` 逐字要求不因省 token
-  取消；Preserve 输入／wire 瘦身仍有余项（Preserve 必要事实补全与 Design Brief 投影已闭合；补齐语义使 Preserve 体积增加，
+- **CS-2 后续**：book 观察仍同时使用全文排版与证据地址，不能未经语义充分性证明删除；basis 已指针化
+  （2026-10-07：wire 只给段 id、引文＝段全文由代码切出，转写失败类错误构造上消失），Preserve 输入／wire 瘦身
+  仍有余项（Preserve 必要事实补全与 Design Brief 投影已闭合；补齐语义使 Preserve 体积增加，
   不能记作降费成功）。
 - **R7 质量优化**：持续登记，按实际阅读反例启动：漏保／过保、因果、承接、声线、导演说明、重复与输入不足。风格画像仅在
   一句一段、环境密度、幽默通道、POV 漂移等既有批评复现且有阅读证据时提出具体方案；under-spec、过度失效、状态过建模、
@@ -217,6 +218,7 @@ HookContext.display_faces/avoid_lines、BODY_VALIDATOR v2（新字段均可缺�
 | 字符串判据身份 | `novel/core/validation.py::validation_identity` 集中解码仍现役字符串判据；材料、章内悬念冲突与关联问题已用结构化身份。剩余判据全部提供稳定身份后删除字符串前缀兼容，不在各节点扩散解析 |
 | 旧 associate 误派更正 | `novel/stages/issue_recovery.py::_legacy_loop_correction` 只从完整正式章观察重建历史重复 close 错误，证明旧问题全部覆盖后才显式 superseded；不解析文案猜 owner、不退费、不重置轮数。旧字符串 association_undecided 账全部只读归档且不再恢复后删除该兼容分支 |
 | 已退役链 | 拒识legacy_incompatible，RETIRED_ARTIFACT_PATHS和盘面探测维持闭合；守卫`tests/test_retired_surface_scan.py`，不复活历史解码面。三批退役名册统一登记在`tests/test_retired_surface_scan.py::CLEANUP_2026_10_04_MODULES`，回来即红 |
+| basis wire 引文面（v5／names v3 wire） | 2026-10-07 指针化（用户裁决「模型只选段、代码切原文」）：wire basis 只收段 id（book/chapters v6、names wire v4），旧 v5/v3 wire 回答按协议字面量关闭式拒收、不做推断采用（prompt 变化本就换请求身份）；`locate_quote`/`canonical_quote`/`content_equivalent_slice`/`norm_index` 已随批删除。canonical 三者（v4/v4/v3）不动照读——canonical 直通读面（`{segment,quote}` 形 basis）作为 S-01 登记过的兼容层保留，删除条件＝canonical 自身瘦身升版时与 slim 适配层一并退役（见 `novel/stages/stage2/slim.py` 模块头） |
 
 ### 候选根运行记录映射与删除条件
 

@@ -136,7 +136,7 @@ def _names_inputs():
 
 
 def _names_wire() -> dict:
-    return {'protocol_version': 'stage2-names-v3', 'resolutions': [],
+    return {'protocol_version': 'stage2-names-v4', 'resolutions': [],
             'families': {'f_lu': {'literal': '陆', 'forms': []}},
             'people': {
                 'fu_jun': {'family_id': 'f_lu', 'given': None, 'aliases': [],

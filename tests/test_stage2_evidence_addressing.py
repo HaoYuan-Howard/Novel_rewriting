@@ -1,10 +1,13 @@
-"""RC-26～29：Stage2 证据寻址——段与自然段对齐、引文所在段由代码定位、
-证据范围语法闭合、条目返修轮的整份回答按整份验收。
+"""RC-26～29＋2026-10-07 basis 指针化：Stage2 证据寻址——段与自然段对齐、
+引文由代码按段全文切出（模型只选段 id）、证据范围语法闭合、条目返修轮的
+整份回答按整份验收。
 
 反例取自 2026-10-04 cs_golden 三本书停在 str06.stage2.chapters 的真实形态
 （合成文本复现同一结构，不入库正文语料）：对白收尾「」」被切到下一段、问号／
 叹号收尾的多个自然段并成一段、段号标签悬在上一段文字下方；模型据此系统性
-地把引文挂到偏大的段号上，返修在「地址错／不在 src」之间来回。
+地把引文挂到偏大的段号上，返修在「地址错／不在 src」之间来回。指针化后
+模型不再抄原文——转写失败类错误构造上不存在，剩余失败＝段选错（闭集／
+范围），条目可定位返修。
 """
 from copy import deepcopy
 import json
@@ -123,57 +126,52 @@ def test_rc26_multiline_segment_stops_before_request():
                                'e01_02': {'chapter': 1, 'text': '乙。\n丙。'}})
 
 
-# ── RC-27：引文所在段由代码定位 ──────────────────────────────────────────────
+# ── 2026-10-07：模型只选段，引文由代码切 ────────────────────────────────────
 
-def _slim_chapter(src, quote, *, who='yun_niang'):
+def _slim_chapter(src, basis, *, who='yun_niang'):
     from contracts.schema.observation import STAGE2_CHAPTERS_WIRE_PROTOCOL
     return {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL, 'beats': [
         {'ev': '夫君送走表弟后安慰芸娘，说会再开导表弟。', 'who': ['fu_jun'],
          'src': src, 'new_scene': True,
          'know': [{'who': who, 'how': 'hears_claim', 'what': '夫君会再开导表弟',
-                   'basis': [quote]}]}]}
+                   'basis': [basis]}]}]}
 
 
-def test_rc27_chapter_basis_segment_is_located_by_code():
+def test_chapter_basis_quote_is_derived_from_segment_text():
     evidence = _chapter_evidence(1)
-    # 模型把半角逗号抄成全角：按内容尺定位后落盘原文切片（D2 回取以内容字
-    # 为界，首尾标点不计入切片）。
-    wire = _slim_chapter('e01_01..e01_02', '娘子别担心，我再开导开导他。」')
+    wire = _slim_chapter('e01_01..e01_02', 'e01_01')
     original = deepcopy(wire)
     observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
     assert errors == [] and wire == original
     basis = observation.model_dump(mode='json')['beats'][0]['cognition'][0]['basis']
-    assert basis == [{'segment': 'e01_01', 'quote': '娘子别担心,我再开导开导他'}]
-    # 逐字命中时原样保留（含收尾引号——它与本句同段，RC-26）。
-    wire = _slim_chapter('e01_01..e01_02', '娘子别担心,我再开导开导他。」')
-    observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
-    assert errors == [] and observation.beats[0].cognition[0].basis[0].quote == (
-        '娘子别担心,我再开导开导他。」')
+    # 引文＝段全文，逐字原样（含标点与收尾引号）；模型输出面没有任何转写文本。
+    assert basis == [{'segment': 'e01_01',
+                      'quote': '夫君将表弟送走后,叹息着安慰我:「娘子别担心,我再开导开导他。」'}]
 
 
-def test_rc27_quote_outside_beat_refs_names_its_home_and_revises_whole_beat():
+def test_basis_segment_outside_beat_refs_revises_whole_beat():
     from novel.stages.stage2.chapters import chapter_patch_locate
     evidence = _chapter_evidence(1)
-    wire = _slim_chapter('e01_02', '我再开导开导他。')
+    wire = _slim_chapter('e01_02', 'e01_01')
     observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
     assert observation is None and len(errors) == 1
     assert 'e01_01' in errors[0] and 'e01_02' in errors[0]
-    # 修正可能要改 src 也可能要换引文——由模型在整拍内选择，代码不替它选。
+    # 修正可能要改 src 也可能要换段——由模型在整拍内选择，代码不替它选。
     assert chapter_patch_locate(wire, errors, evidence_ids=evidence, chapter=1) == [
         (('beats', 0), errors)]
 
 
-def test_rc27_quote_absent_from_chapter_revises_only_that_transfer():
+def test_basis_segment_absent_from_closed_set_revises_only_that_transfer():
     from novel.stages.stage2.chapters import chapter_patch_locate
     evidence = _chapter_evidence(1)
-    wire = _slim_chapter('e01_01', '娘子莫要担心他。')
+    wire = _slim_chapter('e01_01', 'e01_99')
     observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
     assert observation is None and len(errors) == 1
     assert chapter_patch_locate(wire, errors, evidence_ids=evidence, chapter=1) == [
         (('beats', 0, 'know', 0), errors)]
 
 
-def test_rc27_book_basis_segment_is_located_within_item_refs():
+def test_book_basis_quote_is_derived_within_item_refs():
     from contracts.schema.observation import STAGE2_BOOK_WIRE_PROTOCOL
     from novel.stages.stage2.book import compile_book_observation
     evidence = build_evidence(_CHAPTERS, _HOOK)
@@ -181,19 +179,19 @@ def test_rc27_book_basis_segment_is_located_within_item_refs():
             'initial_state': [{
                 'target': {'kind': 'character', 'char_id': 'fu_jun'},
                 'key': 'has_cousin', 'value': '有个表弟', 'persistence': 'stable',
-                'source_refs': ['e00_02'], 'basis': ['我有个表弟。']}]}
+                'source_refs': ['e00_02'], 'basis': ['e00_02']}]}
     original = deepcopy(wire)
     observation, errors = compile_book_observation(wire, evidence=evidence)
     assert errors == [] and wire == original
     assert observation.initial_state[0].basis[0].model_dump() == {
-        'segment': 'e00_02', 'quote': '我有个表弟。'}
+        'segment': 'e00_02', 'quote': '「我有个表弟。」'}
     wire['initial_state'][0]['source_refs'] = ['e00_01']
     observation, errors = compile_book_observation(wire, evidence=evidence)
     assert observation is None and any('e00_02' in e for e in errors)
 
 
-def test_rc27_real_chain_publishes_located_basis(tmp_path):
-    """真实 book／chapters 入口：模型只给引文，落盘观察带代码定位的段号。"""
+def test_real_chain_publishes_derived_basis(tmp_path):
+    """真实 book／chapters 入口：模型只给段 id，落盘观察带代码切出的段全文。"""
     from contracts.schema.observation import (
         STAGE2_BOOK_WIRE_PROTOCOL, STAGE2_CHAPTERS_WIRE_PROTOCOL,
     )
@@ -201,7 +199,7 @@ def test_rc27_real_chain_publishes_located_basis(tmp_path):
     book = {**_book_canonical(), 'protocol_version': STAGE2_BOOK_WIRE_PROTOCOL}
     wires = {
         'book': book,
-        'ch01': _slim_chapter('e01_01..e01_02', '我再开导开导他。」', who='fu_jun'),
+        'ch01': _slim_chapter('e01_01..e01_02', 'e01_01', who='fu_jun'),
         'ch02': {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL, 'beats': [
             {'ev': '次日清晨夫君出门。', 'who': ['fu_jun'], 'src': ['e02_01', 'e02_02'],
              'new_scene': True}]},
@@ -214,7 +212,8 @@ def test_rc27_real_chain_publishes_located_basis(tmp_path):
     assert sorted(transport.calls) == ['book', 'ch01', 'ch02']
     saved = json.loads(repo.path('stage2/observations/ch01.json').read_text(encoding='utf-8'))
     assert saved['beats'][0]['cognition'][0]['basis'] == [
-        {'segment': 'e01_01', 'quote': '我再开导开导他。」'}]
+        {'segment': 'e01_01',
+         'quote': '夫君将表弟送走后,叹息着安慰我:「娘子别担心,我再开导开导他。」'}]
     saved = json.loads(repo.path('stage2/observations/ch02.json').read_text(encoding='utf-8'))
     assert saved['beats'][0]['source_refs'] == ['e02_01', 'e02_02']
 
@@ -224,13 +223,13 @@ def test_rc27_real_chain_publishes_located_basis(tmp_path):
 def test_rc28_src_array_may_mix_single_ids_and_ranges():
     from novel.stages.stage2.chapters import chapter_patch_locate
     evidence = _chapter_evidence(1)
-    wire = _slim_chapter(['e01_01', 'e01_03..e01_04'], '为何?')
+    wire = _slim_chapter(['e01_01', 'e01_03..e01_04'], 'e01_04')
     observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
     assert errors == []
     assert observation.beats[0].source_refs == ('e01_01', 'e01_03', 'e01_04')
     assert observation.beats[0].cognition[0].basis[0].segment == 'e01_04'
     for bad in (['e01_01', 'e01_04..e01_03'], ['e01_01..e02_01']):
-        wire = _slim_chapter(bad, '为何?')
+        wire = _slim_chapter(bad, 'e01_04')
         observation, errors = compile_chapter_observation(
             wire, evidence_ids=evidence, chapter=1)
         assert observation is None and errors

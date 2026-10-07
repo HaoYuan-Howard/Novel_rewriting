@@ -56,24 +56,36 @@ from contracts.schema.source import (
 #: 的观察一律换字面量（book v4／chapters v4／names v3，形状不变），旧盘面按
 #: 版本关闭式拒读；同一族字面量单调递增、每个号只标一种形状（wire 与
 #: canonical 共用编号序列，号不复用）。
+#: 2026-10-07 basis 指针化（用户裁决「模型只选段、代码切原文」）：wire 的
+#: basis 从逐字引文改为段 id——book wire 升 v6、chapters wire 升 v6、names
+#: 新增独立 wire 面 v4；canonical 三者不动（EvidenceQuote 仍是段号＋引文，
+#: 引文＝段全文，整段天然满足「quote 逐字在段内」），旧 canonical 盘面照读。
 STAGE2_OBSERVATION_PROTOCOL: Final = 'stage2-observation-v1'
 STAGE2_NAMES_PROTOCOL: Final = 'stage2-names-v3'
 STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v4'
 STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v4'
 
-#: 书级观察的 **wire 面**（RC-27）：初态／世界约束的 basis 只给逐字引文，
-#: 所在段由 Resolver 在条目自身 source_refs 内定位（I-21：段号可由引文机械
-#: 推导，不让模型抄）；compile 把它派生成 `STAGE2_BOOK_PROTOCOL` 的 canonical。
-STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v5'
+#: 书级观察的 **wire 面**（2026-10-07 裁决：模型只选段、代码切原文）：初态／
+#: 世界约束的 basis 只给**段 id**（闭集成员），逐字引文由 compiler 按段全文
+#: 派生（I-20/I-21：转写文本不进模型输出面）；compile 把它派生成
+#: `STAGE2_BOOK_PROTOCOL` 的 canonical。
+STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v6'
 
-#: 章观察的**瘦 wire 面**（CS-2 起；RC-27/28 升 v5）：`str06.stage2.chapters`
-#: 的 LLM 输出协议——可机械推导的字段不让模型抄写（I-15/I-21：拍号、场景边界
-#: 默认、时态默认、op／modality／scope／disclosure 默认、target 四元组压成地址
-#: 串、命题句柄按文本归并、basis 所在段由 Resolver 按引文定位），落盘经
+#: 章观察的**瘦 wire 面**（CS-2 起；RC-27/28 升 v5；2026-10-07 basis 指针化
+#: 升 v6）：`str06.stage2.chapters` 的 LLM 输出协议——可机械推导的字段不让
+#: 模型抄写（I-15/I-21：拍号、场景边界默认、时态默认、op／modality／scope／
+#: disclosure 默认、target 四元组压成地址串、命题句柄按文本归并、basis 只给
+#: 段 id、引文＝段全文由 compiler 派生），落盘经
 #: `novel/stages/stage2/slim.py::expand_chapter_wire` 派生回 canonical
 #: （`STAGE2_CHAPTERS_PROTOCOL`）形状，全部下游消费者不变（S-03：适配集中在
 #: slim 模块，删除条件＝下游消费迁移完成、canonical 自身瘦身时）。
-STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v5'
+STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v6'
+
+#: names 的 **wire 面**（2026-10-07 basis 指针化新增）：resolutions 的 basis
+#: 只给段 id，引文由 compiler 按段全文派生。canonical（`STAGE2_NAMES_PROTOCOL`
+#: v3，resolutions basis 仍是 `EvidenceQuote`）不变——旧 names.json 照常可读；
+#: 旧 v3 wire 回答（模型手抄段号＋引文）按版本拒收，不做推断采用。
+STAGE2_NAMES_WIRE_PROTOCOL: Final = 'stage2-names-v4'
 
 #: 关联协议（associate 独立）的版本字面量（R1，2026-09-28 升 v2；CS-H H4，
 #: 2026-10-06 升 v3，RC-65）：v2＝typed 作用对象显式序列化＋状态句柄位置编码；
@@ -177,12 +189,14 @@ class BookObservation(StrictModel):
         return self
 
 
-#: 逐字引文（wire 面的 basis 条目）：模型只给原句文字，所在段由 Resolver 定位。
-QuoteText = Annotated[str, Field(min_length=1)]
+#: basis 指针（wire 面的 basis 条目）：模型只给证据段 id（闭集成员，
+#: 2026-10-07 裁决：模型只选段、逐字文本由代码切）；成员资格归 compile 对
+#: 闭集核对。canonical 的 `EvidenceQuote` 不变。
+SegmentRef = Annotated[str, Field(pattern=r'^e\d+_\d+$')]
 
 
 class InitialFactWire(StrictModel):
-    """初态事实的 wire 面：与 `InitialFact` 同形，basis 只给逐字引文（RC-27）。"""
+    """初态事实的 wire 面：与 `InitialFact` 同形，basis 只给段 id。"""
 
     target: StateTarget
     key: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_.-]*$')
@@ -190,24 +204,25 @@ class InitialFactWire(StrictModel):
     persistence: str = Field(pattern=r'^(stable|mutable)$')
     knowledge: KnowledgeSpec | None = None
     source_refs: tuple[str, ...] = Field(min_length=1)
-    basis: tuple[QuoteText, ...] = Field(min_length=1)
+    basis: tuple[SegmentRef, ...] = Field(min_length=1)
 
 
 class WorldRuleWire(StrictModel):
-    """世界约束的 wire 面：与 `WorldRule` 同形，basis 只给逐字引文（RC-27）。"""
+    """世界约束的 wire 面：与 `WorldRule` 同形，basis 只给段 id。"""
 
     kind: str = Field(pattern=r'^(' + '|'.join(WORLD_RULE_KINDS) + r')$')
     statement: str = Field(min_length=1)
     source_refs: tuple[str, ...] = Field(min_length=1)
-    basis: tuple[QuoteText, ...] = Field(min_length=1)
+    basis: tuple[SegmentRef, ...] = Field(min_length=1)
 
 
 class BookObservationWire(StrictModel):
-    """`str06.stage2.book` 的 LLM 输出面（传输面，不落盘）：compile 定位引文
-    所在段后派生成 `BookObservation`。人物、称谓证据与表达观察的形状与
-    canonical 相同（称谓的 source_refs 是语义选择——选哪一处出现作锚点）。"""
+    """`str06.stage2.book` 的 LLM 输出面（传输面，不落盘）：compile 按 basis
+    段 id 派生逐字引文（段全文）后生成 `BookObservation`。人物、称谓证据与
+    表达观察的形状与 canonical 相同（称谓的 source_refs 是语义选择——选哪一
+    处出现作锚点）。"""
 
-    protocol_version: Literal['stage2-book-v5']
+    protocol_version: Literal['stage2-book-v6']
     expression: ExpressionObservation
     characters: dict[str, CharacterCandidate] = Field(min_length=1)
     initial_state: tuple[InitialFactWire, ...] = Field(default=(), min_length=0)
@@ -266,8 +281,8 @@ class SlimEffect(StrictModel):
     scope＝book（登记键由表固定，声明不写）、disclosure＝on_page。
     `val` 只在 op 需要值时给（set／add／remove；unset／unknown 不带）。
     `prop`：说辞被叙述证实时引用的命题文本（须与此前 know 的 what 归一后
-    相同）。basis 逐字证据必填（R10a a1 语义不变），wire 只给引文、所在段由
-    Resolver 在本拍 src 内定位（RC-27）。at 只锁字符集，结构（单个 +、两端
+    相同）。basis 必填（R10a a1 语义不变）：wire 只给段 id，引文＝段全文由
+    compiler 派生（2026-10-07 裁决）。at 只锁字符集，结构（单个 +、两端
     非空、不自环）由 expand 逐条校验——可条目级返修，不退整份。
     """
 
@@ -278,7 +293,7 @@ class SlimEffect(StrictModel):
     modality: str | None = Field(default=None,
                                  pattern=r'^(actual|planned|expected|conditional)$')
     scope: str | None = Field(default=None, pattern=r'^(book|scene)$')
-    basis: tuple[QuoteText, ...] = Field(min_length=1)
+    basis: tuple[SegmentRef, ...] = Field(min_length=1)
     hidden: SlimConcealment | None = None
     prop: str | None = Field(default=None, min_length=1)
 
@@ -287,13 +302,14 @@ class SlimCognition(StrictModel):
     """认知转移的瘦面：`what` 命题文本直接承载语义，句柄由代码按文本归并。
 
     同一命题再次出现时逐字重写同一句；norm() 后不同即另一条命题（不模糊
-    合并——与 CS-1 的 D1 配对判定同一把尺）。basis 只给逐字引文（RC-27）。
+    合并——与 CS-1 的 D1 配对判定同一把尺）。basis 只给段 id（引文＝段全文
+    由 compiler 派生，2026-10-07 裁决）。
     """
 
     who: str = Field(min_length=1)
     how: str = Field(pattern=r'^(learns|suspects|confirms|hears_claim|believes|asserts)$')
     what: str = Field(min_length=1)
-    basis: tuple[QuoteText, ...] = Field(min_length=1)
+    basis: tuple[SegmentRef, ...] = Field(min_length=1)
 
 
 class SlimBeat(StrictModel):
@@ -317,10 +333,10 @@ class SlimBeat(StrictModel):
 
 
 class ChapterObservationWire(StrictModel):
-    """`str06.stage2.chapters` 的 v3 瘦输出面（传输面，不落盘；expand 成
-    `ChapterObservation`（v2／rc12 形状）后进既有管道与盘面）。"""
+    """`str06.stage2.chapters` 的瘦输出面（传输面，不落盘；expand 成
+    `ChapterObservation` 后进既有管道与盘面）。"""
 
-    protocol_version: Literal['stage2-chapters-v5']
+    protocol_version: Literal['stage2-chapters-v6']
     beats: tuple[SlimBeat, ...] = Field(min_length=1)
 
 

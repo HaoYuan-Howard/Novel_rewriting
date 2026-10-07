@@ -96,7 +96,7 @@ def _naming_wire(entries) -> dict:
 def test_name_structure_compile_green_and_refusals():
     core = _chars().core_view()
     structure = _chars().name_structure
-    wire = {'protocol_version': 'stage2-names-v3', **structure.model_dump(mode='json')}
+    wire = {'protocol_version': 'stage2-names-v4', **structure.model_dump(mode='json')}
     compiled, errors = compile_name_structure(wire, core, SRC)
     assert compiled is not None and not errors, errors
 
@@ -145,7 +145,7 @@ def test_family_redundant_id_normalized_or_mismatch_rejected():
     不一致时报错（wire 白名单不静默）。"""
     core = _chars().core_view()
     structure = _chars().name_structure
-    wire = {'protocol_version': 'stage2-names-v3', **structure.model_dump(mode='json')}
+    wire = {'protocol_version': 'stage2-names-v4', **structure.model_dump(mode='json')}
     wire['families']['fam_chen']['family_id'] = 'fam_chen'  # 冗余但一致
     compiled, errors = compile_name_structure(wire, core, SRC)
     assert compiled is not None and not errors, errors
@@ -164,7 +164,7 @@ def test_surname_probe_reports_and_never_blocks():
     assert multi and all(f.strict for f in multi)                  # 复姓：逐处严格
     # 探针不阻断：同一 structure 照常编译
     compiled, errors = compile_name_structure(
-        {'protocol_version': 'stage2-names-v3', **structure.model_dump(mode='json')}, core, SRC)
+        {'protocol_version': 'stage2-names-v4', **structure.model_dump(mode='json')}, core, SRC)
     assert compiled is not None and not errors
 
 

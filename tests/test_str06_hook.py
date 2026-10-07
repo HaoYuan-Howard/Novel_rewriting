@@ -783,7 +783,7 @@ def _full_chain_wires():
         'ch02': {'protocol_version': 'stage2-chapters-v4', 'beats': [
             beat('夫君夜半离家，芸娘发现玉佩之秘。', ('e02_01',),
                  participants=('yun_niang', 'fu_jun'))]},
-        'names': {'protocol_version': 'stage2-names-v3', **chars.name_structure.model_dump(mode='json')},
+        'names': {'protocol_version': 'stage2-names-v4', **chars.name_structure.model_dump(mode='json')},
         'associate': {'protocol_version': 'stage2-associate-v3',
                       'same_proposition': [], 'same_state_dimension': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],

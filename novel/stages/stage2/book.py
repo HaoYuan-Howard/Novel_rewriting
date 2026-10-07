@@ -15,11 +15,11 @@
 
 【职责边界】语义判断（谁是人物、初态收什么、世界约束收什么）归付费
 semantic unit；本模块只验证并报告（S2-3／I-20），不补猜、不模糊匹配。
-观察落盘 `stage2/observations/book.json`（canonical 形状），compiler 归一两处：
-初态／约束 basis 的所在段由 Resolver 按引文在条目自身 source_refs 内定位
-（RC-27，2026-10-04——wire 只给引文，段号不让模型抄）；引文按 `norm()` 尺
-回取段原文切片（D2 标点宽度——源文半角、模型全角的真摘抄不再误报，落盘
-永远是原文字节）。其余字段原样（窗口坐标／编号不在 wire——`from_chapter`
+观察落盘 `stage2/observations/book.json`（canonical 形状），compiler 归一：
+初态／约束的 basis 在 wire 上只给段 id（2026-10-07 裁决：模型只选段、
+代码切原文——转写文本不进模型输出面），段属条目自身 source_refs 核对后
+引文按**段全文**派生（落盘永远是原文字节，构造上不存在「引文不在原文中」）。
+其余字段原样（窗口坐标／编号不在 wire——`from_chapter`
 只活在 core view 投影与 compile 发布的 canonical 里，`R-2.10`）。validator
 不修改输入：全部检查只读，问题聚合成列表返回（I-24／I-36）。
 """
@@ -97,56 +97,38 @@ def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...],
     return pairs
 
 
-def _canonicalize_basis_quotes(wire: Any, resolver: EvidenceResolver) -> None:
-    """basis 引文回取原文切片（D2 标点宽度，2026-10-03；形状与 chapters 侧
-    同一规则、各自的 wire 形状）：逐字已在段内不动；仅标点／空白不同且唯一
-    命中 → 段原文切片；其余不改写、不放宽判定。就地改写 compiler 副本，
-    原 wire 不动（I-24）。
-    """
-    groups: list[tuple[Any, Any]] = [(wire.get('initial_state') or ()),
-                                     (wire.get('world_constraints') or ())]
-    for atoms in groups:
-        for atom in atoms:
-            if not isinstance(atom, Mapping):
-                continue
-            for basis in atom.get('basis') or ():
-                if isinstance(basis, Mapping):
-                    segment = str(basis.get('segment') or '')
-                    quote = str(basis.get('quote') or '')
-                    if segment and quote:
-                        basis['quote'] = resolver.canonical_quote(segment, quote)
-
-
 def _basis_label(group: str, atom: Mapping[str, Any]) -> str:
-    """初态／约束条目的人读定位（引文定位与逐字判定共用同一措辞）。"""
+    """初态／约束条目的人读定位（段派生与逐字判定共用同一措辞）。"""
     if group == 'initial_state':
         return f'initial_state {atom.get("key")}'
     return f'world_constraint {str(atom.get("statement"))[:16]}'
 
 
 def _expand_wire_basis(wire: dict) -> dict:
-    """RC-27：book wire（`STAGE2_BOOK_WIRE_PROTOCOL`）→ canonical 形状副本。
+    """RC-27 起点上的指针化（2026-10-07 裁决）：book wire
+    （`STAGE2_BOOK_WIRE_PROTOCOL`）→ canonical 形状副本。
 
-    初态／约束的 basis 引文串变成 ``{'segment': None, 'quote': 引文}``，段号
-    留给 `_locate_basis_quotes`；字面量换成 canonical 版本。非字符串条目原样
-    保留，交 wire 模型校验报告（不宽松接纳坏输入）。不改调用方对象（I-24）。
+    初态／约束的 basis 段 id 串变成 ``{'segment': id, 'quote': None}``，引文
+    由 `_derive_basis_quotes` 按段全文填入。非字符串条目原样保留，交 wire
+    模型校验报告（不宽松接纳坏输入）。不改调用方对象（I-24）。
     """
     expanded = deepcopy(wire)
     expanded['protocol_version'] = STAGE2_BOOK_PROTOCOL
     for group in ('initial_state', 'world_constraints'):
         for atom in expanded.get(group) or ():
             if isinstance(atom, dict) and isinstance(atom.get('basis'), list):
-                atom['basis'] = [{'segment': None, 'quote': item} if isinstance(item, str)
+                atom['basis'] = [{'segment': item, 'quote': None} if isinstance(item, str)
                                  else item for item in atom['basis']]
     return expanded
 
 
-def _locate_basis_quotes(
+def _derive_basis_quotes(
     wire: dict, resolver: EvidenceResolver,
 ) -> list[tuple[tuple, str]]:
-    """RC-27：初态／约束只给引文的 basis 在条目自身 source_refs 内定位所在段，
-    段号与原文切片写回 compiler 副本；定位不了逐条报告（不改 source_refs、
-    不换引文——Resolver 的 issue 指明引文实际所在段）。返回 (wire 路径, 消息)。"""
+    """basis 段 id 在条目自身 source_refs 内派生段全文引文（2026-10-07
+    裁决：模型只选段、代码切原文）；段号与原文写回 compiler 副本。派生不了
+    逐条报告（不改 source_refs、不换段——issue 指明「计入证据范围或改选」）。
+    返回 (wire 路径, 消息)。"""
     issues: list[tuple[tuple, str]] = []
     for group in ('initial_state', 'world_constraints'):
         for atom_index, atom in enumerate(wire.get(group) or ()):
@@ -154,12 +136,11 @@ def _locate_basis_quotes(
                 continue
             refs = tuple(atom.get('source_refs') or ())
             for basis_index, basis in enumerate(atom.get('basis') or ()):
-                if not isinstance(basis, dict) or basis.get('segment') is not None:
+                if not isinstance(basis, dict) or basis.get('segment') is None:
                     continue
-                segment, quote, issue = resolver.locate_quote(
-                    str(basis.get('quote') or ''), refs)
+                quote, issue = resolver.basis_quote(str(basis.get('segment') or ''), refs)
                 if issue is None:
-                    basis['segment'], basis['quote'] = segment, quote
+                    basis['quote'] = quote
                 else:
                     issues.append((
                         (group, atom_index, 'basis', basis_index),
@@ -167,9 +148,10 @@ def _locate_basis_quotes(
     return issues
 
 
-#: 定位失败的 basis 在**形状复验副本**里的占位段号（与 chapters 侧同一规则：
-#: 仅在本轮已带错、必不发布时使用，占位不进任何输出）。
+#: 派生失败的 basis 在**形状复验副本**里的占位（段号与引文各一）：与 chapters
+#: 侧同一规则——仅在本轮已带错、必不发布时使用，占位不进任何输出。
 _UNLOCATED_SEGMENT = 'e00_00'
+_UNDERIVED_QUOTE = '（未派生）'
 
 
 def _shape_view(wire: dict) -> dict:
@@ -177,8 +159,11 @@ def _shape_view(wire: dict) -> dict:
     for group in ('initial_state', 'world_constraints'):
         for atom in view.get(group) or ():
             for basis in (atom.get('basis') or ()) if isinstance(atom, dict) else ():
-                if isinstance(basis, dict) and basis.get('segment') is None:
-                    basis['segment'] = _UNLOCATED_SEGMENT
+                if isinstance(basis, dict):
+                    if basis.get('segment') is None:
+                        basis['segment'] = _UNLOCATED_SEGMENT
+                    if basis.get('quote') is None:
+                        basis['quote'] = _UNDERIVED_QUOTE
     return view
 
 
@@ -240,10 +225,9 @@ def _compile_book_view(
     # 核对、锚点闸与协议校验都在副本上施行；调用方 wire 对象不被修改。
     canonical = _expand_wire_basis(wire) if is_wire else deepcopy(wire)
     if is_wire:
-        # 只有 wire 面的 basis 不带段号；canonical 直通缺段号按协议拒收，不代补。
-        issues.extend(_locate_basis_quotes(canonical, resolver))
+        # 只有 wire 面的 basis 不带引文；canonical 直通缺引文按协议拒收，不代补。
+        issues.extend(_derive_basis_quotes(canonical, resolver))
         errors.extend(message for _path, message in issues)
-    _canonicalize_basis_quotes(canonical, resolver)
     wire = canonical
 
     # ① 证据句段闭集（逐条精确 issue，不模糊差）
@@ -347,8 +331,9 @@ def _compile_book_view(
             fail(path, message)
             errors.append(message)
 
-    # ④b R10a a1：初态/约束的 basis 引文判定（C4——逐字命中＋段属自身
-    # source_refs）；定位失败的 basis（段号仍为 None）已在定位步报告，不重复。
+    # ④b R10a a1：初态/约束的 basis 判定（段属自身 source_refs ＋ 引文逐字
+    # 在段内——canonical 直通面的防线）；wire 派生成功的条目引文＝段全文，
+    # 天然通过；派生失败的条目（quote 仍为 None）已在派生步报告，不重复。
     basis_entries: list[tuple[str, str, str, Iterable[str]]] = []
     basis_paths: list[tuple] = []
     for group in ('initial_state', 'world_constraints'):
@@ -356,7 +341,8 @@ def _compile_book_view(
             if not isinstance(atom, Mapping):
                 continue
             for basis_index, basis in enumerate(atom.get('basis') or ()):
-                if isinstance(basis, Mapping) and basis.get('segment') is not None:
+                if isinstance(basis, Mapping) and basis.get('segment') is not None \
+                        and basis.get('quote') is not None:
                     basis_entries.append((
                         _basis_label(group, atom),
                         str(basis.get('segment') or ''),
@@ -376,7 +362,7 @@ def _compile_book_view(
         errors.append(message)
 
     # ⑤ 协议形状（版本字面量、slug 形状、target 形状、转移原子闭集）；LLM
-    # 输出面另按 wire 模型复验（basis 只收引文串，不宽松接纳 canonical 形状）。
+    # 输出面另按 wire 模型复验（basis 只收段 id 串，不宽松接纳 canonical 形状）。
     if is_wire:
         try:
             BookObservationWire.model_validate(original)

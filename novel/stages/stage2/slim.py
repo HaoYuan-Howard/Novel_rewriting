@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """slim —— 章观察瘦 wire 的确定性适配层（CS-2 第一步，2026-10-03；RC-27/28
-升 stage2-chapters-v5，2026-10-04）。
+升 stage2-chapters-v5，2026-10-04；2026-10-07 basis 指针化升 v6）。
 
 【职责】LLM 面与 canonical 面之间的唯一转换：`expand_chapter_wire` 把瘦 wire
 派生成 canonical（`STAGE2_CHAPTERS_PROTOCOL`）形状的 dict，`slim_chapter_wire`
-是它的逆（迁移与回归用：expand(slim(现产物)) 再经引文定位 == 现产物）。纯函数、
+是它的逆（迁移与回归用：expand(slim(现产物)) 再经段派生 == 现产物）。纯函数、
 不改输入（I-24）、不落盘——落盘仍是 `ChapterObservation`，下游消费者不变。
-basis 在 wire 上只是逐字引文：expand 产出 ``{'segment': None, 'quote': 引文}``，
-所在段由 chapters 管道的 Resolver 定位步填入（RC-27；本模块不看原文）。
+basis 在 wire 上只是段 id（2026-10-07 裁决：模型只选段、代码切原文）：
+expand 产出 ``{'segment': id, 'quote': None}``，引文由 chapters 管道的
+Resolver 派生步按段全文填入（本模块不看原文）。
 
 【瘦在哪（r10b 全产物实证，132 拍／85 效应／60 认知）】
   • 默认值派生：scene_boundary 112/132 continue、temporal_mode 121/132 single、
@@ -22,9 +23,10 @@ basis 在 wire 上只是逐字引文：expand 产出 ``{'segment': None, 'quote'
     可以是区间（RC-28：语法对组合闭合——提示词教的两种写法自然会混用）。
 
 【不变量】basis 逐字证据（R10a a1）、loops 句柄（D8 跨章配对）、人物/认知
-闭集闸、引文归一回取（D2）全部保持——瘦的只是「模型抄写机械字段」的负担，
-语义判据一条不放宽。适配集中在本模块（S-03）；删除条件＝下游消费迁移完成、
-canonical 自身瘦身升版（届时本模块与 canonical 直通读一并退役）。
+闭集闸、引文＝段全文派生（2026-10-07）全部保持——瘦的只是「模型抄写机械
+字段」的负担，语义判据一条不放宽。适配集中在本模块（S-03）；删除条件＝
+下游消费迁移完成、canonical 自身瘦身升版（届时本模块与 canonical 直通读
+一并退役）。
 """
 from __future__ import annotations
 
@@ -170,7 +172,7 @@ def expand_chapter_wire(
                 'scope': scope,
                 'disclosure': disclosure,
                 'proposition': proposition,
-                'basis': [{'segment': None, 'quote': quote} for quote in effect.basis],
+                'basis': [{'segment': ref, 'quote': None} for ref in effect.basis],
             })
         cognition_out: list[dict] = []
         for j, entry in enumerate(beat.know):
@@ -179,7 +181,7 @@ def expand_chapter_wire(
                 'proposition': {'ref': handle,
                                 'statement': entry.what if first else None},
                 'holder': entry.who, 'mode': entry.how,
-                'basis': [{'segment': None, 'quote': quote} for quote in entry.basis],
+                'basis': [{'segment': ref, 'quote': None} for ref in entry.basis],
             })
         beats_out.append({
             'event': beat.ev,
@@ -260,7 +262,7 @@ def slim_chapter_wire(observation: dict) -> dict:
             if (effect['scope'] != 'book'
                     and effect['key'] not in REGISTERED_STATE_KEYS):
                 slim_effect['scope'] = effect['scope']
-            slim_effect['basis'] = [basis['quote'] for basis in effect['basis']]
+            slim_effect['basis'] = [basis['segment'] for basis in effect['basis']]
             if effect['disclosure']['visibility'] == 'concealed':
                 slim_effect['hidden'] = {
                     'by': list(effect['disclosure']['known_by']),
@@ -272,7 +274,7 @@ def slim_chapter_wire(observation: dict) -> dict:
         know_out = [{
             'who': entry['holder'], 'how': entry['mode'],
             'what': _prop_text(entry.get('proposition')) or '',
-            'basis': [basis['quote'] for basis in entry['basis']],
+            'basis': [basis['segment'] for basis in entry['basis']],
         } for entry in beat.get('cognition') or ()]
         if state_out:
             slim_beat['state'] = state_out

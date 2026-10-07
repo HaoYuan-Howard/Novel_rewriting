@@ -19,8 +19,9 @@ from typing import Any, NamedTuple
 from contracts.schema.source import (
     CharactersCore, NameStructure, render_form,
 )
-from contracts.schema.observation import STAGE2_NAMES_PROTOCOL
+from contracts.schema.observation import STAGE2_NAMES_WIRE_PROTOCOL
 from novel.stages.common import group_located_errors
+from novel.stages.stage2.resolver import EvidenceResolver
 
 _PEOPLE_KEYS = frozenset({'family_id', 'given', 'aliases', 'surface_forms'})
 _FAMILY_KEYS = frozenset({'literal', 'forms'})
@@ -105,8 +106,8 @@ def _compile_name_structure_located(
     errors: list[str] = []
     if not isinstance(wire, dict):
         return None, [(None, 'names wire必须是对象')]
-    if wire.get('protocol_version') != STAGE2_NAMES_PROTOCOL or 'resolutions' not in wire:
-        return None, [(None, f'names必须使用{STAGE2_NAMES_PROTOCOL}并显式提供resolutions；旧回答不能推断已核验名称异写')]
+    if wire.get('protocol_version') != STAGE2_NAMES_WIRE_PROTOCOL or 'resolutions' not in wire:
+        return None, [(None, f'names必须使用{STAGE2_NAMES_WIRE_PROTOCOL}并显式提供resolutions；旧回答不能推断已核验名称异写')]
     if set(wire) - {'protocol_version', 'families', 'people', 'resolutions'}:
         fail(None, 'names wire 携带未知字段')
         errors.append('names wire 携带未知字段')
@@ -243,13 +244,44 @@ def _compile_name_structure_located(
                 errors.append(message)
     if errors:
         return None, issues
+    # basis 指针派生（2026-10-07 裁决：模型只选段、代码切原文）：resolutions
+    # 的 basis 段 id 在证据闭集内核对后按段全文派生引文——转写文本不进模型
+    # 输出面，原字面「literal ∈ 引文」的锚定检查保留且更强（整段可查）。
+    # 派生失败逐条报 wire 级 issue（resolutions 条目不可部分替换，退整份）。
+    resolver = EvidenceResolver(evidence or {})
+    derived_resolutions: list[Any] = []
+    for index, item in enumerate(wire.get('resolutions') or ()):
+        if not isinstance(item, dict) or not isinstance(item.get('basis'), list):
+            derived_resolutions.append(item)
+            continue
+        derived_basis = []
+        for basis in item['basis']:
+            if isinstance(basis, str):
+                quote, issue = resolver.basis_quote(basis, (basis,))
+                if issue is not None:
+                    fail(None, f'名称同一性[{index}]：{issue.message}')
+                    errors.append(f'名称同一性[{index}]：{issue.message}')
+                else:
+                    derived_basis.append({'segment': basis, 'quote': quote})
+            else:
+                # 形状闸：wire 的 basis 只收段 id——canonical 形（自带引文字典）
+                # 不宽松接纳，防模型借字典回到手抄引文（I-34）。
+                message = (f'名称同一性[{index}]：basis 条目只收段 id 字符串'
+                           '（引文由程序按段全文切出），不收引文对象')
+                fail(None, message)
+                errors.append(message)
+        derived = dict(item)
+        derived['basis'] = derived_basis
+        derived_resolutions.append(derived)
+    if errors:
+        return None, issues
     # schema 构造期复检全部跨段规则（渲染等式、覆盖、闭合）；先剥家族对象内
     # 与键一致的冗余 family_id（wire 允许携带，canonical 不收）。
     normalized = {
         'families': {fid: {k: v for k, v in raw.items() if k != 'family_id'}
                      for fid, raw in raw_families.items()},
         'people': raw_people,
-        'resolutions': wire['resolutions'],
+        'resolutions': derived_resolutions,
     }
     from pydantic import ValidationError
     try:
