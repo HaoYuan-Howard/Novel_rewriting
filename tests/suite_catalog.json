@@ -921,7 +921,13 @@
         "stage7"
       ]
     },
-    "tests/test_str06_associate_v3.py": {
+    "tests/test_str06_associate_v4.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2"
+      ]
+    },
+    "tests/test_str06_phase2_facts.py": {
       "layer": "unit_contract",
       "stages": [
         "stage2"

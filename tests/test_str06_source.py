@@ -23,8 +23,8 @@ from novel.stages.stage2 import (
     character_core_view, compile_source_truth,
 )
 
-PV = 'stage2-names-v3'   # 名称同一性留证协议
-CPV = 'stage2-chapters-v5'     # 章观察（CS-S 1b：v5——死字段收口）
+PV = 'stage2-names-v4'   # 名称同一性留证协议
+CPV = 'stage2-chapters-v6'     # 章观察（CS-S 1b：v5——死字段收口）
 
 
 def _outcome(*, book=None, chapters=None, names=None, associate=None):
@@ -207,7 +207,8 @@ def test_fold_reports_stable_rewrite_and_loop_lifecycle():
               loops=[{'ref': 'mystery', 'op': 'close', 'resolution': '是管家'}])]
     # 跨章 close 走 associate 配对（D8）：ch02.mystery ↔ ch03.mystery。
     associate = _unpaired_associate()
-    associate['loop_pairing'] = [{'open': 'ch02.mystery', 'close': 'ch03.mystery'}]
+    associate['loop_pairing'] = [{'open': 'ch02.mystery', 'close': 'ch03.mystery',
+                               'verdict': 'pair'}]
     outcome = _outcome(book=book, chapters=chapters, associate=associate)
     assert outcome.errors == [] and outcome.undecided == []
     assert any('stable 事实被改写' in e for e in outcome.fold['events'])

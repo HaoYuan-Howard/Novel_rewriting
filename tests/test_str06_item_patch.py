@@ -358,7 +358,7 @@ SEGMENTS = {'e01_01': {'chapter': 1, 'text': '夫君走进门来。云娘没有�
 
 def test_chapter_patch_locate_maps_and_guards():
     from novel.stages.stage2 import chapter_patch_locate, compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v5', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v6', 'beats': [
         {'event': 'a', 'participants': ['ghost'], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single',
          'effects': [], 'cognition': [], 'loops': []}]}

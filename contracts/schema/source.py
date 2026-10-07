@@ -74,8 +74,11 @@ RETIRED_STATE_KEYS: Final[frozenset[str]] = frozenset(
 COGNITION_MODES: Final[tuple[str, ...]] = (
     'learns', 'suspects', 'confirms', 'hears_claim', 'believes', 'asserts')
 
-#: 认知持有者的非人物保留值：读者与公众知情（读者确认时点由 fold 派生）。
-NON_CHAR_HOLDERS: Final[frozenset[str]] = frozenset({'reader', 'public'})
+#: 认知持有者的非人物保留值：读者知情（读者确认时点由 fold 派生）。
+#: CS-S Phase 2（D-5，2026-10-07）删 `public`：使用率 10/121、Stage4 显式
+#: 豁免（不铸锁）、持有者闭集＝人物 slug——「公众知情」由 asserts 认知＋
+#: publicly_claimed_by 事实登记表达，不再作为持有者。旧盘面按 rc 关闭式拒读。
+NON_CHAR_HOLDERS: Final[frozenset[str]] = frozenset({'reader'})
 
 
 class SurfaceWindow(StrictModel):

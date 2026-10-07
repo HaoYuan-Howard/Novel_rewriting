@@ -651,7 +651,7 @@ def test_r2_version_constants():
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
-    assert STR06_RC_VERSION == 'str06-rc18'          # rc18 CS-S 1b Stage2 死字段收口；rc17 CS-H H3 称谓面＋H4 associate v3
+    assert STR06_RC_VERSION == 'str06-rc19'          # rc19 CS-S Phase 2 观察面收敛；rc18 CS-S 1b
     assert 'str06-rc10' in STR06_RC_LABELS
     assert RENDERER_VERSION == 'str06-render-v10'    # CS-F2：称谓投影（v9：RC-24 拍末结果作用域）
     assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v8'

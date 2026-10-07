@@ -148,6 +148,9 @@ _RUNNER_OWNER_ALIASES: Final[dict[str, str]] = {
     # CS-S 1c：names 节点内的变体窄调用 owner——归属 str06.stage2.names
     # （不增节点，T-3）；owner 字符串进请求身份，两个 owner 的请求互不混用。
     'name_variants': 'names',
+    # CS-S Phase 2（D-2 A）：associate 节点内的跨章因果窄调用 owner——归属
+    # str06.stage2.associate（不增节点）；身份窄调用与因果窄调用互不混用。
+    'cross_cause': 'associate',
 }
 
 
@@ -2164,9 +2167,21 @@ class CandidateRunContext:
 
     def provenance_for(self, writer_node: str, rel: str, *,
                        refs: tuple[AdoptionRef, ...] = (),
-                       claim_usage: bool = True):
-        """按 writer 节点的贵贱铸来源账：付费节点要求显式采用引用，免费节点无。"""
+                       claim_usage: bool = True,
+                       declared_free: bool = False):
+        """按 writer 节点的贵贱铸来源账：付费节点要求显式采用引用，免费节点无。
+
+        ``declared_free``（CS-S Phase 2）：付费节点**零模型参与**的确定性产物
+        ——调用方显式声明（如 associate 无候选＝零调用时的空判定面）铸
+        FreeProvenance。不声明且无引用即拒：付费节点缺引用的写盘默认按造假拦。
+        """
         spec = self._validated_node(writer_node)
+        if declared_free:
+            if refs:
+                raise ProvenanceRefused(
+                    f'{writer_node} 的产物同时声明免费与采用引用——采用引用'
+                    '只属于模型参与过的产出，二选一（I-35：fallback 显式）')
+            return self.free_provenance(rel)
         if spec.paid:
             return self.llm_provenance(rel, refs=refs, claim_usage=claim_usage,
                                        node=writer_node)

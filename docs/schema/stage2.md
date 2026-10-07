@@ -17,13 +17,26 @@ unver 行常驻披露，不产生审批待办。机械检查只证明形状、�
 ## 观察与关联协议（B2；R1 associate 独立版本）
 
 book／chapters 两个付费观察面与名称结构观察共用协议版本字面量
-`stage2-observation-v1`；associate 用**独立版本** `stage2-associate-v3`
-（R1，2026-09-28 起独立；CS-H H4，2026-10-06 升 v3；`contracts/schema/observation.py`；
-进请求身份与盘面信封，升版＝换字面量＋改模型＋登记，不做运行时转换层）。R1 只升
-associate：typed 作用对象显式序列化（人物带 `char_id`、关系保留主客体方向、world
-是显式类型，不拿空 dict 兜底）＋状态句柄位置编码——三类观察的请求与字面量逐字
-不变。v3（RC-65）再改一处配对面：`same_state_dimension` 不再逐条配**写入句柄**，
-改配**维度句柄**（见下）。
+`stage2-observation-v1`；associate 用**独立版本** `stage2-associate-v4`
+（R1，2026-09-28 起独立；CS-H H4，2026-10-06 升 v3；CS-S Phase 2，2026-10-07
+升 v4；`contracts/schema/observation.py`；进请求身份与盘面信封，升版＝换字面量＋
+改模型＋登记，不做运行时转换层）。R1 只升 associate：typed 作用对象显式序列化
+（人物带 `char_id`、关系保留主客体方向，world 是显式类型，不拿空 dict 兜底）＋
+状态句柄位置编码。v3（RC-65）：`same_state_dimension` 改配**维度句柄**（见下）。
+v4（CS-S Phase 2，S2-9 落地）：**条目级窄 resolver**——输入不再是整书投影，而是
+代码给出的未决候选＋最小文本（近义命题对＝书级 facts 词表近义/跨章近义/悬空引用×
+更早章命题；近义键维度；跨章 open×close 且时序正；相邻章 seam），逐候选恰答一次
+verdict，无候选＝零调用；跨章因果独立窄调用 `stage2-cross-cause-v1`（D-2 A：
+候选＝loop 配对拍对＋facts 流拍对，模型只选 kind 或否决）。
+
+**书级命题词表（CS-S Phase 2）**：book 观察增 `facts:[{fact_id, statement,
+basis, known_at_start}]`——F 编号 `f{nn}` 由 compile 按列表序派发（不进 wire，
+I-21）；`known_at_start` 承载初始知情（持有者闭集＝人物 slug，D-5 删 public；
+reader 知情 Phase 3 由 compile 派生）；facts 不带 address（D-3：无消费者）。章
+观察的 cognition 可用 `fact` 引用词表编号（wire 面 `fact` 与 `what` 恰写其一；
+canonical 面 proposition.ref=`f{nn}`、statement=None——文本由 compile 回填），
+跨章同一性按引用构造成立；词表近义的转写文本经 associate 候选判定并入。fold 消费
+facts 产出**知情时间线读数**（T-5：结构化只读读数，不进下游 API）。
 
 **句柄编码（R1 v2：唯一的关联登记表）**：`AssociationSpace`
 （`novel/stages/stage2/associate.py::project_association_space`）是 prompt、
@@ -49,9 +62,9 @@ close——提示词不列、wire 引用即带「已在章内自开自闭」说�
 
 | 观察 | 节点 | 内容 | 去机械化要点 |
 |---|---|---|---|
-| `BookObservation` | `str06.stage2.book` | 人物候选（可读 slug、称谓及证据句段）、初态、世界约束 | 无 `state_id`／`constraint_id`；surface 无 `from_chapter`（`R-2.10` 锚点派生） |
+| `BookObservation` | `str06.stage2.book` | 人物候选（可读 slug、称谓及证据句段）、初态、世界约束、书级命题词表 facts | 无 `state_id`／`constraint_id`／fact 编号（F 编号代码派发）；surface 无 `from_chapter`（`R-2.10` 锚点派生） |
 | `ChapterObservation` | `str06.stage2.chapters` | 有序事件＋三类转移＋场景边界＋时间模式＋证据 | 无 `beat_id`（列表序即事件序）、无章序、无因果边；只含**章内本地句柄**（D3） |
-| `AssociateObservation` | `str06.stage2.associate` | 同一命题、同一状态维度、悬念开合配对、跨章因果、跨章续场 | **只选已给句柄**（compiler 投影闭集）；只建立同一性与引用，不移动事实成立、知情或揭示时点（D8） |
+| `AssociateObservation` | `str06.stage2.associate` | 逐候选 verdict：同一命题、同一状态维度、悬念开合、跨章续场（身份窄调用）＋跨章因果 kind（独立窄调用） | **答案只能是已给候选**（候选由代码给出；逐候选恰答一次）；只建立同一性与引用，不移动事实成立、知情或揭示时点（D8） |
 | `NamesObservation` | `str06.stage2.names` | 源名称结构（家族、名、化名、称谓构词） | 形状与 v4 `NameStructure` 同源（D9「names 不变」） |
 
 转移语义逐字复用 v13 拍模型（`contracts/schema/source.py` 的 `Effect`／`Cognition`／
@@ -96,7 +109,7 @@ Stage6 退役后 `stage1/hook_copy.json` 的唯一消费者是本层：切成 `e
 | `stage2/observations/book.json` | `BookObservation` | `str06.stage2.book` | 书级观察：人物候选（可读 slug、称谓及证据）、初态、世界约束 |
 | `stage2/observations/ch{nn}.json` | `ChapterObservation` | `str06.stage2.chapters` | 逐章观察：有序事件＋三类转移＋场景边界＋时间模式＋证据（章内本地句柄） |
 | `stage2/observations/names.json` | `NamesObservation` | `str06.stage2.names` | 源名称结构观察（`NameStructure`） |
-| `stage2/observations/associate.json` | `AssociateObservation` | `str06.stage2.associate` | 跨章关联决定：同一命题／同维状态／悬念配对／跨章因果／跨章续场（只选已给句柄；R1 起独立协议，现役 `stage2-associate-v3`、形状 `str06-rc17`） |
+| `stage2/observations/associate.json` | `AssociateObservation` | `str06.stage2.associate` | 跨章关联判定：逐候选 verdict（R1 起独立协议，现役 `stage2-associate-v4`、形状 `str06-rc19`；无候选＝零调用） |
 | `stage2/blueprints/chapter_blueprints.json` | `BlueprintsArtifactV13` | `str06.stage2.compile` | 逐章 Blueprint（三类转移、场景分段与因果边；compile 唯一 writer） |
 | `stage2/acceptance/fold.json` | 自由形态派生记录 | `str06.stage2.compile` | source fold 读数表（事件＋每章空转移拍比例＋书末未揭示 concealed） |
 | `stage2/characters/characters.json` | `CharactersArtifactV4` | `str06.stage2.compile` | Characters v4：core＋名称结构（compile 合并 book 与 names 观察后唯一发布，D9） |
@@ -131,12 +144,12 @@ book 观察与全文（字面校验含章前文字）；`str06.stage2.associate`
 | `source_chapter_dense_ordinals` | hard | 源章数组阅读序 1..N 密集且非空 |
 | `source_chapter_blueprint` | hard | 章观察编译闭合（三类转移、场景分段、闭集；章观察只含章内本地句柄） |
 | `source_loop_lifecycle` | hard | loops 只许 open/close：loop 一次性 open、close 必带 resolution、问题文本不可改写 |
-| `source_proposition_closure` | hard | 命题引用闭合：章内本地句柄可解析、新建带 statement、引用不重抄文本；跨章同一性配对归 associate |
+| `source_proposition_closure` | hard | 命题引用闭合：章内本地句柄可解析、新建带 statement、引用不重抄文本；fact 引用（f{nn}）按词表闭集核对、不带文本，跨章同一性按引用构造成立；残余近义漂移配对归 associate 候选判定 |
 | `source_registered_key_scope` | hard | 登记键闭集与作用域：作用域读时按表派生（scene_location＝scene、residence＝book、身体状态键各自一键；表外键一律 book）；退役位置键拒识 |
 | `source_fold_consistent` | hard | fold 事件与 Blueprint canonical 一致（含 e00 只读读数） |
 | `source_fold_events` | metric | fold 事件计数与章分布读数 |
 | `source_fold_empty_transition_ratio` | metric | 每章空转移拍比例（三类转移全空的拍所占比例） |
-| `source_fold_knowledge` | metric | 知情 fold 读数（按命题＋持有者＋模式折叠；度量不是门） |
+| `source_fold_knowledge` | metric | 知情 fold 读数（按命题＋持有者＋模式折叠；Phase 2 起含 facts 知情时间线——known_at_start 起步＋逐认知转移事件＋冗余告知读数；度量不是门） |
 | `source_basis_quote_literal` | hard | R10a a1：basis 段属条目自身 source_refs 且引文逐字存在于所引句段（canonical 直通面不归一化、不模糊匹配；C4；wire 面只给段 id、引文＝段全文由 compiler 派生，2026-10-07）；Blueprint v15 证据窗口（被引段全文＋同章前后各句、重叠机械合并）由 compiler 派生——邻句被送达≠邻句成为证据 |
 | `source_effect_modality` | hard | R10a a1：Effect.modality 闭集 actual/planned/expected/conditional 必填（C2 源侧）——计划/预计/条件与已发生分开；认识限定不混入命题文本；源文未说明不得自动填 actual |
 | `names_structure_compile` | hard | Characters v4 名称结构编译闭合 |

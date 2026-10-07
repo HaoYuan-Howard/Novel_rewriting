@@ -4,7 +4,9 @@
 升 v5，2026-10-04；2026-10-07 basis 指针化升 v6；同日二次收口升 v7——
 wire/canonical 词汇分层：evidence_refs 只给段 id，scene_location 上移拍级；
 CS-S 1a 升 v8——`src`→`start` 单段＋区间代码派生、`who`→`on_stage`、
-SlimEffect 删 `scope`/`hidden`/`prop`）。
+SlimEffect 删 `scope`/`hidden`/`prop`；CS-S Phase 2 升 v9——know 增 `fact`
+书级词表引用（与 `what` 恰写其一；fact 直通 f{nn} 引用，文本由 compile 从
+词表回填——转写漂移在构造上消失））。
 
 【职责】LLM 面与 canonical 面之间的唯一转换：`expand_chapter_wire` 把瘦 wire
 派生成 canonical（`STAGE2_CHAPTERS_PROTOCOL`）形状的 dict，`slim_chapter_wire`
@@ -263,7 +265,16 @@ def expand_chapter_wire(
             })
         cognition_out: list[dict] = []
         for j, entry in enumerate(beat.know):
-            handle, first = props.resolve(entry.what)
+            if entry.fact is not None:
+                # Phase 2：书级词表引用直通（ref=f{nn}、statement=None——文本由
+                # compile 从词表回填；跨章同一性按引用构造成立）。
+                cognition_out.append({
+                    'proposition': {'ref': entry.fact, 'statement': None},
+                    'holder': entry.who, 'mode': entry.how,
+                    'basis': [{'segment': ref, 'quote': None} for ref in entry.evidence_refs],
+                })
+                continue
+            handle, first = props.resolve(entry.what or '')
             cognition_out.append({
                 'proposition': {'ref': handle,
                                 'statement': entry.what if first else None},
@@ -349,13 +360,22 @@ def slim_chapter_wire(observation: dict) -> dict:
                 slim_effect['modality'] = effect['modality']
             slim_effect['evidence_refs'] = [b['segment'] for b in effect['basis']]
             state_out.append(slim_effect)
-        know_out = [{
-            'who': entry['holder'], 'how': entry['mode'],
-            'what': (entry.get('proposition') or {}).get('statement')
-                    or statements.get((entry.get('proposition') or {}).get('ref'))
-                    or '',
-            'evidence_refs': [basis['segment'] for basis in entry['basis']],
-        } for entry in beat.get('cognition') or ()]
+        know_out = []
+        for entry in beat.get('cognition') or ():
+            prop = entry.get('proposition') or {}
+            ref = prop.get('ref')
+            if isinstance(ref, str) and ref.startswith('f') and ref[1:].isdigit():
+                # Phase 2：书级词表引用（f{nn}）——逆映射回 fact 字段，不还原文本。
+                know_out.append({
+                    'who': entry['holder'], 'how': entry['mode'], 'fact': ref,
+                    'evidence_refs': [basis['segment'] for basis in entry['basis']],
+                })
+                continue
+            know_out.append({
+                'who': entry['holder'], 'how': entry['mode'],
+                'what': prop.get('statement') or statements.get(ref) or '',
+                'evidence_refs': [basis['segment'] for basis in entry['basis']],
+            })
         if state_out:
             slim_beat['state'] = state_out
         if know_out:

@@ -39,7 +39,7 @@ def _beat(event: str, refs: tuple[str, ...], **over) -> dict:
 
 
 def _compile(beats: list[dict]):
-    wire = {'protocol_version': 'stage2-chapters-v5', 'beats': beats}
+    wire = {'protocol_version': 'stage2-chapters-v6', 'beats': beats}
     return compile_chapter_observation(
         wire, evidence_ids=EVIDENCE, chapter=1,
         character_slugs=frozenset({'qi_niang', 'zhang_fu'}))
@@ -222,7 +222,7 @@ def test_book_surface_from_chapter_must_match_earliest_source_chapter():
     ev = build_evidence(chapters)
     assert '表弟' in ev['e01_01']['text']
     wire = {
-        'protocol_version': 'stage2-book-v5',
+        'protocol_version': 'stage2-book-v6',
         'characters': {'pei_shuyuan': {
             'canonical': '表弟', 'surfaces': [
                 {'surface': '表弟', 'from_chapter': 4,
@@ -236,7 +236,7 @@ def test_book_surface_from_chapter_must_match_earliest_source_chapter():
     assert hit and 'from_chapter=4' in hit[0], errors
     # 绿：from_chapter 与最早命中章一致 → 无 ②b 错误。
     wire_ok = {
-        'protocol_version': 'stage2-book-v5',
+        'protocol_version': 'stage2-book-v6',
         'characters': {'pei_shuyuan': {
             'canonical': '表弟', 'surfaces': [
                 {'surface': '表弟', 'from_chapter': 1, 'source_refs': ['e01_01']},

@@ -11,7 +11,7 @@
 Stage7 交付、页面刷新与服务重启读回一致的 fake 全链钉在
 `tests/test_str06_product_entry.py::test_service_full_chain_real_subprocess_and_restart_readback`
 （fake transport 经 `sitecustomize` 注入子进程，`real_code_version` 过 run_step
-代码身份闸；12 次付费、10 个付费节点——CS-3 bind 退役后现数、`--check-only` 追跑零新购、二次
+代码身份闸；12 次付费、10 个付费节点——CS-3 bind 退役后现数（CS-S Phase 2 起另按候选条件发 associate 节点内 cross_cause 窄调用）、`--check-only` 追跑零新购、二次
 `agent.start` 零派发）；旧联合抽取引擎 `novel/stages/stage2/source.py` 整包删除
 （反例迁至五 owner 引擎，`tests/test_str06_source.py`／`tests/hard_cases.py`
 换轨）；`_llm_client`／`create_legacy_client`／`default_legacy_backend`（执行期
@@ -104,7 +104,7 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 
 ### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
 
-现役版式为 `str06-rc18`（CS-S 1b：Stage2 死字段收口；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
+现役版式为 `str06-rc19`（CS-S Phase 2：观察面收敛——facts 词表/know.fact/associate v4；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
 `7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个（CS-3 bind
 退役后 13），运行配置未变。
 book 观察 `stage2-book-v3`、chapters 独立 `stage2-chapters-v2`（names 保持
@@ -310,10 +310,11 @@ R1 升 rc9、H4 升 rc17）；associate／compile
 
 **CS-S 观察面收敛路线（2026-10-07）**：Stage2 观察面按 Phase 收敛——wire v8
 （`start`／`on_stage`、区间代码派生）→ L1／L2 死字段清除（rc18）→ names A＋B＋C
-（候选先行的条件窄调用＋构词模板 compiler 派生）→ facts＋knowledge transitions＋
-associate 条目级窄 resolver（rc19）→ closed change keys＋拍级 access＋reader 派生。
-观察层是抽取／消歧／编译输入，不是第三套 canonical（S2-8～10 与批次进度见
-`docs/REQUIREMENTS.md` 的 CS-S 节；裁决见 `docs/DECISIONS.md` 2026-10-07 行）。
+（候选先行的条件窄调用＋构词模板 compiler 派生）→ ✅ facts 词表＋know.fact 引用＋
+associate 条目级窄 resolver（rc19，Phase 2 已落地）→ closed change keys＋拍级
+access＋reader 派生（Phase 3）。观察层是抽取／消歧／编译输入，不是第三套
+canonical（S2-8～10 与批次进度见 `docs/REQUIREMENTS.md` 的 CS-S 节；裁决见
+`docs/DECISIONS.md` 2026-10-07 行）。
 
 ## Stage4：把章依赖编译完整（目标）
 

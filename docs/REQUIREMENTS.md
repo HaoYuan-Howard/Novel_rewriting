@@ -67,7 +67,6 @@ Golden_Set_v3.0 三本 yaml 的成书对比评估金标复认（2026-10-05 用�
 
 | 批 | 内容 | 状态 |
 |---|---|---|
-| Phase 2 | Book 增 `facts:[{statement, evidence_refs, known_at_start}]`（F 编号代码派发）＋chapters `know.fact` 引用；近义重复只报 candidate（确定性相似度），Associate 退为条目级窄 resolver（未决候选＋最小文本）；wire／L1 升版、rc19。默认裁决：D-3 不上 `address`（无消费者）；D-5 删 `public` 持有者 | 待做 |
 | Phase 3 | closed change keys（从 ≥3 本书真实键聚类定稿）＋`state→change`、`ev→event`；拍级 `access`（获知通道枚举按真实分布冻结）；reader 知情由 compile 派生、`know.who` 禁 reader；`same_state_dimension` 消失（associate 协议升版）；免费 oracle＝rc15 冻结根 25 条模型自写 reader 条目对比派生结果 | 待做 |
 
 批完成即撤行（验证分母与命令写提交说明）。Phase 4（devices A/B）未立项，不随本路线执行。
@@ -77,8 +76,6 @@ Golden_Set_v3.0 三本 yaml 的成书对比评估金标复认（2026-10-05 用�
 过渡例外必须在此登记删除条件；新增兼容层先取得用户裁决。
 
 | 对象 | 有效义务与删除条件 |
-|---|---|
-| associate 整书投影（S2-9 过渡例外） | 现役 associate 仍整书投影并生产 `cross_chapter_cause`／`scene_continuation`。删除条件＝CS-S Phase 2 落地：输入面改为「代码给出的未决候选＋最小文本」（近义命题对并入 facts 候选；悬念配对候选＝跨章 open×close；`cross_chapter_cause` 按 D-2 A 保留为独立窄任务——候选＝loop 配对＋fact 流给出的拍对，模型只选 kind 或否决；续场候选按相邻章 seam 投影）；无候选＝零调用。落地并验证后删除本行 |
 |---|---|
 | rc12／rc13 五类产物 adapter | `novel/store.py::_upgrade_rc12_payload` 只迁移白名单无损信息（rc17 起 brief／writer_book_ir 的 rc12／rc13 载荷迁移目标直接钉 rc17；盘上 rc14～rc16 载荷不在白名单内，随模型字面量按契约表漂移拒读——`ChapterIR.display_prefix` 语义已变，不能当缺省字段读入；旧根续跑同样按候选契约表拒收）；旧 Brief 缺认知模式免费重放 Preserve，旧 Design 缺 confirms 走显式 owner patch。存量全部重建或退役后删除此 adapter 及 Str06Repository.read_graph_hook 的旧组件迁移，禁止无限新增版本 |
 | OwnerIssue v1／v2 读兼容 | v3 显式 dispatch_pending、指纹历史与更正记录；只经 `contracts/schema/workflow.py::owner_issue_record_of_payload` 集中解码；所有存量 v1／v2 根只读归档／不再续跑后删除。旧错误路由账的更正按 RC-15 显式恢复，不重置轮数 |

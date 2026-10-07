@@ -93,13 +93,17 @@ from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
     book_patch_locate, chapter_observation_prompt, chapter_patch_locate,
     character_core_view, names_patch_locate,
-    compile_associate_observation, associate_observation_prompt,
-    associate_patch_locate,
+    compile_associate_observation, associate_candidates_prompt,
+    associate_patch_locate, compile_cross_cause, cross_cause_prompt,
+    project_identity_candidates, project_cause_candidates,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
     compile_name_variants, name_variant_candidates, name_variants_prompt,
     compile_source_truth, project_association_space,
     first_appearance_anchors, first_appearance_issues, NAMES_INPUT_VERSION,
     names_evidence_view, normalize_name_observations, validate_name_resolutions,
+)
+from contracts.schema.observation import (
+    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_NAMES_PROTOCOL, AssociateObservation,
 )
 from contracts.schema.source import SourceNameResolution
 from novel.stages.owner_revision import (
@@ -116,7 +120,6 @@ from novel.stages.stage4 import (
     project_design_input, project_preserve_view, preserve_revision_wire,
     publish_graph,
 )
-from contracts.schema.observation import STAGE2_NAMES_PROTOCOL
 from contracts.schema.orchestration import LegacyLlmProfile
 from novel.stages.stage4 import (
     design_patch_legal_values, design_patch_slice, hook_combination_errors,
@@ -324,7 +327,8 @@ def run_book(ctx: ChainContext) -> dict:
                      owners=('book',), refs=(book_ref,))
     return {'characters': len(observation.characters),
             'initial_state': len(observation.initial_state),
-            'world_constraints': len(observation.world_constraints)}
+            'world_constraints': len(observation.world_constraints),
+            'facts': len(observation.facts)}
 
 
 def _chapter_evidence(evidence: dict, chapter: int) -> dict:
@@ -333,10 +337,12 @@ def _chapter_evidence(evidence: dict, chapter: int) -> dict:
             if v['chapter'] == chapter or (chapter == 1 and v.get('pre_chapter'))}
 
 
-def chapter_acceptance(wire, *, chapter: int, evidence_ids, character_slugs, anchors):
+def chapter_acceptance(wire, *, chapter: int, evidence_ids, character_slugs, anchors,
+                       fact_ids=None):
     """生产章观察与只读预检共用接受闸；首现锚点由书级 core 派生。"""
     observation, errors = compile_chapter_observation(
-        wire, evidence_ids=evidence_ids, chapter=chapter, character_slugs=character_slugs)
+        wire, evidence_ids=evidence_ids, chapter=chapter, character_slugs=character_slugs,
+        fact_ids=fact_ids)
     if observation is not None:
         errors.extend(first_appearance_issues(anchors, chapter=chapter, beats=observation.beats))
     return observation, errors
@@ -384,6 +390,8 @@ def run_chapters(ctx: ChainContext) -> dict:
         raise MechanicalDefectStop(f'书级称谓锚点无效：{core_errors}',
                                   node='str06.stage2.chapters', issues=tuple(core_errors))
     anchors = first_appearance_anchors(core)
+    # Phase 2：书级命题词表编号闭集（know 的 fact 引用按闭集核对）。
+    fact_ids = frozenset(fact.fact_id for fact in book.facts)
     failures: dict[int, BaseException] = {}
     observed = 0
 
@@ -403,15 +411,16 @@ def run_chapters(ctx: ChainContext) -> dict:
             def validate(w):
                 # R10a a1：传完整段映射（含 text），basis 引文可逐字判定
                 return chapter_acceptance(w, evidence_ids=chapter_evidence, chapter=no,
-                                          character_slugs=frozenset(book.characters), anchors=anchors)
+                                          character_slugs=frozenset(book.characters),
+                                          anchors=anchors, fact_ids=fact_ids)
 
             def locate(w, errs, *, _ev=chapter_evidence, _no=no,
-                       _slugs=frozenset(book.characters)):
+                       _slugs=frozenset(book.characters), _facts=fact_ids):
                 # CS-patch（2026-10-03）：条目级返修的定位协议——与章观察验收
                 # 同源（闭集／basis／人物闭集／句柄纪律），其它闸在拦时自动退
                 # 整份返修（返回 None）。
                 return chapter_patch_locate(w, errs, evidence_ids=_ev, chapter=_no,
-                                            character_slugs=_slugs)
+                                            character_slugs=_slugs, fact_ids=_facts)
 
             wire, ch_ref = ctx.ask(f'ch{no:02d}', prompt, lambda w: validate(w)[1],
                                    patch=locate)
@@ -532,12 +541,15 @@ def run_names(ctx: ChainContext) -> dict:
 # ─── stage2 associate／compile（B2 五节点：关联与双真源发布，D8/D9） ─────────
 
 def run_associate(ctx: ChainContext) -> dict:
-    """`str06.stage2.associate`：跨章关联——只选已给句柄建立同一性与引用（D8）。
+    """`str06.stage2.associate`：条目级窄关联——候选由代码给出，逐候选判定（D8）。
 
-    输入是 compiler 从 book 与 chapters 观察投影的句柄闭集及最小文本；输出观察
-    wire 落 `stage2/observations/associate.json`。缺项、歧义、冲突保持未决——
-    **RC-18～20**：请求前复验章内生命周期并按来源回派；验收时compile干跑
-    只把有稳定身份且归属associate的诊断交同节点修订。最终未决拒绝发布保留
+    Phase 2（S2-9 落地）：输入不再是整书投影——`project_identity_candidates`
+    用确定性相似度筛出未决候选（近义命题、近义键维度、跨章 open×close、相邻
+    章 seam），**无候选＝零调用**；身份答案落盘后由 `project_cause_candidates`
+    从已判定答案派生因果候选拍对（D-2 A），有候选才发第二窄调用（owner
+    `cross_cause`，模型只选 kind 或否决）。缺项、歧义、冲突保持未决——
+    **RC-18～20**：请求前复验章内生命周期并按来源回派；验收时 compile 干跑
+    只把有稳定身份且归属 associate 的诊断交同节点修订。最终未决拒绝发布保留
     （崩溃窗口／单节点重跑／owner patch 后的防御）。跨节点回派的 open 记录
     在案时，修订要求并入 prompt（原请求＋上一版＋typed 问题）。
     """
@@ -554,7 +566,7 @@ def run_associate(ctx: ChainContext) -> dict:
     errors.extend(f'名称同一性未决：{r.literal}；{r.reason}' for r in names.structure.resolutions
                   if r.status == 'unresolved')
     if errors:
-        raise MechanicalDefectStop('名称同一性未闭合，不购买下游判断',
+        raise MechanicalDefectStop('名称同一性不闭合，不购买下游判断',
                                    node='str06.stage2.associate', issues=tuple(errors))
     try:
         book, chapters = normalize_name_observations(book, chapters, names.structure)
@@ -562,42 +574,116 @@ def run_associate(ctx: ChainContext) -> dict:
         raise MechanicalDefectStop('名称局部归一未闭合，不购买下游判断',
                                    node='str06.stage2.associate', issues=(str(exc),)) from exc
     space = project_association_space(book, chapters)
-    prompt = revision_prompt_for_owner(
-        repository, 'associate', associate_observation_prompt(space),
-        'stage2/observations/associate.json')
+    candidates = project_identity_candidates(space, book)
+    observation = AssociateObservation.model_validate(
+        {'protocol_version': STAGE2_ASSOCIATE_PROTOCOL})
+    associate_ref = None
+    if candidates:
+        prompt = revision_prompt_for_owner(
+            repository, 'associate', associate_candidates_prompt(candidates),
+            'stage2/observations/associate.json')
 
-    def _validate(w):
-        observation, errors = compile_associate_observation(w, space)
-        if errors:
-            return errors
-        outcome = compile_source_truth(book=book, chapters=chapters, names=names,
-                                       associate=observation, evidence=evidence,
-                                       source_texts=tuple(c['text'] for c in ctx.chapters))
-        # 干跑发现位置不授予修复权；代码缺陷/无归属诊断禁止购买关联自修。
-        from novel.core.validation import ValidationIssue
-        if outcome.errors or any(not isinstance(issue, ValidationIssue)
-                                 or issue.owner != 'associate' for issue in outcome.undecided):
-            raise MechanicalDefectStop('关联干跑存在非本单位可修问题',
-                                       node='str06.stage2.associate',
-                                       issues=tuple(outcome.errors + outcome.undecided))
-        return outcome.undecided
+        def _validate(w):
+            _observation, w_errors = compile_associate_observation(w, space, candidates)
+            if w_errors:
+                return w_errors
+            outcome = compile_source_truth(book=book, chapters=chapters, names=names,
+                                           associate=_observation, evidence=evidence,
+                                           source_texts=tuple(c['text'] for c in ctx.chapters))
+            # 干跑发现位置不授予修复权；代码缺陷/无归属诊断禁止购买关联自修。
+            from novel.core.validation import ValidationIssue
+            if outcome.errors or any(not isinstance(issue, ValidationIssue)
+                                     or issue.owner != 'associate' for issue in outcome.undecided):
+                raise MechanicalDefectStop('关联干跑存在非本单位可修问题',
+                                           node='str06.stage2.associate',
+                                           issues=tuple(outcome.errors + outcome.undecided))
+            return outcome.undecided
 
-    def _locate(w, errs):
-        # CS-H H4（RC-57 覆盖）：配对条目定位——机械验收与干跑未决按句柄反查
-        # 条目路径；需要新增条目或歧义时返回 None，退整份返修。
-        return associate_patch_locate(w, errs, space=space)
+        def _locate(w, errs):
+            # CS-H H4（RC-57 覆盖）：答案条目定位——机械验收与干跑未决按句柄
+            # 反查条目路径；需要新增条目（missing_answer）或歧义时返回 None，
+            # 退整份返修。
+            return associate_patch_locate(w, errs, space=space)
 
-    wire, associate_ref = ctx.ask('associate', prompt, _validate, patch=_locate)
-    observation, errors = compile_associate_observation(wire, space)
-    if errors:
-        raise ValueError(errors)
-    repository.write('stage2/observations/associate.json', observation,
-                     owners=('associate',), refs=(associate_ref,))
-    return {'same_proposition': len(observation.same_proposition),
-            'same_state_dimension': len(observation.same_state_dimension),
-            'loop_pairing': len(observation.loop_pairing),
-            'cross_chapter_cause': len(observation.cross_chapter_cause),
-            'scene_continuation': len(observation.scene_continuation)}
+        wire, associate_ref = ctx.ask(
+            'associate', prompt, _validate, patch=_locate)
+        observation, w_errors = compile_associate_observation(wire, space, candidates)
+        if w_errors:
+            raise ValueError(w_errors)
+
+    # 第二窄任务（D-2 A）：因果候选从**已判定的身份答案**派生——候选为空＝零调用。
+    causes: tuple = ()
+    cause_candidates = project_cause_candidates(space, chapters, book, observation)
+    if cause_candidates:
+        def _validate_cause(w):
+            _causes, c_errors = compile_cross_cause(w, cause_candidates)
+            return c_errors
+
+        def _locate_cause(w, errs):
+            # 窄调用答案的条目定位：候选对反查行（unknown／duplicate）；
+            # missing_answer（无行可替换）与歧义返回 None 退整份。
+            if not isinstance(w, dict) or not errs:
+                return None
+            rows = w.get('causes')
+            if not isinstance(rows, list):
+                return None
+            grouped: dict[tuple, list] = {}
+            for error in errs:
+                location = getattr(error, 'location', None)
+                if not isinstance(location, tuple) or not location:
+                    return None
+                if location[0] == 'cross_chapter_cause' and len(location) >= 3:
+                    key = (location[1], location[2])
+                    hits = [i for i, row in enumerate(rows)
+                            if isinstance(row, dict)
+                            and (row.get('from_beat'), row.get('to_beat')) == key]
+                elif location[0] == 'causes' and len(location) > 1 \
+                        and isinstance(location[1], int):
+                    hits = [location[1]] if 0 <= location[1] < len(rows) else []
+                else:
+                    return None
+                if len(hits) != 1:
+                    return None
+                grouped.setdefault(('causes', hits[0]), []).append(error)
+            return list(grouped.items())
+
+        cause_wire, _cause_ref = ctx.ask(
+            'cross_cause', cross_cause_prompt(cause_candidates, space),
+            _validate_cause, patch=_locate_cause)
+        causes, c_errors = compile_cross_cause(cause_wire, cause_candidates)
+        if c_errors:
+            raise ValueError(c_errors)
+        observation = observation.model_copy(
+            update={'cross_chapter_cause': causes})
+
+    # 防御干跑（I-34）：组装后的最终观察过一遍 compile——非本单位可修问题当场
+    # 停，不落盘半成品（无候选时也执行——悬空 close 等未决仍须在此拦下）。
+    outcome = compile_source_truth(book=book, chapters=chapters, names=names,
+                                   associate=observation, evidence=evidence,
+                                   source_texts=tuple(c['text'] for c in ctx.chapters))
+    from novel.core.validation import ValidationIssue
+    if outcome.errors or any(not isinstance(issue, ValidationIssue)
+                             or issue.owner != 'associate' for issue in outcome.undecided):
+        raise MechanicalDefectStop('关联干跑存在非本单位可修问题',
+                                   node='str06.stage2.associate',
+                                   issues=tuple(outcome.errors + outcome.undecided))
+    repository.write(
+        'stage2/observations/associate.json', observation, owners=('associate',),
+        refs=(associate_ref,) if associate_ref is not None else (),
+        # 零调用（无身份候选且无因果候选）＝零模型参与：确定性空判定面，
+        # 显式声明免费来源账（I-35；付费节点缺引用的写盘默认按造假拦）。
+        declared_free=associate_ref is None)
+    return {'identity_candidates': candidates.answer_count(),
+            'same_proposition': sum(1 for p in observation.same_proposition
+                                    if p.verdict == 'same'),
+            'same_state_dimension': sum(1 for p in observation.same_state_dimension
+                                        if p.verdict == 'same'),
+            'loop_pairing': sum(1 for p in observation.loop_pairing
+                                if p.verdict == 'pair'),
+            'cross_chapter_cause': sum(1 for c in observation.cross_chapter_cause
+                                       if c.kind != 'none'),
+            'scene_continuation': sum(1 for p in observation.scene_continuation
+                                      if p.verdict == 'continue')}
 
 
 def _read_chapter_observations(

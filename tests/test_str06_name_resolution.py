@@ -51,6 +51,13 @@ def _case():
         cognition=[{'proposition': {'ref': 'p_out', 'statement': '苏芸孃决定次日出门'},
                     'holder': 'reader', 'mode': 'learns',
                     'basis': [{'segment': 'e02_03', 'quote': '苏芸孃决定次日出门'}]}]))
+    # v4 候选面随夹具变化：ch02 追加拍自开新场（seam 右端变 ch02.sc2）且登记
+    # p_out（悬空引用候选多一条）——默认答案须恰覆盖新候选集。
+    wires['associate']['scene_continuation'] = [
+        {'left': 'ch01.sc1', 'right': 'ch02.sc1', 'verdict': 'distinct'},
+        {'left': 'ch02.sc2', 'right': 'ch03.sc1', 'verdict': 'distinct'}]
+    wires['associate']['same_proposition'].append(
+        {'left': 'ch02.p_out', 'right': 'ch03.p_hide', 'verdict': 'distinct'})
     return chapters, wires
 
 
@@ -140,7 +147,7 @@ def test_unresolved_identity_stops_before_associate_purchase_and_publish(tmp_pat
     wires['name_variants']['variants'][0].update(
         verdict='unresolved', char_id=None, surface=None)
     ask = _AcceptingAsk(wires)
-    with pytest.raises(MechanicalDefectStop, match='名称同一性未闭合'):
+    with pytest.raises(MechanicalDefectStop, match='名称同一性不闭合'):
         _run(tmp_path, chapters, wires, ask)
     assert 'names' in ask.prompts and 'associate' not in ask.prompts
     assert not (tmp_path / 'stage2/characters/characters.json').exists()

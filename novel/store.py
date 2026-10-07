@@ -2141,6 +2141,9 @@ class PublishItem(NamedTuple):
     owners: tuple[str, ...] = ()
     refs: tuple = ()
     claim_usage: bool = True
+    #: 付费节点零模型参与的确定性产物（如 associate 无候选的空判定面）——
+    #: 显式声明铸 FreeProvenance（CS-S Phase 2；不声明且无引用即拒）。
+    declared_free: bool = False
 
 
 class Str06Repository:
@@ -2236,7 +2239,8 @@ class Str06Repository:
             '请先从对应 owner 重建当前候选根上的产物')
 
     def write(self, rel: str, value: Any, *, owners: tuple[str, ...] | None = None,
-              refs: tuple = (), claim_usage: bool = True) -> Path:
+              refs: tuple = (), claim_usage: bool = True,
+              declared_free: bool = False) -> Path:
         """落盘一份产物（单项输出组）：带来源账并**封存发布证明**（R6）。
 
         `refs` 是 B1 的**显式采用引用**（`AdoptionRef`）：provenance 由纯函数按
@@ -2250,7 +2254,7 @@ class Str06Repository:
         """
         return self.publish((PublishItem(
             rel=rel, value=value, owners=owners or (), refs=refs,
-            claim_usage=claim_usage),))[0]
+            claim_usage=claim_usage, declared_free=declared_free),))[0]
 
     def publish(self, items: tuple['PublishItem', ...] | list['PublishItem']
                 ) -> tuple[Path, ...]:
@@ -2344,7 +2348,7 @@ class Str06Repository:
             # 已登记产物落盘即带来源账；正文（text）的账在绑定它的回执上。
             provenance = self.context.provenance_for(
                 _writer_of(spec), item.rel, refs=item.refs,
-                claim_usage=item.claim_usage)
+                claim_usage=item.claim_usage, declared_free=item.declared_free)
             payload = {**payload, '_provenance': provenance.to_disk()}
         return (json.dumps(payload, ensure_ascii=False, indent=2,
                            allow_nan=False).encode('utf-8'), provenance)

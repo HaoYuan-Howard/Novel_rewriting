@@ -747,7 +747,7 @@ def _full_chain_wires():
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
                                 for s in entry.surfaces]}
             for slug, entry in chars.characters.items()}),
-        'protocol_version': 'stage2-book-v5',
+        'protocol_version': 'stage2-book-v6',
         'characters': {
             slug: {'canonical': entry.canonical,
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
@@ -770,7 +770,7 @@ def _full_chain_wires():
          'keep_reason': None}]}
     return {
         'book': book,
-        'ch01': {'protocol_version': 'stage2-chapters-v5', 'beats': [
+        'ch01': {'protocol_version': 'stage2-chapters-v6', 'beats': [
             beat('苏芸娘嫁入陆家，夫君立下旧约。', ('e01_01',),
                  participants=('yun_niang', 'fu_jun'),
                  effects=({'target': {'kind': 'relation', 'subject': 'yun_niang',
@@ -779,15 +779,19 @@ def _full_chain_wires():
                            'modality': 'actual',
                            'basis': ({'segment': 'e01_01',
                                       'quote': '苏芸娘嫁入陆家'},)},))]},
-        'ch02': {'protocol_version': 'stage2-chapters-v5', 'beats': [
+        'ch02': {'protocol_version': 'stage2-chapters-v6', 'beats': [
             beat('夫君夜半离家，芸娘发现玉佩之秘。', ('e02_01',),
                  participants=('yun_niang', 'fu_jun'))]},
         'names': __import__('tests.str06_facilities', fromlist=['names_v6_wire'])
             .names_v6_wire(chars.name_structure.model_dump(mode='json')),
-        'associate': {'protocol_version': 'stage2-associate-v3',
+        'associate': {'protocol_version': 'stage2-associate-v4',
                       'same_proposition': [], 'same_state_dimension': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],
-                      'scene_continuation': []},
+                      # 两章各一场：seam 候选判 distinct（各自独立场景）。
+                      'scene_continuation': [
+                          {'left': 'ch01.sc1', 'right': 'ch02.sc1',
+                           'verdict': 'distinct'}]},
+        'cross_cause': {'protocol_version': 'stage2-cross-cause-v1', 'causes': []},
         'preserve': {'protocol_version': 'stage4-preserve-v2', 'obligations': [
             {'kind': 'event_core',
              'statement': '苏芸娘嫁入陆家且夫君立下旧约',

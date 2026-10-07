@@ -67,7 +67,7 @@ def _book_wire() -> dict:
             'yun_niang': {'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'source_refs': ['e01_02']}]},
         }),
-        'protocol_version': 'stage2-book-v5',
+        'protocol_version': 'stage2-book-v6',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
@@ -344,7 +344,7 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
                 'stage2/observations/names.json'):
         artifact = repo.inspect(rel)
         assert artifact['protocol_version'] == (
-            'stage2-book-v5' if rel.endswith('/book.json')
+            'stage2-book-v6' if rel.endswith('/book.json')
             else STAGE2_NAMES_PROTOCOL if rel.endswith('/names.json')
             else STAGE2_CHAPTERS_PROTOCOL), rel
         assert '_provenance' in artifact, rel
@@ -514,10 +514,14 @@ def test_missing_chapter_unit_recovery_replays_without_repurchase(tmp_path):
 
         def send(self, request: ChatRequest) -> ChatResponse:
             user = request.user
-            if '人物账、初始状态与世界约束' in user:
+            if '人物账、初始状态、世界约束与书级命题词表' in user:
                 owner = 'book'
             elif '登记全书源名称结构' in user:
                 owner = 'names'
+            elif '条目级关联判定' in user:
+                owner = 'associate'
+            elif '跨章因果判定' in user:
+                owner = 'cross_cause'
             else:
                 import re as _re
                 marks = _re.findall(r'【第 (\d+) 章正文】', user)

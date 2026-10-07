@@ -889,16 +889,17 @@ def test_faulted_product_entry_heals_via_revision_and_delivers(base, tmp_path,
     assert '柳婉' in final_text and '苏芸娘' not in final_text
 
     # ④ 修订轮真实发生并如实计费：12 笔干净外发＋1 笔 associate 修订轮实付
-    #    （CS-3 bind 退役）；整书总闸按 attempt 合账（I-17/I-43）。
+    #    ＋1 笔 cross_cause 因果窄调用（CS-S Phase 2：D-2 A，loop 配对拍对候选；
+    #    CS-3 bind 退役）；整书总闸按 attempt 合账（I-17/I-43）。
     rows = _ledger_rows(base)
     paid = [row for row in rows
             if row['sid'] == book.name and not row['cached']]
-    assert len(paid) == 13, '受影响 owner 应恰好多一笔修订轮实付'
+    assert len(paid) == 14, '受影响 owner 应恰好多一笔修订轮实付＋一笔因果窄调用'
     associate_rows = [row for row in paid
                       if row['node'] == 'str06.stage2.associate']
-    assert len(associate_rows) == 2, 'associate 一原轮＋一修订轮'
+    assert len(associate_rows) == 3, 'associate 一原轮＋一修订轮＋一因果窄调用'
     from novel.work_units import read_book_budget
-    assert read_book_budget(base, book.name).used == 13
+    assert read_book_budget(base, book.name).used == 14
 
     # ⑤ 重启读回：全新服务实例三面读回一致，成书与交付摘要互相咬合。
     candidate = book.name

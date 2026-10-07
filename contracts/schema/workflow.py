@@ -645,13 +645,21 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 # HookContext.display_faces/avoid_lines、正文 validator v2（必保揭名必现字面）；
 # H4 associate 协议升 `stage2-associate-v3`（维度句柄，RC-65）。六份携带形状的
 # 产物换身份；旧 rc16 根（含 `csf4_restore_20261005`）按契约表漂移只读拒收。
-STR06_RC_VERSION: Final = 'str06-rc18'
+# rc18（2026-10-07 CS-S Phase 1）：观察死字段三层收口——book/chapters canonical
+# v5、names v4、wire v8（各行见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
+# rc19（2026-10-07 CS-S Phase 2）：观察面收敛——book v6 增 facts（书级命题词表＋
+# known_at_start 初始知情，F 编号代码派发）、chapters v6 增 know.fact 引用、
+# associate v4 条目级窄 resolver（候选由代码给出、无候选＝零调用；跨章因果独立
+# 窄调用 wire `stage2-cross-cause-v1`，D-2 A）、认知持有者闭集删 public（D-5）、
+# fold 增知情时间线读数。观察（book／ch／associate）与 fold 换身份；names／
+# Characters／Blueprint 形状未变不升（rc18 沿用）。旧 rc18 根按契约表漂移只读拒收。
+STR06_RC_VERSION: Final = 'str06-rc19'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
                           'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
                           'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15',
-                          'str06-rc16', 'str06-rc17', 'str06-rc18')
+                          'str06-rc16', 'str06-rc17', 'str06-rc18', 'str06-rc19')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒

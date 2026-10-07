@@ -38,6 +38,7 @@ compile 侧的闭集核对保留（发布前防御）。认知 holder／effect t
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from typing import Any, Iterable, Mapping
 
@@ -53,6 +54,10 @@ from novel.stages.stage2.slim import (
     chapter_segment_sequence, expand_chapter_wire,
 )
 from novel.core.validation import ValidationIssue
+
+#: 书级命题编号的观察面形状（与 `FACT_ID_PATTERN` 同一张表；slim 派发的章内
+#: 句柄是 k{nn}，两个命名空间不冲突）。
+_FACT_REF = re.compile(r'^f\d{2,}$')
 
 
 def chapter_loop_issues(beats: list[Any], *, chapter: int | None = None) -> list[ValidationIssue]:
@@ -127,14 +132,27 @@ def chapter_prior_text(chapters: list[dict], before_chapter: int) -> str:
             '不带证据 id，不要求引用）\n\n' + '\n\n'.join(parts) + '\n')
 
 
+def chapter_facts_block(book: Any) -> str:
+    """书级命题词表块（Phase 2）：know 的 fact 引用闭集的请求面。
+
+    词表是书级观察的产物（book owner 通读全书后登记）；本章请求只看到
+    编号与命题文本——不携带证据段（证据已由 book owner 验收）。
+    """
+    facts = list(getattr(book, 'facts') or ())
+    if not facts:
+        return ('【书级命题词表】（无——本书未登记词表，know 只写 what）\n')
+    lines = '\n'.join(f'[{fact.fact_id}] {fact.statement}' for fact in facts)
+    return ('【书级命题词表】（know 的 fact 只能引用这些编号）\n' + lines + '\n')
+
+
 def chapter_observation_prompt(*, chapter: int, book: Any, chapters: list[dict],
                                evidence: Mapping[str, Mapping[str, Any]]) -> str:
     """第 k 章观察请求的 prompt 组装（run_chapters 的唯一组装点）。
 
     `book` 是书级观察（`BookObservation`，盘上 `stage2/observations/book.json`
-    的模型）：人物表是本请求唯一的跨节点输入。槽值全部由（源章数组，书级
-    观察，章序）决定——同章请求因此逐字节可复算，`D3` 的互不依赖由构造
-    函数签名保证，不靠调用顺序。
+    的模型）：人物表与书级命题词表是本请求仅有的跨节点输入。槽值全部由
+    （源章数组，书级观察，章序）决定——同章请求因此逐字节可复算，`D3` 的
+    互不依赖由构造函数签名保证，不靠调用顺序。
     """
     glossary = json.dumps(
         {slug: {'canonical': c.canonical,
@@ -145,6 +163,7 @@ def chapter_observation_prompt(*, chapter: int, book: Any, chapters: list[dict],
     return CHAPTER_PROMPT.format(
         ch=chapter,
         glossary=glossary,
+        facts_block=chapter_facts_block(book),
         prior=chapter_prior_text(chapters, chapter),
         evidence=chapter_evidence,
         pre_chapter=PRE_CHAPTER_RULE if chapter == 1 else '')
@@ -237,6 +256,7 @@ def _derive_basis_quotes(canonical: Any, resolver: EvidenceResolver, *,
 def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
                     slugs: frozenset[str] | None, chapter: int | None,
                     labels: tuple[str, str] = ('effects', 'cognition'),
+                    fact_ids: frozenset[str] | None = None,
                     ) -> list[tuple[tuple[str | int, ...] | None, str]]:
     """章观察机械闸的**结构化视图**（CS-patch，2026-10-03）：与
     `compile_chapter_observation` 同源同序，逐条附 wire 的 JSON 路径
@@ -247,7 +267,8 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
     `labels` 只是**词汇**不是判据：瘦 wire（CS-2）的路径与消息用 state／
     know 命名（模型看得到、patch 找得到），检查项与顺序逐字不变。CS-S 1b：
     退役位置键拒识从 `_normalize_registered_scopes` 迁到本视图（作用域归一
-    已删——作用域读时按登记表派生，R-2.14）。
+    已删——作用域读时按登记表派生，R-2.14）。CS-S Phase 2：know 的 f{nn}
+    引用闭集（词表成员资格＋引用不带文本）在本视图按条目报告。
     """
     eff_label, cog_label = labels
     issues: list[tuple[tuple[str | int, ...] | None, str]] = []
@@ -275,6 +296,20 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
                                    '当前位置用 scene_location（场景作用域）、'
                                    '长期居所用 residence（book 作用域）、'
                                    '身体状态各自一键，不得塞进同一个位置值'))
+                if kind == 'cognition':
+                    prop = transfer.get('proposition') or {}
+                    ref = prop.get('ref')
+                    if isinstance(ref, str) and _FACT_REF.fullmatch(ref):
+                        if fact_ids is None or ref not in fact_ids:
+                            issues.append((beat_path + (label, index - 1),
+                                           f'{where} {label}[{index}] 引用了书级'
+                                           f'命题词表之外的编号 {ref!r}（fact 只能'
+                                           '逐字取自【书级命题词表】清单）'))
+                        elif prop.get('statement') is not None:
+                            issues.append((beat_path + (label, index - 1),
+                                           f'{where} {label}[{index}] 引用书级命题 '
+                                           f'{ref} 不得携带 what/statement 文本'
+                                           '（词表命题的文本由程序从词表回填）'))
                 for basis in transfer.get('basis') or ():
                     if not isinstance(basis, dict) or basis.get('segment') is None \
                             or basis.get('quote') is None:
@@ -331,6 +366,7 @@ def _route_wire(wire: Any, *, chapter: int | None, sequence: tuple[str, ...] | N
 
 def _compile_view(wire: dict, *, evidence_ids, chapter: int | None,
                   character_slugs: Iterable[str] | None,
+                  fact_ids: Iterable[str] | None = None,
                   ) -> tuple[Any, list[tuple[tuple[str | int, ...] | None, str]]]:
     """验收与条目定位共用的同一条管道（判据 25）：路由 → 副本 → basis 段
     派生（2026-10-07）→ 机械闸。返回 ``(compiler 副本, issues)``；副本为
@@ -340,10 +376,13 @@ def _compile_view(wire: dict, *, evidence_ids, chapter: int | None,
     判定；只传 id 的合成闭集只做闭集核对（无文本可查，派生与逐字判定如实
     报错）。v8 区间派生的段序列由闭集按章前缀过滤派生（数值阅读序）——
     全书闭集与章内闭集给同一章派生出同一序列，纪律不依赖调用方闭集宽窄。
+    `fact_ids`（Phase 2）是书级命题词表编号闭集；f{nn} 引用按闭集核对
+    （None＝调用方未提供词表——f 引用按「词表外」报告，fail fast）。
     """
     resolver = EvidenceResolver(evidence_ids if isinstance(evidence_ids, Mapping)
                                 else list(evidence_ids))
     slugs = frozenset(character_slugs) if character_slugs is not None else None
+    facts = frozenset(fact_ids) if fact_ids is not None else None
     sequence = chapter_segment_sequence(evidence_ids, chapter)
     routed, labels, route_issues = _route_wire(wire, chapter=chapter,
                                                sequence=sequence)
@@ -355,7 +394,8 @@ def _compile_view(wire: dict, *, evidence_ids, chapter: int | None,
         # 只有瘦 wire 的 basis 不带引文；canonical 直通缺引文按协议拒收，不代补。
         issues.extend(_derive_basis_quotes(canonical, resolver, chapter=chapter,
                                            labels=labels))
-    issues.extend(_chapter_issues(canonical, resolver, slugs, chapter, labels))
+    issues.extend(_chapter_issues(canonical, resolver, slugs, chapter, labels,
+                                  fact_ids=facts))
     return canonical, issues
 
 
@@ -388,6 +428,7 @@ def _shape_view(normalized: dict) -> dict:
 def chapter_patch_locate(wire: Any, errors: list[str], *,
                          evidence_ids, chapter: int | None = None,
                          character_slugs: Iterable[str] | None = None,
+                         fact_ids: Iterable[str] | None = None,
                          ) -> list[tuple[tuple[str | int, ...], list[str]]] | None:
     """CS-patch 的章观察条目定位（owner 声明给 `ask_json` 的 `patch` 协议）。
 
@@ -401,7 +442,8 @@ def chapter_patch_locate(wire: Any, errors: list[str], *,
     if not isinstance(wire, dict):
         return None
     _canonical, issues = _compile_view(wire, evidence_ids=evidence_ids, chapter=chapter,
-                                       character_slugs=character_slugs)
+                                       character_slugs=character_slugs,
+                                       fact_ids=fact_ids)
     if not issues or any(path is None for path, _message in issues):
         return None
     if len(errors) != len(issues) or sorted(errors) != sorted(
@@ -421,6 +463,7 @@ def chapter_patch_locate(wire: Any, errors: list[str], *,
 def compile_chapter_observation(
     wire: Any, *, evidence_ids: Iterable[str], chapter: int | None = None,
     character_slugs: Iterable[str] | None = None,
+    fact_ids: Iterable[str] | None = None,
 ) -> tuple[ChapterObservation | None, list[str]]:
     """第 k 章 wire → (ChapterObservation, errors)：章观察的全部 owner 机械闸。
 
@@ -428,10 +471,11 @@ def compile_chapter_observation(
     本章闭集之外的段 id 即精确 issue——观察只含章内证据（D3）。
     `character_slugs` 是书级人物表 slug 闭集（R3 左移）：beats 的 participants
     引用表外人物当场报 issue（措辞与 compile 的 `R-2.3` 核对一致，compile 侧
-    保留为发布前防御）。wire 不被修改（I-24）；错误逐条聚合，含 Resolver 的
-    精确 issue 消息。瘦 wire 先经 expand 派生、basis 段 id 由 Resolver 核对
-    闭集与本拍 src 后按段全文派生引文，再过同一管道；落盘形状与全部下游
-    消费者不变。
+    保留为发布前防御）。`fact_ids`（Phase 2）是书级命题词表编号闭集：know 的
+    f{nn} 引用须在词表内且不带文本。wire 不被修改（I-24）；错误逐条聚合，
+    含 Resolver 的精确 issue 消息。瘦 wire 先经 expand 派生、basis 段 id 由
+    Resolver 核对闭集与本拍 src 后按段全文派生引文，再过同一管道；落盘形状
+    与全部下游消费者不变。
     """
     if not isinstance(wire, dict):
         return None, ['chapter wire 必须是 JSON object']
@@ -440,7 +484,8 @@ def compile_chapter_observation(
     # CS-S 1b：作用域归一步骤删（作用域读时按登记表派生，R-2.14）——退役
     # 位置键拒识已在 `_chapter_issues` 内按条目报告。
     canonical, issues = _compile_view(wire, evidence_ids=evidence_ids, chapter=chapter,
-                                      character_slugs=character_slugs)
+                                      character_slugs=character_slugs,
+                                      fact_ids=fact_ids)
     errors: list = [message for _path, message in issues]
     if canonical is None:
         return None, errors

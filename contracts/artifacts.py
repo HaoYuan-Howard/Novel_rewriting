@@ -250,10 +250,12 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # associate（只有位置句柄）、fold 与 Stage4 起各产物不带段号，不虚构升版。
     # rc18（2026-10-07 CS-S 1b）：观察 canonical 升 v5——InitialFact.knowledge
     # 与 effect 的 disclosure／proposition／scope 删；旧 rc15 根只读拒收。
-    'stage2/observations/book.json': 'str06-rc18',
-    'stage2/observations/ch{nn}.json': 'str06-rc18',
+    # rc19（CS-S Phase 2）：book v6 增 facts（书级命题词表＋known_at_start）；
+    # chapters v6 增 know.fact 引用——观察换身份，旧 rc18 根只读拒收。
+    'stage2/observations/book.json': 'str06-rc19',
+    'stage2/observations/ch{nn}.json': 'str06-rc19',
     # rc18（CS-S 1c）：names canonical 升 v4——构词 surface_forms 由 compiler
-    # 派生、resolutions 来自变体窄调用（增 not_name）。
+    # 派生、resolutions 来自变体窄调用（增 not_name）。Phase 2 形状未变不升。
     'stage2/observations/names.json': 'str06-rc18',
     # rc9（2026-09-28 R1 关联无损）：associate 协议独立升版 stage2-associate-v2
     # ——typed 作用对象显式序列化＋状态句柄位置编码（ch{nn}.b{拍}.e{效应序}.{key}
@@ -262,12 +264,19 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc17（2026-10-06 CS-H H4，RC-65）：协议升 stage2-associate-v3——
     # same_state_dimension 改配维度句柄（dim{nn}，按（作用对象，键）地址聚合），
     # 章内已自开自闭的 close 不进可配对闭集；旧 v2 wire 关闭式拒读。
-    'stage2/observations/associate.json': 'str06-rc17',
+    # rc19（CS-S Phase 2，S2-9 落地）：协议升 stage2-associate-v4——条目级窄
+    # resolver（输入＝代码给出的未决候选＋最小文本，逐候选 verdict；无候选＝
+    # 零调用）；跨章因果独立窄调用 wire stage2-cross-cause-v1（D-2 A）。
+    'stage2/observations/associate.json': 'str06-rc19',
     # v13（2026-09-26 质量改进批次二）：拍模型三类转移＋场景分段；v12 存量拒读。
+    # Phase 2：cognition 命题引用可指向 f{nn}（词表编号）——值域扩展非形状变化，
+    # 不升版（Blueprints 保持 rc18）。
     'stage2/blueprints/chapter_blueprints.json': 'str06-rc18',
     # v13 同批：fold 读数结构化（每章空转移拍比例＋书末未揭示 concealed）。
     # rc18：fold 删 concealed_unrevealed（concealed 效应已删）。
-    'stage2/acceptance/fold.json': 'str06-rc18',
+    # rc19：fold 增知情时间线读数（facts known_at_start 起步的逐命题知情读数，
+    # T-5：结构化只读读数，不进下游 API）。
+    'stage2/acceptance/fold.json': 'str06-rc19',
     'stage2/characters/characters.json': 'str06-rc18',
     'runtime/preserve_checkpoint.json': 'str06-rc12',
     # rc13（2026-10-03 CS-3 余项，D5 统一＋world 规则 id）：读者揭示统一走

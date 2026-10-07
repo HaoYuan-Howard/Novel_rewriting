@@ -32,7 +32,7 @@ from tests.str06_expression_inputs import (
     sample_book_expression, sample_design_expression,
 )
 
-PV = 'stage2-chapters-v5'   # R10a a1：章观察独立协议字面量（names 无字面量面）
+PV = 'stage2-chapters-v6'   # R10a a1：章观察独立协议字面量（names 无字面量面）
 
 
 def _design_wire_v7():
@@ -72,7 +72,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v5', 'characters': {
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v6', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
@@ -106,10 +106,11 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                 'fu_jun': {'family_id': None, 'given': None, 'aliases': []},
                 'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': []}},
         },
-        'associate': {'protocol_version': 'stage2-associate-v3',
+        'associate': {'protocol_version': 'stage2-associate-v4',
                       'same_proposition': [], 'same_state_dimension': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],
                       'scene_continuation': []},
+        'cross_cause': {'protocol_version': 'stage2-cross-cause-v1', 'causes': []},
         'preserve': _preserve_wire(), 'design': _design_wire_v7(),
         # F5 起 Hook Design 属 Stage4 腿：完整 graph 与 WriterIR 一起发布
         'hook_design': {
@@ -260,7 +261,7 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
-                {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v5', 'characters': {
+                {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v6', 'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
@@ -339,7 +340,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v5', 'characters': {
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v6', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
@@ -403,10 +404,11 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
             'people': {
                 'fu_jun': {'family_id': None, 'given': None, 'aliases': []},
                 'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': []}}},
-        'associate': {'protocol_version': 'stage2-associate-v3',
+        'associate': {'protocol_version': 'stage2-associate-v4',
                       'same_proposition': [], 'same_state_dimension': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],
                       'scene_continuation': []},
+        'cross_cause': {'protocol_version': 'stage2-cross-cause-v1', 'causes': []},
         'preserve': preserve, 'design': design,
         'hook_design': {
             'protocol_version': 'stage4-hook-design-v1',

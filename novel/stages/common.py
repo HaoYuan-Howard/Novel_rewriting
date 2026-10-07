@@ -621,7 +621,8 @@ def semantic_revision_rules(owner: str) -> str:
             'book': '依据原文，允许纠正本单位的书级观察与证据；不得改写原文。',
             'names': '依据原文及人物表，允许纠正名称结构部件（姓／名／化名／歧义例外）并保留证据。',
             'name_variants': '依据候选出现段原文，允许纠正本单位对候选字面的判定并保留证据。',
-            'associate': '正式观察与给定句柄为只读；只能纠正本单位配对选择，不能改观察的事实、open或close。',
+            'associate': '正式观察与给定候选为只读；只能纠正本单位逐候选判定（same/pair/continue 或 distinct/unresolved），不能改观察的事实、open或close。',
+        'cross_cause': '正式观察与给定候选拍对为只读；只能纠正本单位的因果判定（kind 选择或否决），不能改观察的事实。',
             'preserve': '源事实与证据为只读；可纠正本单位的义务观察、保存判断和满足条件，源证据冲突按协议报告。',
             'design': '完整义务、锁及约束为只读；可纠正本单位在合法范围内的目标设计、承载和披露选择。',
             'hook_design': '正文设计及命题含义为只读；可纠正本单位的入口材料选择、组织和合法披露安排。',
@@ -631,7 +632,7 @@ def semantic_revision_rules(owner: str) -> str:
     return ('【修订权限】' + rule + '不得改写只读上游或补造无依据事实；'
             '输出范围仍以原协议为准，保留与问题无关的合法内容。')
 
-BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界约束。
+BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态、世界约束与书级命题词表。
 
 【全书文本】（〔第N章〕为章界标记，共 {n} 章；开头的〔章前文字〕是本书引子，其证据段 id 以 e00_ 开头）
 {text}
@@ -673,7 +674,19 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
    人物个人判断、单次事件的教训、人物动机、已在具体情节中自然体现的背景知识都不要收。
    没有就给空数组。
 
-4. expression：narration 为 {{person:first|third, focalizers:[人物 slug 或第三人称 narrator],
+4. facts：全书关键命题词表——信息不对称相关、会约束后续行为/误解/隐瞒/揭示的命题陈述
+   （身份与身世、秘密、约定、主张、关键事实）。后续各章的认知转移将以编号引用这些命题
+   （编号由程序派发，你不输出编号）。每项 {{"statement","evidence_refs","known_at_start"}}：
+   - statement：主谓宾完整的陈述句；同一命题只登记一条；
+   - evidence_refs：1-3 个证据段 id（该命题在源文中确立或被陈述的段）；
+   - known_at_start：故事开始那一刻已经知道该命题的人物 slug 数组（按证据登记）；
+     故事开始时无人知晓（剧情中才揭示）给空数组 []；不写 reader；
+   - 与 initial_state 的分工：initial_state 是（作用对象，键，值）的维度事实，facts 是
+     命题陈述——同一信息不在两边重复登记；普通事件经过、即时动作、已在
+     world_constraints 的世界观规则不进 facts。
+   没有就给空数组。
+
+5. expression：narration 为 {{person:first|third, focalizers:[人物 slug 或第三人称 narrator],
    statement, source_refs}}；第一人称恰好一个真实人物。statement 明确人称、叙述者与视角权限。
    mechanisms 为 [{{kind:pov_permission|humor|contrast,statement,source_refs}}]：逐项记录
    允许／不允许的视角信息、主导幽默与重要内外反差；如对外守礼而内心直白。
@@ -684,20 +697,21 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态与世界
 【证据段 id 清单】（每行一个自然段，行首方括号内是该段的 id；source_refs 只能从中选）
 {evidence}
 
-输出 JSON 顶层：{{"protocol_version":"stage2-book-v8","characters":{{...}},"initial_state":[...],"world_constraints":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
+输出 JSON 顶层：{{"protocol_version":"stage2-book-v9","characters":{{...}},"initial_state":[...],"world_constraints":[...],"facts":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
 个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。
 
 【证据段指针】（R10a a1）initial_state 与 world_constraints 的每个条目必须带 evidence_refs：
 ["e00_02", ...]（至少 1 条，只写段 id、不抄原文——逐字引文由程序按段全文切出）。
 evidence_refs 必须出自该条目自身的 source_refs（引你所引：先在 source_refs 里列段，
 再从中选 evidence_refs）；不拿人名或动作词凑数；判断依据含限定（以为／觉得／像是／
-预计／约／几天后）时，所选段必须实际承载该限定原文。"""
+预计／约／几天后）时，所选段必须实际承载该限定原文。facts 的证据面即 evidence_refs
+自身（无 source_refs），同样只写段 id。"""
 
 CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：ev 是给人读的事件表述，需要延续的变化全部由三类转移承载——state（事实）、know（认知）、loops（悬念）。机械字段（拍号、默认值、区间覆盖、命题句柄等）由 compiler 派生，你只写判断与例外。
 
 【人物表】（on_stage / state 的 at / know 的 who 只能用这些 slug）
 {glossary}
-{prior}
+{facts_block}{prior}
 【第 {ch} 章正文】（每行一个自然段，行首方括号内的 eXX_YY 是该段的证据 id）
 {evidence}
 {pre_chapter}
@@ -746,13 +760,18 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      替换对应维度的新值——去向未知就写"去向未交代"或 unknown（op），不得留旧值让
      下游补造；不另开新键；
    - 无 postcondition 的拍 state 给空数组。
-3. know：认知的 postcondition——谁对哪条命题持什么模式。每项 {{"who","how","what","evidence_refs"}}：
-   - who：人物 slug 或 reader／public；
+3. know：认知的 postcondition——谁对哪条命题持什么模式。每项 {{"who","how","fact","what","evidence_refs"}}
+   （"fact" 与 "what" 恰写其一）：
+   - who：人物 slug 或 reader；
    - how：learns(确凿得知)/suspects(起疑)/confirms(证实怀疑)/hears_claim(听到说法
      未知真假)/believes(以为为真，不代表世界为真)/asserts(公开主张)；
+   - 命题优先引用书级词表：本章命题已在【书级命题词表】登记时，用 "fact":"f03"
+     引用其编号，**不重写文本**（跨章引用同一编号即同一命题——这是跨章同一性的
+     唯一正路）；只有词表外的命题才写 "what"；"fact" 与 "what" 恰写其一；
    - what：命题本身（主谓宾完整的陈述句）。同一命题再次出现时**逐字重写同一句**——
      compiler 按文本归并句柄，改写一字即另一条命题。与前面章节相关的命题，不要猜
-     它们在别章的措辞——按本章视角写清本章可证的内容，跨章同一性由关联节点建立；
+     它们在别章的措辞——按本章视角写清本章可证的内容，措辞与词表近义的命题仍应
+     改用 fact 引用，配对归关联节点判定；
    - 只收会约束后续行为、误解、隐瞒或揭示的信息不对称；普通在场见闻、例行告知、
      ev 已说清的事实不建；
    - 公开的表态、改口、说辞属于 ev，不得据此推导当事人内心偏好或决定已变，

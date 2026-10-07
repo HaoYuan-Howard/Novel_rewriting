@@ -2,26 +2,32 @@
 # -*- coding: utf-8 -*-
 """book —— `str06.stage2.book` 的观察 owner 引擎（B2；D9 书级一次调用）。
 
-【职责】书级观察（人物候选、称谓及证据、初态、世界约束）的确定性面：
+【职责】书级观察（人物候选、称谓及证据、初态、世界约束、书级命题词表）的
+确定性面：
   • prompt 组装：全书原文（〔第N章〕章界标记＋章前文字块）与证据句段清单；
   • wire → `BookObservation` 的机械验收（S2-2：解析／形状问题免费修复，不重购）：
     协议版本字面量（I-13）、人物 slug 形状、证据句段闭集（Resolver）、
     `R-2.10` 称谓锚点可派生（所引段逐字包含该称呼，不猜笔误）、`R-2.8`
     canonical 闭合（必须逐字等于某个已登记 surface）、人物内 surface 重复、
-    初态／世界约束的目标与 known_by 闭合、场景作用域登记键不进 initial_state
-    （`R-2.9` 一族）；
+    初态／世界约束的目标闭合、场景作用域登记键不进 initial_state
+    （`R-2.9` 一族）、facts 的 evidence_refs 闭集与 known_at_start 持有者
+    闭集（Phase 2：＝人物 slug，D-5）；
+  • facts 的 F 编号代码派发（Phase 2，I-21）：wire 不带编号，expand 按列表序
+    派发 ``f{nn}``——词表是后续抽取的共享词汇（S2-8：不是第三套真源），下游
+    经章观察 know.fact 引用与 fold 知情时间线读数消费；
   • 人物表 core view 投影（`character_core_view`）：book 观察的人物条目按
     Resolver 派生 `from_chapter`（唯一实现，S-03），供 names 的确定性输入。
 
-【职责边界】语义判断（谁是人物、初态收什么、世界约束收什么）归付费
-semantic unit；本模块只验证并报告（S2-3／I-20），不补猜、不模糊匹配。
-观察落盘 `stage2/observations/book.json`（canonical 形状），compiler 归一：
-初态／约束的 basis 在 wire 上只给段 id（2026-10-07 裁决：模型只选段、
+【职责边界】语义判断（谁是人物、初态收什么、世界约束收什么、词表收哪些
+命题）归付费 semantic unit；本模块只验证并报告（S2-3／I-20），不补猜、不
+模糊匹配。观察落盘 `stage2/observations/book.json`（canonical 形状），compiler
+归一：初态／约束的 basis 在 wire 上只给段 id（2026-10-07 裁决：模型只选段、
 代码切原文——转写文本不进模型输出面），段属条目自身 source_refs 核对后
-引文按**段全文**派生（落盘永远是原文字节，构造上不存在「引文不在原文中」）。
-其余字段原样（窗口坐标／编号不在 wire——`from_chapter`
-只活在 core view 投影与 compile 发布的 canonical 里，`R-2.10`）。validator
-不修改输入：全部检查只读，问题聚合成列表返回（I-24／I-36）。
+引文按**段全文**派生（落盘永远是原文字节，构造上不存在「引文不在原文中」）；
+facts 同规则（证据范围＝自身 evidence_refs）。其余字段原样（窗口坐标／编号
+不在 wire——`from_chapter` 只活在 core view 投影与 compile 发布的 canonical
+里，`R-2.10`）。validator 不修改输入：全部检查只读，问题聚合成列表返回
+（I-24／I-36）。
 """
 from __future__ import annotations
 
@@ -87,6 +93,16 @@ def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...],
         pairs.append((f'world_constraint {str(wc.get("statement"))[:20]}',
                       tuple(wc.get('source_refs') or ()),
                       ('world_constraints', wc_index)))
+    for fact_index, fact in enumerate(wire.get('facts') or []):
+        if not isinstance(fact, Mapping):
+            continue
+        # 展开后是 basis 形；未展开的 wire 形（evidence_refs）兜底同查。
+        refs = tuple(str(b.get('segment') or '') for b in fact.get('basis') or ()
+                     if isinstance(b, Mapping) and b.get('segment'))
+        if not refs:
+            refs = tuple(fact.get('evidence_refs') or ())
+        pairs.append((f'fact {str(fact.get("statement"))[:20]}', refs,
+                      ('facts', fact_index)))
     expression = wire.get('expression')
     if isinstance(expression, Mapping):
         for index, item in enumerate([expression.get('narration'), *(expression.get('mechanisms') or [])]):
@@ -98,9 +114,11 @@ def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...],
 
 
 def _basis_label(group: str, atom: Mapping[str, Any]) -> str:
-    """初态／约束条目的人读定位（段派生与逐字判定共用同一措辞）。"""
+    """初态／约束／facts 条目的人读定位（段派生与逐字判定共用同一措辞）。"""
     if group == 'initial_state':
         return f'initial_state {atom.get("key")}'
+    if group == 'facts':
+        return f'fact {str(atom.get("statement"))[:16]}'
     return f'world_constraint {str(atom.get("statement"))[:16]}'
 
 
@@ -110,8 +128,10 @@ def _expand_wire_basis(wire: dict) -> dict:
 
     初态／约束的 evidence_refs 段 id 串变成 canonical 的
     ``basis: [{'segment': id, 'quote': None}]``，引文由 `_derive_basis_quotes`
-    按段全文填入。非列表形状原样保留，交 wire 模型校验报告（不宽松接纳坏
-    输入）。不改调用方对象（I-24）。
+    按段全文填入。facts（Phase 2）同规则派生 basis，并按列表序**派发 F 编号**
+    （``f{nn}``，I-21——编号不进 wire）；facts 无 source_refs，证据范围即
+    evidence_refs 自身。非列表形状原样保留，交 wire 模型校验报告（不宽松接纳
+    坏输入）。不改调用方对象（I-24）。
     """
     expanded = deepcopy(wire)
     expanded['protocol_version'] = STAGE2_BOOK_PROTOCOL
@@ -122,6 +142,24 @@ def _expand_wire_basis(wire: dict) -> dict:
                                  if isinstance(item, str) else item
                                  for item in atom['evidence_refs']]
                 del atom['evidence_refs']
+    facts = expanded.get('facts')
+    if isinstance(facts, list):
+        expanded_facts = []
+        for index, fact in enumerate(facts, 1):
+            if not isinstance(fact, dict):
+                expanded_facts.append(fact)
+                continue
+            item = dict(fact)
+            item['fact_id'] = f'f{index:02d}'
+            raw_refs = fact.get('evidence_refs')
+            if isinstance(raw_refs, list):
+                item['basis'] = [{'segment': ref, 'quote': None}
+                                 if isinstance(ref, str) else ref
+                                 for ref in raw_refs]
+                item.pop('evidence_refs', None)
+            item.setdefault('known_at_start', ())
+            expanded_facts.append(item)
+        expanded['facts'] = expanded_facts
     return expanded
 
 
@@ -131,6 +169,7 @@ def _derive_basis_quotes(
     """basis 段 id 在条目自身 source_refs 内派生段全文引文（2026-10-07
     裁决：模型只选段、代码切原文）；段号与原文写回 compiler 副本。派生不了
     逐条报告（不改 source_refs、不换段——issue 指明「计入证据范围或改选」）。
+    facts（Phase 2）无 source_refs——证据范围即自身 basis 段集合。
     返回 (wire 路径, 消息)。"""
     issues: list[tuple[tuple, str]] = []
     for group in ('initial_state', 'world_constraints'):
@@ -148,6 +187,22 @@ def _derive_basis_quotes(
                     issues.append((
                         (group, atom_index, 'basis', basis_index),
                         f'{_basis_label(group, atom)}：{issue.message}'))
+    for fact_index, fact in enumerate(wire.get('facts') or ()):
+        if not isinstance(fact, dict):
+            continue
+        refs = tuple(basis.get('segment') for basis in (fact.get('basis') or ())
+                     if isinstance(basis, dict))
+        for basis_index, basis in enumerate(fact.get('basis') or ()):
+            if not isinstance(basis, dict) or basis.get('segment') is None:
+                continue
+            quote, issue = resolver.basis_quote(
+                str(basis.get('segment') or ''), refs)
+            if issue is None:
+                basis['quote'] = quote
+            else:
+                issues.append((
+                    ('facts', fact_index, 'basis', basis_index),
+                    f'{_basis_label("facts", fact)}：{issue.message}'))
     return issues
 
 
@@ -159,20 +214,31 @@ _UNDERIVED_QUOTE = '（未派生）'
 
 def _shape_view(wire: dict) -> dict:
     view = deepcopy(wire)
-    for group in ('initial_state', 'world_constraints'):
+
+    def _fill(atom: dict) -> None:
+        for basis in atom.get('basis') or ():
+            if isinstance(basis, dict):
+                if basis.get('segment') is None:
+                    basis['segment'] = _UNLOCATED_SEGMENT
+                if basis.get('quote') is None:
+                    basis['quote'] = _UNDERIVED_QUOTE
+        # wire 形状失败（如漏 evidence_refs）时 basis 可能整键缺失——补占位
+        # 让其余字段照常过形状复验；该错误已由 ⑤ 的 wire 闸按路径报告，
+        # 这里不重复整份化（2026-10-07 二次收口④）。facts 的 fact_id 缺失
+        # （wire 直通面未带编号）同样补占位——正常路径由 expand 派发。
+        if not atom.get('basis'):
+            atom['basis'] = [{'segment': _UNLOCATED_SEGMENT,
+                              'quote': _UNDERIVED_QUOTE}]
+
+    for group in ('initial_state', 'world_constraints', 'facts'):
         for atom in view.get(group) or ():
-            for basis in (atom.get('basis') or ()) if isinstance(atom, dict) else ():
-                if isinstance(basis, dict):
-                    if basis.get('segment') is None:
-                        basis['segment'] = _UNLOCATED_SEGMENT
-                    if basis.get('quote') is None:
-                        basis['quote'] = _UNDERIVED_QUOTE
-            # wire 形状失败（如漏 evidence_refs）时 basis 可能整键缺失——补占位
-            # 让其余字段照常过形状复验；该错误已由 ⑤ 的 wire 闸按路径报告，
-            # 这里不重复整份化（2026-10-07 二次收口④）。
-            if isinstance(atom, dict) and not atom.get('basis'):
-                atom['basis'] = [{'segment': _UNLOCATED_SEGMENT,
-                                  'quote': _UNDERIVED_QUOTE}]
+            if not isinstance(atom, dict):
+                continue
+            _fill(atom)
+            if group == 'facts':
+                if not atom.get('fact_id'):
+                    atom['fact_id'] = 'f00'
+                atom.setdefault('known_at_start', ())
     return view
 
 
@@ -334,10 +400,22 @@ def _compile_book_view(
                        '居所登记 residence')
             fail(path, message)
             errors.append(message)
+    # ④a facts（Phase 2）：known_at_start 持有者闭集＝人物 slug（D-5——不含
+    # public；reader 知情 Phase 3 由 compile 派生，不进词表）。
+    for fact_index, fact in enumerate(wire.get('facts') or []):
+        if not isinstance(fact, Mapping):
+            continue
+        for holder in fact.get('known_at_start') or ():
+            if holder not in slugs:
+                message = (f'fact {str(fact.get("statement"))[:16]} 的 known_at_start '
+                           f'引用未知人物 {holder}（持有者闭集＝人物 slug，不写 reader）')
+                fail(('facts', fact_index), message)
+                errors.append(message)
 
-    # ④b R10a a1：初态/约束的 basis 判定（段属自身 source_refs ＋ 引文逐字
-    # 在段内——canonical 直通面的防线）；wire 派生成功的条目引文＝段全文，
+    # ④b R10a a1：初态/约束/facts 的 basis 判定（段属自身 source_refs ＋ 引文
+    # 逐字在段内——canonical 直通面的防线）；wire 派生成功的条目引文＝段全文，
     # 天然通过；派生失败的条目（quote 仍为 None）已在派生步报告，不重复。
+    # facts 无 source_refs——证据范围即自身 basis 段集合。
     basis_entries: list[tuple[str, str, str, Iterable[str]]] = []
     basis_paths: list[tuple] = []
     for group in ('initial_state', 'world_constraints'):
@@ -353,6 +431,21 @@ def _compile_book_view(
                         str(basis.get('quote') or ''),
                         tuple(atom.get('source_refs') or ())))
                     basis_paths.append((group, atom_index, 'basis', basis_index))
+    for fact_index, fact in enumerate(wire.get('facts') or []):
+        if not isinstance(fact, Mapping):
+            continue
+        fact_refs = tuple(str(basis.get('segment') or '')
+                          for basis in fact.get('basis') or ()
+                          if isinstance(basis, Mapping) and basis.get('segment'))
+        for basis_index, basis in enumerate(fact.get('basis') or ()):
+            if isinstance(basis, Mapping) and basis.get('segment') is not None \
+                    and basis.get('quote') is not None:
+                basis_entries.append((
+                    _basis_label('facts', fact),
+                    str(basis.get('segment') or ''),
+                    str(basis.get('quote') or ''),
+                    fact_refs))
+                basis_paths.append(('facts', fact_index, 'basis', basis_index))
     # 标签可能重复（同键初态、前 16 字相同的约束）：按条目序消费路径，与
     # verify_bases 的逐条产出序对齐。
     by_label: dict[str, list[tuple]] = {}

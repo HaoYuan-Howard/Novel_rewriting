@@ -523,10 +523,12 @@ class _RoutingTransport:
         if '【本章交付要求】' in user:
             # v5 分区渲染：章目的在「导演说明」分区（「本章目的（第N章）：…」）
             return 'body_ch01' if '本章目的（第1章）' in user else 'body_ch02'
-        if '人物账、初始状态与世界约束' in user:
+        if '人物账、初始状态、世界约束与书级命题词表' in user:
             return 'book'
-        if '跨章关联' in user:
+        if '条目级关联判定' in user:
             return 'associate'
+        if '跨章因果判定' in user:
+            return 'cross_cause'
         if '拆成有序 beats' in user:
             # 章正文标记（【第 N 章正文】）的最后一次出现即当前章：前文原文块用
             # 〔第N章〕方头括号，不会与章正文标记混淆。

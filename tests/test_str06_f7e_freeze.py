@@ -138,7 +138,7 @@ from novel.llm.paid_requests import candidate_contract_identity
 # 原因见 REQUIREMENTS CS-S。
 # rc18 续（2026-10-07 CS-S 1c）：names 观察 canonical 升 v4（构词派生＋变体窄调用、
 # resolutions 增 not_name）——names.json 行随批换 rc18 身份。
-FROZEN_CONTRACT_IDENTITY = 'f38e4f8b6bfe5471e2e1f5f0d5a1a3e50ce123dd41d556e41ddf1a67a1e6da7e'
+FROZEN_CONTRACT_IDENTITY = '32d813578dba474391e727e7bb94f4ef7713723c20df703d7384415ba5300e52'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -207,8 +207,9 @@ def test_frozen_artifact_table_shape():
 def test_frozen_rc_version_label():
     # rc13（CS-3 余项：D5 统一＋world 规则 id）——五产物形状变化升版，其余
     # 产物表条目保持 rc12（形状未变）。rc15：证据寻址（RC-26/27）；rc16：事实锁引用（CS-F2）；
-    # rc17：CS-H H3 称谓面＋H4 associate v3（用户裁决随 H4 集中升一次）。
-    assert STR06_RC_VERSION == 'str06-rc18'
+    # rc17：CS-H H3 称谓面＋H4 associate v3；rc18：CS-S Phase 1 死字段收口；
+    # rc19：CS-S Phase 2 观察面收敛（facts／know.fact／associate v4／D-5／fold 时间线）。
+    assert STR06_RC_VERSION == 'str06-rc19'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是
@@ -225,14 +226,14 @@ def test_frozen_rc_version_label():
 #: project_preserve_view 确定性渲染）。
 #: 旧盘面按版本关闭式拒识（协议不兼容），不计语义检出。
 FROZEN_SEMANTIC_PROTOCOLS = {
-    # rc18（CS-S 1b）：观察 canonical 升 v5——knowledge／disclosure／proposition／
-    # scope 死字段收口；旧 v4 盘面关闭式拒读。
-    'STAGE2_BOOK_PROTOCOL': 'stage2-book-v5',
-    'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v5',
+    # rc18（CS-S 1b）：观察 canonical 升 v5——死字段收口；rc19（CS-S Phase 2）：
+    # book v6 增 facts（词表＋known_at_start）、chapters v6 增 know.fact 引用。
+    'STAGE2_BOOK_PROTOCOL': 'stage2-book-v6',
+    'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v6',
     'STAGE2_NAMES_PROTOCOL': 'stage2-names-v4',
-    # rc17（CS-H H4，RC-65）：associate 升 v3——same_state_dimension 改配维度
-    # 句柄（（作用对象，键）地址聚合）；旧 v2 wire 关闭式拒读。
-    'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v3',
+    # rc17（CS-H H4，RC-65）：associate 升 v3——维度句柄；rc19（CS-S Phase 2）
+    # 升 v4——条目级窄 resolver（候选由代码给出、逐候选 verdict）。
+    'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v4',
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v2',
     'STAGE4_PRESERVE_POLICY_VERSION': 5,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
