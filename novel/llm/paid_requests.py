@@ -282,7 +282,7 @@ class PurchaseRequired(ExecutionError):
     def __init__(self, owner: str):
         super().__init__(
             f'{owner} 无同请求身份结果且未授权新调用；如需继续请同时提供 '
-            '--yes 与正文外发许可（--allow-source-export）',
+            '--yes 与正文外发许可（--allow-egress）',
             code='purchase_required', phase='authorize', node=f'str06.*.{owner}',
             context={'owner': owner})
         self.owner = owner

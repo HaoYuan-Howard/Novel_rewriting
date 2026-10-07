@@ -2283,7 +2283,7 @@ class PaidBoundary:
 
     正式 CLI 节点执行（`execute`）经本装配走付费边界——**不另建付费通路**：
     同一 session、同一 ledger、同一 `enforce_request_budget` 闸、同一 workflow／
-    epoch 生命周期。授权仍由调用方显式给出（`--yes`／`--allow-source-export`），
+    epoch 生命周期。授权仍由调用方显式给出（`--yes`／`--allow-egress`），
     本装配不代批。
     """
 
@@ -2485,7 +2485,7 @@ def execute(args) -> None:
     if not 0 < args.body_band_low < args.body_band_high:
         raise ValueError('--body-band-low/high 必须满足 0 < low < high')
     if args.check_only and (args.yes or args.allow_source_export):
-        raise ValueError('--check-only 不签发新调用：去掉 --yes/--allow-source-export 再跑')
+        raise ValueError('--check-only 不签发新调用：去掉 --yes/--allow-egress 再跑')
     resample_owner = getattr(args, 'resample', None)
     resample_reason = getattr(args, 'reason', None)
     if bool(resample_owner) != bool(resample_reason):
