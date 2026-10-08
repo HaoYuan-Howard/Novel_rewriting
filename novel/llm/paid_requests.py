@@ -430,6 +430,31 @@ def sealed_turn_references(root: Path) -> set[tuple[str, str]]:
     return sealed
 
 
+def reconcile_delivered_turns(root: Path, unit: 'WorkUnitBudget') -> dict[str, str]:
+    """对账已交付未采用轮：被已封存 CommitBundle 引用 → adopted；其余 →
+    rejected（superseded_unadopted：保留原回答、不返还轮次，对齐正式 client
+    的 ``continued_content_work`` 语义）。幂等；reserved／unknown 原样保留——
+    pending／unknown 不自动重购，交恢复入口对账（Q-13）。
+
+    取轮路径（``_close_unadopted``）与操作员追加入口
+    （``work_unit_grants.reconcile_delivered``）共用本实现：单元额度耗尽且存在
+    已保存回答时，追加闸要求先对账，而自动对账只在取轮路径触发——额度已尽则
+    取轮不可能，操作员显式入口解开该循环（2026-10-08 走书实证）。
+    """
+    sealed = sealed_turn_references(root)
+    outcome: dict[str, str] = {}
+    for turn in unit._read().turns:
+        if turn.state != 'delivered':
+            continue
+        if (unit.unit_id, turn.turn_id) in sealed:
+            unit.mark_adopted(turn.turn_id)
+            outcome[turn.turn_id] = 'adopted'
+        else:
+            unit.mark_rejected(turn.turn_id, reason_code='superseded_unadopted')
+            outcome[turn.turn_id] = 'rejected'
+    return outcome
+
+
 class PaidRequestSession:
     def __init__(self, repository: Str06Repository, ledger: CostLedger,
                  transport: Transport, *, yes: bool = False, allow_source_export: bool = False,
@@ -787,20 +812,12 @@ class PaidRequestSession:
     def _close_unadopted(self, unit: WorkUnitBudget) -> None:
         """下一次取轮前对账已交付内容轮：采用状态从 seal 派生（B1）。
 
-        被任何已封存 CommitBundle 引用的轮 → `mark_adopted`（ledger 状态是封存
-        证据的投影，由 seal 事件翻转；bundle 是 canonical 证据，进程内窗口已删）；
-        其余 `delivered` 轮 → `mark_rejected` 关闭让位（保留原回答、不返还轮次，
-        对齐正式 client 的 `continued_content_work` 语义）。`reserved`／`unknown`
-        原样保留——pending／unknown 不自动重购，交恢复入口对账（Q-13）。
+        实现住 ``reconcile_delivered_turns``（取轮路径与操作员追加入口共用）：
+        被任何已封存 CommitBundle 引用的轮 → ``mark_adopted``（ledger 状态是
+        封存证据的投影，由 seal 事件翻转；bundle 是 canonical 证据，进程内窗口
+        已删）；其余 ``delivered`` 轮 → ``mark_rejected`` 关闭让位。
         """
-        sealed = sealed_turn_references(self.repository.root)
-        for turn in unit._read().turns:
-            if turn.state != 'delivered':
-                continue
-            if (unit.unit_id, turn.turn_id) in sealed:
-                unit.mark_adopted(turn.turn_id)
-                continue
-            unit.mark_rejected(turn.turn_id, reason_code='superseded_unadopted')
+        reconcile_delivered_turns(self.repository.root, unit)
 
     # ── ledger 行 ───────────────────────────────────────────────────────────
 

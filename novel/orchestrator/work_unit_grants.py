@@ -49,11 +49,23 @@ def _inspect(base: str | Path, sid: str, unit_id: str, additional: int) -> _Insp
     if len(ledger.turns) < ledger.content_limit:
         reason = '当前仍有可用额度，无需追加'
     elif any(row.state in ('reserved', 'unknown', 'delivered') for row in ledger.turns):
-        reason = '已有未闭合调用或已保存回答，须先免费恢复或对账'
+        reason = ('已有未闭合调用或已保存回答，须先免费恢复或对账——未被正式'
+                  '提交引用的已保存回答可经 work_unit_grants.reconcile_delivered'
+                  ' 显式让位后追加')
     elif ledger.group_producer_sha256 is not None and not ledger.group_producer_completed:
         reason = '整组候选待免费补提交，不能用额度追加绕过'
     elif any(row.producer_sha256 is not None and row.ordinal > ledger.committed_through for row in ledger.turns):
         reason = '已保存 producer 提交目标，须先免费补提交'
+    if reason is not None:
+        # 不可追加的前置原因先于 owner 停止证明返回：delivered 轮在 CLI 直跑
+        # （无会话身份）下 owner 证明必炸深水异常，会把本该指路的拒绝覆盖成
+        # 「缺原会话身份」（2026-10-08 走书实证）。apply 同口径走本分支拒绝。
+        return _Inspection(WorkUnitGrantPreview(
+            sid=sid, unit_id=unit_id, available=False, reason=reason,
+            additional=additional, allowed_additions=list(WORK_UNIT_GRANT_ADDITIONS),
+            preview_token=None, unit=work_units.unit_view(ledger),
+            costs=costs, history=list(ledger.grants)), budget, ledger, surface,
+            tuple(sorted(owners)))
     owner_proof = _owner_proof(budget, ledger, owners, cost_rows)
     token = work_units._digest({'kind': 'work-unit-budget-grant-v1', 'unit_id': unit_id,
         'ledger': ledger.model_dump(mode='json'), 'surface': surface, 'code': code,
@@ -64,6 +76,25 @@ def _inspect(base: str | Path, sid: str, unit_id: str, additional: int) -> _Insp
         additional=additional, allowed_additions=list(WORK_UNIT_GRANT_ADDITIONS),
         preview_token=token if reason is None else None, unit=work_units.unit_view(ledger),
         costs=costs, history=list(ledger.grants)), budget, ledger, surface, tuple(sorted(owners)))
+
+
+def reconcile_delivered(base: str | Path, sid: str, unit_id: str, *,
+                        actor: str, reason: str) -> dict[str, str]:
+    """操作员显式对账已交付未采用轮（与取轮路径共用同一实现）。
+
+    场景（2026-10-08 走书实证）：单元额度耗尽且存在已保存回答（delivered）
+    时，追加闸要求先恢复或对账，而自动对账只在取轮路径触发——额度已尽则
+    取轮不可能，形成「追加需闭合、闭合需取轮」的循环。本入口解开循环：
+    未被任何已封存 CommitBundle 引用的已保存回答让位（保留原回答与费用
+    证据，不返还轮次）；被引用的翻转为 adopted。actor/reason 必填，对账
+    动作可追溯。幂等：无 delivered 轮时返回空 dict。
+    """
+    if not actor.strip() or not reason.strip():
+        raise work_units.WorkUnitRefused('对账必须显式给非空 actor 与 reason')
+    paths.work_unit_dir(base, sid, unit_id)
+    budget = _load(base, sid, unit_id)
+    from novel.llm.paid_requests import reconcile_delivered_turns
+    return reconcile_delivered_turns(Path(base), budget)
 
 
 def inspect(base: str | Path, sid: str, unit_id: str, additional: int = 1) -> WorkUnitGrantPreview:

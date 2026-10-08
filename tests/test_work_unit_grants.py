@@ -457,3 +457,51 @@ def test_agent_flow_recorded_identity_must_exist_in_agent_account(tmp_path):
     _costs, rows, owners = cost_evidence(loaded, ledger_view)
     with pytest.raises(WorkUnitRefused, match='AgentRun'):
         owner_stop_proof(loaded, ledger_view, owners, rows)
+
+
+def test_reconcile_delivered_unlocks_grant_after_exhaustion_with_saved_answer(tmp_path):
+    """判据（2026-10-08 走书实证）：额度耗尽且存在已保存回答（delivered）——
+    追加闸要求先恢复或对账，而自动对账只在取轮路径触发（额度已尽则取轮不可
+    能），形成「追加需闭合、闭合需取轮」的循环；reconcile_delivered 显式让位
+    解锁。幂等（无 delivered 轮时空操作）；actor/reason 必填。"""
+    ctx, budget, _ = _exhaust(tmp_path)
+    # 耗尽后补保存回答（不采用）——轮置 delivered，账行一一对应不变。
+    saved = budget._read().turns[3]
+    budget.save_response(saved.turn_id, {'final_response': '{"value":4}'})
+    assert budget._read().turns[3].state == 'delivered'
+    blocked = work_unit_grants.inspect(tmp_path, ctx.sid, budget.unit_id, additional=1)
+    assert not blocked.available and 'reconcile_delivered' in blocked.reason, blocked.reason
+    # actor/reason 必填（对账动作可追溯）。
+    with pytest.raises(Exception):
+        work_unit_grants.reconcile_delivered(tmp_path, ctx.sid, budget.unit_id,
+                                             actor=' ', reason='让位')
+    outcome = work_unit_grants.reconcile_delivered(
+        tmp_path, ctx.sid, budget.unit_id, actor='operator',
+        reason='已保存回答未被正式提交引用，让位以追加额度（走书流程）')
+    assert outcome == {saved.turn_id: 'rejected'}
+    assert budget._read().turns[3].state == 'failed' and \
+        budget._read().turns[3].reason_code == 'superseded_unadopted'
+    # 幂等：无 delivered 轮时空操作。
+    assert work_unit_grants.reconcile_delivered(
+        tmp_path, ctx.sid, budget.unit_id, actor='operator', reason='再对账') == {}
+    # 解锁后追加与取轮恢复正常。
+    view = work_unit_grants.inspect(tmp_path, ctx.sid, budget.unit_id, additional=1)
+    assert view.available, view.reason
+    work_unit_grants.apply(tmp_path, ctx.sid, budget.unit_id, _request(view))
+    fifth = budget.reserve(_sha('fifth'), run_id=ctx.run_id)
+    assert budget.used == 5
+
+
+def test_zz_debug_delivered_inspect(tmp_path):
+    from novel.orchestrator.work_unit_evidence import read_rows
+    from novel.llm.ledger import ledger_path
+    ctx, budget, _ = _exhaust(tmp_path)
+    saved = budget._read().turns[3]
+    budget.save_response(saved.turn_id, {'final_response': '4'})
+    led = budget._read()
+    rows = read_rows(ledger_path(tmp_path), 'x')
+    print('attempts:', [[a.attempt_id for a in t.attempts] for t in led.turns])
+    print('rows:', [r.get('attempt_id') for r in rows])
+    view = work_unit_grants.inspect(tmp_path, ctx.sid, budget.unit_id, additional=1)
+    print('available:', view.available, '|', view.reason[:90])
+    assert view.available is False

@@ -61,7 +61,10 @@ effort/thinking）。本地 Agent CLI（`kind=agent` / driver / execution_mode�
 无回答的传输失败可由开发维护 agent 免费收口：先用
 `python -m novel.orchestrator.work_unit_recovery --base <根> --sid <sid> --unit-id <id> --turn-id <id>`
 取得预览；将 `preview_token`、执行者 `actor`、核实理由 `reason` 写入 JSON 后，同命令增加
-`--apply-request <JSON路径>`。该入口逐项核成本、session、原请求、日志和 owner 排空证据，
+`--apply-request <JSON路径>`。已保存回答（delivered）未被正式提交引用而挡住额度追加时
+（自动对账只在取轮路径触发，额度已尽则取轮不可能），用
+`novel.orchestrator.work_unit_grants.reconcile_delivered(base, sid, unit_id, actor=…, reason=…)`
+显式让位（幂等、不返还轮次、保留回答与费用证据）。该入口逐项核成本、session、原请求、日志和 owner 排空证据，
 只把已确认失败的 unknown 改为 failed，不生成语义决定、不退还额度、不清除未知用量。
 存在已购回答或证据缺失时继续阻断，先恢复原结果；同一请求重放幂等。该入口不是产品跑书步骤；
 admission 账沿用历史命名（`commander_admissions.jsonl`）。两个分支：存量书 Commander 连接失败
