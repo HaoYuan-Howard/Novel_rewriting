@@ -71,12 +71,14 @@ _hard('source_chapter_blueprint', 'stage2',
 _hard('source_loop_lifecycle', 'stage2',
       'loops 只许 open/close：loop 一次性 open、close 必带 resolution、问题文本不可改写', 'R-2.11')
 _hard('source_proposition_closure', 'stage2',
-      '命题引用闭合：同章重抄与本章登记一致；跨章同义由 associate 声明，'
-      '正式 ID 可解析且统一采用最早建立的代表文本；同维状态配维度句柄'
-      '（键不同但同维才配，规范键按地址传播整类）', 'R-2.12')
+      '命题引用闭合：同章重抄与本章登记一致；跨章同一性优先由 know.fact 引用'
+      '（f{nn} 词表）构造成立，残余近义漂移由 associate 候选制窄判定声明，'
+      '正式 ID 可解析且统一采用最早建立的代表文本；不再有同维状态配对面'
+      '（change 键入 CHANGE_KEYS 闭集，键即 canonical）', 'R-2.12')
 _hard('source_registered_key_scope', 'stage2',
-      '登记键闭集与作用域：作用域读时按表派生（scene_location＝scene、'
-      'residence＝book、身体状态键各自一键；表外键一律 book）；退役位置键拒识', 'R-2.14')
+      '变化键闭集与作用域：change 键入 CHANGE_KEYS 闭集，表外键（含退役位置键）'
+      '一律拒；作用域读时按登记表派生（scene_location＝scene，由拍级字段合成；'
+      '其余键＝book）', 'R-2.14')
 _hard('source_fold_consistent', 'stage2',
       'source fold 事件与 Blueprint canonical 一致', 'R-2.4')
 _hard('names_structure_compile', 'stage2',

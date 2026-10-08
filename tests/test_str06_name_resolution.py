@@ -19,7 +19,7 @@ from novel.stages.stage2 import (
     character_core_view, compile_name_structure, normalize_name_observations,
 )
 from novel.stages.stage2.names import (
-    compile_name_variants, name_variant_candidates,
+    compile_name_variants, name_variant_candidates, validate_name_resolutions,
 )
 from novel.stages.stage4 import project_preserve_view
 from novel.store import Str06Repository
@@ -92,9 +92,7 @@ def test_variant_candidate_generation_is_deterministic_and_narrow():
     cand = candidates[0]
     assert (cand.char_id, cand.anchor, cand.segments) == \
         ('yun_niang', '苏芸娘', ('e02_03',))
-    assert 'name_variants' not in _full_stage2_wires() or True
     # 无异写文本 → 无候选（零调用的判定面）。
-    plain_wires = _full_stage2_wires()
     plain_chapters = deepcopy(CHAPTERS)
     plain_chapters[0]['text'] += '\n苏芸娘在灯下缝衣。'
     plain_wires = _full_stage2_wires()
@@ -168,6 +166,105 @@ def test_not_name_verdict_completes_without_normalization(tmp_path):
     assert blueprint.chapters[1].beats[-1].event == '苏芸孃决定次日出门'
 
 
+def test_names_candidate_decisions_are_complete_at_canonical_consumers(tmp_path):
+    """正式观察仍须完整覆盖当前候选；删判定不能绕过 wire 的恰答一次闸。
+
+    not_name 是持久化的完整判定；候选随源证据增加时必须重新判定。消费者
+    重算候选，不只相信付费回答曾通过机械验收。
+    """
+    from contracts.schema.observation import NamesObservation
+    from novel.stages.chain import ChainContext, run_associate
+    from novel.stages.stage2.compile import compile_source_truth
+    chapters, wires = _case()
+    wires['name_variants']['variants'][0].update(
+        verdict='not_name', char_id=None, surface=None)
+    repo = _run(tmp_path, chapters, wires, _AcceptingAsk(wires))
+    book = repo.read_model('stage2/observations/book.json')
+    names = repo.read_model('stage2/observations/names.json')
+    chapter_obs = {n: repo.read_model(f'stage2/observations/ch{n:02d}.json')
+                   for n in (1, 2, 3)}
+    evidence = build_evidence(chapters, HOOK)
+    core, errors = character_core_view(book, evidence=evidence)
+    assert not errors and names.structure.resolutions[0].status == 'not_name'
+    assert validate_name_resolutions(names.structure, core, evidence=evidence) == []
+
+    missing = names.structure.model_copy(update={'resolutions': ()})
+    errors = validate_name_resolutions(missing, core, evidence=evidence)
+    assert any('苏芸孃' in message and '当前 0 条' in message for message in errors)
+    duplicate = names.structure.model_copy(update={
+        'resolutions': names.structure.resolutions * 2})
+    errors = validate_name_resolutions(duplicate, core, evidence=evidence)
+    assert any('当前 2 条' in message for message in errors)
+    wrong_target = names.structure.model_copy(update={'resolutions': (
+        names.structure.resolutions[0].model_copy(update={
+            'status': 'same', 'char_id': 'fu_jun', 'surface': '夫君'}),)})
+    errors = validate_name_resolutions(wrong_target, core, evidence=evidence)
+    assert any('只能指向候选近似锚人物' in message for message in errors)
+
+    changed_evidence = deepcopy(evidence)
+    changed_evidence['e03_99'] = {'chapter': 3, 'text': '苏芸良推门进来。'}
+    errors = validate_name_resolutions(names.structure, core, evidence=changed_evidence)
+    assert any('苏芸良' in message and '当前 0 条' in message for message in errors)
+    changed_plain = deepcopy(evidence)
+    changed_plain['e03_99'] = {'chapter': 3, 'text': '苏芸娘推门进来。'}
+    assert validate_name_resolutions(names.structure, core, evidence=changed_plain) == []
+
+    broken_names = NamesObservation(protocol_version=names.protocol_version,
+                                    structure=missing)
+    outcome = compile_source_truth(
+        book=book, chapters=chapter_obs, names=broken_names,
+        associate=repo.read_model('stage2/observations/associate.json'),
+        evidence=evidence)
+    assert not outcome.publishable and any('当前 0 条' in e for e in outcome.errors)
+
+    # 同一正式观察改动从 paid associate 的真实入口被挡住，不能继续买关联。
+    from tests.str06_facilities import synthetic_ref
+    repo.context.begin_run()
+    repo.read_model('stage2/observations/book.json')
+    repo.write('stage2/observations/names.json', broken_names, owners=('names',),
+               refs=(synthetic_ref('names', '已购输入'),))
+    with pytest.raises(MechanicalDefectStop, match='名称同一性不闭合'):
+        run_associate(ChainContext(
+            repository=repo, chapters=chapters, hook_copy=HOOK,
+            ask=lambda *args, **kwargs: pytest.fail('漏判定不得购买关联'),
+            ask_text=lambda *args: pytest.fail('不得购买正文'),
+            ask_body=lambda *args: pytest.fail('不得购买正文'), budget=800))
+
+
+@pytest.mark.parametrize('defect', ['missing_person', 'missing_surface', 'unknown_family'])
+def test_names_structure_edits_stop_before_associate_purchase(tmp_path, defect):
+    """NamesObservation 单份模型合法仍不代表对人物真账闭合；购买前复用合并判据。"""
+    from contracts.schema.observation import NamesObservation
+    from novel.stages.chain import ChainContext, run_associate
+    from tests.str06_facilities import synthetic_ref
+    chapters, wires = _case()
+    repo = _run(tmp_path, chapters, wires, _AcceptingAsk(wires))
+    names = repo.read_model('stage2/observations/names.json')
+    people = dict(names.structure.people)
+    if defect == 'missing_person':
+        people.pop('yun_niang')
+    elif defect == 'missing_surface':
+        forms = dict(people['yun_niang'].surface_forms)
+        forms.pop('苏芸娘')
+        people['yun_niang'] = people['yun_niang'].model_copy(update={'surface_forms': forms})
+    else:
+        people['yun_niang'] = people['yun_niang'].model_copy(update={'family_id': 'not_registered'})
+    edited = NamesObservation(
+        protocol_version=names.protocol_version,
+        structure=names.structure.model_copy(update={'people': people}))
+    repo.context.begin_run()
+    repo.read_model('stage2/observations/book.json')
+    repo.write('stage2/observations/names.json', edited, owners=('names',),
+               refs=(synthetic_ref('names', '已购结构编辑'),))
+    with pytest.raises(MechanicalDefectStop, match='名称同一性不闭合') as excinfo:
+        run_associate(ChainContext(
+            repository=repo, chapters=chapters, hook_copy=HOOK,
+            ask=lambda *args, **kwargs: pytest.fail('坏名称结构不得购买关联'),
+            ask_text=lambda *args: pytest.fail('不得购买正文'),
+            ask_body=lambda *args: pytest.fail('不得购买正文'), budget=800))
+    assert any('合并名称结构失败' in str(issue) for issue in excinfo.value.issues)
+
+
 @pytest.mark.parametrize('defect,expected', [
     ('segment', '出现段之外'), ('target', '未登记'),
     ('registered', '不在候选清单内'), ('missing', '漏答'),
@@ -196,6 +293,69 @@ def test_variant_verdict_refuses_bad_evidence_target_and_old_protocol(defect, ex
     assert value is None and any(expected in message
                                  for _path, message in located), located
     assert wire == before
+
+
+@pytest.mark.parametrize('defect,expected', [
+    ('override_no_placeholder', '无占位符'),
+    ('override_not_string', '必须是构词模板字符串或 null'),
+    ('override_name_literal_left_in_text', '非占位部分'),
+    ('alias_without_id', '化名条目形状非法'),
+    ('alias_not_list', 'aliases 必须是数组'),
+    ('family_form_without_form', '称谓条目形状非法'),
+    ('family_forms_not_list', 'forms 必须是数组'),
+    ('family_literal_not_string', 'literal 缺失或为空'),
+    ('family_id_not_string', 'family_id 必须是字符串或 null'),
+    ('family_form_literal_not_string', '称谓条目形状非法'),
+])
+def test_names_structure_refuses_override_bypass_and_malformed_entries(defect, expected):
+    """form_overrides 不得绕开纯称谓防漏标（无占位符模板恒等 surface、不产生替换键，
+    名字面留在文本里改名时漏改）；畸形条目是条目级错误而不是 KeyError／TypeError
+    崩节点（崩溃＝exit 70 未知，而不是一轮返修）。"""
+    chapters, wires = _case()
+    core, _structure, _candidates, evidence = _structure_and_candidates(chapters, wires)
+    wire = deepcopy(wires['names'])
+    person = wire['people']['yun_niang']
+    if defect == 'override_no_placeholder':
+        person['form_overrides'] = {'苏芸娘': '苏芸娘'}
+    elif defect == 'override_not_string':
+        person['form_overrides'] = {'苏芸娘': 5}
+    elif defect == 'override_name_literal_left_in_text':
+        person['form_overrides'] = {'苏芸娘': '{family}芸娘'}
+    elif defect == 'alias_without_id':
+        person['aliases'] = [{'literal': '苏阿娘'}]
+    elif defect == 'alias_not_list':
+        person['aliases'] = 3
+    elif defect == 'family_form_without_form':
+        wire['families']['f_su']['forms'] = [{'literal': '苏家', 'source_refs': []}]
+    elif defect == 'family_forms_not_list':
+        wire['families']['f_su']['forms'] = 7
+    elif defect == 'family_literal_not_string':
+        wire['families']['f_su']['literal'] = ['苏']
+    elif defect == 'family_id_not_string':
+        person['family_id'] = ['f_su']
+    else:
+        wire['families']['f_su']['forms'] = [
+            {'literal': ['苏家'], 'form': '{family}家', 'source_refs': ['e03_02']}]
+    before = deepcopy(wire)
+    full = '\n'.join(c['text'] for c in chapters)
+    structure, errors = compile_name_structure(wire, core, full, evidence=evidence)
+    assert structure is None and any(expected in message for message in errors), errors
+    assert wire == before
+
+
+def test_names_structure_keeps_valid_override_and_null_pure_title():
+    """反向守卫：合法例外不被误伤——带占位符且无残留名字面的模板、写 null 的
+    纯称谓照常接受。"""
+    chapters, wires = _case()
+    core, _structure, _candidates, evidence = _structure_and_candidates(chapters, wires)
+    wire = deepcopy(wires['names'])
+    wire['people']['yun_niang']['form_overrides'] = {
+        '苏芸娘': '{family}{given}', '云娘': None}
+    full = '\n'.join(c['text'] for c in chapters)
+    structure, errors = compile_name_structure(wire, core, full, evidence=evidence)
+    assert structure is not None and not errors, errors
+    forms = structure.people['yun_niang'].surface_forms
+    assert forms['苏芸娘'] == '{family}{given}' and forms['云娘'] is None
 
 
 def test_mapping_is_local_and_idempotent():

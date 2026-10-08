@@ -39,9 +39,7 @@ from pydantic import ValidationError
 from contracts.schema.observation import (
     STAGE2_BOOK_PROTOCOL, STAGE2_BOOK_WIRE_PROTOCOL, BookObservation, BookObservationWire,
 )
-from contracts.schema.source import (
-    CHANGE_KEYS, REGISTERED_STATE_KEYS, CharactersCore, CharacterEntry,
-)
+from contracts.schema.source import CHANGE_KEYS, CharactersCore, CharacterEntry
 from novel.stages.common import BOOK_PROMPT, group_located_errors
 #: 变化键闭集的 prompt 渲染（CHANGE_KEYS 同一张表；Phase 3）。
 _CHANGE_KEYS_SET = frozenset(CHANGE_KEYS)
@@ -97,7 +95,7 @@ def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...],
         pairs.append((f'world_constraint {str(wc.get("statement"))[:20]}',
                       tuple(wc.get('source_refs') or ()),
                       ('world_constraints', wc_index)))
-    for fact_index, fact in enumerate(wire.get('facts') or []):
+    for fact_index, fact in enumerate(_fact_items(wire)):
         if not isinstance(fact, Mapping):
             continue
         # 展开后是 basis 形；未展开的 wire 形（evidence_refs）兜底同查。
@@ -115,6 +113,12 @@ def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...],
                         else ('expression', 'mechanisms', index - 1))
                 pairs.append((f'expression[{index}]', tuple(item.get('source_refs') or ()), path))
     return pairs
+
+
+def _fact_items(wire: Mapping[str, Any]) -> list | tuple:
+    """只遍历合法数组容器；非法 facts 形状留给协议模型按路径报告。"""
+    facts = wire.get('facts')
+    return facts if isinstance(facts, (list, tuple)) else ()
 
 
 def _basis_label(group: str, atom: Mapping[str, Any]) -> str:
@@ -191,7 +195,7 @@ def _derive_basis_quotes(
                     issues.append((
                         (group, atom_index, 'basis', basis_index),
                         f'{_basis_label(group, atom)}：{issue.message}'))
-    for fact_index, fact in enumerate(wire.get('facts') or ()):
+    for fact_index, fact in enumerate(_fact_items(wire)):
         if not isinstance(fact, dict):
             continue
         refs = tuple(basis.get('segment') for basis in (fact.get('basis') or ())
@@ -229,19 +233,22 @@ def _shape_view(wire: dict) -> dict:
         # wire 形状失败（如漏 evidence_refs）时 basis 可能整键缺失——补占位
         # 让其余字段照常过形状复验；该错误已由 ⑤ 的 wire 闸按路径报告，
         # 这里不重复整份化（2026-10-07 二次收口④）。facts 的 fact_id 缺失
-        # （wire 直通面未带编号）同样补占位——正常路径由 expand 派发。
+        # （wire 直通面未带编号）按位置补占位——正常路径由 expand 派发。
         if not atom.get('basis'):
             atom['basis'] = [{'segment': _UNLOCATED_SEGMENT,
                               'quote': _UNDERIVED_QUOTE}]
 
     for group in ('initial_state', 'world_constraints', 'facts'):
-        for atom in view.get(group) or ():
+        items = _fact_items(view) if group == 'facts' else view.get(group) or ()
+        for atom_index, atom in enumerate(items):
             if not isinstance(atom, dict):
                 continue
             _fill(atom)
             if group == 'facts':
                 if not atom.get('fact_id'):
-                    atom['fact_id'] = 'f00'
+                    # 按位置补占位编号：模型级「编号唯一连续」不变量不因占位而
+                    # 追加噪声错误（真实重复／跳号仍照常报告）。
+                    atom['fact_id'] = f'f{atom_index + 1:02d}'
                 atom.setdefault('known_at_start', ())
     return view
 
@@ -255,8 +262,9 @@ def compile_book_observation(
     `R-2.10` 锚点派生都有段文本可查），或只传 id 的合成闭集（锚点闸在该形态下
     按 id 前缀派生，字面无从核对——仅存于既有单元测试）。wire 不被修改
     （I-24）；错误逐条聚合，含 Resolver 的精确 issue 消息。LLM 输出面
-    （`STAGE2_BOOK_WIRE_PROTOCOL`）的 basis 只给引文，所在段由 Resolver 在条目
-    自身 source_refs 内定位（RC-27）；canonical 形状直通（wire 领养与测试读面）。
+    （`STAGE2_BOOK_WIRE_PROTOCOL`）的 evidence_refs 只选证据段，引文由 Resolver
+    按段全文派生；初态／约束仍须在条目自身 source_refs 内，facts 的证据范围
+    即自身 evidence_refs。canonical 形状直通只验证，不补段或补引文。
     """
     observation, located = _compile_book_view(wire, evidence=evidence)
     return observation, [message for _path, message in located]
@@ -398,27 +406,29 @@ def _compile_book_view(
                 message = f'initial_state {atom.get("key")} 引用未知人物 {ref}'
                 fail(path, message)
                 errors.append(message)
-        if atom.get('key') not in _CHANGE_KEYS_SET:
-            # CS-S Phase 3：初态键与章观察 change 同一张闭集表（schema 模式之外
-            # 的逐条定位报错面——语义细节由 value 承载）。
-            message = (f'initial_state 的键 {atom.get("key")!r} 不在变化键闭集内'
+        key = atom.get('key')
+        if not is_wire and (not isinstance(key, str) or key not in _CHANGE_KEYS_SET):
+            # CS-S Phase 3：初态键与章观察 change 同一张闭集表。wire 面由 ⑤ 的
+            # wire 模型闸报告（带去向指引的条目级错误，单一通路）；本闸只管
+            # canonical 直通面。scene_location 不在 CHANGE_KEYS，落在这一支——
+            # 非字符串键（list／dict）同样是条目错误而不是 TypeError。
+            message = (f'initial_state 的键 {key!r} 不在变化键闭集内'
                        '（key 只能取自【变化键闭集】清单；场景作用域键不收——'
                        '开场所在交给第 1 章第一个 new 拍，长期居所登记 residence）')
             fail(path, message)
             errors.append(message)
-        elif REGISTERED_STATE_KEYS.get(atom.get('key')) == 'scene':
-            message = (f'initial_state {atom.get("key")} 的键 {atom.get("key")} 是场景'
-                       '作用域：开场所在交给第 1 章第一个 new 拍；故事开始前成立的长期'
-                       '居所登记 residence')
-            fail(path, message)
-            errors.append(message)
     # ④a facts（Phase 2）：known_at_start 持有者闭集＝人物 slug（D-5——不含
     # public；reader 知情 Phase 3 由 compile 派生，不进词表）。
-    for fact_index, fact in enumerate(wire.get('facts') or []):
+    for fact_index, fact in enumerate(_fact_items(wire)):
         if not isinstance(fact, Mapping):
             continue
-        for holder in fact.get('known_at_start') or ():
-            if holder not in slugs:
+        holders = fact.get('known_at_start')
+        if not isinstance(holders, (list, tuple)):
+            continue  # 非数组的形状错误由协议模型报告，不提前迭代或推断。
+        for holder in holders:
+            if not isinstance(holder, str):
+                continue  # list/dict 等非法元素不作 set 查询，保留条目级形状修复。
+            if holder == 'reader' or holder not in slugs:
                 message = (f'fact {str(fact.get("statement"))[:16]} 的 known_at_start '
                            f'引用未知人物 {holder}（持有者闭集＝人物 slug，不写 reader）')
                 fail(('facts', fact_index), message)
@@ -443,7 +453,7 @@ def _compile_book_view(
                         str(basis.get('quote') or ''),
                         tuple(atom.get('source_refs') or ())))
                     basis_paths.append((group, atom_index, 'basis', basis_index))
-    for fact_index, fact in enumerate(wire.get('facts') or []):
+    for fact_index, fact in enumerate(_fact_items(wire)):
         if not isinstance(fact, Mapping):
             continue
         fact_refs = tuple(str(basis.get('segment') or '')
@@ -474,6 +484,7 @@ def _compile_book_view(
     # 输出面另按 wire 模型复验（evidence_refs 只收段 id 串，不宽松接纳 canonical
     # 形状）。形状失败按 pydantic 路径定位条目（2026-10-07 二次收口④：
     # initial_state[i]／characters.{slug} 一类窄修该条目，顶层失败退整份）。
+    wire_shape_reported = False
     if is_wire:
         try:
             BookObservationWire.model_validate(original)
@@ -482,6 +493,12 @@ def _compile_book_view(
             for paths, message in wire_shape_issues(exc, kind='book'):
                 fail(paths[0] if paths else None, f'book 观察 {message}')
                 errors.append(f'book 观察 {message}')
+                wire_shape_reported = True
+    if wire_shape_reported:
+        # wire 形状失败已按条目（或 wire 级）完整报告：canonical 复验在占位副本上
+        # 只会重复同一根因（表外键、缺字段）并追加一条 path=None 的整份错误，
+        # 把本可条目窄修的返修拖成整本重购。
+        return None, issues
     try:
         # 占位段号只在本轮已带错（必不发布）时用于形状复验，见 `_UNLOCATED_SEGMENT`。
         observation = BookObservation.model_validate(_shape_view(wire) if errors else wire)

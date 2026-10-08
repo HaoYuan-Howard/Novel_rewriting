@@ -147,7 +147,10 @@ from novel.llm.paid_requests import candidate_contract_identity
 # reader cognition）、Characters v6（初态键闭集）；RC 版式头升 rc20。读者知情由
 # compile 按拍级 access 派生（wire 禁 reader）。旧 rc19 根按契约表漂移只读拒收；
 # 原因见 REQUIREMENTS CS-S。
-FROZEN_CONTRACT_IDENTITY = '5b6f5403c53946fe04789f68cca7f939753e3a32a66ed33a28570f38c3c0f6b5'
+# rc20 续（2026-10-08 CS-S 审阅补升）：writer_book_ir.json 行 rc17→rc18——1b 删
+# ObligationAnchor.visibility 时漏升（IR 经 VerificationIR.obligations 内嵌 anchors，
+# I-13）；RC 版式头仍为 rc20（同一未发布批次内补齐），冻结身份随该行重钉。
+FROZEN_CONTRACT_IDENTITY = '55da9e2fb9d66c2f787842721c17346d7a0c2433e11f2dd0d3e21722926dee1b'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。

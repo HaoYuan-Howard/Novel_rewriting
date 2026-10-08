@@ -251,6 +251,60 @@ def test_brief_lock_derivation_is_deterministic():
     assert brief1 == brief2
 
 
+def test_reader_knowledge_keeps_locks_without_becoming_a_character():
+    """reader 知情锚点仍投影知情锁，但 lineage／Brief 的人物闭集不混入 reader。
+    人物持有者的 lineage 与 participants 保留。
+    """
+    checkpoint = _checkpoint()
+    reader_ob = next(o for o in checkpoint.obligations if o.statement == '读者得知实证')
+    person_ob = next(o for o in checkpoint.obligations if o.statement == '芸娘从起疑到证实同一件事')
+    assert reader_ob.lineage.character_ids == ()
+    assert reader_ob.lineage.blueprint_refs == ('b01_02',)
+    assert person_ob.lineage.character_ids == ('yun_niang',)
+    brief, _ = project_brief(checkpoint, _characters(), _blueprint())
+    reader_req = next(r for r in brief.requirements if r.summary == '读者得知实证')
+    person_req = next(r for r in brief.requirements if r.summary == '芸娘从起疑到证实同一件事')
+    assert reader_req.participants == ()
+    assert person_req.participants == ('yun_niang',)
+    assert {c.holder for c in reader_req.knowledge_changes} == {'reader'}
+    assert any(lock.holder == 'reader' for lock in brief.knowledge_locks)
+
+
+def test_reader_lineage_defense_ignores_forged_character_entry_and_keeps_proxy():
+    """人物模型先拒 reader；绕过模型的坏对象也不能污染 lineage，proxy 人物正常保留。"""
+    characters = _characters()
+    characters = CharactersCore.model_validate({
+        **characters.model_dump(mode='json'),
+        'characters': {**characters.model_dump(mode='json')['characters'],
+                       'reader_proxy': characters.characters['fu_jun'].model_dump(mode='json')}})
+    forged = characters.model_copy(update={'characters': {
+        **characters.characters, 'reader': characters.characters['fu_jun']}})
+    blueprint = _blueprint()
+    first = blueprint.chapters[0].beats[0]
+    first = first.model_copy(update={'cognition': (
+        first.cognition[0].model_copy(update={'holder': 'reader_proxy'}),
+        *first.cognition[1:])})
+    chapter = blueprint.chapters[0].model_copy(update={'beats': (
+        first, *blueprint.chapters[0].beats[1:])})
+    blueprint = blueprint.model_copy(update={'chapters': (chapter,)})
+    checkpoint, errors = assemble_preserve(
+        _preserve_wire(), policy_id='p', policy_version=5,
+        characters=forged, blueprint=blueprint,
+        provider='x', model='y', request_sha256='r' * 64)
+    assert checkpoint is not None and not errors, errors
+    reader_ob = next(o for o in checkpoint.obligations if o.statement == '读者得知实证')
+    person_ob = next(o for o in checkpoint.obligations if o.statement == '芸娘从起疑到证实同一件事')
+    assert reader_ob.lineage.character_ids == ()
+    assert person_ob.lineage.character_ids == ('reader_proxy', 'yun_niang')
+    brief, _ = project_brief(checkpoint, forged, blueprint)
+    reader_req = next(r for r in brief.requirements if r.summary == '读者得知实证')
+    person_req = next(r for r in brief.requirements if r.summary == '芸娘从起疑到证实同一件事')
+    assert reader_req.participants == ()
+    assert 'reader_proxy' in person_req.participants
+    assert any(lock.holder == 'reader' for lock in brief.knowledge_locks)
+    assert any(lock.holder == 'reader_proxy' for lock in brief.knowledge_locks)
+
+
 # ───────────────────────── Design v5：wire 形状 ─────────────────────────
 
 def _design_wire(brief: ReconstructionBrief) -> dict:

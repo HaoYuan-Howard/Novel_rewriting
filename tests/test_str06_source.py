@@ -20,26 +20,47 @@ from tests.test_str06_stage2_publish import (
 )
 from novel.stages.stage2 import (
     AssociateObservation, BookObservation, ChapterObservation, NamesObservation,
-    character_core_view, compile_source_truth,
+    character_core_view, compile_source_truth, project_association_space,
+    project_identity_candidates,
 )
+from tests.str06_facilities import complete_associate_fixture
 
 PV = 'stage2-names-v4'   # 名称同一性留证协议
-CPV = 'stage2-chapters-v7'     # 章观察（CS-S 1b：v5——死字段收口）
+CPV = 'stage2-chapters-v7'     # 章观察（CS-S Phase 3：闭集 change 与 reader 派生）
 
 
 def _outcome(*, book=None, chapters=None, names=None, associate=None):
     """四份观察 → `compile_source_truth` 的最小合成底座（绿可整体覆盖成红）。"""
     ch_wires = chapters if chapters is not None else _chapter_wires()
+    book_obs = BookObservation.model_validate(
+        book if book is not None else _book_wire())
+    chapter_obs = {no: ChapterObservation.model_validate(ch_wires[f'ch{no:02d}'])
+                   for no in range(1, len(ch_wires) + 1)}
+    associate_wire = associate if associate is not None else _associate_wire()
+    if associate is None:
+        # 本文件改章观察以测 fold／命题解析；默认脚本须随真实候选重建，不能
+        # 继续携带已被测试换掉的句柄。显式传入的反例答案原样保留，不删坏行。
+        space = project_association_space(book_obs, chapter_obs)
+        candidates = project_identity_candidates(space, book_obs)
+        for kind, fields in (
+                ('same_proposition', ('left', 'right')),
+                ('loop_pairing', ('open', 'close')),
+                ('scene_continuation', ('left', 'right'))):
+            allowed = {(getattr(c, fields[0]), getattr(c, fields[1]))
+                       for c in getattr(candidates, kind)}
+            if kind == 'same_proposition':
+                allowed |= {(right, left) for left, right in allowed}
+            associate_wire[kind] = [row for row in associate_wire[kind]
+                                   if (row[fields[0]], row[fields[1]]) in allowed]
+        associate_wire['cross_chapter_cause'] = []
+    association = complete_associate_fixture(
+        book_obs, chapter_obs, AssociateObservation.model_validate(associate_wire))
     return compile_source_truth(
-        book=BookObservation.model_validate(
-            book if book is not None else _book_wire()),
-        chapters={no: ChapterObservation.model_validate(ch_wires[f'ch{no:02d}'])
-                  for no in range(1, len(ch_wires) + 1)},
+        book=book_obs, chapters=chapter_obs,
         names=NamesObservation.model_validate({
             'protocol_version': PV,
             'structure': names if names is not None else _names_structure()}),
-        associate=AssociateObservation.model_validate(
-            associate if associate is not None else _associate_wire()),
+        associate=association,
         evidence=EVIDENCE)
 
 

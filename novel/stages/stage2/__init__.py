@@ -29,6 +29,7 @@ from novel.stages.stage2.associate import (
     LoopCandidate, LoopHandle,
     PropositionCandidate, PropositionHandle, SceneCandidate, SceneHandle,
     associate_candidates_prompt, associate_patch_locate,
+    associate_observation_issues, associate_unresolved_issues,
     compile_associate_observation,
     compile_cross_cause, cross_cause_prompt, near_synonym_pair,
     project_association_space, project_cause_candidates,
@@ -43,7 +44,7 @@ from novel.stages.stage2.chapters import (
     compile_chapter_observation, chapter_loop_issues,
 )
 from novel.stages.stage2.compile import (
-    CompileOutcome, FoldResult, compile_source_truth,
+    CompileOutcome, FoldResult, compile_source_truth, inspect_identity_associations,
     evidence_metrics, first_appearance_anchors, first_appearance_issues,
     initial_snapshot, source_fold,
 )
@@ -71,11 +72,12 @@ __all__ = [
     'expand_chapter_wire', 'first_appearance_anchors',
     'first_appearance_issues', 'slim_chapter_wire',
     'associate_candidates_prompt', 'associate_patch_locate', 'book_observation_prompt',
+    'associate_observation_issues', 'associate_unresolved_issues',
     'book_patch_locate', 'chapter_observation_prompt', 'chapter_prior_text',
     'character_core_view',
     'compile_associate_observation', 'compile_cross_cause',
     'chapter_patch_locate', 'compile_book_observation', 'compile_chapter_observation', 'chapter_loop_issues',
-    'compile_name_structure', 'compile_source_truth', 'evidence_metrics',
+    'compile_name_structure', 'compile_source_truth', 'inspect_identity_associations', 'evidence_metrics',
     'normalize_name_observations', 'validate_name_resolutions',
     'initial_snapshot', 'near_synonym_pair',
     'compile_name_variants', 'derive_surface_forms', 'merge_name_structure',

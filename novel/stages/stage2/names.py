@@ -14,7 +14,8 @@
     逐条一致，I-20/I-21）。
   • B（候选先行）：`name_variant_candidates` 由代码生成变体候选——锚＝派生
     模板非空且 ≥3 字的登记 surface，候选＝源文里同首字、编辑距离 1（替换／
-    插入／缺字）、未登记、非任一登记 surface 子串的字面；无候选＝零调用。
+    插入／缺字）、未登记、与任一 ≥3 字登记 surface 互不为子串、只含字母数字类
+    字符的字面（多锚全部保留）；无候选＝零调用。
     判定走节点内新 owner `name_variants` 的窄调用（wire
     `stage2-name-variants-v1`，逐条 verdict，每候选恰答一次）。
   • A（守卫）：names 不得增删或拆合人物（people 键集合闸）；same 只在证据
@@ -120,8 +121,9 @@ def derive_surface_forms(
     `parts` 是变量名→身份字面（family／given／alias:<id>）。返回 (模板或
     None, 是否歧义)：无任何身份字面 → (None, False)＝纯称谓；同位同长的
     最大字面属于多个变量 → 歧义（须 `form_overrides` 例外，S2-10 的
-    「构词多解未决」）。最长优先使「沈知言」在 family=沈／given=知言 时派生
-    为 {given}，不误拆成 {family}言。
+    「构词多解未决」）。最长优先使「沈知言」在 family=沈／given=沈知言（名字段
+    登记的是含姓全名）时派生为 {given}，不误拆成 {family}知言；family=沈／
+    given=知言 时则逐位派生为 {family}{given}。
     """
     if not parts:
         return (None, False)
@@ -168,6 +170,14 @@ class NameVariantCandidate:
     char_id: str
     anchor: str
     segments: tuple[str, ...]
+    #: 同一字面也落在别的人物锚的编辑距离 1 邻域时的其余 (char_id, anchor)，
+    #: 按生成序；首个锚仍是 `char_id`／`anchor`。不静默归给先到的人物：全部
+    #: 锚进窄调用请求，`same` 只能指向其中任一锚的人物（compile 同口径执行）。
+    other_anchors: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def anchors(self) -> tuple[tuple[str, str], ...]:
+        return ((self.char_id, self.anchor), *self.other_anchors)
 
 
 def _edit_distance_one(candidate: str, anchor: str) -> bool:
@@ -200,15 +210,20 @@ def name_variant_candidates(
 
     锚＝该人物派生模板非空且 ≥3 字的登记 surface；候选＝证据段文本里与锚
     同首字、编辑距离 1 的字面，且未登记（不等于任何登记 surface／家族级
-    form 字面）、与任何登记 surface 互不为子串——变体不会完整包含正确字面
-    （插入邻域「anchor＋后继字」因此天然滤除，标点跟随同滤）。同字面多锚
-    时保留生成锚的首个（char_id 随锚走，语义判断归窄调用）。
+    form 字面）、与任何 ≥3 字的登记 surface 互不为子串——变体不会完整包含
+    正确字面（插入邻域「anchor＋后继字」因此天然滤除）。子串过滤只对 ≥3 字
+    的登记面生效：1～2 字的称谓（「远」「娘」）若也参与，会把含它的真变体
+    （「裴知远」）整条吞掉。候选字面只收字母数字类字符：带标点或空白的邻域
+    切片（「裴书，」）不是名字，不进请求。同字面落在多个人物锚的邻域时全部
+    保留（不静默归给先到的人物），语义判断归窄调用。
     """
     registered = {
         s.surface for entry in characters.characters.values() for s in entry.surfaces
     } | {form.literal for family in structure.families.values()
          for form in family.forms}
-    by_literal: dict[str, NameVariantCandidate] = {}
+    long_registered = tuple(sorted(s for s in registered if len(s) >= 3))
+    #: 候选字面 → ([(char_id, 锚)…], [出现段…])，均按生成序、不重复
+    found: dict[str, tuple[list[tuple[str, str]], list[str]]] = {}
     for slug, entry in characters.characters.items():
         person = structure.people.get(slug)
         if person is None:
@@ -225,22 +240,22 @@ def name_variant_candidates(
                     for length in (len(surface) - 1, len(surface), len(surface) + 1):
                         cand = text[start:start + length]
                         if (len(cand) == length and cand != surface
+                                and cand.isalnum()
                                 and _edit_distance_one(cand, surface)
                                 and cand not in registered
                                 and not any(cand in s or s in cand
-                                            for s in registered)):
-                            existing = by_literal.get(cand)
-                            if existing is None:
-                                by_literal[cand] = NameVariantCandidate(
-                                    literal=cand, char_id=slug, anchor=surface,
-                                    segments=(ref,))
-                            elif ref not in existing.segments:
-                                by_literal[cand] = NameVariantCandidate(
-                                    literal=cand, char_id=existing.char_id,
-                                    anchor=existing.anchor,
-                                    segments=(*existing.segments, ref))
+                                            for s in long_registered)):
+                            anchors, segments = found.setdefault(cand, ([], []))
+                            if (slug, surface) not in anchors:
+                                anchors.append((slug, surface))
+                            if ref not in segments:
+                                segments.append(ref)
                     start = text.find(surface[0], start + 1)
-    return tuple(by_literal[literal] for literal in sorted(by_literal))
+    return tuple(
+        NameVariantCandidate(
+            literal=literal, char_id=anchors[0][0], anchor=anchors[0][1],
+            segments=tuple(segments), other_anchors=tuple(anchors[1:]))
+        for literal, (anchors, segments) in sorted(found.items()))
 
 
 # ───────────────────────── 结构 wire v6 的编译 ─────────────────────────
@@ -310,8 +325,16 @@ def _compile_name_structure_located(
         if literal not in source_text:
             fail(path, f'{where} 的字面 {literal!r} 未在源文中出现')
             errors.append(f'{where} 的字面 {literal!r} 未在源文中出现')
-        for form in raw.get('forms') or []:
-            if not isinstance(form, dict) or set(form) - {'literal', 'form', 'source_refs'}:
+        forms = raw.get('forms') or []
+        if not isinstance(forms, list):
+            fail(path, f'{where} 的 forms 必须是数组')
+            errors.append(f'{where} 的 forms 必须是数组')
+            continue
+        for form in forms:
+            if (not isinstance(form, dict) or set(form) - {'literal', 'form', 'source_refs'}
+                    or not isinstance(form.get('form'), str)
+                    or not isinstance(form.get('literal'), str)
+                    or not form['literal']):
                 fail(path, f'{where} 称谓条目形状非法')
                 errors.append(f'{where} 称谓条目形状非法')
                 continue
@@ -342,8 +365,14 @@ def _compile_name_structure_located(
             continue
         aliases_raw = raw.get('aliases') or []
         aliases: dict[str, str] = {}
+        if not isinstance(aliases_raw, list):
+            fail(path, f'{where} 的 aliases 必须是数组')
+            errors.append(f'{where} 的 aliases 必须是数组')
+            continue
         for alias in aliases_raw:
-            if not isinstance(alias, dict) or set(alias) - {'alias_id', 'literal'}:
+            if (not isinstance(alias, dict) or set(alias) - {'alias_id', 'literal'}
+                    or not isinstance(alias.get('alias_id'), str) or not alias['alias_id']
+                    or not isinstance(alias.get('literal') or '', str)):
                 fail(path, f'{where} 化名条目形状非法')
                 errors.append(f'{where} 化名条目形状非法')
                 continue
@@ -356,13 +385,20 @@ def _compile_name_structure_located(
                 errors.append(f'{where} 化名字面 {alias["literal"]!r} 未在源文中出现')
         family_id = raw.get('family_id')
         family_literal = None
+        if family_id is not None and not isinstance(family_id, str):
+            fail(path, f'{where} 的 family_id 必须是字符串或 null')
+            errors.append(f'{where} 的 family_id 必须是字符串或 null')
+            family_id = None
         if family_id is not None:
             entry = raw_families.get(family_id)
             if not isinstance(entry, dict):
                 fail(path, f'{where} 的 family_id {family_id!r} 未登记家族')
                 errors.append(f'{where} 的 family_id {family_id!r} 未登记家族')
             else:
-                family_literal = entry.get('literal')
+                # 家族字面的形状错误已在家族条目报告；不把 list/dict 等坏部件
+                # 交给新构词派生器，否则 startswith 会绕过免费形状修复抛 TypeError。
+                candidate_literal = entry.get('literal')
+                family_literal = candidate_literal if isinstance(candidate_literal, str) else None
         given = raw.get('given')
         if given is not None and not isinstance(given, str):
             fail(path, f'{where} 的 given 必须是字符串或 null')
@@ -394,7 +430,22 @@ def _compile_name_structure_located(
         surface_forms: dict[str, str | None] = {}
         for surface in sorted(surfaces):
             if surface in overrides:
-                surface_forms[surface] = overrides[surface]
+                override = overrides[surface]
+                if override is not None and not isinstance(override, str):
+                    message = (f'{where} 的 form_overrides[{surface!r}] 必须是构词模板'
+                               '字符串或 null（纯称谓）')
+                    fail(path, message)
+                    errors.append(message)
+                    continue
+                if isinstance(override, str) and '{' not in override:
+                    # 无占位符的“模板”恒等于 surface、不产生任何替换键，且绕开
+                    # 纯称谓的防漏标——等价于纯称谓就必须写 null。
+                    message = (f'{where} 的 form_overrides[{surface!r}]={override!r} '
+                               '无占位符；纯称谓请写 null')
+                    fail(path, message)
+                    errors.append(message)
+                    continue
+                surface_forms[surface] = override
                 continue
             template, ambiguous = derive_surface_forms(surface, parts)
             if ambiguous:
@@ -422,6 +473,17 @@ def _compile_name_structure_located(
                 fail(path, f'{where} 的 surface {surface!r}：{exc}')
                 errors.append(f'{where} 的 surface {surface!r}：{exc}')
                 continue
+            # 防漏标对模板同样成立：占位符之外的字面片段（逐片段，不拼接）不得
+            # 再含本人姓名字面——否则改名时这一段不会随占位符被替换。派生模板
+            # 按最大替换构造满足；只有 form_overrides 例外会在此被拦。
+            for fragment in re.split(r'\{[^{}]*\}', form):
+                for literal in (family_literal, given, *aliases.values()):
+                    if literal and literal in fragment:
+                        message = (f'{where} 的 surface {surface!r} 构词模板 {form!r} '
+                                   f'的非占位部分 {fragment!r} 含本人姓名字面 {literal!r}'
+                                   '（防漏标：应以占位符表达）')
+                        fail(path, message)
+                        errors.append(message)
             if rendered != surface:
                 message = (f'{where} 的 surface {surface!r} 与构词渲染不一致：'
                            f'{form!r} 渲染为 {rendered!r}')
@@ -455,8 +517,9 @@ def name_variants_prompt(candidates, evidence) -> str:
     from novel.stages.common import NAME_VARIANTS_RULES
     lines = ['【候选清单】（每条恰答一次；判定与证据只能从中选）']
     for index, cand in enumerate(candidates, 1):
-        lines.append(f'{index}. 字面「{cand.literal}」（近似锚：{cand.anchor}，'
-                     f'人物 {cand.char_id}）出现段：')
+        anchors = '；'.join(f'{anchor}，人物 {char_id}'
+                           for char_id, anchor in cand.anchors)
+        lines.append(f'{index}. 字面「{cand.literal}」（近似锚：{anchors}）出现段：')
         for ref in cand.segments:
             text = (evidence.get(ref) or {}).get('text') or ''
             lines.append(f'   [{ref}] {text}')
@@ -520,6 +583,15 @@ def compile_name_variants(
                        f'该候选出现段之外的段 {outside}（出现段＝{list(cand.segments)}）')
             errors += 1
             continue
+        if verdict.verdict == 'same' and verdict.char_id not in {
+                char_id for char_id, _anchor in cand.anchors}:
+            # 候选由代码给出、近似锚就是 same 的合法去向（提示词同口径）：
+            # 指向锚之外的人物＝凭空新增同一性，不接受（S2-10）。
+            fail(path, f'变体[{index + 1}]「{verdict.literal}」的 same 只能指向近似锚'
+                       f'人物 {sorted({c for c, _a in cand.anchors})}，不是 '
+                       f'{verdict.char_id!r}')
+            errors += 1
+            continue
         if verdict.verdict == 'same' and characters is not None:
             entry = characters.characters.get(verdict.char_id)
             if entry is None or verdict.surface not in (
@@ -557,6 +629,10 @@ def validate_name_resolutions(
 ) -> list[str]:
     """只验证语义声明的引用与原句证明，不判断两个姓名是否同一人物。
 
+    生成候选必须逐条有且仅有一个判定：不仅在 wire 接受时核对，消费正式 names
+    观察时也复验，防止人工编辑删除判定或上游候选变化后漏过未决。候选集合由
+    当前人物账、名称结构与源证据重新派生，不增加持久化真相源；人工补充的局部
+    判定沿用既有引用与证据校验，不扩大拒收范围。
     CS-S 1c：`not_name` 与 unresolved 同形校验（不暗含映射、不参与归一），
     但**不阻断发布**——阻断只由调用方对 unresolved 施加（未决＝需要人／
     窄修，not_name＝假设已否决的完整性证明）。
@@ -566,6 +642,20 @@ def validate_name_resolutions(
     occupied = {}
     known_surfaces = {s.surface for c in characters.characters.values() for s in c.surfaces}
     resolver = EvidenceResolver(evidence or {})
+    candidate_targets: dict[str, set[str]] = {}
+    if evidence:
+        candidates = name_variant_candidates(structure, characters, evidence)
+        counts: dict[str, int] = {}
+        for item in structure.resolutions:
+            counts[item.literal] = counts.get(item.literal, 0) + 1
+        for candidate in candidates:
+            candidate_targets[candidate.literal] = {char_id for char_id, _anchor
+                                                    in candidate.anchors}
+            count = counts.get(candidate.literal, 0)
+            if count != 1:
+                errors.append(
+                    f'名称候选「{candidate.literal}」须恰有一条判定，当前 {count} 条'
+                    '（名称候选由当前人物账与源证据派生，不得漏答或重复）')
     for index, item in enumerate(structure.resolutions):
         label = f'名称同一性[{index}]'
         if not evidence:
@@ -581,6 +671,11 @@ def validate_name_resolutions(
             char = characters.characters.get(item.char_id)
             if char is None or item.surface not in {s.surface for s in char.surfaces}:
                 errors.append(f'{label}指向未登记人物或称谓')
+            if (item.literal in candidate_targets
+                    and item.char_id not in candidate_targets[item.literal]):
+                errors.append(
+                    f'{label} same 只能指向候选近似锚人物 '
+                    f'{sorted(candidate_targets[item.literal])}，不是 {item.char_id!r}')
             for b in item.basis:
                 if item.literal not in b.quote:
                     continue

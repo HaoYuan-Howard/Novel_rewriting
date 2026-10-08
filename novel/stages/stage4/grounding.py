@@ -147,7 +147,7 @@ def _derive_lineage(
     """义务 anchors → SourceLineage（I-15/I-21：compiler 派生，wire 不再输出）。
 
     blueprint_refs＝锚点主体（拍内转移归其 beat_id；初态/约束归自身 id）；
-    character_ids＝初态 target 人物＋效应作用对象人物＋认知 holder——同一
+    character_ids＝初态 target 人物＋效应作用对象人物＋人物认知 holder——同一
     既有语义（可综合多个源主体），只是来源从模型声明改为锚点解析。
     """
     blueprint_refs: list[str] = []
@@ -173,7 +173,10 @@ def _derive_lineage(
         if transfer is None:
             continue
         if anchor.source_kind == 'cognition':
-            character_ids.append(transfer.holder)
+            # reader 是知情持有者，人物表没有它；其锁仍由 cognition anchor
+            # 派生，不能经 lineage 变成 Brief 的参演人物。
+            if transfer.holder != 'reader' and transfer.holder in characters.characters:
+                character_ids.append(transfer.holder)
         elif anchor.source_kind == 'initial_state':
             target = transfer.target
             if target.kind == 'character':
@@ -214,9 +217,10 @@ def project_preserve_view(
         lines.append('【书级初始事实（故事开始前成立）】')
         for atom in characters.initial_state:
             cited.update(atom.source_refs)
-            # CS-S 1b：初始已知后缀删（initial_state.knowledge 已删——语义缺口
-            # 如实登记：Preserve 视图暂无「初始已知」面，Phase 2 由 facts
-            # known_at_start 补回）。
+            # CS-S 1b：初始已知后缀删（initial_state.knowledge 已删）。语义缺口
+            # 如实登记：Phase 2 的 facts `known_at_start` 只落在 fold 知情时间线读数
+            # （T-5：只读读数，不进下游 API），Stage4 的 Preserve／Brief 仍看不到
+            # 「开场前已知」——是否把它渲染进 Preserve 视图待产品裁决（REQUIREMENTS）。
             lines.append(f'[{atom.state_id}] {_render_target(atom.target)}.'
                          f'{atom.key} = {atom.value!r}（{atom.persistence}）')
             for basis in atom.basis:

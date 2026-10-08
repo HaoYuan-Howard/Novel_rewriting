@@ -2773,6 +2773,31 @@ def test_rc12_ir_moves_reader_entries_and_preserves_fact_addresses():
     assert ir['pending_reader_confirmations'][0]['address']['domain'] == 'world'
 
 
+def test_rc12_ir_migration_targets_rc18_and_strips_dead_anchor_visibility():
+    """CS-S 1b 删 ObligationAnchor.visibility：IR 经 verification_ir.obligations
+    内嵌 anchors，登记迁移须剥掉旧载荷里的该键（StrictModel 禁多余字段），并把
+    迁移目标钉到现行 rc18；不碰 anchor 以外的 visibility 键，不改输入。"""
+    from copy import deepcopy
+    from contracts.schema.grounding import ObligationAnchor
+    from novel.store import _upgrade_rc12_payload
+    anchor = {'handle': 'b01_01.e1', 'source_kind': 'effect', 'op': 'set',
+              'visibility': 'on_page'}
+    source = {'contract_version': 'str06-rc13', 'chapters': [{'scenes': [{
+        'contract_version': 'str06-rc13', 'verification_ir': {
+            'obligations': [{'anchors': [anchor]}],
+            'other': {'visibility': 'kept'}}}]}]}
+    before = deepcopy(source)
+    data = _upgrade_rc12_payload('stage4/ir/writer_book_ir.json', source)
+    assert source == before, '迁移不得修改输入'
+    assert data['contract_version'] == 'str06-rc18'
+    migrated = data['chapters'][0]['scenes'][0]['verification_ir']
+    assert 'visibility' not in migrated['obligations'][0]['anchors'][0]
+    assert migrated['other'] == {'visibility': 'kept'}, '只剥 anchor 形状上的死字段'
+    ObligationAnchor.model_validate(migrated['obligations'][0]['anchors'][0])
+    with pytest.raises(Exception, match='visibility'):
+        ObligationAnchor.model_validate(anchor)
+
+
 def test_rc13_lost_reader_link_and_brief_modes_are_refused():
     from novel.store import _upgrade_rc12_payload
     from novel.errors import ProvenanceRefused

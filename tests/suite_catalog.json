@@ -930,14 +930,28 @@
     "tests/test_str06_phase3_change.py": {
       "layer": "unit_contract",
       "stages": [
-        "stage2"
-      ]
+        "stage2",
+        "stage4"
+      ],
+      "cases": {
+        "test_reader_keeps_each_payoff_when_one_beat_closes_multiple_loops": "stage"
+      }
     },
     "tests/test_str06_phase2_facts.py": {
       "layer": "unit_contract",
       "stages": [
         "stage2"
       ]
+    },
+    "tests/test_str06_narrow_units.py": {
+      "layer": "stage",
+      "stages": [
+        "stage2"
+      ],
+      "cases": {
+        "test_narrow_owner_units_are_registered_per_node_and_resolve_to_own_scope": "unit_contract",
+        "test_unit_ledger_admits_only_registered_narrow_scopes": "unit_contract"
+      }
     },
     "tests/test_str06_stage2_protocol.py": {
       "layer": "unit_contract",
@@ -1211,7 +1225,10 @@
       ],
       "cases": {
         "test_proved_variant_reaches_canonical_and_preserve_without_changing_quotes": "stage",
-        "test_unresolved_identity_stops_before_associate_purchase_and_publish": "stage"
+        "test_unresolved_identity_stops_before_associate_purchase_and_publish": "stage",
+        "test_not_name_verdict_completes_without_normalization": "stage",
+        "test_names_structure_edits_stop_before_associate_purchase": "stage",
+        "test_names_candidate_decisions_are_complete_at_canonical_consumers": "stage"
       }
     },
     "tests/test_workflow_role_boundaries.py": {

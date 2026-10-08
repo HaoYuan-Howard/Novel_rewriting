@@ -98,9 +98,37 @@ def test_access_channel_enum_is_witnessed_default_and_narrated_exception():
         pass
 
 
+def _complete_associate(book, chapters):
+    """构造恰答当前全部候选的答案；不从 compiler 的成功结论反推 fixture。"""
+    from contracts.schema.observation import AssociateObservation
+    from novel.stages.stage2 import (
+        project_association_space, project_cause_candidates, project_identity_candidates,
+    )
+    space = project_association_space(book, chapters)
+    candidates = project_identity_candidates(space, book)
+    observation = AssociateObservation.model_validate({
+        'protocol_version': 'stage2-associate-v5',
+        'same_proposition': [
+            {'left': c.left, 'right': c.right, 'verdict': 'distinct'}
+            for c in candidates.same_proposition],
+        'loop_pairing': [
+            {'open': c.open, 'close': c.close, 'verdict': 'distinct'}
+            for c in candidates.loop_pairing],
+        'scene_continuation': [
+            {'left': c.left, 'right': c.right, 'verdict': 'distinct'}
+            for c in candidates.scene_continuation],
+    })
+    causes = project_cause_candidates(space, chapters, book, observation)
+    return AssociateObservation.model_validate({
+        **observation.model_dump(mode='json'),
+        'cross_chapter_cause': [
+            {'from_beat': c.from_beat, 'to_beat': c.to_beat, 'kind': 'none'}
+            for c in causes],
+    })
+
+
 def _compiled_with(beat_over, loops=(), extra_chapters=()):
     """三章观察（ch01 带覆写拍）→ compile_source_truth 的蓝图与 fold。"""
-    from contracts.schema.observation import AssociateObservation
     from novel.stages.stage2 import compile_source_truth
     book = _book_wire()
     ch01 = {'protocol_version': CPV, 'beats': [_beat('一拍', ('e01_01',),
@@ -115,10 +143,7 @@ def _compiled_with(beat_over, loops=(), extra_chapters=()):
     return compile_source_truth(
         book=book_obs, chapters=chapter_obs,
         names=_names_observation(book_obs), evidence=EVIDENCE,
-        associate=AssociateObservation.model_validate({
-            'protocol_version': 'stage2-associate-v5',
-            'same_proposition': [], 'loop_pairing': [],
-            'cross_chapter_cause': [], 'scene_continuation': []}))
+        associate=_complete_associate(book_obs, chapter_obs))
 
 
 def _reader_entries(blueprint, chapter=1):
@@ -182,10 +207,7 @@ def test_reader_learned_from_loop_close_resolution():
     outcome = compile_source_truth(
         book=book_obs, chapters=chapter_obs, names=_names_observation(book_obs),
         evidence=EVIDENCE,
-        associate=AssociateObservation.model_validate({
-            'protocol_version': 'stage2-associate-v5',
-            'same_proposition': [], 'loop_pairing': [],
-            'cross_chapter_cause': [], 'scene_continuation': []}))
+        associate=_complete_associate(book_obs, chapter_obs))
     assert outcome.errors == [] and not outcome.undecided, outcome.errors
     entries = _reader_entries(outcome.blueprint)
     assert ('reader', 'learns', '床底的人是夫君') in entries, entries
@@ -219,12 +241,58 @@ def test_observation_side_reader_is_refused_by_compile_defense():
     outcome = compile_source_truth(
         book=book_obs, chapters=chapter_obs, names=_names_observation(book_obs),
         evidence=EVIDENCE,
-        associate=AssociateObservation.model_validate({
-            'protocol_version': 'stage2-associate-v5',
-            'same_proposition': [], 'loop_pairing': [],
-            'cross_chapter_cause': [], 'scene_continuation': []}))
+        associate=_complete_associate(book_obs, chapter_obs))
     assert any('禁 reader' in e for e in outcome.errors), outcome.errors
     assert not outcome.publishable
+
+
+def test_reader_keeps_each_payoff_when_one_beat_closes_multiple_loops():
+    """同拍收束两个悬念，两条 resolution 各派生正式命题，且真实 Preserve
+    投影同时看到两条；不能共用拍级句柄而把第二条 payoff 静默去重。
+    """
+    outcome = _compiled_with({'loops': [
+        {'ref': 'q_person', 'op': 'open', 'question': '床底是谁？'},
+        {'ref': 'q_noise', 'op': 'open', 'question': '为何床板响？'},
+        {'ref': 'q_person', 'op': 'close', 'resolution': '床底的人是夫君'},
+        {'ref': 'q_noise', 'op': 'close', 'resolution': '夫君翻身撞响床板'},
+    ]})
+    assert outcome.publishable, (outcome.errors, outcome.undecided)
+    reader = [c for c in outcome.blueprint.chapters[0].beats[0].cognition
+              if c.holder == 'reader']
+    assert {c.proposition.statement for c in reader} == {
+        '床底的人是夫君', '夫君翻身撞响床板'}
+    assert len({c.proposition.ref for c in reader}) == 2
+    from novel.stages.stage4.grounding import project_preserve_view
+    view = project_preserve_view(outcome.characters.core_view(), outcome.blueprint)
+    assert all(f'认知 reader learns 命题 {c.proposition.ref}「{c.proposition.statement}」'
+               in view for c in reader)
+
+
+def test_reader_generated_propositions_cannot_collide_with_observation_refs():
+    """canonical 直通的本地 ref 没有保留 rd 前缀，派生事实/收束不能占用它。
+    原命题镜像仍复用原正式 ID，两条新派生命题保持各自的文本和正式 ID。
+    """
+    for ref in ('rd01e01', 'rd01l', 'rd01l02'):
+        outcome = _compiled_with({
+            'access': 'narrated',
+            'effects': [_plain_effect({'kind': 'character', 'char_id': 'fu_jun'},
+                                      'intent', '求娶芸娘为报恩')],
+            'cognition': [{'proposition': {'ref': ref, 'statement': '夫君幼时落水'},
+                           'holder': 'yun_niang', 'mode': 'confirms',
+                           'basis': _basis('e01_01')}],
+            'loops': [
+                {'ref': 'q_person', 'op': 'open', 'question': '床底是谁？'},
+                {'ref': 'q_person', 'op': 'close', 'resolution': '床底的人是夫君'},
+            ],
+        })
+        assert outcome.publishable, (ref, outcome.errors, outcome.undecided)
+        cognition = outcome.blueprint.chapters[0].beats[0].cognition
+        source_prop = next(c.proposition for c in cognition if c.holder == 'yun_niang')
+        reader = {c.proposition.statement: c.proposition.ref
+                  for c in cognition if c.holder == 'reader'}
+        assert set(reader) == {'夫君幼时落水', '求娶芸娘为报恩', '床底的人是夫君'}, (ref, reader)
+        assert reader['夫君幼时落水'] == source_prop.ref
+        assert len(set(reader.values())) == 3
 
 
 def test_chapter_prompt_renders_closed_keys_and_access():

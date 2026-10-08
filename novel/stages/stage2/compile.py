@@ -36,12 +36,13 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Iterable, Literal, Mapping
 
 from pydantic import ValidationError
 
 from contracts.schema.observation import (
     AssociateObservation, BookObservation, ChapterObservation, NamesObservation,
+    is_fact_ref,
 )
 from contracts.schema.source import (
     REGISTERED_STATE_KEYS,
@@ -53,7 +54,8 @@ from novel.core.text import norm
 from novel.stages.stage2.resolver import EvidenceResolver, verify_bases
 from novel.stages.common import OverlayChange, StateOverlay
 from novel.stages.stage2.associate import (
-    AssociationSpace, association_issue, loop_pairing_issues,
+    AssociationSpace, associate_observation_issues, associate_unresolved_issues,
+    association_issue, loop_pairing_issues,
     project_association_space,
 )
 from novel.stages.stage2.book import character_core_view
@@ -62,8 +64,6 @@ from novel.stages.stage2.expression import compile_source_expression
 
 _BEAT_HANDLE = re.compile(r'ch(\d+)\.b(\d+)')
 _SCENE_HANDLE = re.compile(r'ch(\d+)\.sc(\d+)')
-#: 书级命题编号（与 chapters 的观察面同一张表——fact 引用解析的命名空间判据）。
-_FACT_REF = re.compile(r'^f\d{2,}$')
 
 
 # ───────────────────────── 并查集（配对等价类） ─────────────────────────
@@ -155,7 +155,7 @@ class _BookCompile:
     R1 v2：持有**唯一关联登记表**（`space`）。CS-S Phase 2：书级 facts 预种为
     命题等价类的**根**（rank(-1,·)——早于一切章内句柄，fact 编号即正式 ID、
     fact 文本即类 canonical 文本）；associate 的 verdict 只执行 same／pair／
-    continue 与 kind≠none（distinct／unresolved／none 保持分离，不默认合并）。
+    continue 与 kind≠none（distinct／none 不合并，unresolved 保持未决拒发）。
     CS-S Phase 3：状态维度等价类（`_StateClasses`）随 `same_state_dimension`
     删除——change 键入闭集＝键即 canonical。
     """
@@ -214,7 +214,69 @@ class _BookCompile:
         #: 悬空的跨章命题引用：解析推迟到全部章建立之后（可判定时序倒转）。
         self.pending_props: list[tuple[dict, str, str]] = []
 
+    # ── 命题等价类的冲突核对 ──────────────────────────────────────────────
+
+    def proposition_conflicts(self, associate: AssociateObservation) -> list[Any]:
+        """same 的传递闭包与显式判定相撞时保持未决（S2-7：冲突不默认合并、
+        也不默认不同）。
+
+        • 显式 `distinct` 的两端落进同一等价类（A≡B、B≡C、A×C distinct）：并查集
+          的传递闭包会把三者静默并为同一正式 ID，把模型显式的“不同”吞掉；
+        • 同一等价类含 ≥2 个书级 fact：fact 编号是各自独立的正式 ID，类里只能
+          有一个根——两个 fact 被同一章命题 same 连起来，等于声称两条词表命题
+          是同一件事（那是 book 词表的去重问题），蓝图里它们却仍是两个 ID。
+
+        两类都是 associate 的判定自相矛盾，归 associate 条目级返修（owner＝
+        associate），不重新购买理解；成员列表按序给出，便于定位。
+        """
+        issues: list[Any] = []
+        reported: set[tuple[str, str]] = set()
+        for pair in associate.same_proposition:
+            if pair.verdict != 'distinct' or (pair.left, pair.right) in reported:
+                continue
+            # 成员资格必须在 find 之前问：find 会把句柄补进并查集。
+            if pair.left not in self.prop_union or pair.right not in self.prop_union:
+                continue
+            root = self.prop_union.find(pair.left)
+            if root != self.prop_union.find(pair.right):
+                continue
+            reported.add((pair.left, pair.right))
+            members = sorted(self.prop_union.members(root))
+            issues.append(association_issue(
+                'proposition_conflict', (pair.left, pair.right),
+                f'命题 {pair.left!r} 与 {pair.right!r} 被判为不同（distinct），却经其他 '
+                f'same 判定传递并入同一等价类（{"、".join(members)}）——同一性判定自相'
+                '矛盾，保持未决：请核对该类里的 same 判定'))
+        classes: dict[str, list[str]] = {}
+        for fact_id in sorted(self.facts):
+            classes.setdefault(self.prop_union.find(fact_id), []).append(fact_id)
+        for _root, fact_ids in sorted(classes.items()):
+            if len(fact_ids) > 1:
+                issues.append(association_issue(
+                    'fact_merge', tuple(fact_ids),
+                    f'书级命题 {"、".join(fact_ids)} 被 same 判定连成同一等价类——'
+                    '词表里的两条命题不能被并为同一件事（保持未决：请核对把它们'
+                    '连起来的 same 判定，词表去重属 book 观察）'))
+        return issues
+
     # ── 命题登记与引用解析 ────────────────────────────────────────────────
+
+    def _allocate_proposition(self, chapter: int) -> str:
+        """观察命题与派生命题共用唯一正式 ID 序列（I-21）。"""
+        self.prop_seq += 1
+        formal = f'k{self.prop_seq:02d}'
+        self.formal_chapter[formal] = chapter
+        return formal
+
+    def derived_proposition(self, statement: str, chapter: int) -> dict[str, str]:
+        """reader 的新命题直接取得正式 ID，不登记观察句柄。
+
+        观察的本地 ref 没有保留前缀；canonical 直通可以合法给出 rd01e01
+        一类文本。因此派生条不能占用 chNN.rd* 命名空间，否则会被已登记观察
+        命题或 associate 等价类捕获。派生条不参与语义关联，直接派发正式 ID
+        才能机械保证与观察 ref 隔离，并保留同拍每个 payoff。
+        """
+        return {'ref': self._allocate_proposition(chapter), 'statement': statement}
 
     def establish(self, handle: str, statement: str, chapter: int) -> str:
         """新建命题：授正式 ID，或并入已建立的等价类（同义命题合并，D8）。
@@ -226,11 +288,9 @@ class _BookCompile:
         root = self.prop_union.find(handle)
         formal = self.class_formal.get(root)
         if formal is None:
-            self.prop_seq += 1
-            formal = f'k{self.prop_seq:02d}'
+            formal = self._allocate_proposition(chapter)
             self.class_formal[root] = formal
             self.class_statement[root] = statement
-            self.formal_chapter[formal] = chapter
         self.propositions[handle] = {'id': formal, 'chapter': chapter,
                                      'statement': self.class_statement[root]}
         return formal
@@ -365,6 +425,36 @@ def compile_source_truth(
     未决项不发布（D8）；机械缺陷不发布（I-34）；两份真源由同一结果一次成形，
     落盘仍由 runner 经 repository 的原子写与来源账完成（I-25 唯一 writer）。
     """
+    return _compile_source_truth(
+        book=book, chapters=chapters, names=names, associate=associate,
+        evidence=evidence, source_texts=source_texts, association_phase='assembled')
+
+
+def inspect_identity_associations(
+    *, book: BookObservation, chapters: Mapping[int, ChapterObservation],
+    names: NamesObservation, associate: AssociateObservation,
+    evidence: Mapping[str, Mapping[str, Any]],
+    source_texts: tuple[str, ...] | None = None,
+) -> tuple[list[str], list[str]]:
+    """第一窄任务的非发布干跑：身份判定已完成，因果答案尚未购买。
+
+    身份候选须完整回答且不能夹带因果；未决判定、时序、占用与引用继续查。
+    共用正式 compiler 的转换核心，只暴露诊断，不返回 canonical 产物。
+    最终发布只经 compile_source_truth 的 assembled 相位，不能绕过因果分母。
+    """
+    outcome = _compile_source_truth(
+        book=book, chapters=chapters, names=names, associate=associate,
+        evidence=evidence, source_texts=source_texts, association_phase='identity')
+    return outcome.errors, outcome.undecided
+
+
+def _compile_source_truth(
+    *, book: BookObservation, chapters: Mapping[int, ChapterObservation],
+    names: NamesObservation, associate: AssociateObservation,
+    evidence: Mapping[str, Mapping[str, Any]], source_texts: tuple[str, ...] | None,
+    association_phase: Literal['identity', 'assembled'],
+) -> CompileOutcome:
+    """发布与身份干跑共用的只读转换核心；相位只决定已执行任务的验收分母。"""
     outcome = CompileOutcome()
     errors = outcome.errors
     undecided = outcome.undecided
@@ -444,11 +534,30 @@ def compile_source_truth(
     # 唯一关联登记表（R1 v2）：与 run_associate 的 prompt／闭集核对同一投影——
     # 状态句柄定位与确定性序都查表，不在 compile 重写编码。
     space = project_association_space(book, chapters)
-    undecided.extend(loop_pairing_issues(associate, space))
-    if undecided:
-        return outcome
+    # 最终观察须完整覆盖当前候选；unresolved 是未决而非 distinct。保留旧防御
+    # 的时序/占用诊断同批聚合，不用新候选闸的早退遮住独有反例。
+    loop_conflicts = loop_pairing_issues(associate, space)
+    association_issues = [
+        *associate_observation_issues(associate, space, book, chapters,
+                                      phase=association_phase),
+        *associate_unresolved_issues(associate),
+        *loop_conflicts,
+    ]
+    seen_association_issues: set[tuple[str, tuple]] = set()
+    for issue in association_issues:
+        identity = (issue.code, issue.location)
+        if identity not in seen_association_issues:
+            seen_association_issues.add(identity)
+            undecided.append(issue)
     state = _BookCompile(slugs=set(core.characters), associate=associate,
                          space=space, book=book)
+    proposition_conflicts = state.proposition_conflicts(associate)
+    undecided.extend(proposition_conflicts)
+    if loop_conflicts or proposition_conflicts:
+        # 候选完整性问题与既有冲突同批报告；同一性/开合已经自相矛盾时，没有
+        # 唯一可编译解释，不能继续构造 canonical 草稿。单独的漏答/越界问题
+        # 仍继续经过后续防御，保住其时序、拍存在性等独有诊断。
+        return outcome
 
     # ② 初态：生成 s0_* 编号（CS-S Phase 3：键入闭集＝键即 canonical，无同维
     # 归一——表外键已被 wire 闸与 InitialStateAtom 的 schema 模式拒绝）。
@@ -613,7 +722,7 @@ def _compile_chapter(
         resolved: set[int] = set()
         for prop, where_prop in propositions:
             ref = prop.get('ref')
-            if isinstance(ref, str) and _FACT_REF.fullmatch(ref):
+            if is_fact_ref(ref):
                 fact = state.facts.get(ref)
                 if fact is None:
                     errors.append(
@@ -740,7 +849,7 @@ def _derive_reader_knowledge(
         return {'segment': ref, 'quote': seg.get('text') or ''}
 
     for chapter, beat_dicts, _scenes, _order in compiled:
-        for ordinal, beat in enumerate(beat_dicts, 1):
+        for beat in beat_dicts:
             access = beat.get('access') or 'witnessed'
             derived: list[dict[str, Any]] = []
             seen: set[tuple[str, str]] = set()
@@ -769,28 +878,20 @@ def _derive_reader_knowledge(
             beat_basis = [q for q in (_quote(ref) for ref in beat.get('source_refs', ()))
                           if q is not None]
             if access == 'narrated':
-                for effect_ordinal, effect in enumerate(beat.get('effects') or [], 1):
+                for effect in beat.get('effects') or []:
                     value = effect.get('value')
                     if not (effect.get('modality') == 'actual'
                             and effect.get('op') == 'set'
                             and isinstance(value, str) and value.strip()):
                         continue
-                    handle = f'ch{chapter:02d}.rd{ordinal:02d}e{effect_ordinal:02d}'
-                    formal = state.establish(handle, value, chapter)
-                    _add('learns',
-                         {'ref': formal,
-                          'statement': state.propositions[handle]['statement']},
+                    _add('learns', state.derived_proposition(value, chapter),
                          effect.get('basis') or beat_basis)
             for loop in beat.get('loops') or []:
                 if loop.get('op') != 'close':
                     continue
                 resolution = loop.get('resolution')
                 if isinstance(resolution, str) and resolution.strip():
-                    handle = f'ch{chapter:02d}.rd{ordinal:02d}l'
-                    formal = state.establish(handle, resolution, chapter)
-                    _add('learns',
-                         {'ref': formal,
-                          'statement': state.propositions[handle]['statement']},
+                    _add('learns', state.derived_proposition(resolution, chapter),
                          beat_basis)
             if derived:
                 # model_dump() 的 python 模式保留 tuple——重新赋值，不就地 extend。
@@ -820,8 +921,14 @@ def _apply_cross_chapter_causes(
                 '（章内因果由拍序承载，跨章因果不得回指）'))
             continue
         target_bp = by_chapter.get(to_chapter)
-        if target_bp is None or to_ordinal > len(target_bp.beats):
+        if target_bp is None or not 1 <= to_ordinal <= len(target_bp.beats):
             undecided.append(association_issue('cause_missing', (edge.from_beat, edge.to_beat), f'因果边 {edge.from_beat}→{edge.to_beat} 的 to 拍不存在'))
+            continue
+        # from 拍也必须是真实存在的拍：边落在 to 章的 causal_edges 里，from 端若是
+        # 悬空拍号，发布出去的就是指向不存在节点的因果边（下游无从解析）。
+        source_bp = by_chapter.get(from_chapter)
+        if source_bp is None or not 1 <= from_ordinal <= len(source_bp.beats):
+            undecided.append(association_issue('cause_from_missing', (edge.from_beat, edge.to_beat), f'因果边 {edge.from_beat}→{edge.to_beat} 的 from 拍不存在'))
             continue
         edges.setdefault(to_chapter, []).append(CausalEdge(
             from_beat=f'b{from_chapter:02d}_{from_ordinal:02d}',
@@ -950,8 +1057,11 @@ class _Folder:
     def __init__(self, characters: CharactersCore,
                  facts: tuple[Any, ...] = ()):
         self.overlay = StateOverlay()
-        #: 认知层：(命题正式 ID, 持有者) → {'mode', 'at'}
+        #: 认知层：(命题正式 ID, 持有者) → {'mode', 'at'}（当前态，渲染快照用）
         self.knowledge: dict[tuple[str, str], dict[str, str]] = {}
+        #: 认知转移流水（读数）：每次认知转移一条，按拍序追加，不覆盖——知情时间线
+        #: 要保住“先起疑、后证实”的首次获知时点（当前态只留最后一次）。
+        self.knowledge_log: list[tuple[str, str, str, str]] = []
         #: 开放悬念：正式 ID → question
         self.open_loops: dict[str, str] = {}
         self.events: list[str] = []
@@ -1026,6 +1136,7 @@ class _Folder:
     def _apply_cognition(self, cog, beat: Beat) -> None:
         prop = cog.proposition.ref
         self.knowledge[(prop, cog.holder)] = {'mode': cog.mode, 'at': beat.beat_id}
+        self.knowledge_log.append((prop, cog.holder, cog.mode, beat.beat_id))
         # Phase 2 读数（度量不是门）：初始已知者又被拍内告知——词表与认知
         # 转移两处落同一知情（1b 删掉的读数二由 facts 时间线承担同一诊断）。
         fact = self.facts.get(prop)
@@ -1167,9 +1278,11 @@ def source_fold(
         fact_id: {
             'statement': fact.statement,
             'known_at_start': list(fact.known_at_start),
+            # 逐认知转移事件（拍序）：同一持有者的 suspects→confirms 两次转移
+            # 都在，首次获知时点不被后来的转移覆盖。
             'events': [
-                {'holder': holder, 'mode': entry['mode'], 'at': entry['at']}
-                for (ref, holder), entry in sorted(folder.knowledge.items())
+                {'holder': holder, 'mode': mode, 'at': at}
+                for ref, holder, mode, at in folder.knowledge_log
                 if ref == fact_id],
         }
         for fact_id, fact in folder.facts.items()}

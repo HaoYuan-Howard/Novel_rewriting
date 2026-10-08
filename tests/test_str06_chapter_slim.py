@@ -500,8 +500,9 @@ def test_round_trip_rich_observation():
 
 
 def test_slim_refuses_unrepresentable_concealed_or_prop():
-    """canonical 直通面仍带 concealed／effect 命题（1b 才删）：逆映射对不可
-    表示的死字段显式拒绝，不静默丢语义（I-34——迁移面不制造语义丢失）。"""
+    """canonical 效应带 wire 不可表达的字段（1b 删掉的 disclosure／proposition／
+    scope 一类旧面）：逆映射显式拒绝，不静默丢语义（I-34——迁移面不制造语义
+    丢失）。守卫按“现役字段集之外一律拒”判定，不点名死字段——任意多余字段同拒。"""
     observation = {
         'protocol_version': PV_CANON,
         'beats': [{
@@ -521,3 +522,157 @@ def test_slim_refuses_unrepresentable_concealed_or_prop():
     }
     with pytest.raises(ValueError, match='不可表达'):
         slim_chapter_wire(observation)
+
+
+def test_scene_location_synthesis_does_not_shift_change_paths():
+    """实证反例（2026-10-08 审阅 B#2）：拍级 scene_location 由 expand 合成登记键
+    效应并 `insert(0)`（canonical 效应句柄 `bNN.eK` 按序派发，顺序不能动），
+    而条目路径与消息标签原先按 canonical effects 下标报——带 scene_location 的
+    拍里 change 的路径与序号整体 +1，窄修会指向不存在的条目（真正坏的那条
+    没被指到）。同一条错误在有／无 scene_location 时路径与标签必须一致。"""
+    results = {}
+    for with_location in (False, True):
+        wire = _slim_wire()
+        beat = wire['beats'][0]
+        beat['change'].append({
+            'at': 'yun_niang', 'key': 'intent', 'val': '想借种',
+            'evidence_refs': ['e02_01'],   # 章外段：该转移（change[2]）的精确 issue
+        })
+        if with_location:
+            beat['scene_location'] = '婚房'
+        observation, errors = compile_chapter_observation(
+            wire, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
+        assert observation is None
+        located = chapter_patch_locate(
+            wire, errors, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
+        results[with_location] = (errors, located)
+    plain_errors, plain_located = results[False]
+    loc_errors, loc_located = results[True]
+    assert len(plain_errors) == len(loc_errors) == 1
+    assert 'change[2]' in plain_errors[0] and 'change[2]' in loc_errors[0], loc_errors
+    assert len(plain_located) == len(loc_located) == 1
+    assert plain_located[0][0] == loc_located[0][0] == ('beats', 0, 'change', 1)
+    # canonical 顺序不变：合成的 scene_location 仍是首条效应（句柄稳定）。
+    good = _slim_wire(scene_location='婚房')
+    canonical, issues = expand_chapter_wire(good, chapter=1, sequence=SEQUENCE)
+    assert issues == [] and canonical['beats'][0]['effects'][0]['key'] == 'scene_location'
+
+
+def test_know_holder_and_change_target_closed_at_chapter_acceptance():
+    """实证反例（2026-10-08 审阅 B#5）：participants 闭集已左移到本章验收（R3），
+    但 know.who 与 change 的作用对象仍要到 compile 才报——`who:'public'`（D-5
+    已删的持有者）或任何非人物 slug 通过本章验收、付费章响应被接受后 compile
+    才失败，白白再购一轮。两者对书级人物表的闭集在本章验收即查，且是条目级
+    路径（know[i]／change[j]），带 scene_location 的拍里 change 下标也不错位。"""
+    wire = _slim_wire(scene_location='婚房')
+    wire['beats'][0]['know'][0]['who'] = 'public'
+    wire['beats'][0]['change'][0]['at'] = 'ghost'
+    wire['beats'][0]['change'].append({
+        'at': 'yun_niang+ghost', 'key': 'attitude', 'val': '戒备',
+        'evidence_refs': ['e01_02']})
+    observation, errors = compile_chapter_observation(
+        wire, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
+    assert observation is None
+    assert any('cognition holder 引用未知人物 public' in e and 'know[1]' in e
+               for e in errors), errors
+    assert any('effect 引用未知人物 ghost' in e and 'change[1]' in e for e in errors), errors
+    assert any('effect 引用未知人物 ghost' in e and 'change[2]' in e for e in errors), errors
+    located = chapter_patch_locate(wire, errors, evidence_ids=EVIDENCE, chapter=1,
+                                   character_slugs=SLUGS)
+    assert located is not None
+    assert sorted(path for path, _ in located) == [
+        ('beats', 0, 'change', 0), ('beats', 0, 'change', 1), ('beats', 0, 'know', 0)]
+    # 闭集内人物不误报；reader 在 wire 层即拒（观察面禁 reader）。
+    good = _slim_wire(scene_location='婚房')
+    assert compile_chapter_observation(
+        good, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)[1] == []
+    bad = _slim_wire()
+    bad['beats'][0]['know'][0]['who'] = 'reader'
+    assert compile_chapter_observation(
+        bad, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)[0] is None
+
+
+def test_change_key_outside_closed_set_gets_item_level_guidance():
+    """实证反例（2026-10-08 审阅 A#6）：wire 的 `SlimEffect.key` 用闭集正则，
+    scene_location 在 change 里被 pydantic 先拒、报的是整段正则——slim／book 里
+    “scene_location 是拍级字段”的引导分支根本不可达，模型拿不到正确去向。现在
+    越闭集的 key 是条目级错误（可窄修），消息给出去向：scene_location→拍级
+    字段，其余→回到【变化键闭集】清单。"""
+    wire = _slim_wire()
+    wire['beats'][0]['change'][0]['key'] = 'scene_location'
+    observation, errors = compile_chapter_observation(
+        wire, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
+    assert observation is None and len(errors) == 1, errors
+    assert '拍级字段' in errors[0] and 'scene_location' in errors[0]
+    assert 'String should match' not in errors[0]
+    located = chapter_patch_locate(
+        wire, errors, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
+    assert located is not None and [p for p, _ in located] == [('beats', 0, 'change', 0)]
+
+    wire = _slim_wire()
+    wire['beats'][0]['change'][0]['key'] = 'plan_x'
+    observation, errors = compile_chapter_observation(
+        wire, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
+    assert observation is None and len(errors) == 1, errors
+    assert '变化键闭集' in errors[0] and 'String should match' not in errors[0]
+    located = chapter_patch_locate(
+        wire, errors, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
+    assert located is not None and [p for p, _ in located] == [('beats', 0, 'change', 0)]
+
+
+def test_slim_refuses_any_unrepresentable_effect_field_and_reads_only_fact_ids_from_the_registry():
+    """逆映射的多余字段守卫不依赖死字段名单（原先点名读 disclosure／proposition，
+    1b 之后那是读已删字段的死代码）；事实编号判定与章验收同一份定义
+    `is_fact_ref`（`f01` 是词表引用；一位数的 `f1` 是章内本地句柄，不是引用）。"""
+    base = {
+        'event': 'x', 'participants': [], 'source_refs': ['e01_01'],
+        'scene_boundary': 'new', 'temporal_mode': 'single', 'loops': [],
+        'effects': [{
+            'target': {'kind': 'world', 'char_id': None, 'subject': None, 'object': None},
+            'key': 'narration_fact', 'op': 'set', 'modality': 'actual',
+            'value': '表弟确已到府', 'extra_field': 1,
+            'basis': [{'segment': 'e01_01', 'quote': '…'}]}],
+        'cognition': []}
+    with pytest.raises(ValueError, match='不可表达'):
+        slim_chapter_wire({'protocol_version': PV_CANON, 'beats': [base]})
+
+    def cognition(ref: str) -> dict:
+        beat = copy.deepcopy(base)
+        beat['effects'] = []
+        beat['cognition'] = [{
+            'proposition': {'ref': ref, 'statement': '夫君藏身床底'},
+            'holder': 'yun_niang', 'mode': 'learns',
+            'basis': [{'segment': 'e01_01', 'quote': '…'}]}]
+        return slim_chapter_wire({'protocol_version': PV_CANON, 'beats': [beat]})
+
+    assert cognition('f01')['beats'][0]['know'][0].get('fact') == 'f01'
+    local = cognition('f1')['beats'][0]['know'][0]
+    assert 'fact' not in local and local['what'] == '夫君藏身床底'
+
+
+@pytest.mark.parametrize('defect', ['extra', 'planned', 'unknown', 'narrow_basis', 'duplicate'])
+def test_slim_scene_location_never_discards_unrepresentable_semantics(defect):
+    """位置分支同样先验字段及可表达面；非默认效应、证据缩窄与重复不得静默丢失。"""
+    effect = {
+        'target': {'kind': 'world'}, 'key': 'scene_location', 'op': 'set',
+        'modality': 'actual', 'value': '饭厅',
+        'basis': [{'segment': ref, 'quote': '…'} for ref in ('e01_01', 'e01_02')],
+    }
+    beat = {
+        'event': '来到饭厅', 'participants': [], 'source_refs': ['e01_01', 'e01_02'],
+        'scene_boundary': 'new', 'temporal_mode': 'single',
+        'effects': [effect], 'cognition': [], 'loops': [],
+    }
+    assert slim_chapter_wire({'beats': [beat]})['beats'][0]['scene_location'] == '饭厅'
+    if defect == 'extra':
+        effect['extra_field'] = 1
+    elif defect == 'planned':
+        effect['modality'] = 'planned'
+    elif defect == 'unknown':
+        effect.update(op='unknown', value=None)
+    elif defect == 'narrow_basis':
+        effect['basis'].pop()
+    else:
+        beat['effects'].append(copy.deepcopy(effect))
+    with pytest.raises(ValueError, match='不可表达'):
+        slim_chapter_wire({'beats': [beat]})

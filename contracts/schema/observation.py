@@ -10,9 +10,9 @@
 转换层（I-13：本仓无隐式通用迁移；旧根只读，新协议下新根全量重购）。
 
 【associate 独立版本（R1，2026-09-28）】关联协议与三类观察协议分别管理：
-`STAGE2_ASSOCIATE_PROTOCOL`（CS-S Phase 2 起 stage2-associate-v5）。v4＝条目级
-窄 resolver：输入＝代码给出的未决候选＋最小文本（S2-9 正常路径落地；无候选
-＝零调用），输出逐候选 verdict；跨章因果是独立窄调用 wire
+`STAGE2_ASSOCIATE_PROTOCOL`（现役 stage2-associate-v5；Phase 2 起 v4 改为条目级
+窄 resolver，Phase 3 起 v5 删维度候选面）：输入＝代码给出的未决候选＋最小文本
+（S2-9 正常路径落地；无候选＝零调用），输出逐候选 verdict；跨章因果是独立窄调用 wire
 （`STAGE2_CROSS_CAUSE_WIRE_PROTOCOL`，D-2 A：候选＝loop 配对＋facts 流拍对，
 模型只选 kind 或否决）。三类观察的请求与字面量逐字不变（首版 PLAN.md R1，
 Git 2fc03832；A1.5 出自被它吸收的 A0–A6 提案）。
@@ -36,13 +36,14 @@ Git 2fc03832；A1.5 出自被它吸收的 A0–A6 提案）。
 """
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Final, Literal
 
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.source import (
-    ACCESS_PATTERN, CHANGE_KEY_PATTERN, AliasEntry, Cognition, Effect,
+    ACCESS_PATTERN, CHANGE_KEY_PATTERN, AliasEntry, CharacterKey, Cognition, Effect,
     EvidenceQuote, FamilyEntry, LoopAction, NameStructure, StateTarget,
 )
 
@@ -234,6 +235,13 @@ class WorldRule(StrictModel):
 #: 引用构造成立）；与章内代码派发句柄 ``k{nn}``（slim 模块）分属两个命名
 #: 空间，冲突在观察闸按闭集拒绝。
 FACT_ID_PATTERN: Final = r'^f\d{2,}$'
+_FACT_ID_RE: Final = re.compile(FACT_ID_PATTERN)
+
+
+def is_fact_ref(ref: object) -> bool:
+    """命题引用是否书级词表编号（``f{nn}``）——全仓唯一判定（章验收与 slim 逆映射
+    共用）；章内代码派发的句柄是 ``k{nn}``，两个命名空间不冲突。"""
+    return isinstance(ref, str) and _FACT_ID_RE.fullmatch(ref) is not None
 
 
 class Fact(StrictModel):
@@ -248,7 +256,7 @@ class Fact(StrictModel):
     fact_id: str = Field(pattern=FACT_ID_PATTERN)
     statement: str = Field(min_length=1)
     basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
-    known_at_start: tuple[str, ...] = Field(default=(), min_length=0)
+    known_at_start: tuple[CharacterKey, ...] = Field(default=(), min_length=0)
 
 
 from contracts.schema.expression import ExpressionObservation
@@ -263,7 +271,7 @@ class BookObservation(StrictModel):
 
     protocol_version: Literal['stage2-book-v7']
     expression: ExpressionObservation
-    characters: dict[str, CharacterCandidate] = Field(min_length=1)
+    characters: dict[CharacterKey, CharacterCandidate] = Field(min_length=1)
     initial_state: tuple[InitialFact, ...] = Field(default=(), min_length=0)
     world_constraints: tuple[WorldRule, ...] = Field(default=(), min_length=0)
     facts: tuple[Fact, ...] = Field(default=(), min_length=0)
@@ -273,6 +281,19 @@ class BookObservation(StrictModel):
         bad = [slug for slug in self.characters if not _slug_ok(slug)]
         if bad:
             raise ValueError(f'人物 slug 非法（小写蛇形）：{bad}')
+        return self
+
+    @model_validator(mode='after')
+    def _facts_are_a_dense_sequence(self) -> 'BookObservation':
+        """F 编号唯一且按列表序连续（f01、f02…）：编号由 compile 的 expand 按序
+        派发（I-21），本不变量把「唯一、连续」从派发实现的偶然变成模型保证——
+        直通面与手改的 book.json 若重复或跳号，下游以 fact_id 为键的索引会静默
+        覆盖前一条命题。"""
+        expected = [f'f{index:02d}' for index in range(1, len(self.facts) + 1)]
+        actual = [fact.fact_id for fact in self.facts]
+        if actual != expected:
+            raise ValueError(
+                f'facts 的 fact_id 须唯一且按列表序连续（期望 {expected}，实际 {actual}）')
         return self
 
 
@@ -310,7 +331,7 @@ class FactWire(StrictModel):
 
     statement: str = Field(min_length=1)
     evidence_refs: tuple[SegmentRef, ...] = Field(min_length=1)
-    known_at_start: tuple[str, ...] = Field(default=(), min_length=0)
+    known_at_start: tuple[CharacterKey, ...] = Field(default=(), min_length=0)
 
 
 class BookObservationWire(StrictModel):
@@ -321,7 +342,7 @@ class BookObservationWire(StrictModel):
 
     protocol_version: Literal['stage2-book-v10']
     expression: ExpressionObservation
-    characters: dict[str, CharacterCandidate] = Field(min_length=1)
+    characters: dict[CharacterKey, CharacterCandidate] = Field(min_length=1)
     initial_state: tuple[InitialFactWire, ...] = Field(default=(), min_length=0)
     world_constraints: tuple[WorldRuleWire, ...] = Field(default=(), min_length=0)
     facts: tuple[FactWire, ...] = Field(default=(), min_length=0)

@@ -205,7 +205,7 @@ class _AcceptingAsk:
         self.bypass_acceptance = bypass_acceptance
         self.prompts: dict[str, str] = {}
 
-    def __call__(self, owner: str, prompt: str, validate, patch=None):
+    def __call__(self, owner: str, prompt: str, validate, patch=None, downstream_preview=None):
         errors = [] if owner in self.bypass_acceptance else validate(deepcopy(self.wires[owner]))
         if errors:
             # R3 左移后，机械问题（含 associate 的 compile 干跑未决项）在 owner
@@ -371,15 +371,23 @@ def test_same_name_two_persons_stay_separate(tmp_path):
     assert from_chapters == {'fu_jun': [1], 'fu_jun_jr': [3]}
 
 
+def _all_same_verdicts() -> list[dict]:
+    """三处命题（ch01.p_hide／ch02.p_known／ch03.p_hide）判为同一命题的自洽答案。
+
+    三条候选两两互答 same：同一等价类内不得夹显式 distinct——并查集的传递闭包会把
+    矛盾静默并掉，compile 现按 `association_proposition_conflict` 保持未决。"""
+    return [
+        {'left': 'ch01.p_hide', 'right': 'ch02.p_known', 'verdict': 'same'},
+        {'left': 'ch01.p_hide', 'right': 'ch03.p_hide', 'verdict': 'same'},
+        {'left': 'ch02.p_known', 'right': 'ch03.p_hide', 'verdict': 'same'}]
+
+
 def test_paired_normalized_identical_statements_merge_into_one_formal_id(tmp_path):
     """标点差异的配对仍合法，最早确立的文本为 canonical。"""
     wires = _full_stage2_wires()
     # 归一全等：仅标点不同（「，」的内容字与无标点相同）——确定性相似度筛出候选。
     wires['ch02']['beats'][0]['cognition'][0]['proposition']['statement'] = '夫君藏身，床底。'
-    wires['associate']['same_proposition'] = [
-        {'left': 'ch01.p_hide', 'right': 'ch02.p_known', 'verdict': 'same'},
-        {'left': 'ch01.p_hide', 'right': 'ch03.p_hide', 'verdict': 'same'},
-        {'left': 'ch02.p_known', 'right': 'ch03.p_hide', 'verdict': 'distinct'}]
+    wires['associate']['same_proposition'] = _all_same_verdicts()
     repo, _ask, _report = _run_stage2(tmp_path, 'synonym', wires)
     bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
     ch1, ch2, ch3 = bp['chapters']
@@ -397,10 +405,7 @@ def test_paired_synonymous_statements_merge_without_moving_disclosure(tmp_path):
     wires = _full_stage2_wires()
     # 近义措辞（过确定性相似度筛）：候选已给，模型只判 same/distinct。
     wires['ch02']['beats'][0]['cognition'][0]['proposition']['statement'] = '夫君藏身于床底'
-    wires['associate']['same_proposition'] = [
-        {'left': 'ch01.p_hide', 'right': 'ch02.p_known', 'verdict': 'same'},
-        {'left': 'ch01.p_hide', 'right': 'ch03.p_hide', 'verdict': 'same'},
-        {'left': 'ch02.p_known', 'right': 'ch03.p_hide', 'verdict': 'distinct'}]
+    wires['associate']['same_proposition'] = _all_same_verdicts()
     original = deepcopy(wires)
     repo, ask, report = _run_stage2(tmp_path, 'synonym_words', wires)
     assert report['undecided'] == 0 and 'associate' in ask.prompts
@@ -430,8 +435,7 @@ def test_synonymous_class_keeps_local_restatement_validation(tmp_path):
     wires['ch02']['beats'].append(_beat(
         '云娘再次确认', ('e02_01',), scene_boundary='continue',
         cognition=[deepcopy(cognition)]))
-    wires['associate']['same_proposition'].append(
-        {'left': 'ch02.p_known', 'right': 'ch01.p_hide', 'verdict': 'same'})
+    wires['associate']['same_proposition'] = _all_same_verdicts()
     repo, _ask, _report = _run_stage2(tmp_path, 'local_restatement', wires)
     beats = repo.inspect('stage2/blueprints/chapter_blueprints.json')['chapters'][1]['beats']
     assert [b['cognition'][0]['proposition'] for b in beats] == [
@@ -450,8 +454,7 @@ def test_synonymous_association_rejected_by_old_guard_recovers_free(tmp_path):
 
     wires = _full_stage2_wires()
     wires['ch02']['beats'][0]['cognition'][0]['proposition']['statement'] = '夫君藏身于床底'
-    wires['associate']['same_proposition'].append(
-        {'left': 'ch01.p_hide', 'right': 'ch02.p_known', 'verdict': 'same'})
+    wires['associate']['same_proposition'] = _all_same_verdicts()
     base = tmp_path / 'recovery'
     initialize_workflow(base)
     repo = Str06Repository(base / 'book')
@@ -473,7 +476,7 @@ def test_synonymous_association_rejected_by_old_guard_recovers_free(tmp_path):
     class Ask(_AcceptingAsk):
         old_guard = True
 
-        def __call__(self, owner, prompt, validate, patch=None):
+        def __call__(self, owner, prompt, validate, patch=None, downstream_preview=None):
             if owner != 'associate':
                 return super().__call__(owner, prompt, validate, patch)
             request = ChatRequest(model='fake', system='关联', user=prompt,
@@ -588,7 +591,10 @@ def test_scene_continuation_via_boundary_and_via_pairing(tmp_path):
     # ① continue 边界：ch1 末场景延续到 ch2 开场（同一 scene_id，跨章 span）。
     wires = _full_stage2_wires()
     wires['ch02']['beats'][0]['scene_boundary'] = 'continue'
-    wires['associate']['scene_continuation'] = []  # 无 seam 候选（ch2 未自称开场）
+    # ch1→ch2 无 seam 候选（ch2 首拍 continue＝已续前场）；ch2 的末场景（带入的
+    # 延续场景）与 ch3 自称 new 的首场景仍是 seam，候选在、判 distinct。
+    wires['associate']['scene_continuation'] = [
+        {'left': 'ch02.sc1', 'right': 'ch03.sc1', 'verdict': 'distinct'}]
     repo, _ask, report = _run_stage2(tmp_path, 'seam_continue', wires)
     assert report['undecided'] == 0
     bp = repo.inspect('stage2/blueprints/chapter_blueprints.json')
@@ -710,10 +716,104 @@ def test_time_inverted_pairing_is_undecided(tmp_path):
             {'left': 'ch01.p_hide', 'right': 'ch03.p_hide', 'verdict': 'same'},
             {'left': 'ch01.p_fwd', 'right': 'ch03.p_late', 'verdict': 'same'}]))
     names = _names_observation(book)
+    from tests.str06_facilities import complete_associate_fixture
     result = compile_source_truth(book=book, chapters=mutated, names=names,
-                                  associate=observation, evidence=EVIDENCE)
+                                  associate=complete_associate_fixture(book, mutated, observation),
+                                  evidence=EVIDENCE)
     assert any('时序倒转' in str(issue) for issue in result.undecided), result.undecided
     assert not result.publishable, '未决即拒发'
+
+
+def _chain_of_three_propositions(verdicts: list[tuple[str, str, str]]):
+    """三章各一条命题（pa／pb／pc）＋给定 same_proposition 判定后的 compile 结果。"""
+    from contracts.schema.observation import AssociateObservation
+
+    def cognition(ref: str, statement: str, mode: str, segment: str) -> dict:
+        return {'proposition': {'ref': ref, 'statement': statement},
+                'holder': 'yun_niang', 'mode': mode, 'basis': _basis(segment)}
+
+    chapters = {
+        1: {'protocol_version': CPV, 'beats': [_beat(
+            '起疑', ('e01_01',), participants=('yun_niang',),
+            cognition=[cognition('pa', '夫君藏身床底', 'suspects', 'e01_01')])]},
+        2: {'protocol_version': CPV, 'beats': [_beat(
+            '再疑', ('e02_01',), participants=('yun_niang',),
+            cognition=[cognition('pb', '夫君藏身于床底', 'learns', 'e02_01')])]},
+        3: {'protocol_version': CPV, 'beats': [_beat(
+            '证实', ('e03_01',), participants=('yun_niang',),
+            cognition=[cognition('pc', '夫君藏身于床底下', 'confirms', 'e03_01')])]},
+    }
+    book, parsed = _observations(_book_wire(), chapters)
+    associate = AssociateObservation.model_validate({
+        'protocol_version': APV, 'loop_pairing': [], 'cross_chapter_cause': [],
+        'scene_continuation': [],
+        'same_proposition': [{'left': left, 'right': right, 'verdict': verdict}
+                             for left, right, verdict in verdicts]})
+    from tests.str06_facilities import complete_associate_fixture
+    return compile_source_truth(book=book, chapters=parsed,
+                                names=_names_observation(book),
+                                associate=complete_associate_fixture(book, parsed, associate),
+                                evidence=EVIDENCE)
+
+
+def test_explicit_distinct_is_not_swallowed_by_transitive_same():
+    """判据（D#5）：A≡B、B≡C 都答 same，A×C 又明确答 distinct——判定自相矛盾。
+
+    并查集的传递闭包会把三章命题静默并为同一正式 ID，显式的 distinct 被吞掉；
+    S2-7：冲突保持未决，归 associate 条目级返修，拒绝发布。"""
+    result = _chain_of_three_propositions([
+        ('ch01.pa', 'ch02.pb', 'same'), ('ch02.pb', 'ch03.pc', 'same'),
+        ('ch01.pa', 'ch03.pc', 'distinct')])
+    assert result.errors == [] and not result.publishable
+    conflicts = [issue for issue in result.undecided
+                 if issue.code == 'association_proposition_conflict']
+    assert [issue.location for issue in conflicts] == [('ch01.pa', 'ch03.pc')]
+    assert conflicts[0].owner == 'associate', '回派 associate 做条目级返修'
+    assert 'ch02.pb' in str(conflicts[0]), '消息列出该等价类成员，便于定位'
+    assert result.blueprint is None, '未决时不发布半份蓝图'
+
+
+def test_consistent_same_and_distinct_verdicts_still_publish():
+    """绿对照：只有 A≡B（C 与二者都 distinct）——判定自洽，A、B 同 ID，C 独立。"""
+    result = _chain_of_three_propositions([
+        ('ch01.pa', 'ch02.pb', 'same'), ('ch02.pb', 'ch03.pc', 'distinct'),
+        ('ch01.pa', 'ch03.pc', 'distinct')])
+    assert result.publishable, (result.errors, [str(i) for i in result.undecided])
+    refs = [bp.beats[0].cognition[0].proposition.ref for bp in result.blueprint.chapters]
+    assert refs[0] == refs[1] != refs[2]
+
+
+def test_cross_chapter_cause_from_beat_must_exist():
+    """判据（D#3b）：因果边的 from 拍也必须存在——否则发布出指向不存在拍号
+    （b01_09）的悬空边，下游无从解析。"""
+    from contracts.schema.observation import AssociateObservation
+    book, chapters = _space_pair()
+    for from_beat in ('ch01.b9', 'ch01.b0'):
+        observation = AssociateObservation.model_validate(_associate_wire(
+            cross_chapter_cause=[
+                {'from_beat': from_beat, 'to_beat': 'ch03.b1', 'kind': 'causes'}]))
+        result = compile_source_truth(book=book, chapters=chapters,
+                                      names=_names_observation(book),
+                                      associate=observation, evidence=EVIDENCE)
+        assert not result.publishable, from_beat
+        missing = [issue for issue in result.undecided
+                   if issue.code == 'association_cause_from_missing']
+        assert [issue.location for issue in missing] == [(from_beat, 'ch03.b1')]
+        assert missing[0].owner == 'associate'
+        assert all(not bp.causal_edges for bp in result.blueprint.chapters), \
+            '悬空因果边不得进入蓝图（未决项拒发，且草稿里也不含该边）'
+    # 绿对照：from 拍存在则落到 to 章（既有 test_cross_chapter_cause_lands_in_the_to_chapter 同径）。
+    observation = AssociateObservation.model_validate(_associate_wire(
+        cross_chapter_cause=[{'from_beat': 'ch01.b2', 'to_beat': 'ch03.b2',
+                              'kind': 'causes'}]))
+    from tests.str06_facilities import complete_associate_fixture
+    result = compile_source_truth(book=book, chapters=chapters,
+                                  names=_names_observation(book),
+                                  associate=complete_associate_fixture(book, chapters, observation),
+                                  evidence=EVIDENCE)
+    assert result.publishable
+    assert [(e.from_beat, e.to_beat) for e in result.blueprint.chapters[2].causal_edges] \
+        == [('b01_02', 'b03_02')]
 
 
 def test_first_appearance_gate_stops_as_typed_mechanical_defect(tmp_path):
@@ -812,8 +912,10 @@ def test_loop_pairing_conflict_is_rejected_before_acceptance_and_publication(kin
     observation, errors = compile_associate_observation(
         corrected['associate'], project_association_space(book, good_chapters))
     assert errors == []
+    from tests.str06_facilities import complete_associate_fixture
     good = compile_source_truth(book=book, chapters=good_chapters, names=names,
-                               associate=observation, evidence=EVIDENCE)
+                               associate=complete_associate_fixture(book, good_chapters, observation),
+                               evidence=EVIDENCE)
     assert good.errors == [] and good.undecided == []
     assert not any(line.startswith('loop ') for line in good.fold['snapshots'][3])
 
@@ -851,7 +953,14 @@ def test_loop_pairing_conflict_preserves_truth_and_recovers_without_purchase(tmp
     for owner in ('ch02', 'ch03', 'associate'):
         model = AssociateObservation if owner == 'associate' else ChapterObservation
         repo.attach_context(make_context(repo.root, ledger=CostLedger(path=None)))
-        repo.write(f'stage2/observations/{owner}.json', model.model_validate(corrected[owner]),
+        observation = model.model_validate(corrected[owner])
+        if owner == 'associate':
+            from tests.str06_facilities import complete_associate_fixture
+            observation = complete_associate_fixture(
+                repo.read_model('stage2/observations/book.json'),
+                {n: repo.read_model(f'stage2/observations/ch{n:02d}.json') for n in (1, 2, 3)},
+                observation)
+        repo.write(f'stage2/observations/{owner}.json', observation,
                    owners=(owner,), refs=(synthetic_ref(owner, '已购输入免费修正'),))
     compile_only()
     fold = repo.inspect('stage2/acceptance/fold.json')
@@ -1005,8 +1114,7 @@ def test_associate_prompt_declares_v5_protocol_without_dimension_face():
     candidates = project_identity_candidates(space, book)
     prompt = associate_candidates_prompt(candidates)
     assert '"protocol_version":"stage2-associate-v5"' in prompt
-    assert candidates.same_state_dimension == () if hasattr(
-        candidates, 'same_state_dimension') else True
+    assert not hasattr(candidates, 'same_state_dimension'), '维度候选面已删除'
     assert 'same_state_dimension' not in prompt, '维度候选面不进请求'
     assert 'attitude ×' not in prompt, '闭集键不是候选（键即 canonical）'
     assert '（无候选——该类给空数组）' in prompt
@@ -1022,8 +1130,7 @@ def test_stage4_reads_only_canonical(tmp_path, synonymous):
     wires = _full_stage2_wires()
     if synonymous:
         wires['ch02']['beats'][0]['cognition'][0]['proposition']['statement'] = '夫君藏身于床底'
-        wires['associate']['same_proposition'].append(
-            {'left': 'ch01.p_hide', 'right': 'ch02.p_known', 'verdict': 'same'})
+        wires['associate']['same_proposition'] = _all_same_verdicts()
     repo, _ask, _report = _run_stage2(tmp_path, 'downstream', wires)
     chars = repo.read_model('stage2/characters/characters.json')
     core = chars.core_view()

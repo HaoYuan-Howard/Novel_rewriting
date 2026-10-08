@@ -648,6 +648,7 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态、世界
    同一事件只有一个 canonical beat；由开场拍首次产生的事实或知情，不得同时出现在
    initial_state 中（S₀ → 开场拍 → 第 1 章）。
 1. characters：为每个有名字或反复出场的人物建条目，键为小写下划线 slug（如 yun_niang）：
+   - reader 是读者认知的保留字，不作为人物 slug；
    - canonical：全书最稳定的称呼（内部主键显示名，不承担"何时可公开"语义）；
      **必须逐字等于该人物 surfaces 中的某一项**——没登记的字面不能当 canonical；
    - surfaces：数组，每项 {{surface, source_refs}}。同一称呼多次复现的并成一条，
@@ -718,7 +719,7 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
 {evidence}
 {pre_chapter}
 【要求】
-1. beats：按故事顺序拆拍，每拍 {{"event","on_stage","start","new_scene","iterative","access","change","know","loops"}}。
+1. beats：按故事顺序拆拍，每拍 {{"event","on_stage","start","scene_location","new_scene","iterative","access","change","know","loops"}}。
    **不输出拍号**：列表序即事件序：
    - event：写"发生了什么"，并保住足以正确演出这一事件的语义——必要前因、关键指代
      （如"他那里"须写明指什么）、已成立的站位（谁在床上/床边/门外）、公开行为与内心
@@ -733,6 +734,10 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      从本拍 start 到下一拍 start 的前一段，末拍到章末——**不写区间、不写数组**。
      start 必须按段号数值严格递增；首拍必须是本章第一段（第 1 章允许跳过开头的
      e00 引子段——被跳过的引子段视为弃权，此后每段都归属最近一个 start 所在的拍）；
+   - scene_location：本拍的场景位置（拍级字段，与 new_scene／iterative 同级，只写
+     例外）：换景或首次交代位置时给，如 "scene_location":"饭厅"；位置没变就不写。
+     **当前位置只写在这里，不写进 change**——程序会把它编成场景作用域的登记效应，
+     换场后自动失效；长期居所才是 change 的 residence；
    - new_scene：本拍开新场景（旧场景的 scene 作用域状态就此失效）才写 true，缺省＝
      延续当前场景。全书第一个拍必须 new；第 1 章之后的章若开场直接延续上一章末尾的
      同一场景，第一拍不写 new_scene，否则写；
@@ -2831,17 +2836,45 @@ def group_located_errors(
     return list(grouped.items())
 
 
+def _closed_key_guidance(error: Mapping[str, Any], loc: tuple, *, kind: str) -> str | None:
+    """章 change／book initial_state 的 `key` 越出变化键闭集时的可操作指引。
+
+    wire 模型的 `key` 用闭集正则（Phase 3 收紧），pydantic 报的是整段正则；模型
+    看不出“该改成什么”。这里换成带去向的说明——表外键回到提示词的【变化键闭集】
+    清单，`scene_location`（compiler 专用合成键，拍级字段）单独说明位置的去向。
+    只处理这两个位置的 pattern 失败；其余错误原样返回 None。
+    """
+    if error.get('type') != 'string_pattern_mismatch' or not loc or loc[-1] != 'key':
+        return None
+    in_change = kind == 'chapters' and 'change' in loc
+    in_initial = kind == 'book' and loc[0] == 'initial_state'
+    if not (in_change or in_initial):
+        return None
+    key = error.get('input')
+    if key == 'scene_location':
+        if in_initial:
+            return ("key 'scene_location' 是场景作用域键，初态不收——开场所在交给第 1 章"
+                    '第一个 new 拍（拍级字段 scene_location），故事开始前成立的长期居所'
+                    '登记 residence')
+        return ("key 'scene_location' 是拍级字段（beats[i].scene_location），不是变化键"
+                '——当前位置不写进 change；长期居所用 residence')
+    return (f'key {key!r} 不在【变化键闭集】内——key 只能取自提示词的【变化键闭集】清单；'
+            '语义细节由 ' + ('value' if in_initial else 'val')
+            + ' 承载，不自造新键；当前位置用拍级 scene_location，长期居所用 residence')
+
+
 def wire_shape_issues(
     exc: ValidationError, *, kind: str,
 ) -> list[tuple[Sequence[EntryPath] | None, str]]:
     """wire 协议形状失败 → 条目级 located issue（2026-10-07 二次收口④：
     形状错误按 pydantic 路径的可修性路由，不按「形状=整份」粗分类）。
 
-    `beats[3].state[0].evidence_refs` 缺字段一类错误给出条目路径（patch 协议
+    `beats[3].change[0].evidence_refs` 缺字段一类错误给出条目路径（patch 协议
     窄修该条目）；顶层结构／协议字面量失败没有可编辑条目 → None（退整份）。
     返回形状与 `group_located_errors` 的 `located` 入参一致（每条错误一项，
     None＝wire 级）。`kind`：``'chapters'`` 映射拍/转移条目，``'book'`` 映射
-    人物/初态/约束/表达条目。
+    人物/初态/约束/书级命题词表（facts）/表达条目。变化键越出闭集的 pattern
+    失败换成带去向的指引（`_closed_key_guidance`），不把整段正则丢给模型。
     """
     issues: list[tuple[Sequence[EntryPath] | None, str]] = []
     raw = exc.errors()
@@ -2865,6 +2898,8 @@ def wire_shape_issues(
             if loc[:1] in (('initial_state',), ('world_constraints',)) \
                     and len(loc) >= 2 and isinstance(loc[1], int):
                 path = (loc[0], loc[1])
+            elif loc[:1] == ('facts',) and len(loc) >= 2 and isinstance(loc[1], int):
+                path = ('facts', loc[1])
             elif loc[:1] == ('characters',) and len(loc) >= 2:
                 path = ('characters', loc[1])
                 if len(loc) >= 4 and loc[2] == 'surfaces' and isinstance(loc[3], int):
@@ -2879,7 +2914,8 @@ def wire_shape_issues(
             elif loc[:1] == ('variants',) and len(loc) >= 2 \
                     and isinstance(loc[1], int):
                 path = ('variants', loc[1])
-        message = (f'wire 协议校验失败：{error.get("msg")}'
+        detail = _closed_key_guidance(error, loc, kind=kind) or error.get('msg')
+        message = (f'wire 协议校验失败：{detail}'
                    f'（{".".join(map(str, loc))}）')
         issues.append(((path,) if path is not None else None, message))
     return issues

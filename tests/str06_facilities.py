@@ -96,7 +96,7 @@ def json_ask(session, *, model='fake', max_tokens=1000):
     from novel.stages.common import SYS, semantic_revision_rules
 
     def ask(owner, prompt, validate, patch=None, review_targets=None,
-            baseline=None, narrow=None):
+            baseline=None, narrow=None, downstream_preview=None):
         request = ChatRequest(model=model, system=SYS, user=prompt,
                               reasoning_effort='high', thinking=True,
                               json_mode=True, max_tokens=max_tokens)
@@ -189,6 +189,41 @@ def republish_checkpoint(repository, mutate, *, owner='preserve'):
 
 
 # ─── W1 选章：正文 runner 的测试替身 ───
+
+def complete_associate_fixture(book, chapters, observation):
+    """为其他 compiler 反例补齐无关候选的明确否决；保留传入的全部判定及缺陷。
+
+    只用于不测试候选生成/完整性的最小基座：无关身份答 distinct，因果答 none。
+    不删除候选外行、不改已有 verdict，不能用于缺项或候选召回本身的测试。
+    """
+    from contracts.schema.observation import AssociateObservation
+    from novel.stages.stage2 import (
+        project_association_space, project_identity_candidates, project_cause_candidates,
+    )
+    wire = observation.model_dump(mode='json')
+    space = project_association_space(book, chapters)
+    candidates = project_identity_candidates(space, book)
+    for kind, fields in (
+            ('same_proposition', ('left', 'right')),
+            ('loop_pairing', ('open', 'close')),
+            ('scene_continuation', ('left', 'right'))):
+        rows = wire[kind]
+        answered = {(row[fields[0]], row[fields[1]]) for row in rows}
+        if kind == 'same_proposition':
+            answered |= {(right, left) for left, right in answered}
+        for candidate in getattr(candidates, kind):
+            pair = (getattr(candidate, fields[0]), getattr(candidate, fields[1]))
+            if pair not in answered:
+                rows.append({fields[0]: pair[0], fields[1]: pair[1], 'verdict': 'distinct'})
+    identity = AssociateObservation.model_validate(wire)
+    answered_causes = {(row['from_beat'], row['to_beat']) for row in wire['cross_chapter_cause']}
+    for candidate in project_cause_candidates(space, chapters, book, identity):
+        pair = (candidate.from_beat, candidate.to_beat)
+        if pair not in answered_causes:
+            wire['cross_chapter_cause'].append({
+                'from_beat': pair[0], 'to_beat': pair[1], 'kind': 'none'})
+    return AssociateObservation.model_validate(wire)
+
 
 def stub_body_runner(monkeypatch):
     """把 `str06.stage5.body` 的 runner 换成如实报告零提交的替身（W1/D2）。

@@ -139,3 +139,90 @@ def test_name_variant_candidate_is_frozen_dataclass():
     cand = NameVariantCandidate(literal='裴知远', char_id='pei',
                                 anchor='裴书远', segments=('e01_01',))
     assert cand.literal == '裴知远'
+    assert cand.anchors == (('pei', '裴书远'),)
+
+
+def _pei_structure(*extra_people: str) -> NameStructure:
+    people = {'pei': {'family_id': 'fam_pei', 'given': '书远', 'aliases': [],
+                      'surface_forms': {'裴书远': '{family}{given}'}}}
+    for slug in extra_people:
+        people[slug] = {'family_id': None, 'given': None, 'aliases': [],
+                        'surface_forms': {name: None for name in
+                                          _EXTRA_SURFACES[slug]}}
+    return NameStructure.model_validate({
+        'families': {'fam_pei': {'literal': '裴', 'forms': []}},
+        'people': people, 'resolutions': []})
+
+
+_EXTRA_SURFACES = {'yuan': ['远'], 'niang': ['娘']}
+
+
+def test_candidate_substring_filter_ignores_short_registered_titles():
+    """1～2 字的登记称谓（「远」「娘」）不得参与子串滤除：它们会把含该字的真变体
+    （「裴知远」）整条吞掉，使异写无候选而漏过。≥3 字的登记面照常滤除。"""
+    evidence = {'e01_01': {'chapter': 1, 'text': '遇裴知远于渡口。'}}
+    core = _core_with({'pei': ['裴书远'], 'yuan': ['远'], 'niang': ['娘']})
+    candidates = name_variant_candidates(
+        _pei_structure('yuan', 'niang'), core, evidence)
+    assert [c.literal for c in candidates] == ['裴知远']
+    # 对照：≥3 字登记面仍滤除含它的邻域（裴书远了）。
+    evidence = {'e01_01': {'chapter': 1, 'text': '裴书远了，裴书远。'}}
+    assert name_variant_candidates(
+        _pei_structure('yuan', 'niang'), core, evidence) == ()
+
+
+def test_candidates_exclude_slices_carrying_punctuation_or_space():
+    """邻域切片带标点／空白（「裴书，」「裴书 」）不是名字，不进请求；否则噪声
+    进提示词，且判 same 后归一会吃掉标点。"""
+    evidence = {'e01_01': {'chapter': 1, 'text': '裴书，来了。裴书。去了。裴书！裴书 在。'}}
+    core = _core_with({'pei': ['裴书远']})
+    assert name_variant_candidates(_pei_structure(), core, evidence) == ()
+
+
+def _two_anchor_case():
+    """裴书远（pei）与裴书达（pei2）同为 ≥3 字锚；『裴书运』与两者都差一字。"""
+    evidence = {'e01_01': {'chapter': 1, 'text': '裴书运拦住了去路。'}}
+    core = _core_with({'pei': ['裴书远'], 'pei2': ['裴书达'], 'stranger': ['陌生人']})
+    structure = NameStructure.model_validate({
+        'families': {'fam_pei': {'literal': '裴', 'forms': []}},
+        'people': {
+            'pei': {'family_id': 'fam_pei', 'given': '书远', 'aliases': [],
+                    'surface_forms': {'裴书远': '{family}{given}'}},
+            'pei2': {'family_id': 'fam_pei', 'given': '书达', 'aliases': [],
+                     'surface_forms': {'裴书达': '{family}{given}'}},
+            'stranger': {'family_id': None, 'given': None, 'aliases': [],
+                         'surface_forms': {'陌生人': None}}},
+        'resolutions': []})
+    return core, structure, evidence
+
+
+def test_candidate_keeps_every_anchor_person_not_just_the_first():
+    """同一字面落在两个人物锚的邻域：全部保留并进请求，不静默归给先到的人物。"""
+    from novel.stages.stage2.names import name_variants_prompt
+    core, structure, evidence = _two_anchor_case()
+    candidates = name_variant_candidates(structure, core, evidence)
+    assert [c.literal for c in candidates] == ['裴书运']
+    assert candidates[0].anchors == (('pei', '裴书远'), ('pei2', '裴书达'))
+    prompt = name_variants_prompt(candidates, evidence)
+    assert '裴书远，人物 pei' in prompt and '裴书达，人物 pei2' in prompt
+
+
+def test_same_verdict_must_point_at_an_anchor_person():
+    """提示词说 same 只能指向近似锚人物：compile 同口径执行——指向锚之外的
+    已登记人物＝凭空新增同一性，条目级拒收；指向任一锚人物则接受。"""
+    from novel.stages.stage2.names import compile_name_variants
+    core, structure, evidence = _two_anchor_case()
+    candidates = name_variant_candidates(structure, core, evidence)
+
+    def wire(char_id: str, surface: str) -> dict:
+        return {'protocol_version': 'stage2-name-variants-v1', 'variants': [{
+            'literal': '裴书运', 'verdict': 'same', 'char_id': char_id,
+            'surface': surface, 'evidence_refs': ['e01_01'], 'reason': '同一人物笔误'}]}
+
+    value, located = compile_name_variants(
+        wire('stranger', '陌生人'), candidates, evidence=evidence, characters=core)
+    assert value is None and any('只能指向近似锚' in m for _p, m in located), located
+    for char_id, surface in (('pei', '裴书远'), ('pei2', '裴书达')):
+        value, located = compile_name_variants(
+            wire(char_id, surface), candidates, evidence=evidence, characters=core)
+        assert not located and value[0]['char_id'] == char_id

@@ -20,7 +20,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from contracts.invariants import (
-    BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES,
+    BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES, narrow_unit_scopes,
 )
 from contracts.schema.workflow import (
     BookBudgetGrantV1, BookContentBudgetV1,
@@ -460,8 +460,11 @@ class WorkUnitBudget:
             raise WorkUnitRefused('未登记的工作单元节点或角色')
         allowed_role = spec.executor_content_limit == 4
         chapter_scope = bool(re.fullmatch(r'chapter:[1-9][0-9]*', scope))
+        # 节点内窄调用 owner 的独立单元（`NARROW_OWNER_UNITS`）：只放行该节点登记过的
+        # scope；其余形状照旧关闭式拒绝。
         allowed_scope = (
             spec.unit_kind in ('book', 'candidate_batch') and scope == 'book'
+            or spec.unit_kind == 'book' and scope in narrow_unit_scopes(node)
             or spec.unit_kind in ('chapter', 'ambiguous_chapter') and chapter_scope
             or spec.unit_kind == 'strategy_and_chapter' and (scope == 'strategy' or chapter_scope)
             )

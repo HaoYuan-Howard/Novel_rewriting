@@ -332,7 +332,10 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc17（2026-10-06 CS-H H3）：ChapterIR 增 display_fallback（回落显示面分表），
     # display_prefix 改只含章首已释放称谓、增 requires_released（必保揭名），
     # BeatIR 增 release_introductions；免费重编译。
-    'stage4/ir/writer_book_ir.json': 'str06-rc17',
+    # rc18（CS-S 1b 补升）：ChapterIR 经 VerificationIR.obligations 内嵌
+    # ObligationAnchor，其 visibility 字段在 1b 已删，IR 形状随之变化；不升版则
+    # 旧 rc17 IR 读入只得到无信息的 extra_forbidden（I-13）。免费重编译。
+    'stage4/ir/writer_book_ir.json': 'str06-rc18',
     'stage5/hook/hook.txt': 'str06-rc12',
     'stage5/hook/receipt.json': 'str06-rc12',
     'stage5/body/ch{nn}.txt': 'str06-rc12',

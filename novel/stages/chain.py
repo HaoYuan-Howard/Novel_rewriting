@@ -98,9 +98,10 @@ from novel.stages.stage2 import (
     project_identity_candidates, project_cause_candidates,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
     compile_name_variants, name_variant_candidates, name_variants_prompt,
-    compile_source_truth, project_association_space,
+    compile_source_truth, inspect_identity_associations, project_association_space,
     first_appearance_anchors, first_appearance_issues, NAMES_INPUT_VERSION,
     names_evidence_view, normalize_name_observations, validate_name_resolutions,
+    merge_name_structure,
 )
 from contracts.schema.observation import (
     STAGE2_ASSOCIATE_PROTOCOL, STAGE2_NAMES_PROTOCOL, AssociateObservation,
@@ -189,10 +190,11 @@ class ChainContext:
     """
 
     repository: Any
-    #: JSON 节点回调 ``(owner, prompt, validate[, patch, review_targets, baseline, narrow])``。
+    #: JSON 节点回调 ``(owner, prompt, validate[, patch, review_targets, baseline, narrow,
+    #: downstream_preview])``；downstream_preview 是本轮当前输入的只读干跑，不进请求身份。
     #: `review_targets`／`baseline`／`narrow`（CS-H H1b/H2）只对实现了窄返修协议的
     #: owner 有意义；未实现的边界忽略它们（普通购买路径）。
-    ask: Callable[[str, str, Callable], tuple[Any, Any]]
+    ask: Callable[..., tuple[Any, Any]]
     #: 文本节点回调 `(owner, prompt[, validate])`：`validate` 是该节点的机械校验（stage 纯函数），
     #: 付费边界据此如实记录接受结果（RC-54）；缺省＝只判空回答。
     ask_text: Callable[..., tuple[str | None, list[str], Any]]
@@ -495,8 +497,9 @@ def run_names(ctx: ChainContext) -> dict:
     if errors:
         raise ValueError(errors)
     resolutions: tuple = ()
-    # B：候选由代码给出——有候选才发窄调用（同节点第二 ask，owner 别名归
-    # str06.stage2.names，请求身份含 owner 字符串，与结构答案互不混用）。
+    variants_ref = None
+    # B：候选由代码给出——有候选才发窄调用（同节点第二 ask，独立工作单元
+    # book:name_variants，请求身份含 owner 字符串，与结构答案互不混用）。
     candidates = name_variant_candidates(structure, core, evidence)
     if candidates:
         def _validate_variants(w):
@@ -517,7 +520,7 @@ def run_names(ctx: ChainContext) -> dict:
                 grouped.setdefault(path, []).append(message)
             return list(grouped.items())
 
-        variants_wire, _variants_ref = ctx.ask(
+        variants_wire, variants_ref = ctx.ask(
             'name_variants', name_variants_prompt(candidates, evidence),
             _validate_variants, patch=_locate_variants)
         derived, located = compile_name_variants(
@@ -532,8 +535,11 @@ def run_names(ctx: ChainContext) -> dict:
                                        issues=tuple(validation))
     observation = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL,
                                    structure=structure)
+    # 来源账带全部实际发生的 ask（结构答案＋有候选时的变体窄调用）：窄调用的
+    # 付费用量不得无人认领（I-17/I-37）。
+    refs = (names_ref,) if variants_ref is None else (names_ref, variants_ref)
     repository.write('stage2/observations/names.json', observation,
-                     owners=('names',), refs=(names_ref,))
+                     owners=('names',), refs=refs)
     return {'name_structure_people': len(structure.people),
             'name_variant_candidates': len(candidates)}
 
@@ -544,8 +550,8 @@ def run_associate(ctx: ChainContext) -> dict:
     """`str06.stage2.associate`：条目级窄关联——候选由代码给出，逐候选判定（D8）。
 
     Phase 2（S2-9 落地）：输入不再是整书投影——`project_identity_candidates`
-    用确定性相似度筛出未决候选（近义命题、近义键维度、跨章 open×close、相邻
-    章 seam），**无候选＝零调用**；身份答案落盘后由 `project_cause_candidates`
+    用确定性相似度筛出未决候选（近义命题、跨章 open×close、相邻章 seam），
+    **无候选＝零调用**；身份答案接受后由 `project_cause_candidates`
     从已判定答案派生因果候选拍对（D-2 A），有候选才发第二窄调用（owner
     `cross_cause`，模型只选 kind 或否决）。缺项、歧义、冲突保持未决——
     **RC-18～20**：请求前复验章内生命周期并按来源回派；验收时 compile 干跑
@@ -561,6 +567,11 @@ def run_associate(ctx: ChainContext) -> dict:
     names = repository.read_model('stage2/observations/names.json')
     evidence = build_evidence(ctx.chapters, ctx.hook_copy)
     core, errors = character_core_view(book, evidence=evidence)
+    if not errors:
+        # 正式 names 的人工编辑／恢复也须符合 Characters 的唯一结构判据；
+        # 在购买关联前纯合并复验，防止漏人物、漏称谓或坏家族引用延迟到发布才拒。
+        _characters, structure_errors = merge_name_structure(core, names.structure)
+        errors.extend(structure_errors)
     if not errors:
         errors.extend(validate_name_resolutions(names.structure, core, evidence=evidence))
     errors.extend(f'名称同一性未决：{r.literal}；{r.reason}' for r in names.structure.resolutions
@@ -587,17 +598,18 @@ def run_associate(ctx: ChainContext) -> dict:
             _observation, w_errors = compile_associate_observation(w, space, candidates)
             if w_errors:
                 return w_errors
-            outcome = compile_source_truth(book=book, chapters=chapters, names=names,
-                                           associate=_observation, evidence=evidence,
-                                           source_texts=tuple(c['text'] for c in ctx.chapters))
+            identity_errors, identity_undecided = inspect_identity_associations(
+                book=book, chapters=chapters, names=names,
+                associate=_observation, evidence=evidence,
+                source_texts=tuple(c['text'] for c in ctx.chapters))
             # 干跑发现位置不授予修复权；代码缺陷/无归属诊断禁止购买关联自修。
             from novel.core.validation import ValidationIssue
-            if outcome.errors or any(not isinstance(issue, ValidationIssue)
-                                     or issue.owner != 'associate' for issue in outcome.undecided):
+            if identity_errors or any(not isinstance(issue, ValidationIssue)
+                                      or issue.owner != 'associate' for issue in identity_undecided):
                 raise MechanicalDefectStop('关联干跑存在非本单位可修问题',
                                            node='str06.stage2.associate',
-                                           issues=tuple(outcome.errors + outcome.undecided))
-            return outcome.undecided
+                                           issues=tuple(identity_errors + identity_undecided))
+            return identity_undecided
 
         def _locate(w, errs):
             # CS-H H4（RC-57 覆盖）：答案条目定位——机械验收与干跑未决按句柄
@@ -613,11 +625,26 @@ def run_associate(ctx: ChainContext) -> dict:
 
     # 第二窄任务（D-2 A）：因果候选从**已判定的身份答案**派生——候选为空＝零调用。
     causes: tuple = ()
+    cause_ref = None
     cause_candidates = project_cause_candidates(space, chapters, book, observation)
     if cause_candidates:
         def _validate_cause(w):
             _causes, c_errors = compile_cross_cause(w, cause_candidates)
             return c_errors
+
+        def _preview_cause(w):
+            # 主身份尚未发布：恢复/重采审计必须用本轮已接受的身份与拍对分母，
+            # 不能从盘上旧 associate 重建。闭包只编译，不写中间产物或发请求。
+            current_causes, current_errors = compile_cross_cause(w, cause_candidates)
+            if current_errors:
+                return {'node': 'str06.stage2.compile', 'status': 'ran',
+                        'errors': current_errors, 'undecided': []}
+            final = observation.model_copy(update={'cross_chapter_cause': current_causes})
+            result = compile_source_truth(
+                book=book, chapters=chapters, names=names, associate=final,
+                evidence=evidence, source_texts=tuple(c['text'] for c in ctx.chapters))
+            return {'node': 'str06.stage2.compile', 'status': 'ran',
+                    'errors': result.errors, 'undecided': result.undecided}
 
         def _locate_cause(w, errs):
             # 窄调用答案的条目定位：候选对反查行（unknown／duplicate）；
@@ -647,9 +674,9 @@ def run_associate(ctx: ChainContext) -> dict:
                 grouped.setdefault(('causes', hits[0]), []).append(error)
             return list(grouped.items())
 
-        cause_wire, _cause_ref = ctx.ask(
+        cause_wire, cause_ref = ctx.ask(
             'cross_cause', cross_cause_prompt(cause_candidates, space),
-            _validate_cause, patch=_locate_cause)
+            _validate_cause, patch=_locate_cause, downstream_preview=_preview_cause)
         causes, c_errors = compile_cross_cause(cause_wire, cause_candidates)
         if c_errors:
             raise ValueError(c_errors)
@@ -667,12 +694,15 @@ def run_associate(ctx: ChainContext) -> dict:
         raise MechanicalDefectStop('关联干跑存在非本单位可修问题',
                                    node='str06.stage2.associate',
                                    issues=tuple(outcome.errors + outcome.undecided))
+    # 来源账带全部实际发生的 ask（身份调用、因果窄调用各一）：只有因果候选而无
+    # 身份候选的常态路径同样是付费产物，不能被标成免费来源。
+    refs = tuple(ref for ref in (associate_ref, cause_ref) if ref is not None)
     repository.write(
         'stage2/observations/associate.json', observation, owners=('associate',),
-        refs=(associate_ref,) if associate_ref is not None else (),
+        refs=refs,
         # 零调用（无身份候选且无因果候选）＝零模型参与：确定性空判定面，
         # 显式声明免费来源账（I-35；付费节点缺引用的写盘默认按造假拦）。
-        declared_free=associate_ref is None)
+        declared_free=not refs)
     return {'identity_candidates': candidates.answer_count(),
             'same_proposition': sum(1 for p in observation.same_proposition
                                     if p.verdict == 'same'),
@@ -2707,7 +2737,8 @@ def execute(args) -> None:
             owner, prompt, json_mode=json_mode, system=system, temperature=temperature,
             enforce=not args.wire_dir)
 
-    def adopt(owner, path, validate, *, system, prompt, json_mode, temperature):
+    def adopt(owner, path, validate, *, system, prompt, json_mode, temperature,
+              downstream_preview=None):
         """wire 采用：核验后落修订记录（ContentRevision 层），返回显式采用引用。"""
         if args.repair_manifest and (
                 owner not in adopted or Path(adopted[owner]['path']).resolve() != path.resolve()
@@ -2789,12 +2820,13 @@ def execute(args) -> None:
                 owner=owner, identity=revision['request_sha256'], candidate=raw,
                 baseline=baseline, validate=validate,
                 character_literals=character_literals(Str06Repository(repository.root)),
-                dry_run=lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
+                dry_run=(downstream_preview if downstream_preview is not None else
+                         lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
                     evidence=build_evidence(chapters, hook_copy), budget=args.budget,
                     hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
                                                      hard_max_chars=args.hook_hard_max),
                     chapter_count=len(chapters), source_texts=tuple(c['text'] for c in chapters),
-                    book_title=args.book_title, length_band=(args.body_band_low, args.body_band_high)))
+                    book_title=args.book_title, length_band=(args.body_band_low, args.body_band_high))))
             stage_revision(repository, owner=owner, identity=revision['request_sha256'],
                            baseline=baseline, raw_bytes=original_bytes, preview=preview,
                            reason=patch_reason)
@@ -2847,7 +2879,7 @@ def execute(args) -> None:
         selected_samples[owner] = selection
         return selected, selection
 
-    def record_sample(owner, data, selection, validate):
+    def record_sample(owner, data, selection, validate, *, downstream_preview=None):
         if selection is None:
             return
         from novel.stages.revisions import preview_owner_patch, stage_revision
@@ -2857,24 +2889,26 @@ def execute(args) -> None:
             owner=owner, identity=selection.baseline_request_sha256, candidate=data,
             baseline=baseline, validate=validate,
             character_literals=character_literals(Str06Repository(repository.root)),
-            dry_run=lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
+            dry_run=(downstream_preview if downstream_preview is not None else
+                     lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
                 evidence=build_evidence(chapters, hook_copy), budget=args.budget,
                 hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
                                                  hard_max_chars=args.hook_hard_max), chapter_count=len(chapters),
                 source_texts=tuple(c['text'] for c in chapters), book_title=args.book_title,
-                length_band=(args.body_band_low, args.body_band_high)))
+                length_band=(args.body_band_low, args.body_band_high))))
         stage_revision(repository, owner=owner, identity=selection.baseline_request_sha256,
                        baseline=baseline, raw_bytes=json.dumps(data, ensure_ascii=False).encode('utf-8'),
                        preview=preview, reason=selection.reason, kind='resample', sequence=selection.sequence)
 
     def ask(owner, prompt, validate, patch=None, review_targets=None,
-            baseline=None, narrow=None):
+            baseline=None, narrow=None, downstream_preview=None):
         path = wire_path(owner)
         if path is not None:
             # 人工/离线 wire 显式采用优先于免费沿用与窄复核：它经同一 validate
             # 验收，但不参与候选集合判定（H1b 沿用闭包的同一条优先级）。
             raw, ref = adopt(owner, path, validate, system=SYS, prompt=prompt,
-                             json_mode=True, temperature=0.3)
+                             json_mode=True, temperature=0.3,
+                             downstream_preview=downstream_preview)
             return raw, ref
         request = build_request(owner, prompt, json_mode=True, system=SYS, temperature=0.3)
         patch_replay = replay_patch(owner, request, validate, SYS, prompt)
@@ -2886,7 +2920,7 @@ def execute(args) -> None:
                                revision_rules=semantic_revision_rules(owner),
                                review_targets=review_targets, baseline=baseline,
                                narrow=narrow)
-        record_sample(owner, raw, selection, validate)
+        record_sample(owner, raw, selection, validate, downstream_preview=downstream_preview)
         return raw, answer
 
     def carry_forward(owner, prompt, decision):

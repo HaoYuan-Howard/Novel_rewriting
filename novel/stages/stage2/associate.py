@@ -41,7 +41,9 @@ owner 的纪律问题，本节点无修复面。
   拍:   ``ch{nn}.b{idx}``            idx＝拍在本章列表序（1 起）
   命题: ``ch{nn}.{本地 ref}``        章观察里的命题本地句柄逐字
   悬念: ``ch{nn}.{本地 ref}``        章观察里的悬念本地句柄（open/close 角色分开闭集）
-  场景: ``ch{nn}.sc{idx}``           idx＝本章内按开场序的场景序（1 起）
+  场景: ``ch{nn}.sc{idx}``           idx＝本章内按开场序的场景序（1 起；首拍
+                                     continue 的章，前章带入的延续场景占 sc1——
+                                     序由 `chapter_scene_layout` 唯一给出）
   词表: ``f{nn}``                    书级 facts 编号（Phase 2；与 k{nn} 章内句柄
                                      分属两个命名空间，闭集互不重叠）
 
@@ -56,13 +58,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Final, Mapping, Sequence
+from typing import Any, Final, Literal, Mapping, Sequence
 
 from pydantic import ValidationError
 
 from contracts.schema.observation import (
     AssociateObservation, BookObservation, CauseVerdict, ChapterObservation,
-    CrossCauseWire,
+    CrossCauseWire, STAGE2_CROSS_CAUSE_WIRE_PROTOCOL,
 )
 from novel.core.text import norm
 from novel.core.validation import ValidationIssue
@@ -131,11 +133,17 @@ class LoopCandidate:
 
 @dataclass(frozen=True)
 class SceneCandidate:
-    """相邻章 seam 续场候选：左＝前章最后一个 new 场景，右＝后章第一个场景
-    （其开场拍须是后章第 1 拍——开场 continue 的章按构造已续前场，无需配对）。"""
+    """相邻章 seam 续场候选：左＝前章最后一个场景，右＝后章第一个场景（须自称
+    开新场——开场 continue 的章按构造已续前场，无需配对）。
+
+    `left_text`／`right_text` 是判断「是否同一场」所需的最小文本：左场景**末拍**
+    与右场景**首拍**的 event（句柄本身不携带任何语义，模型无从凭句柄判断）。
+    """
 
     left: str
     right: str
+    left_text: str
+    right_text: str
 
 
 @dataclass(frozen=True)
@@ -230,21 +238,28 @@ def project_identity_candidates(
                 question=open_entry.question or '',
                 resolution=close_entry.resolution or ''))
     scene_pairs: list[SceneCandidate] = []
-    by_chapter: dict[int, list[str]] = {}
+    scenes_by_chapter: dict[int, list[str]] = {}
     for handle, entry in space.scenes.items():
-        by_chapter.setdefault(entry.chapter, []).append(handle)
-    for chapter, handles in by_chapter.items():
-        by_chapter[chapter] = sorted(
+        scenes_by_chapter.setdefault(entry.chapter, []).append(handle)
+    for chapter, handles in scenes_by_chapter.items():
+        scenes_by_chapter[chapter] = sorted(
             handles, key=lambda h: space.scenes[h].ordinal)
-    for chapter in sorted(by_chapter):
-        right_handles = by_chapter.get(chapter + 1) or []
+    for chapter in sorted(scenes_by_chapter):
+        right_handles = scenes_by_chapter.get(chapter + 1) or []
         if not right_handles:
             continue
-        left_handles = by_chapter.get(chapter) or []
+        left_handles = scenes_by_chapter.get(chapter) or []
         right = right_handles[0]
-        if not left_handles or space.scenes[right].opening_beat != 1:
+        # 右场景是从前章带入的（开场拍 continue）＝按构造已续前场，无需配对。
+        if not left_handles or space.scenes[right].carried:
             continue
-        scene_pairs.append(SceneCandidate(left=left_handles[-1], right=right))
+        left_scene, right_scene = space.scenes[left_handles[-1]], space.scenes[right]
+        scene_pairs.append(SceneCandidate(
+            left=left_handles[-1], right=right,
+            left_text=space.beats[
+                f'ch{left_scene.chapter:02d}.b{left_scene.closing_beat}'].event,
+            right_text=space.beats[
+                f'ch{right_scene.chapter:02d}.b{right_scene.opening_beat}'].event))
     return AssociationCandidates(
         same_proposition=tuple(sorted(
             prop_pairs, key=lambda c: (c.left, c.right))),
@@ -252,12 +267,6 @@ def project_identity_candidates(
             loop_pairs, key=lambda c: (c.open, c.close))),
         scene_continuation=tuple(sorted(
             scene_pairs, key=lambda c: (c.left, c.right))))
-
-
-def _beat_positions(space: AssociationSpace) -> dict[str, tuple[int, int]]:
-    """拍句柄 → (章, 拍序) 的数值序键（≥10 拍的章不按字典序）。"""
-    return {handle: (entry.chapter, entry.ordinal)
-            for handle, entry in space.beats.items()}
 
 
 def project_cause_candidates(
@@ -271,32 +280,43 @@ def project_cause_candidates(
       命题所在拍）的全部跨章有序对。
     """
     fact_ids = {fact.fact_id for fact in getattr(book, 'facts') or ()}
-    positions = _beat_positions(space)
-
     def _beat_handle(chapter: int, ordinal: int) -> str:
         return f'ch{chapter:02d}.b{ordinal}'
 
-    beats_by_fact: dict[str, set[tuple[int, int]]] = {
-        fact_id: set() for fact_id in fact_ids}
-    beats_by_prop: dict[str, tuple[int, int]] = {}
+    # 一个本地命题可在多拍被引用；保留全部出现拍，不能让后拍覆盖首现。
+    beats_by_handle: dict[str, set[tuple[int, int]]] = {}
     loop_beats: dict[str, tuple[int, int]] = {}
     for chapter in sorted(chapters):
         for ordinal, beat in enumerate(chapters[chapter].beats, 1):
             position = (chapter, ordinal)
             for cognition in beat.cognition:
                 ref = cognition.proposition.ref
-                if ref in fact_ids:
-                    beats_by_fact[ref].add(position)
-                else:
-                    beats_by_prop[f'ch{chapter:02d}.{ref}'] = position
+                handle = ref if ref in fact_ids else f'ch{chapter:02d}.{ref}'
+                beats_by_handle.setdefault(handle, set()).add(position)
             for loop in beat.loops:
                 loop_beats[f'ch{chapter:02d}.{loop.ref}'] = position
+    # same 是传递同一性：fact↔A、A↔B 后，B 的全部出现拍也属于该 fact 流。
+    # 这里只求已接受身份断言的可达成员，不生成 canonical 根或补猜语义。
+    same_neighbors: dict[str, set[str]] = {}
     for pair in identity.same_proposition:
         if pair.verdict != 'same':
             continue
-        for left, right in ((pair.left, pair.right), (pair.right, pair.left)):
-            if left in fact_ids and right in beats_by_prop:
-                beats_by_fact[left].add(beats_by_prop[right])
+        same_neighbors.setdefault(pair.left, set()).add(pair.right)
+        same_neighbors.setdefault(pair.right, set()).add(pair.left)
+    beats_by_fact: dict[str, set[tuple[int, int]]] = {}
+    for fact_id in sorted(fact_ids):
+        positions_of_fact: set[tuple[int, int]] = set()
+        visited: set[str] = set()
+        pending = [fact_id]
+        while pending:
+            handle = pending.pop()
+            if handle in visited:
+                continue
+            visited.add(handle)
+            positions_of_fact.update(beats_by_handle.get(handle, ()))
+            pending.extend(neighbor for neighbor in same_neighbors.get(handle, ())
+                           if neighbor not in visited)
+        beats_by_fact[fact_id] = positions_of_fact
     pairs: set[tuple[tuple[int, int], tuple[int, int]]] = set()
     for pair in identity.loop_pairing:
         if pair.verdict != 'pair':
@@ -359,12 +379,48 @@ class BeatHandle:
 
 
 @dataclass(frozen=True)
+class SceneLayout:
+    """一章内的一个场景分段：序号、开场拍序、末拍序、是否从前章带入。"""
+
+    ordinal: int
+    opening_beat: int
+    closing_beat: int
+    #: 首拍 `continue`——本场景是前章开放场景在本章的延续（compile 的 SceneSpan
+    #: 序里它占本章第 1 个场景位，句柄 ``sc1``）。
+    carried: bool
+
+
+def chapter_scene_layout(boundaries: Sequence[str]) -> tuple[SceneLayout, ...]:
+    """本章逐拍 `scene_boundary` → 章内场景分段（唯一的场景序规则）。
+
+    与 `compile.py::_compile_chapter` 的分段规则同一张表：首拍无论 `new` 还是
+    `continue` 都占本章第 1 个场景位（`continue` 即前章带入的延续场景），其后
+    每个 `new` 开新场景、`continue` 并入当前场景。候选句柄 ``ch{nn}.sc{序}`` 的序号
+    必须与 compile 眼中的 SceneSpan 序逐位一致——续场配对在 compile 里按此序核对
+    「左端是本章最后一个场景、右端是后章第一个场景」，两边各数一套就会让代码自己
+    生成的候选被自己拒绝（`tests/test_str06_associate_v5.py` 以全排列守住同源）。
+    """
+    spans: list[list[Any]] = []
+    for beat_ordinal, boundary in enumerate(boundaries, 1):
+        if beat_ordinal == 1 or boundary == 'new':
+            spans.append([beat_ordinal, beat_ordinal,
+                          beat_ordinal == 1 and boundary != 'new'])
+        else:
+            spans[-1][1] = beat_ordinal
+    return tuple(SceneLayout(ordinal=index, opening_beat=opening,
+                             closing_beat=closing, carried=carried)
+                 for index, (opening, closing, carried) in enumerate(spans, 1))
+
+
+@dataclass(frozen=True)
 class SceneHandle:
-    """场景句柄：本章内按开场序的序号与开场拍序。"""
+    """场景句柄：本章内的场景序号、开场拍／末拍序与是否从前章带入。"""
 
     chapter: int
     ordinal: int
     opening_beat: int
+    closing_beat: int
+    carried: bool = False
 
 
 @dataclass
@@ -431,16 +487,14 @@ def project_association_space(
                     space.loop_opens.setdefault(handle, entry)
                 else:
                     space.loop_closes.setdefault(handle, entry)
-    # 场景序：按拍序扫 new 边界（与 compile 的分段规则同一张表）。
+    # 场景序：唯一规则 `chapter_scene_layout`（与 compile 的 SceneSpan 序同源）。
     for chapter in sorted(chapters):
-        scene_ordinal = 0
-        for beat_ordinal, beat in enumerate(chapters[chapter].beats, 1):
-            if beat.scene_boundary == 'new':
-                scene_ordinal += 1
-            if scene_ordinal:
-                space.scenes.setdefault(f'ch{chapter:02d}.sc{scene_ordinal}',
-                                        SceneHandle(chapter=chapter, ordinal=scene_ordinal,
-                                                    opening_beat=beat_ordinal))
+        for span in chapter_scene_layout(
+                [beat.scene_boundary for beat in chapters[chapter].beats]):
+            space.scenes[f'ch{chapter:02d}.sc{span.ordinal}'] = SceneHandle(
+                chapter=chapter, ordinal=span.ordinal,
+                opening_beat=span.opening_beat, closing_beat=span.closing_beat,
+                carried=span.carried)
     # 可配对 close 闭集：章内已自开自闭的 close（同一句柄串也在 open 集里）不进
     # 跨章配对面（RC-65）——它们已有归属，配了只会被判重复 close。
     space.pairable_closes = {
@@ -462,7 +516,8 @@ def associate_candidates_prompt(candidates: AssociationCandidates) -> str:
         f'- open [{c.open}] 问题：{c.question} × close [{c.close}] 收束：{c.resolution}'
         for c in candidates.loop_pairing) or '（无候选——该类给空数组）'
     scene_lines = '\n'.join(
-        f'- 前章末场 [{c.left}] × 后章首场 [{c.right}]'
+        f'- 前章末场 [{c.left}]（末拍：{c.left_text}） × '
+        f'后章首场 [{c.right}]（首拍：{c.right_text}）'
         for c in candidates.scene_continuation) or '（无候选——该类给空数组）'
     return ASSOCIATE_CANDIDATES_PROMPT.format(
         propositions=proposition_lines, loops=loop_lines, scenes=scene_lines)
@@ -566,8 +621,8 @@ def compile_associate_observation(
     """只读接受（v4：逐候选恰答一次）。
 
     闭集＝**候选集合**（Phase 2 起不再按整书投影句柄核对——答案只能是已给
-    候选）。无序候选（命题／维度／续场）左右互换视为同一候选；有序候选
-    （loop 的 open/close）不可换。漏答候选＝机械缺陷（修复面是补一行答案，
+    候选）。无序命题候选左右互换视为同一候选；有序候选（loop 的 open/close、
+    续场的前章 left/后章 right）不可换。漏答候选＝机械缺陷（修复面是补一行答案，
     patch 协议替换不了不存在的行——由调用方退整份返修）；多答／重复答按条目
     报告。loop 占用核对（重复 close 等）只看 verdict=pair 的行。
     """
@@ -582,15 +637,24 @@ def compile_associate_observation(
         errors = loop_pairing_issues(observation, space)
         return (observation, []) if not errors else (None, errors)
     errors: list[str] = []
+    # 跨章因果不在身份答案里：因果只由独立窄调用（stage2-cross-cause-v1，候选
+    # 由代码从**已判定的身份答案**派生）经 run_associate 组装进最终观察。身份答案
+    # 携带的任何因果行都不对应已给候选，且 compile 阶段无人再核对它的成员资格
+    # ——按“答案超出候选”机械拒收（整份返修：多余的行没有可替换的目标）。
+    for row in observation.cross_chapter_cause:
+        errors.append(association_issue(
+            'stray_cause', ('cross_chapter_cause', row.from_beat, row.to_beat),
+            f'身份答案不得携带 cross_chapter_cause（{row.from_beat!r}→{row.to_beat!r}）：'
+            '跨章因果只由独立的因果窄调用给出，这里留空数组'))
     unordered: dict[str, tuple[tuple[str, str], ...]] = {
         'same_proposition': tuple(
             (c.left, c.right) for c in candidates.same_proposition),
-        'scene_continuation': tuple(
-            (c.left, c.right) for c in candidates.scene_continuation),
     }
     ordered: dict[str, tuple[tuple[str, str], ...]] = {
         'loop_pairing': tuple(
             (c.open, c.close) for c in candidates.loop_pairing),
+        'scene_continuation': tuple(
+            (c.left, c.right) for c in candidates.scene_continuation),
     }
     fields = {'same_proposition': ('left', 'right'),
               'scene_continuation': ('left', 'right'),
@@ -665,6 +729,67 @@ def compile_cross_cause(
     return (None, errors) if errors else (tuple(model.causes), [])
 
 
+def associate_observation_issues(
+    observation: AssociateObservation, space: AssociationSpace,
+    book: BookObservation, chapters: Mapping[int, ChapterObservation],
+    *, phase: Literal['identity', 'assembled'] = 'assembled',
+) -> list[str]:
+    """最终组装观察的只读候选复验（正式发布与免费恢复共用）。
+
+    身份答案与因果答案分开购买，最终 artifact 将两者组装在一起；复验时按当前
+    正式观察重建两份候选分母，不把历史配对或文件存在当成完整性证明。临时身份
+    视图只移除因果字段，不修改原输入；none 也须保留，证明该因果候选已经回答。
+    phase=identity 仅用于第一窄任务的正式干跑：身份候选仍须完整，且禁止携带
+    尚未购买的因果答案；其余消费者默认验最终组装分母。
+    """
+    if phase not in ('identity', 'assembled'):
+        raise ValueError(f'未知关联验收阶段：{phase!r}')
+    identity = (observation if phase == 'identity' else
+                observation.model_copy(update={'cross_chapter_cause': ()}))
+    _identity, errors = compile_associate_observation(
+        identity, space, project_identity_candidates(space, book))
+    if errors or phase == 'identity':
+        return errors
+    cause_candidates = project_cause_candidates(space, chapters, book, identity)
+    if not cause_candidates and not observation.cross_chapter_cause:
+        return []  # 无候选＝零调用；最终空面不是一个需满足非空 wire 的付费回答。
+    if not observation.cross_chapter_cause:
+        # 最终 schema 允许空 cause 字段，表示第二窄任务尚未组装；候选非空时
+        # 按当前分母逐项报缺答案，不能误报付费 wire 的顶层非空形状问题。
+        return [association_issue(
+            'missing_answer', ('cross_chapter_cause', c.from_beat, c.to_beat),
+            f'候选 {c.from_beat!r}→{c.to_beat!r} 没有回答（拿不准答 none）')
+            for c in cause_candidates]
+    _causes, errors = compile_cross_cause(
+        {'protocol_version': STAGE2_CROSS_CAUSE_WIRE_PROTOCOL,
+         'causes': observation.cross_chapter_cause},
+        cause_candidates)
+    return errors
+
+
+def associate_unresolved_issues(
+    observation: AssociateObservation,
+) -> list[ValidationIssue]:
+    """语义拿不准须保持未决，按候选身份进入现役 associate 免费恢复/修订面。"""
+    issues: list[ValidationIssue] = []
+    fields = (('same_proposition', 'left', 'right'),
+              ('loop_pairing', 'open', 'close'),
+              ('scene_continuation', 'left', 'right'))
+    for kind, left_field, right_field in fields:
+        for row in getattr(observation, kind):
+            if row.verdict != 'unresolved':
+                continue
+            left, right = getattr(row, left_field), getattr(row, right_field)
+            # 命题是无序对，稳定身份不依赖模型回答的左右方向。
+            if kind == 'same_proposition':
+                left, right = sorted((left, right))
+            issues.append(association_issue(
+                'unresolved_verdict', (kind, left, right),
+                f'{kind} 的候选 {left!r}×{right!r} 判为 unresolved：'
+                '同一性尚未确定，不能默认不同后发布'))
+    return issues
+
+
 # ───────────────────────── 条目定位（CS-H H4，RC-57 覆盖） ─────────────────────────
 
 #: 配对数组名 → 参与句柄字段（定位时按句柄反查条目下标）。
@@ -687,8 +812,9 @@ def _located_rows(wire: dict, location: tuple) -> set[tuple[str, int]]:
       answer）：条目须同时含全部句柄——同一句柄在多条合法候选里出现（一因
       多果）不是歧义，只有同时含两端的那一行才是问题所在；
     • `(kind, field, 句柄)`：只在该字段上匹配。
-    missing_answer（候选无既有行可替换）与 duplicate_answer（两行都含该候选）
-    都定位不到唯一行——返回空集/多行，由调用方退整份返修。
+    真正缺行的 missing_answer 与 duplicate_answer（两行都含该候选）定位不到
+    唯一行——返回空集/多行，由调用方退整份返修。有序续场的两端写反时，同两端
+    的既有行仍可唯一定位，按条目修正方向。
     """
     scope = location[0] if location and isinstance(location[0], str)         and location[0] in _PAIR_KINDS else None
     if scope is not None and len(location) > 1 and isinstance(location[1], int):

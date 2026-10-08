@@ -121,22 +121,20 @@ def _artifact_model(rel: str | None):
 
 # ── rc12/rc13→rc14 登记迁移：仅正式模型读取口；inspect 保留原字节 ─────────
 # 删除条件见 REQUIREMENTS：历史运行根全部重建或退役后删除此兼容层。
-# rc17（CS-H H3）：brief／writer_book_ir 形状再升（H3 新字段全部可缺省读入），
-# rc12／rc13 载荷的迁移目标钉 rc17；rc18（CS-S 1b）brief 再升
-# （ObligationAnchor.visibility 删）——brief 的迁移目标随行钉 rc18。⚠ 盘上
-# rc14～rc16 载荷不在迁移白名单内：模型字面量只收现行版，按契约表漂移拒读
-# （ChapterIR.display_prefix 语义已变，不能把旧值当新字段缺省读入）；旧根
-# 续跑同样按候选契约表拒收。
+# rc17（CS-H H3）：brief／writer_book_ir 形状再升（H3 新字段全部可缺省读入）；
+# rc18（CS-S 1b）两者再升（ObligationAnchor.visibility 删；IR 经 VerificationIR
+# 内嵌 anchors）——rc12／rc13 载荷的迁移目标随行钉 rc18，并剥掉 anchors 上的
+# 死字段 visibility（单写者、零逻辑读者，无损）。⚠ 盘上 rc14～rc17 载荷不在迁移
+# 白名单内：模型字面量只收现行版，按契约表漂移拒读（ChapterIR.display_prefix
+# 语义已变，不能把旧值当新字段缺省读入）；旧根续跑同样按候选契约表拒收。
 _RC14_SITES = {
     'stage4/design/body_design.json', 'stage4/design/presentation_graph.json',
     'stage4/compiled/execution_plan.json',
 }
-_RC17_SITES = {
-    'stage4/ir/writer_book_ir.json',
-}
 #: rc18（CS-S 1b）：ObligationAnchor.visibility 删除的站点，迁移目标钉 rc18。
 _RC18_SITES = {
     'stage4/grounding/reconstruction_brief.json',
+    'stage4/ir/writer_book_ir.json',
 }
 _ADDRESS_FIELDS = {'domain', 'key', 'subjects', 'holder', 'at', 'op', 'value',
                    'scope', 'knowledge_mode', 'modality', 'confirms',
@@ -149,7 +147,7 @@ def _upgrade_rc12_payload(spec: str | None, data: dict) -> dict:
     地址、读取、Hook 地址和变化使用同一 reader 归一。StateEntry 读者条目
     转为 KnowledgeEntry，并移动到相应知情容器；不修改输入或历史封存字节。
     """
-    if spec not in _RC14_SITES | _RC17_SITES | _RC18_SITES or data.get('contract_version') not in (
+    if spec not in _RC14_SITES | _RC18_SITES or data.get('contract_version') not in (
             'str06-rc12', 'str06-rc13'):
         return data
     out = copy.deepcopy(data)
@@ -196,6 +194,10 @@ def _upgrade_rc12_payload(spec: str | None, data: dict) -> dict:
                 value['knowledge_mode'] = 'known' if value['op'] == 'set' else None
         if value.get('contract_version') in ('str06-rc12', 'str06-rc13'):
             value['contract_version'] = 'str06-rc14'
+        # ObligationAnchor（handle＋source_kind 是它的必填身份）的 visibility 已于
+        # rc18 删除；StrictModel 禁止多余字段，旧载荷里的该键须剥掉才读得进。
+        if {'handle', 'source_kind'} <= set(value):
+            value.pop('visibility', None)
         # 已折叠的建立项不是 TargetDelta，不保留揭示关联。
         if 'established_by' in value and 'op' in value:
             value.pop('confirms', None)
@@ -219,8 +221,6 @@ def _upgrade_rc12_payload(spec: str | None, data: dict) -> dict:
         return {key: walk(item, f'{path}.{key}') for key, item in value.items()}
 
     result = walk(out)
-    if spec in _RC17_SITES:
-        result['contract_version'] = 'str06-rc17'
     if spec in _RC18_SITES:
         result['contract_version'] = 'str06-rc18'
     return result

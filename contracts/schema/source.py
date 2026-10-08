@@ -1,53 +1,56 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""source —— Characters v4／Blueprints v13（Source Truth 两份 canonical）RC（F2b／F6／质量改进批次二）。
+"""source —— Characters v6／Blueprints v17 两份 Source Truth canonical（CS-S rc20）。
 
-【形状来源】试点三轮验证的 B 档产物形状（参考件 `_tmp_vnext_run.py`，
-outputs/vnext_probe_b），按终态四类 truth 职责分流：
-  • Characters v4：人物条目（canonical + surfaces 时间窗）＋人物/关系 initial_state，
-    RC3 起增附独立 `name_structure` 段（源名称结构，owner=Stage2 names 窄调用）。
-  • Blueprints v13：chapters/beats + 三类转移（effects／cognition／loops）+ causal_edges
-    + world_constraints（书级初始事实／约束归 Blueprint truth）。
-抽取 wire 是一份 book 响应 + 逐章响应（LLM 面）；确定性 compile 分流为这两份
-canonical（`novel/stages/stage2/source.py`）。
+【职责与发布边界】Characters 保存人物条目（canonical＋surfaces 时间窗）、
+人物/关系 initial_state 与名称结构；Blueprints 保存逐章拍、三类转移、场景、
+跨章因果、世界约束及源表达。book／chapters／names／associate 观察经唯一
+writer `novel/stages/stage2/compile.py` 编译发布，两份产物是下游真相源（S2-5）。
 
-【v13 拍模型（质量改进批次二 · D1–D12）】每一拍是一次状态转移：event 只是给人读的
-事件表述，需要延续的变化全部由三类转移承载——
-  • effects（事实）：叙述确立的事实变化，必填可见性（on_page／concealed）与作用域；
-  • cognition（认知）：谁对哪条命题持什么模式（learns/suspects/confirms/hears_claim/
-    believes/asserts），取代 v12 的 reveals；
-  • loops（悬念）：独立数组，op 只有 open/close，close 必填 resolution。
-拍上另带场景边界（new/continue）与 temporal_mode（single/iterative）；场景 id、
-命题与 loop 的正式 ID 由 compiler 生成（I-21），wire 内用本地标签、跨章用 prompt
-列出的正式 ID 引用（D12）。
+【拍模型】每一拍是一次状态转移：event 给人读，需延续的变化进入三类转移——
+  • effects（事实）：叙述确立的事实变化，modality 区分 actual／planned／
+    expected／conditional；变化键入闭集，作用域读时按 REGISTERED_STATE_KEYS 派生；
+  • cognition（认知）：持有者对命题的 learns／suspects／confirms／hears_claim／
+    believes／asserts；reader 条目由 compiler 按 access 与转移派生，观察面禁自写；
+  • loops（悬念）：open 带问题，close 带非空 resolution，开闭形状独立。
+拍另有 scene_boundary（new／continue）、temporal_mode（single／iterative）与
+access（witnessed／narrated）。场景、命题、loop 等正式 ID 由 compiler 生成
+（I-21）；章观察使用本地命题句柄或书级 facts 编号，跨章关联经正式观察协议。
 
-【RC 不变量（试点校验规则的类型化）】
-slug/beat_id/state_id/constraint_id 前缀与字符集、surface 窗口 from≤until、
-until 只在有明确失效依据时给出（None=仍可用）、relation 禁自环、initial_state
-只引用已登记人物、op/mode/kind 闭集、open 必填非空 question、close 必填非空
-resolution、concealed 必声明已知者且必带命题、登记键作用域按表（表内键作用域
-由 compile 归一化绑定，schema 层兜底直接构造的错声明）。跨产物校验
-（participants、source_refs 证据闭合、双 owner、相邻因果边、命题与 loop 引用闭合）
-归 compile 机械臂——validator 不越层猜证据集。
+【机械不变量】surface 时间窗 from≤until，until 只在有失效证据时给出；关系
+目标禁自环，初态只引用人物闭集，op／mode／kind／变化键闭集且转移带逐字 basis。
+scene_location 从拍级字段合成为 world 效应（scene 作用域），其余变化键为 book
+作用域；effect 不再携带 disclosure／proposition／scope。证据闭合、命题/loop
+引用与人物闭集由 owner 验收及最终 compile 防御复核，validator 不猜缺失语义。
 
-【名称结构（F6）】
-RC2 只有 canonical + surfaces，现役判据靠「首字猜姓」——复姓被截断、纯称谓被
-当姓。`NameStructure` 显式登记姓氏家族（同姓亲属共享 family_id；同姓不同人各用
-各的）、名、化名与表层称谓的构词模板：surface 必须由源部件渲染逐字可得，
-纯称谓（form=None）不得含本人姓名字面。`name_projection()` 提供专名字面与
-家族字面集，接管旧 `name_distinctiveness` 的有效职责。
+【名称结构】`NameStructure` 显式登记姓氏家族、名、化名、词面同一性判定与构词
+模板；人物同一性归 book，词面解析归 names。surface_forms 由 compiler 从部件
+字面派生（歧义只接受 wire 的 form_overrides）；模板须逐字渲染源 surface，纯称谓
+（form=None）不含本人姓名字面。`name_projection()` 提供专名与家族字面消费视图。
 """
 from __future__ import annotations
 
 import re
-from typing import Any, Final, Literal
+from typing import Annotated, Any, Final, Literal
 
-from pydantic import Field, model_validator
+from pydantic import AfterValidator, Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 
-Slug = str  # 小写下划线人物键；pattern 在 compile 层统一校验（dict key 无法带 Field）
+Slug = str  # 其它人物引用沿用原字符规则；人物表的保留字约束见 CharacterKey。
+
+
+def _character_key_is_not_reader(key: str) -> str:
+    """reader 是认知持有者保留字，不得注册成故事人物；其它字符规则保持原口径。"""
+    if key == 'reader':
+        raise ValueError('人物键禁 reader——reader 是读者认知持有者保留字，不是人物')
+    return key
+
+
+# 三种人物载体共用同一保留字闸；dict key 的错误仍定位到 characters.<key>，
+# 不用顶层 model_validator 把付费 wire 的一个条目错误扩大为整份返修。
+CharacterKey = Annotated[str, AfterValidator(_character_key_is_not_reader)]
 
 # ───────────────────── 变化键闭集与固定作用域（D8；CS-S Phase 3）─────────────────────
 #
@@ -205,7 +208,7 @@ class CharactersCore(StrictModel):
 
     Preserve/Brief/章节编译只消费这份 core view——`characters_sha256` 绑定它，
     名称结构修订不会连带使已购结果失效（F6 裁决）。"""
-    characters: dict[Slug, CharacterEntry] = Field(min_length=1)
+    characters: dict[CharacterKey, CharacterEntry] = Field(min_length=1)
     initial_state: tuple[InitialStateAtom, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')

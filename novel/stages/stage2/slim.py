@@ -52,11 +52,15 @@ from typing import Any, Iterable
 
 from contracts.schema.observation import (
     STAGE2_CHAPTERS_PROTOCOL, STAGE2_CHAPTERS_WIRE_PROTOCOL, ChapterObservationWire,
+    is_fact_ref,
 )
 from novel.core.text import norm
 
 #: 代码派发的章内命题本地句柄：k01..（OBSERVATION_HANDLE_PATTERN 内）。
 _PROP_SEQUENCE = 'k{:02d}'
+
+#: canonical 效应的现役字段集（逆映射的可表达面；多出的字段一律拒绝）。
+_CANONICAL_EFFECT_FIELDS = frozenset({'target', 'key', 'op', 'modality', 'value', 'basis'})
 
 #: 段 id 的数值序键：`e{章}_{段}` → (章序, 段序)——≥100 段的章不按字典序。
 _SEGMENT_ID = re.compile(r'^e(\d+)_(\d+)$')
@@ -184,7 +188,7 @@ class _PropRegistry:
 
     与 CS-1 的 D1 配对判定同一把尺（norm()）：标点宽度不同的重引归并同一
     句柄，norm 后不同即另一条命题——不模糊合并、不替模型选边（I-20）。
-    派发顺序＝拍序、拍内 state 先于 know（与 rc12 章内纪律的遍历序一致，
+    派发顺序＝拍序、拍内 change 先于 know（与 rc12 章内纪律的遍历序一致，
     expand/slim/`_chapter_handle_discipline` 三处同一顺序，判据 25）。
     """
 
@@ -235,14 +239,9 @@ def expand_chapter_wire(
         refs = intervals[index] if intervals is not None else [beat.start]
         effects_out: list[dict] = []
         for j, effect in enumerate(beat.change):
-            if effect.key == 'scene_location':
-                # 单一通路（S-04）：场景位置走拍级字段，change 里出现即拒——
-                # 双路径会让 canonical 出现两种来源的同一登记键。
-                issues.append((
-                    ('beats', index, 'change', j),
-                    f'{where} change[{j + 1}] 用 scene_location 表达场景位置——'
-                    'scene_location 是拍级字段（beats[i].scene_location），不进 change'))
-                continue
+            # 单一通路（S-04）：场景位置只走拍级字段——change.key 的闭集正则不含
+            # scene_location，wire 模型在 `model_validate` 就按条目拒绝（指引见
+            # `common.wire_shape_issues`），这里不会收到它。
             target, target_error = _target_of(effect.at, where)
             if target_error is not None:
                 issues.append((('beats', index, 'change', j), target_error))
@@ -311,36 +310,46 @@ def slim_chapter_wire(observation: dict) -> dict:
     只丢默认值与机械字段、把重引命题的 statement 经句柄表还原成文本；
     命题句柄本身不保留（expand 按文本重新派发——回归比较须按「首现序
     重标句柄」归一，见 tests/test_str06_chapter_slim.py）。loops 原样。
-    v8 逆映射只表达 v8 形状：canonical 效应带 disclosure=concealed 或
-    effect 命题（1b 删的死字段）时**拒绝**而不是静默丢弃（I-34——迁移面
-    不制造语义丢失）。
+    逆映射只表达现役 wire 形状：canonical 效应带 wire 不可表达的字段（1b 删掉
+    的 disclosure／proposition／scope 一类旧面）时**拒绝**而不是静默丢弃
+    （I-34——迁移面不制造语义丢失）；不按字段名点名死字段，任何多余字段同拒。
     """
     statements: dict[str, str] = {}
     for beat in observation.get('beats') or []:
-        for transfer in (beat.get('effects') or []) + (beat.get('cognition') or []):
+        for transfer in beat.get('cognition') or []:
             prop = transfer.get('proposition') or None
             if prop and prop.get('statement'):
                 statements[prop['ref']] = prop['statement']
 
     beats_out = []
     for beat in observation.get('beats') or []:
+        refs = list(beat.get('source_refs') or ())
+        if not refs:
+            raise ValueError('拍没有可作 start 的 source_refs')
         # 拍级 scene_location：从登记键 world 效应还原（compiler 合成的对应逆）。
         scene_location = None
         effects = []
         for effect in beat.get('effects') or ():
-            if (effect.get('key') == 'scene_location'
-                    and (effect.get('target') or {}).get('kind') == 'world'):
-                scene_location = effect.get('value')
-                continue
-            disclosure = effect.get('disclosure') or {}
-            if disclosure.get('visibility') == 'concealed' or effect.get('proposition'):
+            extra = sorted(set(effect) - _CANONICAL_EFFECT_FIELDS)
+            if extra:
                 raise ValueError(
-                    f'canonical 效应携带 v8 不可表达的死字段（concealed／命题锚）：'
-                    f'{effect.get("key")}——CS-S 1b 删除该字段前，此观察不能逆映射')
+                    f'canonical 效应携带 wire 不可表达的字段 {extra}：'
+                    f'{effect.get("key")}——逆映射拒绝而不是静默丢弃语义')
+            if effect.get('key') == 'scene_location':
+                # 拍级字段只能还原 compiler 合成的单条 actual/set/world 效应。
+                # 直接 canonical 面可携带其他 op/modality 或较窄的证据，不能把它们
+                # 当成默认位置后丢掉例外（或把两条位置写入静默折叠成最后一条）。
+                if (scene_location is not None
+                        or (effect.get('target') or {}).get('kind') != 'world'
+                        or effect.get('op') != 'set'
+                        or effect.get('modality') != 'actual'
+                        or not isinstance(effect.get('value'), str)
+                        or not effect['value']
+                        or [b['segment'] for b in effect.get('basis', ())] != refs):
+                    raise ValueError('canonical scene_location 效应不可表达为拍级位置字段')
+                scene_location = effect['value']
+                continue
             effects.append(effect)
-        refs = list(beat.get('source_refs') or ())
-        if not refs:
-            raise ValueError('拍没有可作 start 的 source_refs')
         slim_beat: dict[str, Any] = {
             'event': beat['event'],
             'on_stage': list(beat.get('participants') or ()),
@@ -373,7 +382,7 @@ def slim_chapter_wire(observation: dict) -> dict:
         for entry in beat.get('cognition') or ():
             prop = entry.get('proposition') or {}
             ref = prop.get('ref')
-            if isinstance(ref, str) and ref.startswith('f') and ref[1:].isdigit():
+            if is_fact_ref(ref):
                 # Phase 2：书级词表引用（f{nn}）——逆映射回 fact 字段，不还原文本。
                 know_out.append({
                     'who': entry['holder'], 'how': entry['mode'], 'fact': ref,

@@ -297,6 +297,48 @@ def test_chapter_prompt_field_lists_match_wire_schema():
     assert declared('3. know：') == set(SlimCognition.model_fields)
 
 
+def _declared_keys(prompt: str, section: str, marker: str) -> set[str]:
+    """提示词里 `section` 之后第一个 `marker {{…}}` 声明的键集合（"a"/"b" 形拆开）。"""
+    import re
+    m = re.search(re.escape(section) + r'.*?' + re.escape(marker) + r'\s*\{\{(.*?)\}\}',
+                  prompt, re.DOTALL)
+    assert m, f'提示词缺 {section} 的「{marker} {{…}}」键清单'
+    keys: set[str] = set()
+    for item in m.group(1).split(','):
+        keys.update(part.strip('"\'[] ') for part in item.split('/') if part.strip('"\'[] '))
+    return keys
+
+
+def test_chapter_prompt_beat_and_loop_key_lists_match_wire_schema():
+    """实证反例（2026-10-08 审阅）：Phase 3 改名时把 `scene_location` 的完整说明
+    从章提示词删了——它是 SlimBeat 的拍级字段（冻结根里最高频的键，624 条效应
+    151 条），模型不被告知就会少写或不写，所有章的场景位置静默丢失。拍键清单
+    必须与 `SlimBeat` 字段集合逐名相等（不只比 change／know 两段），loops 同理。"""
+    from contracts.schema.observation import SlimBeat
+    from contracts.schema.source import LoopAction
+    from novel.stages.common import CHAPTER_PROMPT
+
+    assert _declared_keys(CHAPTER_PROMPT, '1. beats：', '每拍') == set(SlimBeat.model_fields)
+    assert _declared_keys(CHAPTER_PROMPT, '4. loops：', '每项') == set(LoopAction.model_fields)
+    # 字段只出现在清单里不够：必须有格式说明（缺省语义＋不进 change 的去向）。
+    assert '"scene_location"' in CHAPTER_PROMPT
+    assert 'scene_location：' in CHAPTER_PROMPT
+
+
+def test_book_prompt_item_key_lists_match_wire_schema():
+    """book 提示词的 initial_state／world_constraints／facts 键清单与 wire 模型
+    同口径逐名相等（证据指针 evidence_refs 由前置「证据段指针」段统一声明）。"""
+    from contracts.schema.observation import FactWire, InitialFactWire, WorldRuleWire
+    from novel.stages.common import BOOK_PROMPT
+
+    assert 'evidence_refs' in BOOK_PROMPT
+    assert (_declared_keys(BOOK_PROMPT, '2. initial_state', '每项') | {'evidence_refs'}
+            == set(InitialFactWire.model_fields))
+    assert (_declared_keys(BOOK_PROMPT, '3. world_constraints', '每项') | {'evidence_refs'}
+            == set(WorldRuleWire.model_fields))
+    assert _declared_keys(BOOK_PROMPT, '4. facts', '每项') == set(FactWire.model_fields)
+
+
 def test_review_chapter_precheck_carries_segment_text():
     """实证反例（2026-10-07，ch04 owner patch 收口）：str06_review 的 ch owner
     预检把闭集传成 `frozenset(local)`（只 id 无文本的合成闭集），v7 的 basis

@@ -85,7 +85,7 @@ from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
 from novel import run_identity
 from novel.core.validation import ValidationIssue, validation_identity
 from contracts.invariants import (
-    NODES, OWNER_REVISION_MAX_ROUNDS, WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
+    NARROW_OWNER_UNITS, NODES, OWNER_REVISION_MAX_ROUNDS, WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
 )
 from contracts.schema import ARTIFACT_SPECS
 from contracts.schema.common import FreeProvenance, InputEdge, LlmProvenance
@@ -145,12 +145,6 @@ _NODE_PREFIX = 'str06.'
 _RUNNER_OWNER_ALIASES: Final[dict[str, str]] = {
     'design': 'body_design',
     'hook_writer': 'hook',
-    # CS-S 1c：names 节点内的变体窄调用 owner——归属 str06.stage2.names
-    # （不增节点，T-3）；owner 字符串进请求身份，两个 owner 的请求互不混用。
-    'name_variants': 'names',
-    # CS-S Phase 2（D-2 A）：associate 节点内的跨章因果窄调用 owner——归属
-    # str06.stage2.associate（不增节点）；身份窄调用与因果窄调用互不混用。
-    'cross_cause': 'associate',
 }
 
 
@@ -390,7 +384,16 @@ def semantic_owner_unit(owner: str) -> tuple[str, str]:
     `strategy` 整书单元随 str06.stage2.source 退役）。节点归属由 owner 名当场
     解析：别名表 → 节点 owner 末段 → `NODES` 的 `str06.` 命名空间，hit 不到
     就关闭式上抛，不猜一个节点记账。
+
+    节点内窄调用 owner（`name_variants`／`cross_cause`，CS-S 1c／Phase 2，T-3 不增
+    节点）归属所在节点，但**独占一个工作单元**（scope＝`book:<owner>`，登记表
+    `contracts/invariants.py::NARROW_OWNER_UNITS`）：与主调用共用单元账会让后一个
+    ask 取轮时把前一个已验收未封存的首答记成 `superseded_unadopted`，并瓜分同一份
+    内容额度。owner 字符串同时进请求身份，主／窄请求互不混用。
     """
+    narrow = NARROW_OWNER_UNITS.get(owner)
+    if narrow is not None:
+        return narrow
     match = re.fullmatch(r'ch(\d+)', owner)
     if match:
         return 'str06.stage2.chapters', f'chapter:{int(match.group(1))}'

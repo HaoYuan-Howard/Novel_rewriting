@@ -18,8 +18,8 @@
 重放结论只对「当前输入」成立，输入身份与原运行对不上时在报告头里单独标出。
 
 目前覆盖 design（str06.stage4.body_design）、preserve（str06.stage4.preserve）与
-associate（str06.stage2.associate——v2 已购 wire 对 v3 维度投影的只读读数）；
-未接入的 owner 明确报告「未接入」，不静默跳过。
+associate（str06.stage2.associate——现役 v5 已购 wire 按**当前候选集**逐候选恰答一次
+重放；旧协议回答一律报 obsolete，不做读数）；未接入的 owner 明确报告「未接入」，不静默跳过。
 
 用法：
   python -X utf8 tools/replay_candidates.py <输出根> [--sid <sid>] [--owner design] [--json]
@@ -185,15 +185,20 @@ def _preserve_replayer(base: Path, sid: str, repository: Str06Repository,
     return lambda wire: replay_preserve_round(wire, chars, blueprint)
 
 
-# ─── associate：v2 已购 wire 对 v3 维度投影的只读读数（CS-H H4，RC-65） ──────
+# ─── associate：已购 wire 对当前候选集的只读重放（CS-H H4；CS-S Phase 3 起 v5） ──
 
 def associate_inputs(repository: Str06Repository, *, chapter_count: int):
-    """associate 重放的正式输入：四份观察经名称归一后的关联投影空间。
+    """associate 重放的正式输入：关联投影空间与代码给出的身份候选集。
 
     与 `run_associate` 同一投影（book／chapters／names 观察 → 名称归一 →
-    `project_association_space`）；读不到或归一未闭合＝ReplayNotRun。
+    `project_association_space` → `project_identity_candidates`）；返回
+    ``(space, candidates)``。候选集是验收的分母（逐候选恰答一次）——不传候选
+    就退回宽松验收，漏答的 wire 会被误报为可沿用。读不到或归一未闭合＝ReplayNotRun。
     """
-    from novel.stages.stage2 import normalize_name_observations, project_association_space
+    from novel.stages.stage2 import (
+        normalize_name_observations, project_association_space,
+        project_identity_candidates,
+    )
     try:
         book = repository.read_model('stage2/observations/book.json')
         names = repository.read_model('stage2/observations/names.json')
@@ -205,23 +210,24 @@ def associate_inputs(repository: Str06Repository, *, chapter_count: int):
         book, chapters = normalize_name_observations(book, chapters, names.structure)
     except ValueError as exc:
         raise ReplayNotRun(f'名称局部归一未闭合，不能投影关联空间：{exc}') from exc
-    return project_association_space(book, chapters)
+    space = project_association_space(book, chapters)
+    return space, project_identity_candidates(space, book)
 
 
-def replay_associate_round(wire: dict, space) -> dict:
+def replay_associate_round(wire: dict, space, candidates) -> dict:
     """已购 associate 回答的只读读数（CS-S Phase 3 起）。
 
     v2～v4 wire 的 `same_state_dimension`／维度投影读数面已随 associate v5
     删除（change 键入 `CHANGE_KEYS` 闭集＝键即 canonical，S-05）——旧协议
     回答一律 reuse=obsolete（闭集原因「协议不兼容」，整份新购）；不再对旧根
     做维度分类读数（states／dimensions 登记面已死）。现役 v5 wire 走当前
-    机械验收如实报 reuse。
+    机械验收如实报 reuse——验收分母是 ``candidates``（逐候选恰答一次）。
     """
     from novel.stages.stage2 import compile_associate_observation
     if not isinstance(wire, dict):
         return {'status': 'ran', 'reuse': 'unknown', 'reason': 'wire 不是 JSON object'}
     if wire.get('protocol_version') == STAGE2_ASSOCIATE_PROTOCOL:
-        observation, errors = compile_associate_observation(wire, space)
+        observation, errors = compile_associate_observation(wire, space, candidates)
         return {'status': 'ran', 'passed': observation is not None,
                 'error_count': len(errors),
                 'codes': dict(Counter(error_code(e) for e in errors)),
@@ -235,8 +241,8 @@ def replay_associate_round(wire: dict, space) -> dict:
 
 def _associate_replayer(base: Path, sid: str, repository: Str06Repository,
                         source: dict) -> Callable[[dict], dict]:
-    space = associate_inputs(repository, chapter_count=source['chapter_count'])
-    return lambda wire: replay_associate_round(wire, space)
+    space, candidates = associate_inputs(repository, chapter_count=source['chapter_count'])
+    return lambda wire: replay_associate_round(wire, space, candidates)
 
 
 #: owner → 构造重放函数的工厂。后续批次在此登记其余 owner。
@@ -331,6 +337,7 @@ def _summary(rounds: list[dict]) -> dict:
         'green': [r['ordinal'] for r in rounds if r['replay'].get('reuse') == 'green'],
         'failed': [r['ordinal'] for r in rounds if r['replay'].get('reuse') == 'failed'],
         'unknown': [r['ordinal'] for r in rounds if r['replay'].get('reuse') == 'unknown'],
+        'obsolete': [r['ordinal'] for r in rounds if r['replay'].get('reuse') == 'obsolete'],
         'recorded_accepted_but_replay_failed': [
             r['ordinal'] for r in rounds
             if (r['recorded'] or {}).get('accepted') is True and r['replay'].get('reuse') == 'failed'],
@@ -370,16 +377,15 @@ def render(report: dict) -> str:
             if replay_row['status'] != 'ran':
                 lines.append(f'    重放：未运行——{replay_row["reason"]}')
                 continue
-            if 'pairs_total' in replay_row:
-                # associate（v2 已购 wire 的 v3 维度读数）：只报分类，不判内容对错。
-                lines.append(
-                    f'    维度读数：{replay_row["state_writes"]} 条状态写入→'
-                    f'{replay_row["dimensions"]} 个维度；same_state_dimension '
-                    f'{replay_row["pairs_total"]} 对＝同键空操作 {replay_row["same_address_noop"]}'
-                    f'（v3 已按地址合并，不再需要）＋近义键 {replay_row["cross_key_needed"]}'
-                    f'（v3 仍需维度配对）＋对象冲突 {replay_row["target_mismatch"]}'
-                    f'＋不可解析 {replay_row["unresolvable"]}')
-                lines.append('    沿用：不可沿用（v2 协议对 v3 关闭式拒读；读数不判配对正确性）')
+            if replay_row.get('passed') is None:
+                # 没有验收结论的行（passed 缺省或 None）：associate 旧协议回答
+                # （obsolete——协议字面量与现役不符，整份新购）或非对象 wire
+                # （unknown）。不套用“通过／未通过”的版式，直说原因。
+                protocol = replay_row.get('protocol')
+                label = ('协议已淘汰' + (f'（{protocol}）' if protocol else '')
+                         if replay_row['reuse'] == 'obsolete' else '无法判定')
+                lines.append(f'    重放：{label}——{replay_row["reason"]}')
+                lines.append('    沿用：不可沿用')
                 continue
             checks = ' '.join(f'{c["name"]}={c["status"]}'
                               for c in replay_row.get('checks', ()))
@@ -396,7 +402,8 @@ def render(report: dict) -> str:
                                        if replay_row['reuse'] == 'green' else '不可沿用'))
         usage = summary['usage']
         lines.append(f'汇总：全绿 {summary["green"] or "无"}；未通过 {summary["failed"] or "无"}；'
-                     f'未运行 {summary["unknown"] or "无"}；记录已接受但重放未通过 '
+                     f'未运行 {summary["unknown"] or "无"}；协议已淘汰 {summary["obsolete"] or "无"}；'
+                     f'记录已接受但重放未通过 '
                      f'{summary["recorded_accepted_but_replay_failed"] or "无"}')
         lines.append('已购用量（账内回答值，未知不作零）：'
                      f'输入 {usage["prompt_tokens"]}（未知{usage["prompt_tokens_unknown"]}）'

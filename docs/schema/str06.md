@@ -104,7 +104,7 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 
 ### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
 
-现役版式为 `str06-rc19`（CS-S Phase 2：观察面收敛——facts 词表/know.fact/associate v4；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
+现役版式为 `str06-rc20`（CS-S Phase 3：观察面收官——CHANGE_KEYS 闭集/拍级 access/reader 派生/associate v5；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
 `7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个（CS-3 bind
 退役后 13），运行配置未变。
 book 观察 `stage2-book-v3`、chapters 独立 `stage2-chapters-v2`（names 保持
@@ -277,7 +277,7 @@ Binding 不维护第二份初始态。
 | str06.stage2.book | 是 | 书 | 全书原文（含 e00 引子句段）与证据句段清单 | 人物候选（可读 slug、称谓及证据）、初态、世界约束 |
 | str06.stage2.chapters | 是 | 章（并行） | 本章句段、第 1..k-1 章原文、书级人物表、抽取协议 | 有序事件及事实/认知/悬念转移、场景边界、时间模式、证据；只含章内局部句柄 |
 | str06.stage2.names | 是 | 书 | 书级人物表与全文 | 名称结构（家族、名、化名、称谓构词） |
-| str06.stage2.associate | 是 | 书 | book 与 chapters 观察的句柄及最小文本 | 同一命题、同一状态维度、悬念开合配对、跨章因果、跨章续场；只选已给句柄 |
+| str06.stage2.associate | 是 | 书 | book 与 chapters 观察的候选及最小文本（候选由代码给出） | 同一命题、悬念开合配对、跨章因果、跨章续场；逐候选恰答一次，只选已给候选 |
 | str06.stage2.compile | 否 | 书 | 以上四份 | 解析证据、生成 ID、执行关联，以同一提交记录发布 Characters＋Blueprint；源 fold 读数 |
 
 1. **编号归 compiler**：拍号、状态与约束编号、命题/loop/场景 ID、章序、offset、hash
@@ -295,8 +295,8 @@ Binding 不维护第二份初始态。
 5. **发布（D9）**：compile 是 Characters＋Blueprint 两份真源的唯一 writer；下游只读
    canonical；`stage2/compiled/book_extraction.json` 派生输入退役，Stage4 的人物 core
    由 Characters 投影。
-6. **读数**：源 fold 只消费 canonical transitions；未揭示 concealed、空转移拍比例等
-   读数保留（度量，不是门，`R-2.17`）。
+6. **读数**：源 fold 只消费 canonical transitions；知情时间线、空转移拍比例等
+   读数保留（度量，不是门，`R-2.17`；`concealed` 效应与其未揭示读数已随 CS-S 1b 删除）。
 
 现役 v14 契约（保留拍三类转移 effects/cognition/loops、场景边界、`temporal_mode`，并增加源表达，见
 `contracts/schema/source.py` 与 `R-2.3`/`R-2.12`）是五节点重建的起点。B2 前半已落地：
@@ -885,9 +885,13 @@ F-1/F-2/F-3），再做 D10 两本 golden（先修 `tests/golden.py` 的退役 r
 
 ### 名称同一性与材料返修（CS-R）
 
-names wire 使用 `stage2-names-v3`（rc15 段号按自然段寻址），显式提供 `resolutions`。每条包含 literal、
-status（same／unresolved）、char_id、surface、basis 和 reason。same 指向已登记
-人物称谓；unresolved 的两个指向字段必须为 null。basis 保留源句字面。
+【CS-S 1c 起的现役形态】names 结构 wire 为 `stage2-names-v6`（无 `surface_forms`、无
+`resolutions`）；变体同一性判定改由节点内窄调用 `name_variants`（wire
+`stage2-name-variants-v1`）逐候选给出。落盘的 `resolutions` 每条仍包含 literal、
+status（same／unresolved／not_name）、char_id、surface、basis 和 reason。same 指向已登记
+人物称谓（且只能是候选的近似锚人物）；unresolved／not_name 的两个指向字段必须为 null。
+basis 保留源句字面。以下为 CS-R 当时的 v3 记述，保留作历史背景：names wire 使用
+`stage2-names-v3`（rc15 段号按自然段寻址），显式提供 `resolutions`。
 名称观察与 Characters 的信封为 v2：旧版本不能补空 resolutions，须由 names
 按新协议重建后通过 compile 重建双真源。原观察不改；关联投影和 canonical
 语义文本按有证明的局部句段归一，重复编译幂等。未决时不购买关联、不发布双真源。
