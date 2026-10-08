@@ -512,8 +512,75 @@ def _compile_name_structure_located(
 
 # ───────────────────────── 变体窄调用的编译（CS-S 1c） ─────────────────────────
 
-def name_variants_prompt(candidates, evidence) -> str:
-    """`name_variants` 窄调用 prompt（候选闭集＋每候选的出现段与文本）。"""
+_REF_RE = None
+
+
+def _neighbour_refs(ref: str, evidence) -> tuple[str, ...]:
+    """出现段的同章前后各一段（段号 ±1，章内越界即无；e00 引子同法）。
+
+    邻段只是判定上下文（正名复指一类证据常在邻段），不是证据段——
+    `evidence_refs` 仍只能从出现段里选（compile 同口径核对）。
+    """
+    import re as _re
+    global _REF_RE
+    if _REF_RE is None:
+        _REF_RE = _re.compile(r'^e(\d+)_(\d+)$')
+    m = _REF_RE.match(ref)
+    if m is None:
+        return ()
+    chapter, segment = int(m.group(1)), int(m.group(2))
+    return tuple(f'e{chapter:02d}_{n:02d}' for n in (segment - 1, segment + 1)
+                 if f'e{chapter:02d}_{n:02d}' in evidence)
+
+
+def _literal_count(literal: str, evidence) -> int:
+    """字面在全书证据段的子串出现次数（数量级事实，供判定参考）。"""
+    return sum((seg.get('text') or '').count(literal)
+               for seg in evidence.values())
+
+
+def _anchor_fact_line(char_id: str, anchor: str, structure, evidence) -> str:
+    """一个锚人物的机械事实：锚称谓出现次数＋姓名结构分解。"""
+    person = structure.people.get(char_id) if structure is not None else None
+    parts = [f'锚称谓「{anchor}」出现 {_literal_count(anchor, evidence)} 次']
+    if person is not None and person.family_id:
+        family = structure.families.get(person.family_id)
+        if family is not None:
+            given = f'，名「{person.given}」' if person.given else '（无名）'
+            parts.append(f'人物 {char_id} 姓「{family.literal}」{given}')
+    return '；'.join(parts)
+
+
+def _same_family_fact(structure, char_ids) -> str:
+    """同姓登记人物清单（书内唯一性事实；多锚候选覆盖全部锚人物）。"""
+    if structure is None:
+        return ''
+    literals = {}
+    for slug in char_ids:
+        person = structure.people.get(slug)
+        if person is None or not person.family_id:
+            continue
+        family = structure.families.get(person.family_id)
+        if family is None:
+            continue
+        literals.setdefault(family.literal, set()).add(slug)
+    lines = []
+    for literal in sorted(literals):
+        peers = sorted(literals[literal])
+        only = '仅 ' + '、'.join(peers) if len(peers) == 1 \
+            else '、'.join(peers) + '（不止一人，须凭上下文区分）'
+        lines.append(f'书内姓「{literal}」的登记人物：{only}')
+    return '；'.join(lines)
+
+
+def name_variants_prompt(candidates, evidence, structure=None) -> str:
+    """`name_variants` 窄调用 prompt。
+
+    材料面（2026-10-08 修复「裴知远」死锁）：每候选给出现段全文＋**同章邻段
+    上下文**（正名复指证据常在邻段）＋代码确定性派生的机械事实（字面/锚称谓
+    出现次数、锚人物姓名结构、同姓登记人物清单）。事实由代码给出、判定仍归
+    模型（S2-10/I-20）；邻段只是上下文，`evidence_refs` 仍限于出现段。
+    """
     from novel.stages.common import NAME_VARIANTS_RULES
     lines = ['【候选清单】（每条恰答一次；判定与证据只能从中选）']
     for index, cand in enumerate(candidates, 1):
@@ -523,6 +590,20 @@ def name_variants_prompt(candidates, evidence) -> str:
         for ref in cand.segments:
             text = (evidence.get(ref) or {}).get('text') or ''
             lines.append(f'   [{ref}] {text}')
+            neighbours = [n for n in _neighbour_refs(ref, evidence)
+                          if n not in cand.segments]
+            if neighbours:
+                lines.append('   （邻段上下文，非证据段：')
+                lines.extend(f'     [{n}] {(evidence.get(n) or {}).get("text") or ""}'
+                             for n in neighbours)
+                lines.append('   ）')
+        facts = [f'字面「{cand.literal}」全书出现 {_literal_count(cand.literal, evidence)} 次']
+        facts.extend(_anchor_fact_line(char_id, anchor, structure, evidence)
+                     for char_id, anchor in cand.anchors)
+        same_family = _same_family_fact(structure, [a for a, _ in cand.anchors])
+        if same_family:
+            facts.append(same_family)
+        lines.append(f'   事实：{"；".join(facts)}。')
     body = '\n'.join(lines)
     return NAME_VARIANTS_RULES.format(candidates=body,
                                       protocol=STAGE2_NAME_VARIANTS_WIRE_PROTOCOL)

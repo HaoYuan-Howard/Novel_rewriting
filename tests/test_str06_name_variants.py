@@ -226,3 +226,58 @@ def test_same_verdict_must_point_at_an_anchor_person():
         value, located = compile_name_variants(
             wire(char_id, surface), candidates, evidence=evidence, characters=core)
         assert not located and value[0]['char_id'] == char_id
+
+
+def test_variants_prompt_carries_neighbor_context_and_mechanical_facts():
+    """判据（2026-10-08 修复「裴知远」死锁）：判定材料须含**同章邻段上下文**
+    （正名复指证据常在邻段——只给出现段会让单次笔误在材料面上不可判定）与
+    代码派生的机械事实（字面/锚称谓出现次数、姓名结构、同姓登记人物清单）；
+    邻段明确标注非证据段（evidence_refs 仍限出现段，compile 同口径核对）。"""
+    from novel.stages.stage2.names import name_variants_prompt
+    evidence = {
+        'e01_01': {'chapter': 1, 'text': '夫君连日在外吃酒。'},
+        'e01_02': {'chapter': 1, 'text': '家里就剩下了我和裴知远。'},
+        'e01_03': {'chapter': 1, 'text': '我和裴书远在家里偶遇的次数变多了。'},
+        'e02_01': {'chapter': 2, 'text': '裴书远别扭地打招呼。裴书远又来了。'},
+    }
+    core = _core_with({'pei': ['裴书远']})
+    structure = NameStructure.model_validate({
+        'families': {'fam_pei': {'literal': '裴', 'forms': []}},
+        'people': {'pei': {'family_id': 'fam_pei', 'given': '书远', 'aliases': [],
+                           'surface_forms': {'裴书远': '{family}{given}'}}},
+        'resolutions': []})
+    candidates = name_variant_candidates(structure, core, evidence)
+    assert [c.literal for c in candidates] == ['裴知远']
+    prompt = name_variants_prompt(candidates, evidence, structure)
+    assert '[e01_02] 家里就剩下了我和裴知远。' in prompt
+    # 邻段上下文：出现段前后各一段（e01_01／e01_03），且明确非证据段。
+    assert '邻段上下文，非证据段' in prompt
+    assert '[e01_03] 我和裴书远在家里偶遇的次数变多了。' in prompt, \
+        '正名复指证据必须在材料里'
+    # 机械事实：候选出现 1 次、锚称谓出现次数、姓名结构、同姓唯一清单。
+    assert '字面「裴知远」全书出现 1 次' in prompt
+    assert '锚称谓「裴书远」出现' in prompt
+    assert '人物 pei 姓「裴」，名「书远」' in prompt
+    assert '书内姓「裴」的登记人物：仅 pei' in prompt
+
+
+def test_variants_prompt_marks_multi_anchor_same_family_as_needing_context():
+    """守门反例：同一字面落在两个同姓锚（裴书远／裴书达）邻域——事实行必须
+    如实写「不止一人，须凭上下文区分」，不得借唯一性事实替模型判定。"""
+    from novel.stages.stage2.names import name_variants_prompt
+    core, structure, evidence = _two_anchor_case()
+    candidates = name_variant_candidates(structure, core, evidence)
+    prompt = name_variants_prompt(candidates, evidence, structure)
+    assert '不止一人，须凭上下文区分' in prompt
+    assert '仅 pei、' not in prompt
+
+
+def test_variants_rules_pin_two_axis_evidence_standard():
+    """判据锚定（2026-10-08）：same＝字面相似＋上下文证据之一（两轴缺一不可，
+    证据形态 a/b/c 显式列出）；「仅凭全书只出现一次」不构成 unresolved——
+    单次笔误正是本任务最常见的形态；邻段不进 evidence_refs。"""
+    from novel.stages.common import NAME_VARIANTS_RULES
+
+    for phrase in ('两轴缺一不可', '正名复指', '上下文唯一匹配', '称呼链延续',
+                   '不构成 unresolved 的理由', '邻段只是上下文，不进 evidence_refs'):
+        assert phrase in NAME_VARIANTS_RULES, phrase

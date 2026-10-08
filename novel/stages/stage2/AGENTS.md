@@ -44,7 +44,7 @@ Canonical = truth → Projection = expose → Validator = enforce。
 | S2-7 | `str06.stage2.associate` 只建立同一性与引用（D8）：输入是 compiler 给出的**未决候选＋最小文本**（近义命题对／跨章 open×close／相邻章 seam——Phase 3 起无维度候选：change 键闭集＝键即 canonical），输出逐候选恰答一次 verdict——答案只能是已给候选，漏答／多答／编造即机械缺陷；缺项、歧义、冲突保持未决——不默认合并，也不默认不同；不移动事实成立、角色知情或读者揭示时点。跨章因果是同节点内独立窄调用（D-2 A），候选同样由代码给出。 |
 | S2-8 | Book／Chapters／Names／Associate 均为中间观察或解析产物，不得成为 Characters／Blueprints 之外的第三套 canonical story state。Book 的 facts 是后续抽取的**共享命题词表**（Phase 2）：F 编号代码派发，下游经章观察 know.fact 引用与 fold 知情时间线读数消费（T-5：读数不进下游 API），不作独立真源（S2-1／S2-5 补「词表不是真源」）。Phase 3：change 键入 `CHANGE_KEYS` 闭集（键即 canonical）＋拍级 `access` 获知通道（witnessed 默认／narrated 叙述直陈例外）；观察面不自写读者知情——wire 的 know.who 禁 reader，reader cognition 由 compile 按 access 派生注入蓝图。 |
 | S2-9 | （已落地，2026-10-07 Phase 2）正常路径中 Associate 不重新理解整章或整书；只消费 compile 无法确定性闭合的 unresolved candidates，做条目级窄解析；候选由代码给出，无候选＝零调用。跨章同一性的正路是 chapters 的 know.fact 引用（引用即同一），候选只兜转写漂移。 |
-| S2-10 | Names＝词面解析，人物同一性归 Book：names 不得增删或拆合人物；归一只按显式 `same`＋证据段内局部替换，不全局替换、不模糊匹配、不猜笔误；变体候选由代码给出，未判定者保持 `unresolved` 并阻断发布；构词模板由 compiler 派生。 |
+| S2-10 | Names＝词面解析，人物同一性归 Book：names 不得增删或拆合人物；归一只按显式 `same`＋证据段内局部替换，不全局替换、不模糊匹配、不猜笔误；变体候选由代码给出，未判定者保持 `unresolved` 并阻断发布；构词模板由 compiler 派生。变体判定材料含同章邻段上下文与代码派生机械事实（出现次数/姓名结构/同姓清单，2026-10-08 修复「裴知远」单次笔误死锁），same＝字面相似＋上下文证据（正名复指/同姓唯一/称呼链）两轴缺一不可——材料缺失或标准不自洽会把单次笔误推向必然 unresolved。 |
 
 章内同一悬念句柄的open／close各最多一次，本地close不得早于本地open（拍序及
 同拍条目序）；没有本地open的close仍走跨章配对。接受与下游预检复用只读判据；存量

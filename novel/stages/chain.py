@@ -521,7 +521,8 @@ def run_names(ctx: ChainContext) -> dict:
             return list(grouped.items())
 
         variants_wire, variants_ref = ctx.ask(
-            'name_variants', name_variants_prompt(candidates, evidence),
+            'name_variants',
+            name_variants_prompt(candidates, evidence, structure),
             _validate_variants, patch=_locate_variants)
         derived, located = compile_name_variants(
             variants_wire, candidates, evidence=evidence, characters=core)
