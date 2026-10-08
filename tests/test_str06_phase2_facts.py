@@ -14,7 +14,8 @@
     near-synonym 转写经 same verdict 并入 fact 类；
   • D-5：cognition holder=public 在 compile 闭集拒收；
   • fold：facts 的知情时间线读数（known_at_start 起步＋逐认知转移事件＋
-    初始已知者又被告知的冗余读数；T-5：只读读数，不进下游 API）。
+    初始已知者又被告知的冗余读数——引用 e00 的开场拍重演豁免（2026-10-08
+    口径统一：引子内已完成的告知算开场已知）；T-5：只读读数，不进下游 API）。
 全部确定性构造，零模型调用。
 """
 from __future__ import annotations
@@ -301,6 +302,53 @@ def test_compile_resolves_fact_refs_and_merges_near_synonym_via_verdict():
         ('yun_niang', 'confirms', 'b03_01'), ('reader', 'learns', 'b03_01')]
     assert any('初始已知者 yun_niang 又被拍' in line and 'confirms' in line
                for line in outcome.fold['events']), outcome.fold['events']
+
+
+def test_fold_redundancy_reading_exempts_pre_chapter_replay_beats():
+    """判据（2026-10-08 口径统一）：「故事开始」＝第 1 章第一拍开始——引子
+    （e00）内已完成的告知算开场已知（结果记 known_at_start），引用 e00 的
+    开场拍重演获知过程是预期形态，不作「两处落账」错位读数；不引用章前文字
+    的章内告知保持信号。豁免只影响读数，时间线逐转移照记。"""
+    from contracts.schema.observation import AssociateObservation
+    characters = {
+        'fu_jun': {'canonical': '夫君', 'surfaces': [
+            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+        'yun_niang': {'canonical': '云娘', 'surfaces': [
+            {'surface': '云娘', 'source_refs': ['e01_02']}]}}
+    book = _book_v6(characters, [{
+        'fact_id': 'f01', 'statement': '夫君藏身床底',
+        'basis': _basis('e00_01'),
+        'known_at_start': ['yun_niang']}])
+    ch01 = {'protocol_version': CPV, 'beats': [
+        _beat('新婚夜坦白', ('e00_01',), participants=('yun_niang', 'fu_jun'),
+              cognition=[{'proposition': {'ref': 'f01', 'statement': None},
+                          'holder': 'yun_niang', 'mode': 'learns',
+                          'basis': _basis('e00_01')}])]}
+    ch02 = {'protocol_version': CPV, 'beats': [
+        _beat('事后又证实', ('e02_01',), participants=('yun_niang',),
+              cognition=[{'proposition': {'ref': 'f01', 'statement': None},
+                          'holder': 'yun_niang', 'mode': 'confirms',
+                          'basis': _basis('e02_01')}])]}
+    book_obs, chapters = _observations(book, {1: ch01, 2: ch02})
+    from tests.str06_facilities import complete_associate_fixture
+    associate = complete_associate_fixture(
+        book_obs, chapters, AssociateObservation.model_validate({
+            'protocol_version': 'stage2-associate-v5',
+            'same_proposition': [], 'loop_pairing': [],
+            'cross_chapter_cause': [], 'scene_continuation': []}))
+    outcome = compile_source_truth(book=book_obs, chapters=chapters,
+                                   names=_names_observation(book_obs),
+                                   associate=associate, evidence=EVIDENCE)
+    assert outcome.errors == [] and outcome.undecided == [], (
+        outcome.errors, [str(i) for i in outcome.undecided])
+    events = outcome.fold['events']
+    assert not any('初始已知者 yun_niang 又被拍 b01_01' in line
+                   for line in events), events
+    assert any('初始已知者 yun_niang 又被拍 b02_01' in line and 'confirms' in line
+               for line in events), events
+    assert [(event['holder'], event['mode'], event['at'])
+            for event in outcome.fold['knowledge']['f01']['events']] == [
+        ('yun_niang', 'learns', 'b01_01'), ('yun_niang', 'confirms', 'b02_01')]
 
 
 def test_fold_timeline_keeps_every_transition_not_just_the_last_per_holder():

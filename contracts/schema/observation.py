@@ -73,6 +73,11 @@ STAGE2_NAMES_PROTOCOL: Final = 'stage2-names-v4'
 #: 知情 Phase 3 由 compile 派生）。旧 v5 观察按版本字面量关闭式拒读。
 #: CS-S Phase 3（2026-10-08）：book canonical 升 v7——initial_state 键入
 #: `CHANGE_KEYS` 闭集（schema 层兜底表外键）。
+#: 2026-10-08 口径统一（用户裁决，形状不变不升版）：known_at_start 的
+#: 「故事开始」精确为**第 1 章第一拍开始的时刻**（与 `InitialFact` 同一判定
+#: 时刻）——引子（e00）内已完成的告知算开场已知（过程归第 1 章开场拍、结果
+#: 归词表起步）；后置高光前置／全书概括类引子披露不算开场已知，信息由正文
+#: 对应章观察承载。判据变化经请求身份（prompt 哈希）隔离旧采用。
 STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v7'
 #: CS-S Phase 2（2026-10-07）：chapters canonical 升 v6——cognition 的命题
 #: 可引用书级 facts（proposition.ref=f{nn}、statement=None——文本由 compile
@@ -202,6 +207,10 @@ class CharacterCandidate(StrictModel):
 class InitialFact(StrictModel):
     """初态事实（第 1 章第一拍之前已经成立的地基）。
 
+    判定时刻＝第 1 章第一拍开始（与 `Fact.known_at_start` 的「故事开始」
+    同一时刻，2026-10-08 统一口径）：引子（e00）内先行成立的状态照收；
+    叙事时间在其后的预告／全书概括不收。
+
     **没有** `state_id`：compiler 生成 `s0_*`（I-21）。target 形状与 v13
     `InitialStateAtom` 同源（`StateTarget` 复用）。CS-S 1b：`knowledge` 删
     （Phase 2 由 facts `known_at_start` 承载初始知情）。CS-S Phase 3：键入
@@ -251,6 +260,12 @@ class Fact(StrictModel):
     承载 1b 删掉的初始知情语义——故事开始那一刻已经知道该命题的人物 slug
     （空数组＝剧情中才被知晓；持有者闭集＝人物 slug，D-5 删 public、reader
     知情 Phase 3 由 compile 派生）。facts 不带 address（D-3：无消费者）。
+
+    「故事开始」＝**第 1 章第一拍开始的时刻**（2026-10-08 用户裁决统一口径，
+    与 `InitialFact` 同一判定时刻）：引子（e00）内已完成的告知算开场已知
+    （揭示过程归第 1 章开场拍、完成结果归本字段，fold 时间线并排呈现）；
+    引子若为后置高光前置／全书概括（叙事时间在第 1 章之后），其披露不算
+    开场已知（空数组），信息由正文对应章观察承载，防止新书提前披露。
     """
 
     fact_id: str = Field(pattern=FACT_ID_PATTERN)

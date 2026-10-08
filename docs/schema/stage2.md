@@ -36,7 +36,11 @@ facts 流拍对，模型只选 kind 或否决）。**v5（CS-S Phase 3）：`sam
 **书级命题词表（CS-S Phase 2）**：book 观察增 `facts:[{fact_id, statement,
 basis, known_at_start}]`——F 编号 `f{nn}` 由 compile 按列表序派发（不进 wire，
 I-21）；`known_at_start` 承载初始知情（持有者闭集＝人物 slug，D-5 删 public；
-reader 知情 Phase 3 由 compile 派生）；facts 不带 address（D-3：无消费者）。章
+reader 知情 Phase 3 由 compile 派生）；facts 不带 address（D-3：无消费者）。
+「故事开始」＝**第 1 章第一拍开始**（2026-10-08 统一口径，与 initial_state
+同一判定时刻）：引子（e00）内已完成的告知算开场已知（过程归第 1 章开场拍、
+结果归词表起步）；后置高光前置／全书概括类引子披露不算开场已知，信息由正文
+对应章观察承载（防新书提前披露）。章
 观察的 cognition 可用 `fact` 引用词表编号（wire 面 `fact` 与 `what` 恰写其一；
 canonical 面 proposition.ref=`f{nn}`、statement=None——文本由 compile 回填），
 跨章同一性按引用构造成立；词表近义的转写文本经 associate 候选判定并入。fold 消费

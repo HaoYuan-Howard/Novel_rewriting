@@ -339,6 +339,18 @@ def test_book_prompt_item_key_lists_match_wire_schema():
     assert _declared_keys(BOOK_PROMPT, '4. facts', '每项') == set(FactWire.model_fields)
 
 
+def test_book_prompt_pins_story_start_moment_and_prologue_split():
+    """判据锚定（2026-10-08 口径统一）：「故事开始」必须钉在**第 1 章第一拍
+    开始**的机械时刻（与 InitialFact 同一时刻），引子分流与 known_at_start
+    判据同引该定义；后置高光前置／全书概括不得记入 known_at_start（新书提前
+    披露防线）。"""
+    from novel.stages.common import BOOK_PROMPT, PRE_CHAPTER_RULE
+
+    for text in (BOOK_PROMPT, PRE_CHAPTER_RULE):
+        assert '第 1 章第一拍开始' in text
+    assert 'known_at_start' in BOOK_PROMPT and '提前披露' in BOOK_PROMPT
+
+
 def test_review_chapter_precheck_carries_segment_text():
     """实证反例（2026-10-07，ch04 owner patch 收口）：str06_review 的 ch owner
     预检把闭集传成 `frozenset(local)`（只 id 无文本的合成闭集），v7 的 basis

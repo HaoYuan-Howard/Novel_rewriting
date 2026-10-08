@@ -1103,7 +1103,7 @@ class _Folder:
         for eff in beat.effects:
             self._apply_effect(eff, beat, scene_id, chapter)
         for cog in beat.cognition:
-            self._apply_cognition(cog, beat)
+            self._apply_cognition(cog, beat, cites_pre)
         for loop in beat.loops:
             self._apply_loop(loop, beat)
         return not (beat.effects or beat.cognition or beat.loops)
@@ -1133,7 +1133,7 @@ class _Folder:
             address=address, op='set' if eff.op in ('add', 'remove') else eff.op,
             value=value, scope=scope, source=beat.beat_id)])
 
-    def _apply_cognition(self, cog, beat: Beat) -> None:
+    def _apply_cognition(self, cog, beat: Beat, cites_pre: bool = False) -> None:
         prop = cog.proposition.ref
         self.knowledge[(prop, cog.holder)] = {'mode': cog.mode, 'at': beat.beat_id}
         self.knowledge_log.append((prop, cog.holder, cog.mode, beat.beat_id))
@@ -1142,9 +1142,14 @@ class _Folder:
         fact = self.facts.get(prop)
         if (fact is not None and cog.holder in fact.known_at_start
                 and cog.mode in ('learns', 'confirms')):
-            self.events.append(
-                f'[fold] fact {prop} 初始已知者 {cog.holder} 又被拍 {beat.beat_id} '
-                f'告知（{cog.mode}）——初始知情与章内告知两处落账？')
+            # 2026-10-08 口径统一：引子（e00）内已完成的告知算开场已知（结果在
+            # known_at_start），引用章前文字的拍重演获知过程是预期形态，不作
+            # 错位读数；获知事件本身已进 knowledge_log 时间线。不引用章前文字
+            # 的章内告知保持信号——那才是「剧情中才知晓者被误标开场已知」。
+            if not cites_pre:
+                self.events.append(
+                    f'[fold] fact {prop} 初始已知者 {cog.holder} 又被拍 {beat.beat_id} '
+                    f'告知（{cog.mode}）——初始知情与章内告知两处落账？')
 
     def _apply_loop(self, loop, beat: Beat) -> None:
         if loop.op == 'open':
