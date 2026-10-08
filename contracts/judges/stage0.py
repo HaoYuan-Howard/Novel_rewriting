@@ -33,8 +33,9 @@ _hard('s0_normalization', '只做 BOM 与换行归一化', 'R-0.12')
 _hard('s0_dir_roundtrip', '书目录能被同一把寻址尺子解析回来', 'R-0.13')
 _hard('s0_source_identity', '原始小说没有被换成另一份正文', 'R-0.14')
 
-REGISTRY.register(Rule(
-    rule='s0_correctness', stage=STAGE, item='剔除段在语义上确实不是正文',
-    sev='unver', who_checks='HUMAN', requirement='R-0.7', disclosable_unver=True,
-    note='这一段到底是不是番外没有结构不变量可查。2026-09-15 全自动裁决：'
-         '人工确认入口已退役，本条转为 Q-13 内容质量类披露随交付输出。'))
+# R-0.7（剔除段语义正确性）原由 `s0_correctness` 承载：sev=unver 的披露判据，
+# 2026-09-15 全自动裁决后人工确认入口退役，本维转为 Q-13 内容质量类披露。
+# 2026-10-08 裁决删除：剔除决策已由机械判据确定性处理并由上方 hard 判据完整
+# 守护（账目/指纹/占比/判据共享），一条永 unver 的规则只会让 stage0 复检恒
+# AMBER，把「无事待确认」显示成未知；内容质量披露由 Stage7 交付 manifest 的
+# 固定披露文案承担，不再依赖本注册表行。

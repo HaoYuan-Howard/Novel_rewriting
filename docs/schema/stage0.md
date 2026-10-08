@@ -56,8 +56,10 @@ Stage0 把原始 txt 变成只含文案和正文的文本；机械校验（含�
 
 ## 五、判据与重建
 
-当前注册表共 **13 条**：**11 hard、1 info、1 unver**。
+当前注册表共 **12 条**：**11 hard、1 info**。
 
-判据名：`s0_approval`、`s0_body_ratio`、`s0_correctness`、`s0_decode`、`s0_dir_roundtrip`、`s0_hashes`、`s0_human_preserved`、`s0_nonbody_shared`、`s0_normalization`、`s0_removal_ledger`、`s0_revision_chain`、`s0_source_identity`、`s0_warnings`。
+判据名：`s0_approval`、`s0_body_ratio`、`s0_decode`、`s0_dir_roundtrip`、`s0_hashes`、`s0_human_preserved`、`s0_nonbody_shared`、`s0_normalization`、`s0_removal_ledger`、`s0_revision_chain`、`s0_source_identity`、`s0_warnings`。
 
 `s0_approval` 查 mechanical admission；`s0_revision_chain` 复算 `transform_id` 与 clean 投影一致性。版本破坏升版、拒读旧版，无通用迁移。
+原 `s0_correctness`（unver 披露，R-0.7）已于 2026-10-08 删除：人工语义确认面随全自动裁决退役，
+剔除决策由机械判据确定性处理；内容质量披露由 Stage7 交付 manifest 承担（Q-13）。

@@ -78,7 +78,7 @@ orchestrator 推进，semantic unit 生成；Stage 页只读监控。`HUMAN_NODE
 
 ### R-0 · 非正文剔除（stage0）
 
-免费识别非正文并落盘；机械校验（含正文占比闸）通过即由 producer 写入 auto 批准（`system:stage0-auto`，2026-09-15 全自动裁决），进入 Stage1。剔除的语义正确性（番外盲区，`R-0.7`）没有确定性防线，随交付披露（Q-13）。`stage0.approve` / `stage0.edit` 节点已退役（非现役节点，关闭式拒识）。
+免费识别非正文并落盘；机械校验（含正文占比闸）通过即由 producer 写入 auto 批准（`system:stage0-auto`，2026-09-15 全自动裁决），进入 Stage1。剔除的语义正确性（番外盲区）没有确定性防线，随交付披露（Q-13；原 `s0_correctness` 判据已随 2026-10-08 裁决删除，见 `R-0.7`）。`stage0.approve` / `stage0.edit` 节点已退役（非现役节点，关闭式拒识）。
 
 | # | 要求 | 谁在查 |
 |---|---|---|
@@ -89,7 +89,7 @@ orchestrator 推进，semantic unit 生成；Stage 页只读监控。`HUMAN_NODE
 | R-0.4 | 【已退役 2026-09-15】人工编辑剔除范围随 `stage0.edit` 退役；判据漏掉的那类（语义误剔/漏剔）转为 `R-0.7` 的交付披露，不再有人工修正入口 | `不适用`（退役条款） |
 | R-0.5 | transform 自证（判据 `s0_revision_chain` 复算 `transform_id`），`clean_text.txt` 是当前 transform 的唯一物化投影。无多修订祖先链 | `HARD` |
 | R-0.6 | 必须能核对**两个内容身份**：`Stage0Source.normalized_source_sha1`（归一化原文）；`clean_sha1` 从 transform 与 live 投影现算。Stage1 的真正输入身份是后者 | `HARD` |
-| R-0.7 | 剔除的**正确性**——「这一段到底是不是番外」。2026-09-15 起人工确认入口退役，本维转为 Q-13 内容质量类披露随交付输出 | `人`→`披露`（`s0_correctness`；Q-13） |
+| R-0.7 | 剔除的**正确性**——「这一段到底是不是番外」。2026-09-15 起人工确认入口退役，本维转为 Q-13 内容质量类披露随交付输出。**2026-10-08 裁决：`s0_correctness` 判据删除**——剔除决策由机械判据确定性处理，永 unver 的规则只让 stage0 复检恒 AMBER；披露由交付 manifest 固定文案承担 | `结构`（`novel/stages/stage7/assembly.py` 交付 manifest 固定披露文案；Q-13） |
 | R-0.8 | 重跑 stage0（v3）：同原文且算法结论相同 ⇒ 盘面不变；结论变化 ⇒ 整份替换 transform 并保持 mechanical admission。原文变化关闭式拒绝（`R-0.14`）。v3 无人工稿覆盖分支 | `HARD` |
 | R-0.9 | 剔除后正文占比 < 0.60 判失败——**红在花钱之前** | `HARD` |
 | R-0.10 | 可疑但不算错的按 current 内容现算为显式 `warnings[]` 视图（`STAGE0_WARNINGS` 三类），**不落 revision、不静默、不自动修正、不硬报错** | `INFO` |
@@ -704,7 +704,7 @@ reasoning 是 completion 的子口径，不再累加。统一解析顶层与 com
 
 | 守卫所在 | 需求范围 |
 |---|---|
-| 非正文剔除（`stage0`，**13 条现役**） | R-0 |
+| 非正文剔除（`stage0`，**12 条现役**；2026-10-08 删 `s0_correctness`） | R-0 |
 | 分章（`stage1`，**9 条现役**） | R-1 |
 | 源语义与名称结构（`stage2`，**18 条现役**；CS-S 1b 删 R-2.13／R-2.15） | R-2、R-3 |
 | 目标故事与确定性编译（`stage4`，**31 条现役**） | R-5、R-6（含 Guard M1–M8） |

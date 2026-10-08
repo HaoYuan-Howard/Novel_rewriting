@@ -129,10 +129,12 @@ def test_disclosure_and_degradable_sets_are_pinned():
     # F8a：新链的披露面是两条语义未评判据（正文文学质量、新名阅读质量）。
     # 旧链的 character_semantics_unverifiable／secrets_absent／plot_semantics／
     # s0_correctness 随旧链判据退役——Stage6 判官与生产正文 Judge 取消后，
-    # 语义质量一律走这两条 unver 披露。
+    # 语义质量一律走这两条 unver 披露。s0_correctness 亦于 2026-10-08 删除：
+    # 剔除决策由机械判据确定性处理，永 unver 只会让 stage0 复检恒 AMBER；
+    # 内容质量披露由 Stage7 交付 manifest 承担。
     disclosed = {r.rule for r in REGISTRY.all() if r.disclosable_unver}
     assert disclosed == {
-        'body_semantics_unver', 'naming_quality_unver', 's0_correctness'}, \
+        'body_semantics_unver', 'naming_quality_unver'}, \
         '披露集合变化须同步 Q-13 理由与本钉扎'
     # F8a：新链没有可降级判据——篇幅超限只有篇幅带可披露（R-7.3），
     # 不是「HARD 预算耗尽后降级」的 degradable 形状。
