@@ -464,3 +464,19 @@ def test_mark_defaults_follow_the_state_row_not_the_lock():
     marks = design_fact_marks(DesignWireV8.model_validate(wire))
     assert [(m.kf_id, m.op, m.modality) for m in marks] == [
         (KF, 'set', 'actual'), ('kf_' + '1' * 16, 'unknown', None)]
+
+
+def test_know_off_real_beat_reports_beat_level_path_for_narrow_repair():
+    """判据（2026-10-08，《夫君的报恩》实证三轮原地打转）：know 的认知变化未落
+    在所属义务的 real 承载拍时，issue 路径必须是**拍级**——该错的正确修法常是
+    给本拍 real 补义务标注（一拍可承载多条义务），只开 know 级窄修会禁止模型
+    改 real，语义正确的答案修不动。"""
+    brief = _brief()
+    wire = _v8_wire()
+    wire['scenes'][0]['beats'][0]['know'] = []
+    wire['scenes'][0]['beats'][1]['know'] = [{'ref': 'ob01.k01'}]
+    _expanded, issues = expand_design_wire(wire, brief=brief,
+                                           obligations=_obligations(brief))
+    assert [i for i in issues if 'real 承载拍' in i[1]] == [
+        (('scenes', 0, 'beats', 1),
+         'ob01.k01 必须落在对应义务 ob01 的 real 承载拍')]

@@ -264,7 +264,11 @@ def expand_design_wire(
                 issues.append((where, f'know 认知变化重复标注：{placement.ref}'))
             placed_changes.add(placement.ref)
             if ob not in beat.real:
-                issues.append((where, f'{placement.ref} 必须落在对应义务 {ob} 的 real 承载拍'))
+                # 修复面＝整拍（2026-10-08，《夫君的报恩》实证三轮原地打转）：
+                # 该错的正确修法常是给本拍 real 补义务标注（一拍可承载多条义务），
+                # 只开 know 级窄修会禁止模型改 real，语义正确的答案修不动。
+                issues.append((('scenes', scene_i, 'beats', beat_i),
+                               f'{placement.ref} 必须落在对应义务 {ob} 的 real 承载拍'))
             is_confirmation = change.holder == 'reader' and change.mode == 'known'
             if is_confirmation != (placement.confirms is not None):
                 issues.append((where, f'{placement.ref} 读者确认必须写 confirms，其它变化不得写'))
