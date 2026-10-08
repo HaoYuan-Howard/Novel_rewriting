@@ -656,3 +656,46 @@ def test_associate_free_patch_preview_uses_the_real_identity_wire_phase(problem)
                           identity.model_dump(mode='json'), **args)
     assert not green['errors'] and not green['undecided'], green
     assert green['association_phase'] == 'identity' and green['final_status'] == 'not_run'
+
+
+def test_pairable_opens_exclude_locally_closed_loops():
+    """判据（2026-10-08，《夫君的报恩》实证 loop_already_closed 死锁）：章内
+    自开自闭的 open 已有归属，**不得再进跨章配对候选的 open 端**——close 端
+    早已排除（RC-65）而 open 端曾直接遍历 loop_opens 全集，候选（章内已闭环
+    open × 后章 close）一旦被模型按语义答 pair，compile 执行到章内 close 之后
+    的跨章 close 必判重复 close，重问轮全部白烧。跨章同 ref 的正常配对候选
+    （open 与 close 分属两章、句柄不同）不受影响。"""
+    from novel.stages.stage2.associate import loop_pairing_issues
+    book = _book_wire()
+    ch01 = {'protocol_version': CPV, 'beats': [
+        _beat('开合都在本章', ('e01_01',), loops=[
+            {'ref': 'q1', 'op': 'open', 'question': '本章自问'},
+            {'ref': 'q1', 'op': 'close', 'resolution': '本章自答'}]),
+        _beat('未闭合的悬念', ('e01_02',), loops=[
+            {'ref': 'q2', 'op': 'open', 'question': '跨章悬念'}]),
+    ]}
+    ch02 = {'protocol_version': CPV, 'beats': [
+        _beat('两笔跨章收束', ('e02_01',), loops=[
+            {'ref': 'q3', 'op': 'close', 'resolution': '异名收束'},
+            {'ref': 'q2', 'op': 'close', 'resolution': '同名收束'}]),
+    ]}
+    book_obs, chapters = _observations(book, {1: ch01, 2: ch02})
+    space = project_association_space(book_obs, chapters)
+    # 两端对称排除：q1 章内自开自闭——pairable_opens／pairable_closes 都不含。
+    assert 'ch01.q1' not in space.pairable_opens and 'ch01.q1' in space.loop_opens
+    assert 'ch01.q1' not in space.pairable_closes
+    candidates = project_identity_candidates(space, book_obs)
+    pairs = {(c.open, c.close) for c in candidates.loop_pairing}
+    # 缺陷反例：章内已闭环 open 不产生跨章候选。
+    assert ('ch01.q1', 'ch02.q3') not in pairs
+    # 正常面保留：未闭合 open × 跨章 close（异名）；跨章同 ref 的显式配对。
+    assert ('ch01.q2', 'ch02.q3') in pairs
+    assert ('ch01.q2', 'ch02.q2') in pairs
+    # 验收层对称防御（wire 直通／手改面）：open 端章内已闭环的 pair 拒收。
+    stray = AssociateObservation.model_validate({
+        'protocol_version': 'stage2-associate-v5',
+        'same_proposition': [], 'loop_pairing': [
+            {'open': 'ch01.q1', 'close': 'ch02.q3', 'verdict': 'pair'}],
+        'cross_chapter_cause': [], 'scene_continuation': []})
+    assert any('ch01.q1' in i and '自开自闭' in i
+               for i in loop_pairing_issues(stray, space))

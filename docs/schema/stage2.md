@@ -49,9 +49,12 @@ facts 产出**知情时间线读数**（T-5：结构化只读读数，不进下�
 **句柄编码（R1 v2：唯一的关联登记表）**：`AssociationSpace`
 （`novel/stages/stage2/associate.py::project_association_space`）是 prompt、
 闭集核对与 compile 共用的唯一登记表。拍 `ch{nn}.b{拍序}`、命题/悬念
-`ch{nn}.{本地 ref}`、场景 `ch{nn}.sc{序}`。可配对 close 闭集（`pairable_closes`）
-排除章内已自开自闭的 close——提示词不列、wire 引用即带「已在章内自开自闭」
-说明的精确 issue。
+`ch{nn}.{本地 ref}`、场景 `ch{nn}.sc{序}`。可配对 open／close 闭集
+（`pairable_opens`／`pairable_closes`）对称排除章内已自开自闭的悬念句柄——
+提示词不列、wire 引用即带「已在章内自开自闭」说明的精确 issue；open 端
+2026-10-08 补齐（真实书实证：章内已闭环 open 进跨章候选被模型答 pair 后
+compile 必判重复 close、烧尽重问轮——close 端防了 open 端没防是候选生成
+缺陷，不是模型缺陷）。
 
 **（已删除，CS-S Phase 3）维度句柄面**：v3 的 `dim{nn}` 聚合层与 v4 的
 `same_state_dimension` 候选已随 `CHANGE_KEYS` 键闭集整体退役——键即 canonical，

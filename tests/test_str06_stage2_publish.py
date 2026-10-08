@@ -573,9 +573,9 @@ def test_loop_open_close_pairing_across_chapters(tmp_path):
     wires = _full_stage2_wires()
     wires['ch02']['beats'][0]['loops'] = [
         {'ref': 'q_local', 'op': 'open', 'question': '今晚还有响动吗？'}]
-    # ch02.q_local 自开未收：与 ch03.q_id 的候选判 distinct（不是同一悬念）。
-    wires['associate']['loop_pairing'].append(
-        {'open': 'ch02.q_local', 'close': 'ch03.q_id', 'verdict': 'distinct'})
+    # ch02.q_local 章内自开自闭后，不再与 ch03.q_id 生成跨章候选（2026-10-08
+    # pairable_opens 对称排除——旧候选面曾把它交给模型判 distinct，真实书曾因
+    # 同款形态撞 loop_already_closed 烧尽重问轮），wire 无需作答。
     wires['ch02']['beats'].append(
         _beat('今夜安静', ('e02_01',), scene_boundary='continue',
               loops=[{'ref': 'q_local', 'op': 'close', 'resolution': '没有响动'}]))

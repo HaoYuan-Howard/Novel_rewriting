@@ -51,7 +51,8 @@ owner 的纪律问题，本节点无修复面。
 与维度句柄（``dim{nn}``）已随 `same_state_dimension` 删除：change 键入
 `CHANGE_KEYS` 闭集后「键不同但同维」构造上不可能（键即 canonical），整类
 合并面（候选生成、`_StateClasses` 规范键传播、`dimension_of` 反查）一并退役。
-可配对 close 闭集仍排除章内已自开自闭的 close（`pairable_closes`）。
+可配对 open／close 闭集对称排除章内已自开自闭的悬念句柄
+（`pairable_opens`／`pairable_closes`，2026-10-08 补 open 端）。
 
 """
 from __future__ import annotations
@@ -229,7 +230,7 @@ def project_identity_candidates(
                     right_text=statement if statement is not None
                     else '（引用，未在本章登记文本）'))
     loop_pairs: list[LoopCandidate] = []
-    for open_handle, open_entry in sorted(space.loop_opens.items()):
+    for open_handle, open_entry in sorted(space.pairable_opens.items()):
         for close_handle, close_entry in sorted(space.pairable_closes.items()):
             if open_entry.chapter >= close_entry.chapter:
                 continue
@@ -440,6 +441,9 @@ class AssociationSpace:
     loop_closes: dict[str, LoopHandle] = field(default_factory=dict)
     beats: dict[str, BeatHandle] = field(default_factory=dict)
     scenes: dict[str, SceneHandle] = field(default_factory=dict)
+    #: 可配对 open 闭集（章内已自开自闭的 open 不在其中——已有归属，再被跨章
+    #: close 必判重复 close；2026-10-08 与 pairable_closes 对称补齐）。
+    pairable_opens: dict[str, LoopHandle] = field(default_factory=dict)
     #: 可配对 close 闭集（章内已自开自闭的 close 不在其中；RC-65）。
     pairable_closes: dict[str, LoopHandle] = field(default_factory=dict)
 
@@ -495,8 +499,14 @@ def project_association_space(
                 chapter=chapter, ordinal=span.ordinal,
                 opening_beat=span.opening_beat, closing_beat=span.closing_beat,
                 carried=span.carried)
-    # 可配对 close 闭集：章内已自开自闭的 close（同一句柄串也在 open 集里）不进
-    # 跨章配对面（RC-65）——它们已有归属，配了只会被判重复 close。
+    # 可配对闭集（RC-65；2026-10-08 补 open 端对称防护——《夫君的报恩》实证：
+    # 章内自开自闭的 open（ch05.last_try 类）进跨章候选后，模型按语义答 pair，
+    # compile 执行到章内 close 之后的跨章 close 必撞 loop_already_closed，重问轮
+    # 全部白烧——close 端防了、open 端没防是候选生成缺陷，不是模型缺陷）：
+    # 章内已自开自闭的句柄已有归属，open／close 两端都不得再进跨章配对面。
+    space.pairable_opens = {
+        handle: entry for handle, entry in space.loop_opens.items()
+        if handle not in space.loop_closes}
     space.pairable_closes = {
         handle: entry for handle, entry in space.loop_closes.items()
         if handle not in space.loop_opens}
@@ -611,6 +621,10 @@ def loop_pairing_issues(
             issues.append(
                 association_issue('loop_local_pair', (pair.close, pair.open), f'悬念 close {pair.close!r} 已在章内自开自闭，'
                 f'不得再配到跨章 open {pair.open!r}（保持未决）'))
+        if pair.open in space.loop_closes:
+            issues.append(
+                association_issue('loop_local_pair', (pair.open, pair.close), f'悬念 open {pair.open!r} 已在章内自开自闭，'
+                f'不得再被跨章 close {pair.close!r} 重复关闭（保持未决）'))
     return issues
 
 
