@@ -225,7 +225,7 @@ def test_source_reference_closure_and_no_silent_edge_drop(fault):
         'source_refs': ['e02_01'], 'scene_boundary': 'new',
         'temporal_mode': 'single',
         'effects': [{'target': {'kind': 'character', 'char_id': 'yun_niang'},
-                     'key': 'wariness', 'op': 'set', 'value': '高',
+                     'key': 'attitude', 'op': 'set', 'value': '高',
                      'modality': 'actual',
                      'basis': [{'segment': 'e02_01', 'quote': '云娘质问床底的人'}]}],
         'cognition': [{'proposition': {'ref': 'p_secret',

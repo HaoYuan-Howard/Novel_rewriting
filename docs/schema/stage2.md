@@ -17,17 +17,20 @@ unver 行常驻披露，不产生审批待办。机械检查只证明形状、�
 ## 观察与关联协议（B2；R1 associate 独立版本）
 
 book／chapters 两个付费观察面与名称结构观察共用协议版本字面量
-`stage2-observation-v1`；associate 用**独立版本** `stage2-associate-v4`
+`stage2-observation-v1`；associate 用**独立版本** `stage2-associate-v5`
 （R1，2026-09-28 起独立；CS-H H4，2026-10-06 升 v3；CS-S Phase 2，2026-10-07
-升 v4；`contracts/schema/observation.py`；进请求身份与盘面信封，升版＝换字面量＋
-改模型＋登记，不做运行时转换层）。R1 只升 associate：typed 作用对象显式序列化
-（人物带 `char_id`、关系保留主客体方向，world 是显式类型，不拿空 dict 兜底）＋
-状态句柄位置编码。v3（RC-65）：`same_state_dimension` 改配**维度句柄**（见下）。
-v4（CS-S Phase 2，S2-9 落地）：**条目级窄 resolver**——输入不再是整书投影，而是
-代码给出的未决候选＋最小文本（近义命题对＝书级 facts 词表近义/跨章近义/悬空引用×
-更早章命题；近义键维度；跨章 open×close 且时序正；相邻章 seam），逐候选恰答一次
-verdict，无候选＝零调用；跨章因果独立窄调用 `stage2-cross-cause-v1`（D-2 A：
-候选＝loop 配对拍对＋facts 流拍对，模型只选 kind 或否决）。
+升 v4；CS-S Phase 3，2026-10-08 升 v5；`contracts/schema/observation.py`；进请求
+身份与盘面信封，升版＝换字面量＋改模型＋登记，不做运行时转换层）。R1 只升
+associate：typed 作用对象显式序列化（人物带 `char_id`、关系保留主客体方向，
+world 是显式类型，不拿空 dict 兜底）＋状态句柄位置编码。v4（CS-S Phase 2，
+S2-9 落地）：**条目级窄 resolver**——输入不再是整书投影，而是代码给出的未决
+候选＋最小文本（近义命题对＝书级 facts 词表近义/跨章近义/悬空引用×更早章命题；
+跨章 open×close 且时序正；相邻章 seam），逐候选恰答一次 verdict，无候选＝零
+调用；跨章因果独立窄调用 `stage2-cross-cause-v1`（D-2 A：候选＝loop 配对拍对＋
+facts 流拍对，模型只选 kind 或否决）。**v5（CS-S Phase 3）：`same_state_dimension`
+消失**——change 键入 `CHANGE_KEYS` 闭集（键即 canonical，「键不同但同维」构造上
+不可能），维度句柄（`dim{nn}`）与整类合并面（候选生成、`_StateClasses` 规范键
+传播、`dimension_of` 反查）整体退役；v3/v4 wire 关闭式拒读。
 
 **书级命题词表（CS-S Phase 2）**：book 观察增 `facts:[{fact_id, statement,
 basis, known_at_start}]`——F 编号 `f{nn}` 由 compile 按列表序派发（不进 wire，
@@ -40,21 +43,32 @@ facts 产出**知情时间线读数**（T-5：结构化只读读数，不进下�
 
 **句柄编码（R1 v2：唯一的关联登记表）**：`AssociationSpace`
 （`novel/stages/stage2/associate.py::project_association_space`）是 prompt、
-闭集核对与 compile（`_StateClasses` 确定性序、初态与章效应句柄定位）共用的
-唯一登记表；构建时重复句柄即拒。拍 `ch{nn}.b{拍序}`、命题/悬念
-`ch{nn}.{本地 ref}`、状态写入 `ch{nn}.b{拍}.e{效应序}.{key}`／`book.e{条目序}.{key}`
-（位置编码：key 只是载荷，不承担唯一性；book 初态无拍位，独立命名空间）、
-场景 `ch{nn}.sc{序}`。
+闭集核对与 compile 共用的唯一登记表。拍 `ch{nn}.b{拍序}`、命题/悬念
+`ch{nn}.{本地 ref}`、场景 `ch{nn}.sc{序}`。可配对 close 闭集（`pairable_closes`）
+排除章内已自开自闭的 close——提示词不列、wire 引用即带「已在章内自开自闭」
+说明的精确 issue。
 
-**维度句柄（CS-H H4，v3；RC-65）**：状态槽位在 compiler 里的身份是（作用对象，键），
-所以同对象同键的配对没有效果（csf4 根 90 对里 89 对是这种空操作）。登记表因此多一层：
-同（作用对象，键）地址的全部状态写入（含书级初态与章内效应同键）聚合成一个**维度句柄**
-`dim{nn}`（按首次写入序编号；`AssociationSpace.dimensions`／`dimension_of`），请求面
-每个地址只出现一行、不随同键写入数增长。`same_state_dimension` 只配**键不同但同维**的
-两个维度句柄（近义键如 trust／trust_level）；同键合并已在编译器里完成，配同键即自指
-拒绝；规范键（类内首次写入最早者的键）由 compiler 按地址传播到两类**全部写入**。维度
-跨章聚合，故不做同章拒绝。可配对 close 闭集（`pairable_closes`）排除章内已自开自闭的
-close——提示词不列、wire 引用即带「已在章内自开自闭」说明的精确 issue。
+**（已删除，CS-S Phase 3）维度句柄面**：v3 的 `dim{nn}` 聚合层与 v4 的
+`same_state_dimension` 候选已随 `CHANGE_KEYS` 键闭集整体退役——键即 canonical，
+无「键不同但同维」可配；状态写入句柄（`ch{nn}.b{拍}.e{效应序}.{key}`／
+`book.e{条目序}.{key}`）与 `states`／`dimensions` 登记面同批删除（S-05）。
+
+**变化键闭集与拍级 access（CS-S Phase 3，rc20）**：`CHANGE_KEYS`＝27 个通用维度
+（`contracts/schema/source.py`，rc15 冻结根三本书 184 个真实键聚类定稿——98 个
+单次出现的书内自造键并入通用维度，语义细节由 val 承载）；`scene_location` 只由
+compiler 从拍级字段合成（scene 作用域），不进模型面。拍级 `access`＝获知通道
+闭集（`witnessed` 默认不写／`narrated` 叙述直陈例外——回溯、背景、概括、
+「叙述者点明」；844 拍启发式实测 narrated 约 3%，told 语义由 know 的
+hears_claim/asserts 模式逐条承载，不重复拍级标注）。**reader 知情由 compile 派生**
+（`novel/stages/stage2/compile.py::_derive_reader_knowledge`）：narrated 拍的
+actual 字符串事实与 learns/confirms 命题→reader learns；hears_claim→reader
+hears_claim（任何通道）；悬念 close 的 resolution→reader learns；suspects/
+believes/asserts 不派生。wire 的 `know.who` 禁 reader（schema 层即拒），蓝图
+reader cognition 全部是派生物。rc15 免费 oracle（21 条模型自写 reader 条目）：
+启发式 access 覆盖 5／21、上界口径（模型写了 reader 的拍强制 narrated）6／21——
+未覆盖集中在 rc15 时代的「内容只存在于 reader 条目、无转移承载」拍（新协议的
+连续性契约与 facts 词表把该内容放进转移/词表，派生面才可消费）与设计上不派生的
+suspects（视角判断）。
 
 **模型输出面去机械化（I-20/I-21）**：协议里没有拍号、状态/约束编号、命题/loop/场景
 正式 ID、章序、offset、hash——一律由 compiler 生成；人物 slug 仍由模型给出（可读

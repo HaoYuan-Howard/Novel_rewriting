@@ -49,36 +49,77 @@ from contracts.schema.common import FreeProvenance, LlmProvenance
 
 Slug = str  # 小写下划线人物键；pattern 在 compile 层统一校验（dict key 无法带 Field）
 
-# ───────────────────────── 登记键闭集与固定作用域（D8）─────────────────────────
+# ───────────────────── 变化键闭集与固定作用域（D8；CS-S Phase 3）─────────────────────
 #
 # 位置分轴：`scene_location`（当前所在，场景作用域，换场即失效）与 `residence`
-# （长期居所，书作用域，换场不清除）——`whereabouts` 退役（一值多义：位置＋藏身＋
-# 身体状态曾塞进同一键）。身体状态各自一键（不塞进位置值），书作用域。作用域由
-# compiler 绑定：拍上声明与表不符即归一化（I-15，可推导坐标不让 LLM 声明）。
-# 表外维度键自由（英文蛇形），作用域由拍上 scope 显式声明。扩展本表是契约变化，
-# 随形状升版登记。
+# （长期居所，书作用域，换场不清除）。作用域由 compiler 绑定（I-15，可推导坐标
+# 不让 LLM 声明）。
+#
+# 变化键闭集（CS-S Phase 3，2026-10-08）：从 rc15 冻结根三本书（5 个观察集、
+# 844 拍、184 个真实键）聚类定稿——184 键中 98 个是只出现一次的书内自造键
+# （`plan_for_sheng_er`、`attitude_toward_xie_jingzhi` 一类），全部归并到下列
+# 通用维度，语义细节由 value 承载。模型只从闭集选键（提示词渲染清单，wire 与
+# compile 双闸拒绝表外键）；`scene_location` 只由 compiler 从拍级字段合成，不进
+# 模型面。键即 canonical（`same_state_dimension` 关联面随之消失）。扩展本表是
+# 契约变化，随形状升版登记（I-13）。
+CHANGE_KEYS: Final[tuple[str, ...]] = (
+    'intent',               # 意图/计划/决心/追求（吸收 plan、*_intent、contingency_plan）
+    'relationship',         # 关系事实与亲疏（含恩义、邻里、旧谊；吸收 relation）
+    'residence',            # 长期居所与住居安排（借宿/暂住/迁居是本键的值替换）
+    'body_state',           # 身体与外观（伤、衣饰遮蔽、束缚、外貌）
+    'body_occupancy',       # 身体占用/换身（意识归属；吸收 body_consciousness 族）
+    'marital_status',       # 婚姻状态（已婚/和离/形婚性质/婚约安排/入赘/禁离令）
+    'pregnancy',            # 孕产（受孕、胎动、孕期照护）
+    'attitude',             # 态度与性格取向（对特定对象的好恶、顺从、宠溺）
+    'kinship',              # 亲缘（家族、血亲、家世）
+    'identity',             # 身份事实（公开身份、身世、学生/供养等身份）
+    'children',             # 子女（有无、增减）
+    'occupation',           # 职业与差事
+    'engagement',           # 婚约状态（含订婚进展与立场）
+    'health',               # 健康与病症
+    'emotional_state',      # 情绪（愧、惧、悲、忧等当下情绪状态）
+    'agreement',            # 约定/承诺/盟约/约束
+    'paternity',            # 生父（生母）身份认定
+    'reputation',           # 名声与舆论
+    'fertility',            # 生育力及其公开说法
+    'secret',               # 秘密与隐瞒状态
+    'conflict',             # 交恶与冲突状态
+    'social_standing',      # 地位/头衔/处境
+    'wealth',               # 财产与产业
+    'age',                  # 年龄
+    'possession',           # 持有物
+    'address_term',         # 称呼方式事实
+    'daily_training',       # 日常修习
+)
+
+#: 键作用域（R-2.14 读时派生）：`scene_location`＝scene（compiler 合成）、其余
+#: 一律 book。键集＝CHANGE_KEYS＋`scene_location`（合成键）。
 REGISTERED_STATE_KEYS: Final[dict[str, str]] = {
+    **{key: 'book' for key in CHANGE_KEYS},
     'scene_location': 'scene',
-    'residence': 'book',
-    'body_consciousness': 'book',
-    'body_restraint': 'book',
-    'body_head_covering': 'book',
 }
 
-#: 已退役的位置键（v12 的 whereabouts 单键及其近义键）：出现在 wire 即拒，并指向
-#: 分轴后的登记键——「旧名字被静默接受」是抽取漂移的常见入口。
-RETIRED_STATE_KEYS: Final[frozenset[str]] = frozenset(
-    {'whereabouts', 'hiding_place', 'location'})
+#: 变化键的 schema 模式（含 compiler 合成的 `scene_location`——合成效应也走
+#: `Effect` 模型）。
+STATE_KEY_PATTERN: Final = '^(?:' + '|'.join(REGISTERED_STATE_KEYS) + r')$'
+
+#: 模型面的变化键模式（不含 scene_location——那是 compiler 专用合成键）。
+CHANGE_KEY_PATTERN: Final = '^(?:' + '|'.join(CHANGE_KEYS) + r')$'
 
 #: 认知模式闭集（D2）：believes＝持有者以为为真（不代表世界为真）；asserts＝公开主张。
 COGNITION_MODES: Final[tuple[str, ...]] = (
     'learns', 'suspects', 'confirms', 'hears_claim', 'believes', 'asserts')
 
-#: 认知持有者的非人物保留值：读者知情（读者确认时点由 fold 派生）。
-#: CS-S Phase 2（D-5，2026-10-07）删 `public`：使用率 10/121、Stage4 显式
-#: 豁免（不铸锁）、持有者闭集＝人物 slug——「公众知情」由 asserts 认知＋
-#: publicly_claimed_by 事实登记表达，不再作为持有者。旧盘面按 rc 关闭式拒读。
-NON_CHAR_HOLDERS: Final[frozenset[str]] = frozenset({'reader'})
+#: 拍级获知通道闭集（CS-S Phase 3，2026-10-08，按 rc15 冻结根 844 拍真实分布
+#: 冻结）：`witnessed`＝当场上演（默认，不写——对话/动作/转述，读者旁观）；
+#: `narrated`＝叙述者直陈（例外显式标注——回溯、背景交代、概括、「叙述者点明」
+#: 一类不经角色展演的内容；启发式实测约 3%，其中承载读者揭示的回溯/概括拍
+#: 是 reader 派生的输入）。told 语义不单设值——「听到说法」由 know 的
+#: hears_claim/asserts 模式逐条承载，不重复拍级标注。
+ACCESS_CHANNELS: Final[tuple[str, ...]] = ('witnessed', 'narrated')
+
+#: 拍级获知通道的 schema 模式。
+ACCESS_PATTERN: Final = '^(?:' + '|'.join(ACCESS_CHANNELS) + ')$'
 
 
 class SurfaceWindow(StrictModel):
@@ -139,7 +180,8 @@ class InitialStateAtom(StrictModel):
 
     state_id: str = Field(pattern=r'^s0_[A-Za-z0-9_-]+$')
     target: StateTarget
-    key: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_.-]*$')
+    #: CS-S Phase 3：键入闭集 `CHANGE_KEYS`（schema 层兜底直接构造的表外键）。
+    key: str = Field(pattern=CHANGE_KEY_PATTERN)
     value: Any
     persistence: str = Field(pattern=r'^(stable|mutable)$')
     source_refs: tuple[str, ...] = Field(min_length=1)
@@ -390,15 +432,16 @@ class NameProjection(StrictModel):
         return next((e for e in self.by_person if e.char_id == char_id), None)
 
 
-class CharactersArtifactV5(CharactersCore):
-    """`stage2/characters/characters.json` 目标 v5（RC3 起 v4；CS-S 1b 升 v5）。
+class CharactersArtifactV6(CharactersCore):
+    """`stage2/characters/characters.json` 目标 v6（CS-S Phase 3，rc20）。
 
     `name_structure` 是 RC 字段，经反例定版；core view（characters +
     initial_state）形状与 RC2 相同。v5：initial_state 原子删 `knowledge`
-    （初始知情由 Phase 2 的 facts known_at_start 承载）；rc18（RC-26 段号＋
-    本批）——旧 rc17 根按版本关闭式拒读。
+    （初始知情由 Phase 2 的 facts known_at_start 承载）。v6：initial_state 键入
+    `CHANGE_KEYS` 闭集（schema 层兜底直接构造的表外键）；rc20 起旧根按
+    rc 关闭式拒读。
     """
-    contract_version: str = Field(default='str06-rc18', pattern=r'^str06-rc[0-9]+$')
+    contract_version: str = Field(default='str06-rc20', pattern=r'^str06-rc[0-9]+$')
     name_structure: NameStructure | None = None
     #: 来源账（F7a）：盘上键 `_provenance`。`exclude=True` 让内存态 dump 不带
     #: 它——prompt／请求字节与 F5e 已购身份逐字不变；落盘由 repository 注入。
@@ -422,7 +465,7 @@ class CharactersArtifactV5(CharactersCore):
              'initial_state': [a.model_dump() for a in self.initial_state]})
 
     @model_validator(mode='after')
-    def _structure_closes(self) -> 'CharactersArtifactV5':
+    def _structure_closes(self) -> 'CharactersArtifactV6':
         ns = self.name_structure
         if ns is None:
             return self
@@ -496,7 +539,9 @@ class Effect(StrictModel):
     """
 
     target: EffectTarget
-    key: str = Field(min_length=1)
+    #: CS-S Phase 3：键入闭集（含 compiler 合成的 `scene_location`；模型面闭集
+    #: 见 `CHANGE_KEYS`，wire 闸拒绝表外键）。
+    key: str = Field(pattern=STATE_KEY_PATTERN)
     op: str = Field(pattern=r'^(set|unset|add|remove|unknown)$')
     #: R10a a1（C2）：事实的时态身份——计划／预计／条件执行不是已发生；
     #: 「约半个月便回」是 expected，不是 actual 的既成时长。
@@ -518,7 +563,11 @@ class Effect(StrictModel):
 
 
 class Cognition(StrictModel):
-    """认知转移（D1/D2）：谁对哪条命题持什么模式。取代 v12 的 reveals。"""
+    """认知转移（D1/D2）：谁对哪条命题持什么模式。取代 v12 的 reveals。
+
+    CS-S Phase 3：wire 的 holder 禁 `reader`（读者知情由 compile 按拍级
+    `access` 派生注入 canonical——蓝图里的 reader 条目全部是派生物）。
+    """
 
     proposition: PropositionRef
     holder: str = Field(min_length=1)
@@ -573,6 +622,9 @@ class Beat(StrictModel):
     scene_boundary: str = Field(pattern=r'^(new|continue)$')
     #: 时间模式（D1）：single＝单次行为；iterative＝重复行为（如「连续三夜」）。
     temporal_mode: str = Field(pattern=r'^(single|iterative)$')
+    #: 获知通道（CS-S Phase 3）：witnessed＝当场上演（默认）；narrated＝叙述者
+    #: 直陈（回溯/背景/概括——reader 派生的输入之一）。
+    access: str = Field(default='witnessed', pattern=ACCESS_PATTERN)
     effects: tuple[Effect, ...] = Field(default=(), min_length=0)
     cognition: tuple[Cognition, ...] = Field(default=(), min_length=0)
     loops: tuple[LoopAction, ...] = Field(default=(), min_length=0)
@@ -628,8 +680,8 @@ class ChapterBlueprint(StrictModel):
 from contracts.schema.expression import SourceExpression
 
 
-class BlueprintsArtifactV16(StrictModel):
-    """`stage2/blueprints/chapter_blueprints.json` 目标 v16（CS-S 1b，rc18）。
+class BlueprintsArtifactV17(StrictModel):
+    """`stage2/blueprints/chapter_blueprints.json` 目标 v17（CS-S Phase 3，rc20）。
 
     v13（质量改进批次二）：拍模型从 effects/reveals 改为 effects／cognition／loops
     三类转移，拍上带场景边界与时间模式，章蓝图带 compiler 生成的场景分段。跨章
@@ -641,6 +693,9 @@ class BlueprintsArtifactV16(StrictModel):
     在条目 basis 里，邻句送达≠邻句为证据）。
     v16（CS-S 1b，2026-10-07）：Effect 删 `disclosure`／`proposition`／`scope`
     （作用域读时按登记表派生）；作用域语义见 `REGISTERED_STATE_KEYS`。
+    v17（CS-S Phase 3，2026-10-08）：Beat 增 `access`（获知通道闭集）；效果键入
+    `CHANGE_KEYS` 闭集；cognition 的 reader 条目＝compile 按拍级 access 派生的
+    读者知情（wire 禁 reader——蓝图里的 reader 全部是派生物）。
     """
 
     provenance: FreeProvenance | LlmProvenance | None = Field(
@@ -653,7 +708,7 @@ class BlueprintsArtifactV16(StrictModel):
     evidence: dict[str, str] = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _chapters_contiguous(self) -> 'BlueprintsArtifactV16':
+    def _chapters_contiguous(self) -> 'BlueprintsArtifactV17':
         ordinals = [c.chapter for c in self.chapters]
         if sorted(ordinals) != list(range(1, len(ordinals) + 1)):
             raise ValueError(f'章号必须从 1 连续，实得 {sorted(ordinals)}')

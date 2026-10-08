@@ -24,7 +24,7 @@ from contracts.schema.hook import (
     HookConstraints, HookDesign, HookPov, HookReceipt,
 )
 from contracts.schema.source import (
-    CharactersArtifactV5, NameStructure,
+    CharactersArtifactV6, NameStructure,
 )
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.hook_context import compile_hook_context
@@ -51,8 +51,8 @@ SRC = '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄�
 
 # ───────────────────────── fixture 构造器 ─────────────────────────
 
-def _characters() -> CharactersArtifactV5:
-    return CharactersArtifactV5.model_validate({
+def _characters() -> CharactersArtifactV6:
+    return CharactersArtifactV6.model_validate({
             'characters': {
                 'fu_jun': {'canonical': '夫君', 'surfaces': [
                     {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
@@ -112,14 +112,14 @@ def _body_wire() -> dict:
                  {'event': '洞房夜夫君立约', 'participants': ['yun_niang', 'fu_jun'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
-                       'key': 'debt_agreement', 'op': 'set', 'value': '夫君身负报恩之约',
+                       'key': 'agreement', 'op': 'set', 'value': '夫君身负报恩之约',
                        'scope': 'book', 'knowledge_mode': 'known'}],
                   'delivery_hint': '',
                   'surface_introductions': [{'char_id': 'yun_niang', 'surfaces': ['芸娘']}]},
                  {'event': '芸娘立誓查清', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': ['yun_niang'], 'holder': 'yun_niang',
-                       'key': 'vow', 'op': 'set', 'value': '她决意查清真相',
+                       'key': 'intent', 'op': 'set', 'value': '她决意查清真相',
                        'scope': 'book', 'knowledge_mode': 'known'}],
                   'delivery_hint': '', 'surface_introductions': []}],
              'delivery': {'pov': 'yun_niang', 'voice': '冷峻', 'avoid': []}},
@@ -131,12 +131,12 @@ def _body_wire() -> dict:
                  {'event': '夫君夜半离家', 'participants': ['fu_jun'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-                       'key': 'whereabouts', 'op': 'set', 'modality': 'actual', 'value': '去向不明', 'scope': 'book'}],
+                       'key': 'residence', 'op': 'set', 'modality': 'actual', 'value': '去向不明', 'scope': 'book'}],
                   'delivery_hint': '', 'surface_introductions': []},
                  {'event': '芸娘发现玉佩秘密', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
-                       'key': 'jade_secret', 'op': 'set', 'value': '玉佩刻着沈字',
+                       'key': 'secret', 'op': 'set', 'value': '玉佩刻着沈字',
                        'scope': 'book', 'knowledge_mode': 'known'}],
                   'delivery_hint': '', 'surface_introductions': []}],
              'delivery': {'pov': 'yun_niang', 'voice': '冷峻', 'avoid': []}}],
@@ -159,7 +159,7 @@ def _hook_wire(**over) -> dict:
              'audience': 'world'},
             {'ref': {'scene': 'sc01', 'beat': 'b03'},
              'address': {'domain': 'knowledge', 'subjects': ['yun_niang'], 'holder': 'yun_niang',
-                         'key': 'vow'},
+                         'key': 'intent'},
              'audience': 'reader'}],
         'materials': [
             {'beat_ref': {'scene': 'sc02', 'beat': 'b01'}, 'withheld': [],
@@ -172,7 +172,7 @@ def _hook_wire(**over) -> dict:
         'forbidden_reveals': [
             {'ref': {'scene': 'sc02', 'beat': 'b02'},
              'address': {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
-                         'key': 'jade_secret'}}],
+                         'key': 'secret'}}],
         'design_brief': '从深夜冷开倒叙入新婚夜旧约，信息逐层升级后在新婚夜收束，玉佩之谜不露。',
         'delivery_brief': '第一人称冷面叙述，短句，不解释。',
     }
@@ -209,16 +209,16 @@ def _design_wire_v7() -> dict:
                  {'ev': '洞房夜夫君立约', 'who': ['yun_niang', 'fu_jun'], 'real': ['ob01'],
                   'release': [{'char_id': 'yun_niang', 'surfaces': ['芸娘']}]},
                  {'ev': '芸娘立誓查清', 'who': ['yun_niang'],
-                  'state': [{'at': 'yun_niang', 'key': 'vow', 'val': '她决意查清真相'}]}]},
+                  'state': [{'at': 'yun_niang', 'key': 'intent', 'val': '她决意查清真相'}]}]},
             {'driver': {'focal_actor': 'yun_niang', 'immediate_want': '查明真相',
                         'opposition': '无凭据', 'turn': '发现玉佩'},
              'brief': '重心在玉佩的发现；从空房冷起，压缩等待，在字面露出的瞬间收束。',
              'reads': [],
              'beats': [
                  {'ev': '夫君夜半离家', 'who': ['fu_jun'],
-                  'state': [{'at': 'fu_jun', 'key': 'whereabouts', 'val': '去向不明'}]},
+                  'state': [{'at': 'fu_jun', 'key': 'residence', 'val': '去向不明'}]},
                  {'ev': '芸娘发现玉佩秘密', 'who': ['yun_niang'],
-                  'state': [{'at': 'yun_niang', 'key': 'jade_secret', 'val': '玉佩刻着沈字'}]}]},
+                  'state': [{'at': 'yun_niang', 'key': 'secret', 'val': '玉佩刻着沈字'}]}]},
         ],
         'chapters': [{'purpose': '新婚之夜埋下旧约之疑', 'scenes': 1},
                      {'purpose': '玉佩之谜浮出水面', 'scenes': 1,
@@ -233,12 +233,12 @@ def _hook_wire_v7(**over) -> dict:
     wire['opening_facts'][1] = {
         'ref': {'scene': 'sc01', 'beat': 'b03'},
         'address': {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
-                    'key': 'vow'},
+                    'key': 'intent'},
         'audience': 'reader'}
     wire['forbidden_reveals'] = [{
         'ref': {'scene': 'sc02', 'beat': 'b02'},
         'address': {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
-                    'key': 'jade_secret'}}]
+                    'key': 'secret'}}]
     wire.update(over)
     return wire
 
@@ -327,7 +327,7 @@ def test_partial_disclosure_single_beat():
     wire['materials'] = [
         {'beat_ref': {'scene': 'sc01', 'beat': 'b02'}, 'withheld': [
             {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
-             'key': 'debt_agreement'}], 'presentation': None},
+             'key': 'agreement'}], 'presentation': None},
     ]
     wire['opening_facts'] = [wire['opening_facts'][0]]
     body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
@@ -429,7 +429,7 @@ def test_opening_fact_must_be_established_and_not_material_delta():
     wire['opening_facts'] = [
         {'ref': {'scene': 'sc02', 'beat': 'b02'},
          'address': {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
-                     'key': 'jade_secret'},
+                     'key': 'secret'},
          'audience': 'world'}]
     _, errors = _assemble(wire)
     assert any('早于首个材料' in e for e in errors)   # 时序：world 晚于首个材料
@@ -439,7 +439,7 @@ def test_opening_fact_must_be_established_and_not_material_delta():
     wire['opening_facts'].append(
         {'ref': {'scene': 'sc01', 'beat': 'b02'},
          'address': {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
-                     'key': 'debt_agreement'},
+                     'key': 'agreement'},
          'audience': 'world'})
     _, errors = _assemble(wire)
     assert any('材料拍' in e for e in errors)          # 不能是材料拍的 delta
@@ -450,7 +450,7 @@ def test_reader_fact_beyond_horizon_rejected():
     wire['opening_facts'].append(
         {'ref': {'scene': 'sc02', 'beat': 'b02'},
          'address': {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
-                     'key': 'jade_secret'},
+                     'key': 'secret'},
          'audience': 'reader'})
     wire['forbidden_reveals'] = []
     _, errors = _assemble(wire)
@@ -469,7 +469,7 @@ def test_withheld_must_belong_to_beat_delta():
     wire = _hook_wire()
     wire['materials'][0]['withheld'] = [
         {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
-         'key': 'whereabouts'}]
+         'key': 'residence'}]
     _, errors = _assemble(wire)
     assert any('不属于该拍 delta' in e for e in errors)
 
@@ -747,7 +747,7 @@ def _full_chain_wires():
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
                                 for s in entry.surfaces]}
             for slug, entry in chars.characters.items()}),
-        'protocol_version': 'stage2-book-v6',
+        'protocol_version': 'stage2-book-v7',
         'characters': {
             slug: {'canonical': entry.canonical,
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
@@ -770,7 +770,7 @@ def _full_chain_wires():
          'keep_reason': None}]}
     return {
         'book': book,
-        'ch01': {'protocol_version': 'stage2-chapters-v6', 'beats': [
+        'ch01': {'protocol_version': 'stage2-chapters-v7', 'beats': [
             beat('苏芸娘嫁入陆家，夫君立下旧约。', ('e01_01',),
                  participants=('yun_niang', 'fu_jun'),
                  effects=({'target': {'kind': 'relation', 'subject': 'yun_niang',
@@ -779,13 +779,13 @@ def _full_chain_wires():
                            'modality': 'actual',
                            'basis': ({'segment': 'e01_01',
                                       'quote': '苏芸娘嫁入陆家'},)},))]},
-        'ch02': {'protocol_version': 'stage2-chapters-v6', 'beats': [
+        'ch02': {'protocol_version': 'stage2-chapters-v7', 'beats': [
             beat('夫君夜半离家，芸娘发现玉佩之秘。', ('e02_01',),
                  participants=('yun_niang', 'fu_jun'))]},
         'names': __import__('tests.str06_facilities', fromlist=['names_v6_wire'])
             .names_v6_wire(chars.name_structure.model_dump(mode='json')),
-        'associate': {'protocol_version': 'stage2-associate-v4',
-                      'same_proposition': [], 'same_state_dimension': [],
+        'associate': {'protocol_version': 'stage2-associate-v5',
+                      'same_proposition': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],
                       # 两章各一场：seam 候选判 distinct（各自独立场景）。
                       'scene_continuation': [

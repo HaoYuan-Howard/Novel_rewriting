@@ -10,7 +10,7 @@
 转换层（I-13：本仓无隐式通用迁移；旧根只读，新协议下新根全量重购）。
 
 【associate 独立版本（R1，2026-09-28）】关联协议与三类观察协议分别管理：
-`STAGE2_ASSOCIATE_PROTOCOL`（CS-S Phase 2 起 stage2-associate-v4）。v4＝条目级
+`STAGE2_ASSOCIATE_PROTOCOL`（CS-S Phase 2 起 stage2-associate-v5）。v4＝条目级
 窄 resolver：输入＝代码给出的未决候选＋最小文本（S2-9 正常路径落地；无候选
 ＝零调用），输出逐候选 verdict；跨章因果是独立窄调用 wire
 （`STAGE2_CROSS_CAUSE_WIRE_PROTOCOL`，D-2 A：候选＝loop 配对＋facts 流拍对，
@@ -42,8 +42,8 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.source import (
-    AliasEntry, Cognition, Effect, EvidenceQuote, FamilyEntry, LoopAction,
-    NameStructure, StateTarget,
+    ACCESS_PATTERN, CHANGE_KEY_PATTERN, AliasEntry, Cognition, Effect,
+    EvidenceQuote, FamilyEntry, LoopAction, NameStructure, StateTarget,
 )
 
 #: 观察协议的版本字面量（进请求身份与盘面信封；I-13 显式版本化）。升版 =
@@ -70,11 +70,16 @@ STAGE2_NAMES_PROTOCOL: Final = 'stage2-names-v4'
 #: 派发）；初始知情由 facts 的 known_at_start 承载（1b 删的 InitialFact.
 #: knowledge 语义在此补回，持有者闭集＝人物 slug——D-5 删 public、reader
 #: 知情 Phase 3 由 compile 派生）。旧 v5 观察按版本字面量关闭式拒读。
-STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v6'
+#: CS-S Phase 3（2026-10-08）：book canonical 升 v7——initial_state 键入
+#: `CHANGE_KEYS` 闭集（schema 层兜底表外键）。
+STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v7'
 #: CS-S Phase 2（2026-10-07）：chapters canonical 升 v6——cognition 的命题
 #: 可引用书级 facts（proposition.ref=f{nn}、statement=None——文本由 compile
 #: 从词表回填，跨章同一性按引用构造成立，不再靠转写配对）。
-STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v6'
+#: CS-S Phase 3（2026-10-08）：chapters canonical 升 v7——ObsBeat 增 `access`
+#: （获知通道闭集 witnessed/narrated）；know 的 holder 禁 reader（读者知情由
+#: compile 派生，不进观察面）。
+STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v7'
 
 #: 书级观察的 **wire 面**（2026-10-07 裁决：模型只选段、代码切原文；同日二次
 #: 收口：wire/canonical 词汇分层——wire 用 `evidence_refs`，canonical 用 basis）：
@@ -88,7 +93,9 @@ STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v6'
 #: CS-S Phase 2（2026-10-07）升 v9：增 `facts`（书级命题词表）——statement＋
 #: evidence_refs（段 id）＋known_at_start（人物 slug）；编号不进 wire（F 编号
 #: 代码派发，I-21）。
-STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v9'
+#: CS-S Phase 3（2026-10-08）升 v10：initial_state 键入 `CHANGE_KEYS` 闭集
+#: （提示词渲染清单，表外键即拒）。
+STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v10'
 
 #: 章观察的**瘦 wire 面**（CS-2 起；2026-10-07 basis 指针化；同日二次收口升 v7：
 #: evidence_refs 词汇＋scene_location 上移拍级元数据；CS-S 1a 升 v8：`src`→`start`
@@ -108,7 +115,11 @@ STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v9'
 #: CS-S Phase 2（2026-10-07）升 v9：know 增 `fact` 引用——命题已在书级词表
 #: 登记时引用编号（f{nn}），不重写文本；`fact` 与 `what` 恰写其一（形状保证，
 #: 引用不携带文本＝跨章同一性按引用构造成立）。
-STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v9'
+#: CS-S Phase 3（2026-10-08）升 v10：字段改名 `ev`→`event`、`state`→`change`
+#: （与语义对齐：state 条目是变化，ev 是 event 的缩写遗风）；增 `access`
+#: （获知通道：witnessed 默认不写、narrated 变体直陈时显式标注）；change 键入
+#: `CHANGE_KEYS` 闭集；know 的 `who` 禁 reader（读者知情由 compile 派生）。
+STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v10'
 
 #: names 的 **结构 wire 面**（CS-S 1c，2026-10-07 升 v6）：模型只登记姓氏家族
 #: （含家族级 forms）、名、化名与**歧义例外** `form_overrides`——每个 surface
@@ -129,14 +140,16 @@ STAGE2_NAMES_WIRE_PROTOCOL: Final = 'stage2-names-v6'
 STAGE2_NAME_VARIANTS_WIRE_PROTOCOL: Final = 'stage2-name-variants-v1'
 
 #: 关联协议（associate 独立）的版本字面量（R1，2026-09-28 升 v2；CS-H H4，
-#: 2026-10-06 升 v3，RC-65；CS-S Phase 2，2026-10-07 升 v4）：v2＝typed 作用
-#: 对象显式序列化＋状态句柄位置编码；v3＝`same_state_dimension` 改配**维度
-#: 句柄**（compiler 按（作用对象，键）地址聚合，``dim{nn}``）；v4＝条目级窄
-#: resolver（S2-9 落地）——输入不再是整书投影，而是**代码给出的未决候选＋
-#: 最小文本**（近义命题对＝facts 词表近义/跨章近义；悬念＝跨章 open×close；
-#: 续场＝相邻章 seam），每候选恰答一次 verdict；无候选＝零调用。旧 v3 整书
-#: 投影回答按版本字面量关闭式拒读（A1.5：恢复边界——句柄含义与输入材料已变）。
-STAGE2_ASSOCIATE_PROTOCOL: Final = 'stage2-associate-v4'
+#: 2026-10-06 升 v3，RC-65；CS-S Phase 2，2026-10-07 升 v4；CS-S Phase 3，
+#: 2026-10-08 升 v5）：v2＝typed 作用对象显式序列化＋状态句柄位置编码；
+#: v3＝`same_state_dimension` 改配**维度句柄**（compiler 按（作用对象，键）地址
+#: 聚合，``dim{nn}``）；v4＝条目级窄 resolver（S2-9 落地）——输入不再是整书
+#: 投影，而是**代码给出的未决候选＋最小文本**，每候选恰答一次 verdict；无候选
+#: ＝零调用。v5＝`same_state_dimension` **消失**——change 键入 `CHANGE_KEYS`
+#: 闭集后「键不同但同维」构造上不可能（键即 canonical），维度句柄与整类合并
+#: 面一并删除；剩余四类候选（命题 same／悬念 pair／跨章因果 kind／续场
+#: continue）不变。旧 v4 回答按版本字面量关闭式拒读。
+STAGE2_ASSOCIATE_PROTOCOL: Final = 'stage2-associate-v5'
 
 #: 跨章因果窄调用 wire（CS-S Phase 2，D-2 A）：独立于身份判定的第二窄任务
 #: （同节点 owner `cross_cause`，不增节点）。候选＝代码给出（悬念开合配对的
@@ -190,11 +203,12 @@ class InitialFact(StrictModel):
 
     **没有** `state_id`：compiler 生成 `s0_*`（I-21）。target 形状与 v13
     `InitialStateAtom` 同源（`StateTarget` 复用）。CS-S 1b：`knowledge` 删
-    （Phase 2 由 facts `known_at_start` 承载初始知情）。
+    （Phase 2 由 facts `known_at_start` 承载初始知情）。CS-S Phase 3：键入
+    `CHANGE_KEYS` 闭集（表外键 schema 层即拒）。
     """
 
     target: StateTarget
-    key: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_.-]*$')
+    key: str = Field(pattern=CHANGE_KEY_PATTERN)
     value: Any
     persistence: str = Field(pattern=r'^(stable|mutable)$')
     source_refs: tuple[str, ...] = Field(min_length=1)
@@ -247,7 +261,7 @@ class BookObservation(StrictModel):
     facts 的 F 编号由 compile 按列表序派发（Phase 2）——词表不是真源
     （S2-8），下游经 cognition 引用与 fold 知情时间线读数消费。"""
 
-    protocol_version: Literal['stage2-book-v6']
+    protocol_version: Literal['stage2-book-v7']
     expression: ExpressionObservation
     characters: dict[str, CharacterCandidate] = Field(min_length=1)
     initial_state: tuple[InitialFact, ...] = Field(default=(), min_length=0)
@@ -273,7 +287,7 @@ class InitialFactWire(StrictModel):
     evidence_refs 只给段 id。"""
 
     target: StateTarget
-    key: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_.-]*$')
+    key: str = Field(pattern=CHANGE_KEY_PATTERN)
     value: Any
     persistence: str = Field(pattern=r'^(stable|mutable)$')
     source_refs: tuple[str, ...] = Field(min_length=1)
@@ -305,7 +319,7 @@ class BookObservationWire(StrictModel):
     人物、称谓证据与表达观察的形状与 canonical 相同（称谓的 source_refs 是
     语义选择——选哪一处出现作锚点）。"""
 
-    protocol_version: Literal['stage2-book-v9']
+    protocol_version: Literal['stage2-book-v10']
     expression: ExpressionObservation
     characters: dict[str, CharacterCandidate] = Field(min_length=1)
     initial_state: tuple[InitialFactWire, ...] = Field(default=(), min_length=0)
@@ -321,6 +335,8 @@ class ObsBeat(StrictModel):
     **没有** `beat_id`：事件序即列表序，拍号由 compiler 按序派发（I-21）。
     三类转移、场景边界与时间模式的语义与 v13 `Beat` 一致；转移条目直接复用
     `Effect`／`Cognition`／`LoopAction`（I-11），命题与 loop 用章内本地句柄。
+    CS-S Phase 3：增 `access`（获知通道——reader 派生的输入；wire 缺省
+    witnessed 由 expand 补默认）。
     """
 
     event: str = Field(min_length=1)
@@ -328,6 +344,7 @@ class ObsBeat(StrictModel):
     source_refs: tuple[str, ...] = Field(min_length=1)
     scene_boundary: str = Field(pattern=r'^(new|continue)$')
     temporal_mode: str = Field(pattern=r'^(single|iterative)$')
+    access: str = Field(default='witnessed', pattern=ACCESS_PATTERN)
     effects: tuple[Effect, ...] = Field(default=(), min_length=0)
     cognition: tuple[Cognition, ...] = Field(default=(), min_length=0)
     loops: tuple[LoopAction, ...] = Field(default=(), min_length=0)
@@ -342,31 +359,34 @@ class ChapterObservation(StrictModel):
     CS-S Phase 2：cognition 的 proposition.ref 可以是书级 facts 编号
     （``f{nn}``，此时 statement=None——文本由 compile 从词表回填）；词表
     成员资格与「引用不带文本」在章观察验收，fact 引用按构造建立跨章同一性。
+    CS-S Phase 3：holder 禁 reader（观察面无读者知情——reader 由 compile
+    按拍级 access 派生注入蓝图）。
     """
 
-    protocol_version: Literal['stage2-chapters-v6']
+    protocol_version: Literal['stage2-chapters-v7']
     beats: tuple[ObsBeat, ...] = Field(min_length=1)
 
 
 # ──────────── chapters 瘦 wire（CS-2 第一步；expand 后即上形，不落盘） ────────────
 
 class SlimEffect(StrictModel):
-    """事实转移的瘦面：`at` 地址串＋例外字段。
+    """事实转移的瘦面（v10 改名 `state`→`change` 后的条目形状）：`at` 地址串
+    ＋例外字段。
 
     机械默认（expand 派生，模型只写例外）：op＝set、modality＝actual、
-    scope＝登记键按表／表外一律 book（v8 起不进 wire；R-2.14 派生）、
     disclosure 恒 on_page、effect 不带命题锚（v8 删 `hidden`／`prop`——
     5 观察集 404 效应实证 concealed 0、effect 命题 0，死字段不再让模型抄）。
     `val` 只在 op 需要值时给（set／add／remove；unset／unknown 不带）。
     evidence_refs 必填（R10a a1 语义不变）：wire 只给段 id，引文＝段
-    全文由 compiler 派生（2026-10-07 裁决）。**不得用 state 表达场景位置**：
-    `scene_location` 是 `SlimBeat` 的拍级字段（compiler 合成登记键效应）。at
-    只锁字符集，结构（单个 +、两端非空、不自环）由 expand 逐条校验——可条目
-    级返修，不退整份。
+    全文由 compiler 派生（2026-10-07 裁决）。**不得用 change 表达场景位置**：
+    `scene_location` 是 `SlimBeat` 的拍级字段（compiler 合成登记键效应）。
+    CS-S Phase 3：`key` 入 `CHANGE_KEYS` 闭集（表外键即拒；语义细节由 val
+    承载，不为细分自造新键）。at 只锁字符集，结构（单个 +、两端非空、不自环）
+    由 expand 逐条校验——可条目级返修，不退整份。
     """
 
     at: str = Field(pattern=r'^(world|[a-z0-9_+]+)$')
-    key: str = Field(min_length=1)
+    key: str = Field(pattern=CHANGE_KEY_PATTERN)
     val: Any = None
     op: str | None = Field(default=None, pattern=r'^(set|unset|add|remove|unknown)$')
     modality: str | None = Field(default=None,
@@ -397,29 +417,41 @@ class SlimCognition(StrictModel):
                 'know 条目须恰写其一：fact（书级词表编号）或 what（词表外命题文本）')
         return self
 
+    @model_validator(mode='after')
+    def _no_reader(self) -> 'SlimCognition':
+        if self.who == 'reader':
+            raise ValueError(
+                'know.who 禁 reader——读者知情由 compile 按拍级 access 派生，'
+                '不进观察面')
+        return self
+
 
 class SlimBeat(StrictModel):
-    """一拍的瘦面（v8）：`start` 只写**单段 id**，拍覆盖区间由代码派生——
+    """一拍的瘦面（v8 起 start 单段；v10 改名 `ev`→`event`、`state`→`change`
+    ＋增 `access`）：`start` 只写**单段 id**，拍覆盖区间由代码派生——
     `[start, 下一拍 start−1]`，末拍到章末（今日两本 383 拍实证同章连续，
     区间纪律从提示词纪律变成构造保证）。start 按段号数值严格递增（≥100 段
     的章不按字典序）；首拍必须是本章第一段（第 1 章允许跳过前导 e00 引子段
     ——被跳过的引子段视为弃权）；start 之间的每一段（含「......」分隔段）
     按构造归属其前最近一个 start 所在的拍，不再有未覆盖段或两拍共引一段。
 
-    `new_scene`／`iterative` 只写例外（缺省 continue／single）；`scene_location`
-    是拍级场景位置元数据（换景或首次交代位置时给，compiler 合成登记键
-    `scene_location` 的 world 效应，证据面＝本拍派生区间全体——覆盖性证据
-    不猜具体句）；loops 保持原形状（悬念句柄仍由模型给——跨章开合配对靠
-    它，D8）。
+    `new_scene`／`iterative` 只写例外（缺省 continue／single）；`access` 只写
+    变体直陈的例外（缺省 witnessed——narrated＝叙述者直陈：回溯、背景交代、
+    概括、「叙述者点明」，不经角色展演；它驱动 compile 的读者知情派生）；
+    `scene_location` 是拍级场景位置元数据（换景或首次交代位置时给，compiler
+    合成登记键 `scene_location` 的 world 效应，证据面＝本拍派生区间全体——
+    覆盖性证据不猜具体句）；loops 保持原形状（悬念句柄仍由模型给——跨章开合
+    配对靠它，D8）。
     """
 
-    ev: str = Field(min_length=1)
+    event: str = Field(min_length=1)
     on_stage: tuple[str, ...] = Field(default=(), min_length=0)
     start: SegmentRef
     scene_location: str | None = Field(default=None, min_length=1)
     new_scene: bool = False
     iterative: bool = False
-    state: tuple[SlimEffect, ...] = Field(default=(), min_length=0)
+    access: str = Field(default='witnessed', pattern=ACCESS_PATTERN)
+    change: tuple[SlimEffect, ...] = Field(default=(), min_length=0)
     know: tuple[SlimCognition, ...] = Field(default=(), min_length=0)
     loops: tuple[LoopAction, ...] = Field(default=(), min_length=0)
 
@@ -428,33 +460,26 @@ class ChapterObservationWire(StrictModel):
     """`str06.stage2.chapters` 的瘦输出面（传输面，不落盘；expand 成
     `ChapterObservation` 后进既有管道与盘面）。"""
 
-    protocol_version: Literal['stage2-chapters-v9']
+    protocol_version: Literal['stage2-chapters-v10']
     beats: tuple[SlimBeat, ...] = Field(min_length=1)
 
 
 # ───────────────────────── associate 观察（str06.stage2.associate） ─────────────────────────
 #
-# 【v4＝条目级窄 resolver（CS-S Phase 2，S2-9 落地）】输入面从整书投影改为
-# **代码给出的未决候选＋最小文本**：模型逐候选恰答一次 verdict，不重新理解
-# 整书、不发明候选外的配对（每类候选＝确定性相似度或结构投影筛出，闭集核对
-# 归 compile；漏答／多答／重复答＝机械缺陷按条目窄修）。候选对句柄可以跨
-# 命名空间（章命题句柄 ``ch{nn}.{ref}``×书级 facts 编号 ``f{nn}``）——
-# verdict=same 即声明该章命题就是词表命题，compiler 据此并入 fact 等价类
-# （fact 编号是正式 ID，早于任何章内句柄）。
+# 【v5＝维度候选消失（CS-S Phase 3）】`same_state_dimension` 删除：change 键入
+# `CHANGE_KEYS` 闭集后「键不同但同维」构造上不可能（键即 canonical），维度句柄
+# （``dim{nn}``）与 canonical_key 整类合并面一并退役。v4 的条目级窄 resolver
+# 语义不变：输入面＝**代码给出的未决候选＋最小文本**，模型逐候选恰答一次
+# verdict，不重新理解整书、不发明候选外的配对（每类候选＝确定性相似度或
+# 结构投影筛出，闭集核对归 compile；漏答／多答／重复答＝机械缺陷按条目窄修）。
+# 候选对句柄可以跨命名空间（章命题句柄 ``ch{nn}.{ref}``×书级 facts 编号
+# ``f{nn}``）——verdict=same 即声明该章命题就是词表命题，compiler 据此并入
+# fact 等价类（fact 编号是正式 ID，早于任何章内句柄）。
 
 class PropositionPairVerdict(StrictModel):
     """同一命题候选的判定：same＝同一命题（并入同一等价类，fact 侧为
     canonical）；distinct＝不同命题；unresolved＝拿不准（保持分离，不默认
     合并也不默认不同）。"""
-
-    left: str = Field(pattern=OBSERVATION_HANDLE_PATTERN)
-    right: str = Field(pattern=OBSERVATION_HANDLE_PATTERN)
-    verdict: str = Field(pattern=r'^(same|distinct|unresolved)$')
-
-
-class StateDimensionPairVerdict(StrictModel):
-    """同一状态维度候选的判定（v3 维度句柄语义延续）：same＝键不同但同维
-    （规范键按地址传播整类）；distinct／unresolved 保持分离。"""
 
     left: str = Field(pattern=OBSERVATION_HANDLE_PATTERN)
     right: str = Field(pattern=OBSERVATION_HANDLE_PATTERN)
@@ -496,14 +521,14 @@ class CauseVerdict(StrictModel):
 
 
 class AssociateObservation(StrictModel):
-    """`str06.stage2.associate` 的输出（v4）：逐候选 verdict（含否决与
+    """`str06.stage2.associate` 的输出（v5）：逐候选 verdict（含否决与
     unresolved——已购判定的完整性证明；compile 只执行 same／pair／continue
     与 kind≠none）。句柄闭集＝代码给出的候选集合（成员资格归 compile 核对），
-    只建立同一性与引用（D8）。"""
+    只建立同一性与引用（D8）。`same_state_dimension` 已随 change 键闭集
+    删除（键即 canonical，无「键不同但同维」）。"""
 
-    protocol_version: Literal['stage2-associate-v4']
+    protocol_version: Literal['stage2-associate-v5']
     same_proposition: tuple[PropositionPairVerdict, ...] = Field(default=(), min_length=0)
-    same_state_dimension: tuple[StateDimensionPairVerdict, ...] = Field(default=(), min_length=0)
     loop_pairing: tuple[LoopPairVerdict, ...] = Field(default=(), min_length=0)
     cross_chapter_cause: tuple[CauseVerdict, ...] = Field(default=(), min_length=0)
     scene_continuation: tuple[SceneContinuationVerdict, ...] = Field(default=(), min_length=0)

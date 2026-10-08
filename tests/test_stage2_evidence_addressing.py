@@ -130,7 +130,7 @@ def test_rc26_multiline_segment_stops_before_request():
 
 def _slim_chapter(start, basis, *, who='yun_niang', beats=None):
     from contracts.schema.observation import STAGE2_CHAPTERS_WIRE_PROTOCOL
-    wire_beats = [{'ev': '夫君送走表弟后安慰芸娘，说会再开导表弟。', 'on_stage': ['fu_jun'],
+    wire_beats = [{'event': '夫君送走表弟后安慰芸娘，说会再开导表弟。', 'on_stage': ['fu_jun'],
                    'start': start, 'new_scene': True,
                    'know': [{'who': who, 'how': 'hears_claim', 'what': '夫君会再开导表弟',
                              'evidence_refs': [basis]}]}]
@@ -155,9 +155,9 @@ def test_basis_segment_outside_derived_interval_revises_whole_beat():
     evidence = _chapter_evidence(1)
     # 两拍：拍1 start=e01_01、拍2 start=e01_03；拍2 的证据指向拍1 区间内的段。
     wire = _slim_chapter('e01_01', 'e01_01', beats=[
-        {'ev': '夫君送走表弟后安慰芸娘。', 'on_stage': ['fu_jun'], 'start': 'e01_01',
+        {'event': '夫君送走表弟后安慰芸娘。', 'on_stage': ['fu_jun'], 'start': 'e01_01',
          'new_scene': True},
-        {'ev': '夫君问为何。', 'on_stage': ['fu_jun'], 'start': 'e01_03',
+        {'event': '夫君问为何。', 'on_stage': ['fu_jun'], 'start': 'e01_03',
          'know': [{'who': 'yun_niang', 'how': 'hears_claim', 'what': '夫君会再开导表弟',
                    'evidence_refs': ['e01_01']}]}])
     observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
@@ -186,7 +186,7 @@ def test_book_basis_quote_is_derived_within_item_refs():
     wire = {**_book_canonical(), 'protocol_version': STAGE2_BOOK_WIRE_PROTOCOL,
             'initial_state': [{
                 'target': {'kind': 'character', 'char_id': 'fu_jun'},
-                'key': 'has_cousin', 'value': '有个表弟', 'persistence': 'stable',
+                'key': 'kinship', 'value': '有个表弟', 'persistence': 'stable',
                 'source_refs': ['e00_02'], 'evidence_refs': ['e00_02']}]}
     original = deepcopy(wire)
     observation, errors = compile_book_observation(wire, evidence=evidence)
@@ -209,7 +209,7 @@ def test_real_chain_publishes_derived_basis(tmp_path):
         'book': book,
         'ch01': _slim_chapter('e01_01', 'e01_01', who='fu_jun'),
         'ch02': {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL, 'beats': [
-            {'ev': '次日清晨夫君出门。', 'on_stage': ['fu_jun'], 'start': 'e02_01',
+            {'event': '次日清晨夫君出门。', 'on_stage': ['fu_jun'], 'start': 'e02_01',
              'new_scene': True}]},
     }
     repo, session, transport = _make_session(tmp_path, wires)
@@ -293,7 +293,7 @@ def test_chapter_prompt_field_lists_match_wire_schema():
         assert m, f'CHAPTER_PROMPT 缺 {section} 的「每项 {{…}}」字段清单'
         return {f.strip('"\',[] ') for f in m.group(1).split(',') if f.strip()}
 
-    assert declared('2. state：') == set(SlimEffect.model_fields)
+    assert declared('2. change：') == set(SlimEffect.model_fields)
     assert declared('3. know：') == set(SlimCognition.model_fields)
 
 

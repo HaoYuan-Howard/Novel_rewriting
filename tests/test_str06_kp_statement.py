@@ -47,7 +47,7 @@ def test_kp_statement_resolves_or_fails_fast():
 # ───────────────────────── 楔子面：禁区渲染命题而非 "true" ─────────────────
 
 def _hook_body_with_kp():
-    """渲染层测试：在已验收的 body 上把禁区指向的知情增量（jade_secret）换成
+    """渲染层测试：在已验收的 body 上把禁区指向的知情增量（secret）换成
     kp 句柄（design 的 kp 闭集核对属 assemble 面，key 形状不影响
     publish_graph/compile_hook_context）；hook wire 的禁区地址同步指到该句柄。"""
     body, errors = assemble_body_design(
@@ -61,7 +61,7 @@ def _hook_body_with_kp():
         for beat in scene.beats:
             deltas = tuple(
                 d.model_copy(update={'key': KP, 'value': 'true'})
-                if d.domain is EffectDomain.KNOWLEDGE and d.key == 'jade_secret' else d
+                if d.domain is EffectDomain.KNOWLEDGE and d.key == 'secret' else d
                 for d in beat.target_delta)
             beats.append(beat.model_copy(update={'target_delta': deltas}))
         scenes.append(scene.model_copy(update={'beats': tuple(beats)}))
@@ -107,7 +107,7 @@ def _graph_with_kp_deltas():
     reader = TargetDelta(
         domain=EffectDomain.KNOWLEDGE, key=KP_READER, value='true', subjects=(),
         holder='reader', op='set', scope='book', knowledge_mode='known',
-        confirms={'domain': 'world', 'key': 'hiding'}, modality=None)
+        confirms={'domain': 'world', 'key': 'secret'}, modality=None)
     knowledge = TargetDelta(
         domain=EffectDomain.KNOWLEDGE, key=KP, value='true', subjects=(),
         holder='ch1', op='set', scope='book', knowledge_mode='known',
@@ -115,7 +115,7 @@ def _graph_with_kp_deltas():
     beats = list(graph.scenes[0].beats)
     beats[0] = beats[0].model_copy(update={
         'target_delta': beats[0].target_delta + (TargetDelta(
-            domain='world', key='hiding', op='set', scope='book',
+            domain='world', key='secret', op='set', scope='book',
             value=READER_STATEMENT, modality='actual'), knowledge, reader)})
     scenes = list(graph.scenes)
     scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})

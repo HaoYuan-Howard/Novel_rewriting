@@ -358,7 +358,7 @@ SEGMENTS = {'e01_01': {'chapter': 1, 'text': '夫君走进门来。云娘没有�
 
 def test_chapter_patch_locate_maps_and_guards():
     from novel.stages.stage2 import chapter_patch_locate, compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v6', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v7', 'beats': [
         {'event': 'a', 'participants': ['ghost'], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single',
          'effects': [], 'cognition': [], 'loops': []}]}
@@ -387,11 +387,11 @@ def test_quote_repair_can_update_parent_refs_in_one_round(tmp_path):
         'e01_02': {'chapter': 1, 'text': '夫君坦白自己不能生育。'},
     }
     wire = {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL, 'beats': [{
-        'ev': '夫君向芸娘坦白不能生育。', 'on_stage': ['fu_jun', 'yun_niang'],
+        'event': '夫君向芸娘坦白不能生育。', 'on_stage': ['fu_jun', 'yun_niang'],
         'start': 'e01_01', 'new_scene': True,
         'know': [{'who': 'yun_niang', 'how': 'learns', 'what': '夫君不能生育',
                   'evidence_refs': ['e01_02']}],
-    }, {'ev': '夫君坦白。', 'on_stage': ['fu_jun'], 'start': 'e01_02'}]}
+    }, {'event': '夫君坦白。', 'on_stage': ['fu_jun'], 'start': 'e01_02'}]}
 
     def validate(value):
         return compile_chapter_observation(value, evidence_ids=evidence,
@@ -458,13 +458,13 @@ def test_missing_evidence_refs_field_is_repaired_path_locally():
     from novel.stages.stage2 import chapter_patch_locate, compile_chapter_observation
     from tests.test_str06_chapter_slim import _slim_wire, EVIDENCE, SLUGS
     wire = _slim_wire()
-    del wire['beats'][0]['state'][0]['evidence_refs']
+    del wire['beats'][0]['change'][0]['evidence_refs']
     observation, errors = compile_chapter_observation(wire, evidence_ids=EVIDENCE,
         chapter=1, character_slugs=SLUGS)
     assert observation is None and len(errors) == 1
     assert 'Field required' in errors[0] and 'evidence_refs' in errors[0]
     assert chapter_patch_locate(wire, errors, evidence_ids=EVIDENCE,
-        chapter=1, character_slugs=SLUGS) == [(('beats', 0, 'state', 0), errors)]
+        chapter=1, character_slugs=SLUGS) == [(('beats', 0, 'change', 0), errors)]
 
 
 def test_book_missing_evidence_refs_field_is_repaired_path_locally():
@@ -481,7 +481,7 @@ def test_book_missing_evidence_refs_field_is_repaired_path_locally():
             **sample_book_expression(characters), 'characters': characters,
             'initial_state': [{
                 'target': {'kind': 'character', 'char_id': 'fu_jun'},
-                'key': 'has_cousin', 'value': '有个表弟', 'persistence': 'stable',
+                'key': 'kinship', 'value': '有个表弟', 'persistence': 'stable',
                 'source_refs': ['e01_01']}],
             'world_constraints': []}
     observation, errors = compile_book_observation(wire, evidence=evidence)

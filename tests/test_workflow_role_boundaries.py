@@ -71,7 +71,7 @@ def test_rc18_close_before_local_open_rejected_and_located(same_beat):
     else:
         later = deepcopy(wire['beats'][0])
         later.pop('new_scene', None)
-        later.pop('state', None)
+        later.pop('change', None)
         later.pop('know', None)
         later['start'] = 'e01_02'
         wire['beats'][0]['loops'] = [closed]

@@ -32,7 +32,7 @@ from tests.str06_expression_inputs import (
     sample_book_expression, sample_design_expression,
 )
 
-PV = 'stage2-chapters-v6'   # R10a a1：章观察独立协议字面量（names 无字面量面）
+PV = 'stage2-chapters-v7'   # R10a a1：章观察独立协议字面量（names 无字面量面）
 
 
 def _design_wire_v7():
@@ -72,14 +72,14 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v6', 'characters': {
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v7', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
             {'surface': '云娘', 'source_refs': ['e01_01']}]}},
         'initial_state': [
             {'target': {'kind': 'character', 'char_id': 'fu_jun'},
-             'key': 'birthright', 'value': '养子', 'persistence': 'stable',
+             'key': 'identity', 'value': '养子', 'persistence': 'stable',
              'source_refs': ['e01_01'],
              'basis': [{'segment': 'e01_01', 'quote': '云娘提出约定'}]}],
         'world_constraints': []}
@@ -90,7 +90,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                       participants=('yun', 'fu_jun'),
                       effects=[{'target': {'kind': 'relation', 'subject': 'fu_jun',
                                            'object': 'yun'},
-                                'key': 'covenant', 'op': 'set', 'value': '成立',
+                                'key': 'agreement', 'op': 'set', 'value': '成立',
                                 'modality': 'actual',
                                 'basis': [{'segment': 'e01_01',
                                            'quote': '云娘提出约定'}]}],
@@ -106,8 +106,8 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
                 'fu_jun': {'family_id': None, 'given': None, 'aliases': []},
                 'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': []}},
         },
-        'associate': {'protocol_version': 'stage2-associate-v4',
-                      'same_proposition': [], 'same_state_dimension': [],
+        'associate': {'protocol_version': 'stage2-associate-v5',
+                      'same_proposition': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],
                       'scene_continuation': []},
         'cross_cause': {'protocol_version': 'stage2-cross-cause-v1', 'causes': []},
@@ -261,7 +261,7 @@ def test_changed_hook_copy_refuses_the_old_root_and_changes_requests(tmp_path):
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
-                {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v6', 'characters': {
+                {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v7', 'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
             'yun': {'canonical': '云娘', 'surfaces': [
@@ -340,7 +340,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v6', 'characters': {
+            {'surface': '云娘', 'source_refs': ['e01_01']}]}}), 'protocol_version': 'stage2-book-v7', 'characters': {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]},
         'yun': {'canonical': '云娘', 'surfaces': [
@@ -357,9 +357,10 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                                        'quote': '夫君与云娘一处住着'}]}]),
         _obs_beat('床板响动，读者与云娘确认床底有人', ('e01_01',),
                   participants=('yun', 'fu_jun'), scene_boundary='continue',
+                  access='narrated',
                   cognition=[{'proposition': {'ref': 'p_hide',
                                               'statement': '夫君藏身床底'},
-                              'holder': 'reader', 'mode': 'learns',
+                              'holder': 'yun', 'mode': 'confirms',
                               'basis': [{'segment': 'e01_01',
                                          'quote': '夫君与云娘一处住着'}]}])]}
     design = {
@@ -375,15 +376,15 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
              'reads': [],
              'beats': [{'ev': '夜半响动', 'who': ['yun'],
                         'real': ['ob01'],
-                        'state': [{'at': 'world', 'key': 'hiding',
+                        'state': [{'at': 'world', 'key': 'secret',
                                    'val': '床底有人'}]}]},
             {'driver': {'focal_actor': 'yun', 'immediate_want': '看清床底',
                         'opposition': '恐惧', 'turn': '确认'},
              'brief': '重心在床底确认瞬间；从俯身写到确认，在反应处收住。',
              'reads': [{'domain': 'world', 'subjects': [], 'holder': None,
-                        'key': 'hiding'}],
+                        'key': 'secret'}],
              'beats': [{'ev': '确认床底有人', 'who': ['yun', 'fu_jun'],
-                        'real': ['ob02'], 'know': [{'ref': 'ob02.k01', 'confirms': {'domain': 'world', 'key': 'hiding'}}]}]}],
+                        'real': ['ob02'], 'know': [{'ref': 'ob02.k01', 'confirms': {'domain': 'world', 'key': 'secret'}}]}]}],
         'chapters': [{'purpose': '夜半响动到床底确认', 'scenes': 2}]}
     preserve = {'protocol_version': 'stage4-preserve-v2', 'obligations': [
         {'kind': 'event_core',
@@ -393,7 +394,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
          'satisfaction': '正文呈现佯离与藏身的关系', 'requires': []},
         {'kind': 'reveal',
          'statement': '读者在床板响动后确认床底有人',
-         'anchors': ['b01_02.c1'],
+         'anchors': ['b01_02.c2'],  # CS-S Phase 3：读者条目由 compile 派生（c2＝派生位）
          'must_preserve': True,
          'satisfaction': '正文呈现确认时点与反应', 'requires': [1]}]}
     wires = {
@@ -404,8 +405,8 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
             'people': {
                 'fu_jun': {'family_id': None, 'given': None, 'aliases': []},
                 'yun': {'family_id': 'fam_yun', 'given': '娘', 'aliases': []}}},
-        'associate': {'protocol_version': 'stage2-associate-v4',
-                      'same_proposition': [], 'same_state_dimension': [],
+        'associate': {'protocol_version': 'stage2-associate-v5',
+                      'same_proposition': [],
                       'loop_pairing': [], 'cross_chapter_cause': [],
                       'scene_continuation': []},
         'cross_cause': {'protocol_version': 'stage2-cross-cause-v1', 'causes': []},
@@ -452,7 +453,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
     assert [(p['fact'], p['position'], p['in_scene']) for p in pending] == [
         ('夫君藏身床底', 'sc02#b01', True)]  # 批0 D6：fact 回填为 Brief 登记的命题 statement
     assert pending[0]['address'] == {
-        'domain': 'world', 'key': 'hiding',
+        'domain': 'world', 'key': 'secret',
         'subjects': [], 'holder': None}
     # 渲染进写手阅读面（地址可追溯）
     from novel.stages.common import project_chapter_packet, render_chapter_packet

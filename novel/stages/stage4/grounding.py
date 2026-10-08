@@ -39,7 +39,7 @@ from contracts.schema.grounding import (
     BookConstraint, _lock_id,
 )
 from contracts.schema.source import (
-    BlueprintsArtifactV16, CharactersCore,
+    BlueprintsArtifactV17, CharactersCore,
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
 from novel.core.name_materials import (
@@ -93,7 +93,7 @@ def _render_target(target: Any) -> str:
 
 
 def _anchor_index(
-    characters: CharactersCore, blueprint: BlueprintsArtifactV16,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
 ) -> dict[str, ObligationAnchor]:
     """投影句柄 → 类型化拷贝（compiler 拷贝，模型不复述；I-15/I-21）。
 
@@ -142,7 +142,7 @@ def _anchor_index(
 
 def _derive_lineage(
     handles: tuple[str, ...], index: dict[str, ObligationAnchor],
-    characters: CharactersCore, blueprint: BlueprintsArtifactV16,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
 ) -> SourceLineage:
     """义务 anchors → SourceLineage（I-15/I-21：compiler 派生，wire 不再输出）。
 
@@ -198,7 +198,7 @@ def _derive_lineage(
 
 
 def project_preserve_view(
-    characters: CharactersCore, blueprint: BlueprintsArtifactV16,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
 ) -> str:
     """R10a a2：Preserve 的源证据投影（确定性渲染，取代 Blueprint JSON 倾倒）。
 
@@ -350,7 +350,7 @@ def _preserve_shape_errors(wire: Any) -> list[str]:
 def assemble_preserve(
     wire: Any, *,
     policy_id: str, policy_version: int,
-    characters: CharactersCore, blueprint: BlueprintsArtifactV16,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
     """Preserve wire（stage4-preserve-v2）→ checkpoint。
@@ -604,7 +604,7 @@ def fact_lock_subjects(obligations: Iterable[SourceObligation]) -> dict[str, fro
 
 
 def _unanswered_loops(
-    blueprint: BlueprintsArtifactV16,
+    blueprint: BlueprintsArtifactV17,
 ) -> list[tuple[str, str]]:
     """canonical 里 open 而从未 close 的悬念（原文未回答锁的输入，§二.1）。
 
@@ -665,7 +665,7 @@ def _requires_released_surfaces(
 
 
 def _derive_brief_locks(
-    checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV16,
+    checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV17,
     characters: CharactersCore | None = None, structure=None,
 ) -> tuple[tuple[BriefProposition, ...], tuple[BriefKnowledgeLock, ...],
            tuple[BriefFactLock, ...], dict[str, dict[str, tuple]]]:
@@ -772,7 +772,7 @@ def _derive_brief_locks(
 
 def project_brief(
     checkpoint: PreserveCheckpoint, characters: CharactersCore,
-    blueprint: BlueprintsArtifactV16, structure=None,
+    blueprint: BlueprintsArtifactV17, structure=None,
 ) -> tuple[ReconstructionBrief, tuple[IdentityProjection, ...]]:
     """checkpoint → (Brief, IdentityProjection)。Design 的全部语义输入。
 
@@ -940,7 +940,7 @@ def _anchor_line(anchor: ObligationAnchor) -> str:
 
 def preserve_patch_slice(
     wire: dict[str, Any], characters: CharactersCore,
-    blueprint: BlueprintsArtifactV16, indices: Iterable[int],
+    blueprint: BlueprintsArtifactV17, indices: Iterable[int],
 ) -> dict[str, Any]:
     """Preserve 条目返修的依赖切片（RC-64）：目标义务的源原子与证据窗口。
 

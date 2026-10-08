@@ -639,7 +639,7 @@ def _book_observation_payload() -> dict:
                 ],
             },
         }),
-        'protocol_version': 'stage2-book-v6',
+        'protocol_version': 'stage2-book-v7',
         'characters': {
             'char_001': {
                 'canonical': '甲',

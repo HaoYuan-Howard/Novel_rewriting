@@ -47,7 +47,7 @@ from pydantic import ValidationError
 from contracts.schema.observation import (
     STAGE2_CHAPTERS_WIRE_PROTOCOL, ChapterObservation,
 )
-from contracts.schema.source import RETIRED_STATE_KEYS
+from contracts.schema.source import CHANGE_KEYS, REGISTERED_STATE_KEYS
 from novel.stages.common import CHAPTER_PROMPT, PRE_CHAPTER_RULE
 from novel.stages.stage2.resolver import EvidenceResolver, render_evidence_block
 from novel.stages.stage2.slim import (
@@ -58,6 +58,9 @@ from novel.core.validation import ValidationIssue
 #: 书级命题编号的观察面形状（与 `FACT_ID_PATTERN` 同一张表；slim 派发的章内
 #: 句柄是 k{nn}，两个命名空间不冲突）。
 _FACT_REF = re.compile(r'^f\d{2,}$')
+
+#: 变化键闭集的 prompt 渲染（CHANGE_KEYS 同一张表；Phase 3）。
+_CHANGE_KEYS_LINE = '／'.join(CHANGE_KEYS)
 
 
 def chapter_loop_issues(beats: list[Any], *, chapter: int | None = None) -> list[ValidationIssue]:
@@ -166,7 +169,8 @@ def chapter_observation_prompt(*, chapter: int, book: Any, chapters: list[dict],
         facts_block=chapter_facts_block(book),
         prior=chapter_prior_text(chapters, chapter),
         evidence=chapter_evidence,
-        pre_chapter=PRE_CHAPTER_RULE if chapter == 1 else '')
+        pre_chapter=PRE_CHAPTER_RULE if chapter == 1 else '',
+        change_keys=_CHANGE_KEYS_LINE)
 
 
 def _chapter_handle_discipline(
@@ -289,13 +293,15 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
             for index, transfer in enumerate(raw.get(kind) or (), 1):
                 if not isinstance(transfer, dict):
                     continue
-                if kind == 'effects' and transfer.get('key') in RETIRED_STATE_KEYS:
+                if kind == 'effects' and transfer.get('key') not in REGISTERED_STATE_KEYS:
+                    # CS-S Phase 3：退役键拒识并入闭集拒识——键只能取自
+                    # CHANGE_KEYS（scene_location 是 compiler 合成键，模型面不写）。
                     issues.append((beat_path + (label, index - 1),
-                                   f'{where} {label}[{index}] 位置键 '
-                                   f'{transfer.get("key")} 已退役：'
-                                   '当前位置用 scene_location（场景作用域）、'
-                                   '长期居所用 residence（book 作用域）、'
-                                   '身体状态各自一键，不得塞进同一个位置值'))
+                                   f'{where} {label}[{index}] 的变化键 '
+                                   f'{transfer.get("key")!r} 不在闭集内：'
+                                   'key 只能取自【变化键闭集】清单（语义细节由 '
+                                   'val 承载，不自造新键；当前位置用拍级 '
+                                   'scene_location，长期居所用 residence）'))
                 if kind == 'cognition':
                     prop = transfer.get('proposition') or {}
                     ref = prop.get('ref')
@@ -353,14 +359,14 @@ def _route_wire(wire: Any, *, chapter: int | None, sequence: tuple[str, ...] | N
             from novel.stages.common import wire_shape_issues
             located = wire_shape_issues(exc, kind='chapters')
             if not located or any(paths is None for paths, _message in located):
-                return None, ('state', 'know'), [
+                return None, ('change', 'know'), [
                     (None, f'章观察瘦 wire 协议校验失败：{exc}')]
-            return None, ('state', 'know'), [
+            return None, ('change', 'know'), [
                 (paths[0], f'章观察瘦 {message}')
                 for paths, message in located]
         if expanded is None:
-            return None, ('state', 'know'), issues
-        return expanded, ('state', 'know'), []
+            return None, ('change', 'know'), issues
+        return expanded, ('change', 'know'), []
     return wire, ('effects', 'cognition'), []
 
 

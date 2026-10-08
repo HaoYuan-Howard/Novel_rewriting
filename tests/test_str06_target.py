@@ -11,7 +11,7 @@ from __future__ import annotations
 from contracts.schema.grounding import SemanticBinding
 from contracts.schema.policy import PreserveKind
 from contracts.schema.source import (
-    BlueprintsArtifactV16, ChapterBlueprint, CharactersCore,
+    BlueprintsArtifactV17, ChapterBlueprint, CharactersCore,
 )
 from tests.str06_facilities import v13_beat
 from novel.stages.stage4.grounding import (
@@ -34,17 +34,17 @@ def _source_pair():
                                   'until_chapter': None, 'source_refs': ['e01_01']}]}},
         initial_state=[{'state_id': 's0_01',
                         'target': {'kind': 'character', 'char_id': 'fu_jun'},
-                        'key': 'birthright', 'value': '养子', 'persistence': 'stable',
+                        'key': 'identity', 'value': '养子', 'persistence': 'stable',
                         'source_refs': ['e01_01'],
                         'basis': [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}])
-    bp = BlueprintsArtifactV16(source_expression=sample_blueprint_expression(),
+    bp = BlueprintsArtifactV17(source_expression=sample_blueprint_expression(),
         world_constraints=[], chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat(
                                  'b01_01', '开篇', participants=('fu_jun', 'yun'),
                                  effects=({'target': {'kind': 'relation',
                                                       'subject': 'fu_jun', 'object': 'yun'},
-                                           'key': 'covenant', 'op': 'set',
+                                           'key': 'agreement', 'op': 'set',
                                            'value': '成立',
                                            'modality': 'actual',
                                            'basis': ({'segment': 'e01_01',
@@ -206,7 +206,7 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
     # 已删，改按观察协议直接构造同一形状）；其文本若泄漏进身份约束，下面两条
     # 断言会红。
     observation = ChapterObservation.model_validate({
-        'protocol_version': 'stage2-chapters-v6', 'beats': [{
+        'protocol_version': 'stage2-chapters-v7', 'beats': [{
             'event': '试探', 'participants': ['fu_jun', 'yun'],
             'source_refs': ['e01_01'], 'scene_boundary': 'new',
             'temporal_mode': 'single',
@@ -227,7 +227,7 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
     assert '以为' not in dumped and '离开' not in dumped
     # 事实层的 stable 初始事实照常进入（R10a a2 起 _source_pair 带一条初态）
     by_char = {i.char_id: i.stable_constraints for i in identity}
-    assert by_char['fu_jun'] == ('birthright=养子',)
+    assert by_char['fu_jun'] == ('identity=养子',)
     assert by_char['yun'] == ()
 
 

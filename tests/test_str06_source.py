@@ -24,7 +24,7 @@ from novel.stages.stage2 import (
 )
 
 PV = 'stage2-names-v4'   # 名称同一性留证协议
-CPV = 'stage2-chapters-v6'     # 章观察（CS-S 1b：v5——死字段收口）
+CPV = 'stage2-chapters-v7'     # 章观察（CS-S 1b：v5——死字段收口）
 
 
 def _outcome(*, book=None, chapters=None, names=None, associate=None):
@@ -116,7 +116,7 @@ def test_same_beat_establish_and_reference_is_legal():
         _beat('证实', ['e02_01'], participants=['yun_niang'],
               effects=[{'target': {'kind': 'relation', 'subject': 'fu_jun',
                                    'object': 'yun_niang'},
-                        'key': 'intimacy', 'op': 'set', 'value': '所言不虚',
+                        'key': 'relationship', 'op': 'set', 'value': '所言不虚',
                         'modality': 'actual',
                         'basis': _basis('e02_01')}],
               cognition=[{'proposition': {'ref': 'p_trust'},
@@ -222,7 +222,7 @@ def test_fold_counts_empty_transition_beats_per_chapter():
     chapters['ch02'] = {'protocol_version': CPV, 'beats': [
         _beat('有转移', ['e02_01'],
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
-                        'key': 'mood', 'op': 'set', 'value': '沉',
+                        'key': 'emotional_state', 'op': 'set', 'value': '沉',
                         'modality': 'actual',
                         'basis': _basis('e02_01')}]),
         _beat('空转移一', ['e02_01'], scene_boundary='continue'),
@@ -240,12 +240,12 @@ def test_fold_keeps_unset_and_unknown_distinct_from_never_established():
     chapters['ch02'] = {'protocol_version': CPV, 'beats': [
         _beat('立', ['e02_01'],
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
-                        'key': 'illness', 'op': 'set', 'value': '风寒',
+                        'key': 'health', 'op': 'set', 'value': '风寒',
                         'modality': 'actual',
                         'basis': _basis('e02_01')}]),
         _beat('解', ['e02_01'], scene_boundary='continue',
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
-                        'key': 'illness', 'op': 'unset', 'value': None,
+                        'key': 'health', 'op': 'unset', 'value': None,
                                                 'modality': 'actual',
                                                 'basis': _basis('e02_01')}]),
         _beat('未知', ['e02_01'], scene_boundary='continue',
@@ -257,7 +257,7 @@ def test_fold_keeps_unset_and_unknown_distinct_from_never_established():
     outcome = _outcome(chapters=chapters)
     assert outcome.errors == [] and outcome.undecided == []
     after = '\n'.join(outcome.fold['snapshots'][2])
-    assert 'char:fu_jun.illness = unset' in after
+    assert 'char:fu_jun.health = unset' in after
     assert 'char:fu_jun.scene_location = unknown' in after
 
 
@@ -276,7 +276,7 @@ def _e00_book() -> dict:
 def _unpaired_associate() -> dict:
     """空配对的 associate 观察：引用句柄的自定义章 wire 不带默认跨章配对。"""
     associate = _associate_wire()
-    for key in ('same_proposition', 'same_state_dimension', 'loop_pairing',
+    for key in ('same_proposition', 'loop_pairing',
                 'cross_chapter_cause', 'scene_continuation'):
         associate[key] = []
     return associate
@@ -357,7 +357,7 @@ def test_effect_dead_fields_are_refused_at_the_schema_layer():
     from contracts.schema.source import Effect
     from pydantic import ValidationError
     base = {'target': {'kind': 'character', 'char_id': 'fu_jun'},
-            'key': 'hiding', 'op': 'set', 'value': 'x',
+            'key': 'secret', 'op': 'set', 'value': 'x',
             'modality': 'actual',
             'basis': _basis('e01_01')}
     Effect.model_validate(base)

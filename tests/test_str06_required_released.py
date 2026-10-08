@@ -156,7 +156,7 @@ def test_chapter_ir_carries_requires_released_for_the_carrier_chapter():
         length_band=(plain_ir.book_brief.length_band_low,
                      plain_ir.book_brief.length_band_high),
         projection=chars.name_projection(), structure=chars.name_structure,
-        required_releases={('yun_niang', 'vow', 'known'): ('苏芸娘',)})
+        required_releases={('yun_niang', 'intent', 'known'): ('苏芸娘',)})
     assert ir.chapters[0].requires_released == ('苏芸娘',)
     packet = project_chapter_packet(ir, 1)
     assert '必保揭名：本章正文必须出现称谓字面「苏芸娘」' in render_chapter_packet(packet)

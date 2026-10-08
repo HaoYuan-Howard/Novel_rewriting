@@ -40,9 +40,12 @@ from contracts.schema.observation import (
     STAGE2_BOOK_PROTOCOL, STAGE2_BOOK_WIRE_PROTOCOL, BookObservation, BookObservationWire,
 )
 from contracts.schema.source import (
-    REGISTERED_STATE_KEYS, CharactersCore, CharacterEntry,
+    CHANGE_KEYS, REGISTERED_STATE_KEYS, CharactersCore, CharacterEntry,
 )
 from novel.stages.common import BOOK_PROMPT, group_located_errors
+#: 变化键闭集的 prompt 渲染（CHANGE_KEYS 同一张表；Phase 3）。
+_CHANGE_KEYS_SET = frozenset(CHANGE_KEYS)
+_CHANGE_KEYS_LINE = '／'.join(CHANGE_KEYS)
 from novel.stages.stage2.resolver import (
     EvidenceResolver, render_evidence_block, verify_bases,
 )
@@ -59,7 +62,8 @@ def book_observation_prompt(*, chapters: list[dict], hook_copy: str,
     if hook_copy.strip():
         full = f'〔章前文字〕\n{hook_copy}\n\n' + full
     return BOOK_PROMPT.format(n=len(chapters), text=full,
-                              evidence=render_evidence_block(evidence))
+                              evidence=render_evidence_block(evidence),
+                              change_keys=_CHANGE_KEYS_LINE)
 
 
 def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...], tuple]]:
@@ -394,7 +398,15 @@ def _compile_book_view(
                 message = f'initial_state {atom.get("key")} 引用未知人物 {ref}'
                 fail(path, message)
                 errors.append(message)
-        if REGISTERED_STATE_KEYS.get(atom.get('key')) == 'scene':
+        if atom.get('key') not in _CHANGE_KEYS_SET:
+            # CS-S Phase 3：初态键与章观察 change 同一张闭集表（schema 模式之外
+            # 的逐条定位报错面——语义细节由 value 承载）。
+            message = (f'initial_state 的键 {atom.get("key")!r} 不在变化键闭集内'
+                       '（key 只能取自【变化键闭集】清单；场景作用域键不收——'
+                       '开场所在交给第 1 章第一个 new 拍，长期居所登记 residence）')
+            fail(path, message)
+            errors.append(message)
+        elif REGISTERED_STATE_KEYS.get(atom.get('key')) == 'scene':
             message = (f'initial_state {atom.get("key")} 的键 {atom.get("key")} 是场景'
                        '作用域：开场所在交给第 1 章第一个 new 拍；故事开始前成立的长期'
                        '居所登记 residence')

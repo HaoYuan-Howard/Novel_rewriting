@@ -458,7 +458,7 @@ def _confirm_wire():
         {'ref': 'ob01.k01'},
         {'ref': 'ob04.k01',
          'confirms': {'domain': 'character', 'subjects': ['lu_fujun'],
-                      'holder': None, 'key': 'ghost_fact'}}]
+                      'holder': None, 'key': 'secret'}}]
     return wire, brief, obligations
 
 
@@ -501,7 +501,7 @@ def test_read_and_confirm_closure_errors_carry_wire_paths_for_item_revision():
         'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
         'key': 'kp_2222222222222222', 'value': 'true', 'knowledge_mode': 'known',
         'confirms': {'domain': 'character', 'subjects': ['lu_fujun'], 'holder': None,
-                     'key': 'ghost_fact'}})
+                     'key': 'secret'}})
     body, errors = assemble(wire, brief, obligations)
     assert body is None
     by_path = {tuple(p): e for e in errors

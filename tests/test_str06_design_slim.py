@@ -102,25 +102,25 @@ def _v8_wire() -> dict:
         'character_voices': [
             {'char_id': 'yun_niang', 'voice': '对外端方，内心直白。'}],
         'initial_state': [
-            {'domain': 'relation', 'key': 'marriage',
+            {'domain': 'relation', 'key': 'marital_status',
              'subjects': ['lu_fujun', 'yun_niang'], 'value': 'married'}],
         'initial_surfaces': [{'char_id': 'yun_niang', 'surfaces': ['芸娘']}],
         'scenes': [
             {'driver': {'focal_actor': 'lu_fujun', 'immediate_want': '坦白',
                         'opposition': '难以启齿', 'turn': '抛出借种计划'},
              'brief': '新婚夜坦白，重心在荒诞与错愕的对照。',
-             'reads': [{'domain': 'relation', 'key': 'marriage',
+             'reads': [{'domain': 'relation', 'key': 'marital_status',
                         'subjects': ['lu_fujun', 'yun_niang']}],
              'beats': [
                  {'ev': '夫君坦白不能生育。', 'who': ['lu_fujun', 'yun_niang'],
                   'real': ['ob01'], 'know': [{'ref': 'ob01.k01'}],
-                  'state': [{'at': 'lu_fujun', 'key': 'body_condition',
+                  'state': [{'at': 'lu_fujun', 'key': 'health',
                              'val': '幼时落水伤了根本'}],
                   'ex': ['ex_01']},
                  {'ev': '夫君提出借种计划。', 'who': ['lu_fujun'],
                   'state': [{'at': 'lu_fujun+pei_shuyuan', 'key': 'kinship',
                              'val': 'cousins'},
-                            {'at': 'lu_fujun', 'key': 'plan',
+                            {'at': 'lu_fujun', 'key': 'intent',
                              'val': '借种计划仍在推进', 'modality': 'planned'}]},
              ]},
             {'driver': {'focal_actor': 'yun_niang', 'immediate_want': '安身',
@@ -167,7 +167,7 @@ def test_expand_know_derives_knowledge_at_selected_beat():
     beat1 = expanded['scenes'][0]['beats'][0]
     assert beat1['target_delta'] == [
         {'domain': 'character', 'subjects': ('lu_fujun',), 'holder': None,
-         'key': 'body_condition', 'op': 'set', 'value': '幼时落水伤了根本',
+         'key': 'health', 'op': 'set', 'value': '幼时落水伤了根本',
          'scope': 'book', 'knowledge_mode': None,
          'modality': 'actual'},
         {'domain': 'knowledge', 'subjects': (), 'holder': 'yun_niang',
@@ -360,7 +360,7 @@ def test_reader_reveal_expands_as_knowledge_holder_reader():
                                            mode='known'),)})
     obligations = _obligations(brief)
     wire = _v8_wire()
-    wire['scenes'][0]['beats'][0]['know'].append({'ref': 'ob01.k02', 'confirms': {'domain': 'character', 'subjects': ['lu_fujun'], 'key': 'body_condition'}})
+    wire['scenes'][0]['beats'][0]['know'].append({'ref': 'ob01.k02', 'confirms': {'domain': 'character', 'subjects': ['lu_fujun'], 'key': 'health'}})
     expanded, issues = expand_design_wire(wire, brief=brief, obligations=obligations)
     assert issues == []
     rows = expanded['scenes'][0]['beats'][0]['target_delta']
@@ -368,7 +368,7 @@ def test_reader_reveal_expands_as_knowledge_holder_reader():
     assert len(reader_rows) == 1
     assert (reader_rows[0]['domain'], reader_rows[0]['knowledge_mode'],
             reader_rows[0]['value']) == ('knowledge', 'known', 'true')
-    assert reader_rows[0]['confirms']['key'] == 'body_condition'
+    assert reader_rows[0]['confirms']['key'] == 'health'
 
 
 def test_world_rule_and_immediate_continuation_reach_canonical():
@@ -418,7 +418,7 @@ def test_lock_reference_is_a_closed_set_injected_from_the_brief():
         Draft202012Validator.check_schema(schema)
         return Draft202012Validator({'$ref': '#/$defs/SlimDesignState',
                                      '$defs': schema['$defs']})
-    row = {'at': 'world', 'key': 'plan', 'val': '暂缓', 'modality': 'planned'}
+    row = {'at': 'world', 'key': 'intent', 'val': '暂缓', 'modality': 'planned'}
     closed = validator(fact_lock_ids=[KF])
     assert not list(closed.iter_errors({**row, 'lock': KF}))
     assert list(closed.iter_errors({**row, 'lock': 'kf_' + 'f' * 16})), '闭集外句柄'
@@ -447,7 +447,7 @@ def test_expand_keeps_lock_out_of_the_intermediate_shape_and_marks_project_the_a
     assert mark.path == ('scenes', 0, 'beats', 1, 'state', 1)
     assert (mark.op, mark.modality) == ('set', 'planned')
     assert mark.address.domain.value == 'character' and mark.address.subjects == ('lu_fujun',)
-    assert mark.address.key == 'plan'
+    assert mark.address.key == 'intent'
 
 
 def test_mark_defaults_follow_the_state_row_not_the_lock():

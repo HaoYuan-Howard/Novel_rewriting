@@ -138,7 +138,16 @@ from novel.llm.paid_requests import candidate_contract_identity
 # 原因见 REQUIREMENTS CS-S。
 # rc18 续（2026-10-07 CS-S 1c）：names 观察 canonical 升 v4（构词派生＋变体窄调用、
 # resolutions 增 not_name）——names.json 行随批换 rc18 身份。
-FROZEN_CONTRACT_IDENTITY = '32d813578dba474391e727e7bb94f4ef7713723c20df703d7384415ba5300e52'
+# rc19（2026-10-07 CS-S Phase 2）：观察面收敛——book v6 增 facts、chapters v6 增
+# know.fact、associate v4 条目级窄 resolver；观察与 fold 换 rc19 身份。
+# rc20（2026-10-08 CS-S Phase 3，用户批准的收官批）：change 键入 CHANGE_KEYS 闭集
+# （27 个通用维度，rc15 冻结根三本书 184 个真实键聚类定稿）；chapters wire v10
+# （ev→event、state→change＋拍级 access）与 canonical v7、book canonical v7、
+# associate v5（same_state_dimension 消失）、Blueprints v17（Beat.access＋派生
+# reader cognition）、Characters v6（初态键闭集）；RC 版式头升 rc20。读者知情由
+# compile 按拍级 access 派生（wire 禁 reader）。旧 rc19 根按契约表漂移只读拒收；
+# 原因见 REQUIREMENTS CS-S。
+FROZEN_CONTRACT_IDENTITY = '5b6f5403c53946fe04789f68cca7f939753e3a32a66ed33a28570f38c3c0f6b5'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -208,8 +217,9 @@ def test_frozen_rc_version_label():
     # rc13（CS-3 余项：D5 统一＋world 规则 id）——五产物形状变化升版，其余
     # 产物表条目保持 rc12（形状未变）。rc15：证据寻址（RC-26/27）；rc16：事实锁引用（CS-F2）；
     # rc17：CS-H H3 称谓面＋H4 associate v3；rc18：CS-S Phase 1 死字段收口；
-    # rc19：CS-S Phase 2 观察面收敛（facts／know.fact／associate v4／D-5／fold 时间线）。
-    assert STR06_RC_VERSION == 'str06-rc19'
+    # rc19：CS-S Phase 2 观察面收敛（facts／know.fact／associate v4／D-5／fold 时间线）；
+    # rc20：CS-S Phase 3 收官（CHANGE_KEYS 闭集／access／reader 派生／associate v5）。
+    assert STR06_RC_VERSION == 'str06-rc20'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是
@@ -227,13 +237,16 @@ def test_frozen_rc_version_label():
 #: 旧盘面按版本关闭式拒识（协议不兼容），不计语义检出。
 FROZEN_SEMANTIC_PROTOCOLS = {
     # rc18（CS-S 1b）：观察 canonical 升 v5——死字段收口；rc19（CS-S Phase 2）：
-    # book v6 增 facts（词表＋known_at_start）、chapters v6 增 know.fact 引用。
-    'STAGE2_BOOK_PROTOCOL': 'stage2-book-v6',
-    'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v6',
+    # book v6 增 facts（词表＋known_at_start）、chapters v6 增 know.fact 引用；
+    # rc20（CS-S Phase 3）：book/chapters 升 v7——初态键入 CHANGE_KEYS 闭集、
+    # ObsBeat 增 access（获知通道）、know.who 禁 reader。
+    'STAGE2_BOOK_PROTOCOL': 'stage2-book-v7',
+    'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v7',
     'STAGE2_NAMES_PROTOCOL': 'stage2-names-v4',
     # rc17（CS-H H4，RC-65）：associate 升 v3——维度句柄；rc19（CS-S Phase 2）
-    # 升 v4——条目级窄 resolver（候选由代码给出、逐候选 verdict）。
-    'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v4',
+    # 升 v4——条目级窄 resolver；rc20（CS-S Phase 3）升 v5——same_state_dimension
+    # 消失（change 键闭集＝键即 canonical）。
+    'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v5',
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v2',
     'STAGE4_PRESERVE_POLICY_VERSION': 5,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',

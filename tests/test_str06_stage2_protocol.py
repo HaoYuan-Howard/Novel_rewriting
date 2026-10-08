@@ -100,8 +100,8 @@ def test_observation_artifacts_are_registered_with_independent_versions():
     # rc15（RC-26/27 证据寻址）：携带段号的三类观察换身份；rc18（CS-S 1b）：
     # book／ch{nn} 观察 canonical 升 v5（死字段收口）再换身份；names 形状
     # 不变，保持 rc15。
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/book.json'] == 'str06-rc19'
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/ch{nn}.json'] == 'str06-rc19'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/book.json'] == 'str06-rc20'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/ch{nn}.json'] == 'str06-rc20'
     for rel in ('stage2/observations/ch{nn}.json',
                 'stage2/observations/names.json'):
         assert rel in ARTIFACT_PATHS and rel in ARTIFACT_SPECS
@@ -112,9 +112,9 @@ def test_observation_artifacts_are_registered_with_independent_versions():
     # rc17（CS-H H4，RC-65）：associate 协议升 v3（维度句柄）——同键配对按构造
     # 不可能、模型只配键不同但同维的维度；观察产物随协议换身份。
     assert ARTIFACT_SPECS['stage2/observations/associate.json']
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc19'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc20'
     # R2（语义送达）起 RC 版式头升 rc10；associate 冻结在 rc9（R1 身份）不动。
-    assert STR06_RC_VERSION == 'str06-rc19'     # rc19：CS-S Phase 2 观察面收敛
+    assert STR06_RC_VERSION == 'str06-rc20'     # rc19：CS-S Phase 2 观察面收敛
     # rc16 续（CS-F2 Hook 称谓投影）：楔子上下文随绑定表换身份，旧 rc12 拒读。
     # rc17 续（CS-H H3）：hook 上下文增 display_faces/avoid_lines。
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/context/hook/hook.json'] == 'str06-rc17'
@@ -146,7 +146,7 @@ def _book_wire() -> dict:
                 {'surface': '云娘', 'source_refs': ['e01_02']},
             ]},
         }),
-        'protocol_version': 'stage2-book-v6',
+        'protocol_version': 'stage2-book-v7',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']},
@@ -180,7 +180,7 @@ def _beat_wire(**over) -> dict:
         'scene_boundary': 'new',
         'temporal_mode': 'single',
         'effects': [{'target': {'kind': 'character', 'char_id': 'yun_niang'},
-                     'key': 'wariness', 'op': 'set', 'value': '高',
+                     'key': 'attitude', 'op': 'set', 'value': '高',
                      'modality': 'actual',
                      'basis': _basis('e01_01')}],
         'cognition': [{'proposition': {'ref': 'p_secret',
@@ -254,7 +254,7 @@ def test_transfer_semantics_carry_over_from_v13():
 
 def _dead_field_effect(dead: str) -> dict:
     """CS-S 1b：已删字段的直接构造（红例素材）。"""
-    eff = {'target': {'kind': 'character', 'char_id': 'fu_jun'}, 'key': 'birthright',
+    eff = {'target': {'kind': 'character', 'char_id': 'fu_jun'}, 'key': 'identity',
            'op': 'set', 'value': '养子', 'modality': 'actual',
            'basis': _basis('e01_01')}
     if dead == 'scope':
@@ -276,16 +276,16 @@ def test_chapter_observation_green_with_local_handles():
 # ───────────────────────── associate 只选已给句柄（D8） ─────────────────────────
 
 def test_associate_protocol_is_independently_versioned():
-    """R1：associate 独立升版（CS-S Phase 2 起 stage2-associate-v4——条目级
+    """R1：associate 独立升版（CS-S Phase 2 起 stage2-associate-v5——条目级
     窄 resolver：候选由代码给出、逐候选 verdict）；三类观察协议字面量逐字不变。
     三类观察协议字面量逐字不变。
 
     旧协议字面量对 associate 关闭式拒读（I-13：无运行时转换层）——句柄含义与
     输入材料已变，旧回答不做句柄替换后继续采用（首版 PLAN.md R1，Git 2fc03832；A1.5 出自被它吸收的提案）。
     """
-    assert STAGE2_ASSOCIATE_PROTOCOL == 'stage2-associate-v4'
+    assert STAGE2_ASSOCIATE_PROTOCOL == 'stage2-associate-v5'
     assert STAGE2_OBSERVATION_PROTOCOL == 'stage2-observation-v1'
-    empty = {'same_proposition': [], 'same_state_dimension': [], 'loop_pairing': [],
+    empty = {'same_proposition': [], 'loop_pairing': [],
              'cross_chapter_cause': [], 'scene_continuation': []}
     obs = AssociateObservation.model_validate(
         {'protocol_version': STAGE2_ASSOCIATE_PROTOCOL, **empty})
@@ -305,8 +305,6 @@ def test_associate_observation_shape_and_closed_handle_charset():
         'protocol_version': STAGE2_ASSOCIATE_PROTOCOL,
         'same_proposition': [{'left': 'c01:p_secret', 'right': 'c03:p2',
                               'verdict': 'same'}],
-        'same_state_dimension': [{'left': 'c01:e1', 'right': 'c02:e3',
-                                  'verdict': 'same'}],
         'loop_pairing': [{'open': 'c01:q_night', 'close': 'c03:q9',
                           'verdict': 'pair'}],
         'cross_chapter_cause': [{'from_beat': 'c01:b01', 'to_beat': 'c02:b02',
@@ -316,6 +314,13 @@ def test_associate_observation_shape_and_closed_handle_charset():
     })
     assert obs.same_proposition[0].left == 'c01:p_secret'
     assert obs.cross_chapter_cause[0].kind == 'setup_payoff'
+    # CS-S Phase 3：same_state_dimension 已随 change 键闭集删除——v4 键关闭式拒读。
+    with pytest.raises(ValidationError):
+        AssociateObservation.model_validate({
+            'protocol_version': STAGE2_ASSOCIATE_PROTOCOL,
+            'same_state_dimension': [{'left': 'c01:e1', 'right': 'c02:e3',
+                                      'verdict': 'same'}]}), \
+        'v4 的维度配对面在 v5 关闭式拒读'
     with pytest.raises(ValidationError):
         AssociateObservation.model_validate({
             'protocol_version': STAGE2_ASSOCIATE_PROTOCOL,

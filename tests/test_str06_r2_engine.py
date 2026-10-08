@@ -59,7 +59,7 @@ def _rich_wire() -> dict:
             {'char_id': 'yun_niang', 'voice': '短句、少感叹，怀疑压在动作里'}],
         'initial_state': [
             {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
-             'key': 'appearance', 'op': 'set', 'modality': 'actual', 'value': '眉间一点朱砂'}],
+             'key': 'body_state', 'op': 'set', 'modality': 'actual', 'value': '眉间一点朱砂'}],
         'initial_surfaces': [
             {'char_id': 'yun_niang', 'surfaces': ['苏芸娘']},
             {'char_id': 'fu_jun', 'surfaces': ['夫君']}],
@@ -89,7 +89,7 @@ def _rich_wire() -> dict:
                  {'event': '芸娘暗自起疑', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': ['yun_niang'],
-                       'holder': 'yun_niang', 'key': 'vow', 'op': 'set',
+                       'holder': 'yun_niang', 'key': 'agreement', 'op': 'set',
                        'value': '她决意查清真相', 'scope': 'book',
                        'knowledge_mode': 'known'}],
                   'delivery_hint': '',
@@ -103,7 +103,7 @@ def _rich_wire() -> dict:
                  {'domain': 'relation', 'subjects': ['yun_niang', 'fu_jun'],
                   'holder': None, 'key': 'marital_status'},
                  {'domain': 'world', 'subjects': [], 'holder': None,
-                  'key': 'light', 'at': 2}],
+                  'key': 'possession', 'at': 2}],
              'driver': {'focal_actor': 'yun_niang', 'immediate_want': '查明真相',
                         'opposition': '无凭据', 'turn': '发现玉佩'},
              'realization_brief': '重心在玉佩的发现；在字面露出的瞬间收束。',
@@ -111,10 +111,10 @@ def _rich_wire() -> dict:
                  {'event': '夫君夜半离家', 'participants': ['fu_jun'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-                       'key': 'whereabouts', 'op': 'set', 'modality': 'actual', 'value': '去向不明',
+                       'key': 'residence', 'op': 'set', 'modality': 'actual', 'value': '去向不明',
                        'scope': 'book'},
                       {'domain': 'world', 'subjects': [], 'holder': None,
-                       'key': 'light', 'op': 'set', 'modality': 'actual', 'value': '烛火亮起',
+                       'key': 'possession', 'op': 'set', 'modality': 'actual', 'value': '烛火亮起',
                        'scope': 'scene'}],
                   'delivery_hint': '',
                   'surface_introductions': [],
@@ -122,17 +122,17 @@ def _rich_wire() -> dict:
                       {'op': 'advance', 'ref': 'q1', 'progress': '查到玉佩来历'}]},
                  {'event': '芸娘发现玉佩秘密', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
-                      {'domain': 'world', 'key': 'jade_evidence', 'op': 'set',
+                      {'domain': 'world', 'key': 'secret', 'op': 'set',
                        'value': '玉佩刻着沈字', 'scope': 'book', 'modality': 'actual'},
                       {'domain': 'knowledge', 'subjects': ['fu_jun'],
-                       'holder': 'yun_niang', 'key': 'jade_secret', 'op': 'set',
+                       'holder': 'yun_niang', 'key': 'secret', 'op': 'set',
                        'value': '玉佩刻着沈字', 'scope': 'book',
                        'knowledge_mode': 'known'},
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
-                       'key': 'reveal_jade', 'op': 'set',
+                       'key': 'secret', 'op': 'set',
                        'value': '玉佩刻着沈字，指向旧案', 'scope': 'book',
                        'knowledge_mode': 'known', 'confirms': {
-                           'domain': 'world', 'key': 'jade_evidence'}}],
+                           'domain': 'world', 'key': 'secret'}}],
                   'delivery_hint': '',
                   'surface_introductions': [],
                   'threads': [
@@ -589,17 +589,17 @@ def test_project_context_supplements_participant_background():
     full_state, full_knowledge = participant_background(
         scene=next(s for s in _body.scenes if s.scene_id == 'sc02'),
         folded_prefix=folded)
-    assert [e.key for e in full_state] == ['appearance']
-    assert [e.key for e in full_knowledge] == ['vow']
+    assert [e.key for e in full_state] == ['body_state']
+    assert [e.key for e in full_knowledge] == ['agreement']
     # 写手面收窄：appearance（init 立足点）保留；vow（sc01 拍建立、后文
     # 无消费者）不向后投影（C7）。
-    assert [e.key for e in vir.background_state] == ['appearance']
+    assert [e.key for e in vir.background_state] == ['body_state']
     assert [e.key for e in vir.background_knowledge] == []
     # sc03（无声明读取）：whereabouts／jade_secret／vow 同为无消费者拍
     # 状态，均不进背景；只剩 init 立足点。
     sc03 = ir.chapter(2).scenes[1]
     assert [e.key for e in sc03.verification_ir.background_state] == [
-        'appearance']
+        'body_state']
     assert sc03.verification_ir.background_knowledge == ()
 
 
@@ -791,7 +791,7 @@ def _hook_pair():
         'opening_facts': [
             {'ref': 'init',
              'address': {'domain': 'character', 'subjects': ['yun_niang'],
-                         'holder': None, 'key': 'appearance'},
+                         'holder': None, 'key': 'body_state'},
              'audience': 'world'}],
         'materials': [
             {'beat_ref': {'scene': 'sc02', 'beat': 'b01'}, 'withheld': [],
@@ -804,7 +804,7 @@ def _hook_pair():
         'forbidden_reveals': [
             {'ref': {'scene': 'sc02', 'beat': 'b02'},
              'address': {'domain': 'knowledge', 'subjects': ['fu_jun'],
-                         'holder': 'yun_niang', 'key': 'jade_secret'}}],
+                         'holder': 'yun_niang', 'key': 'secret'}}],
         'design_brief': '从深夜冷开倒叙入新婚夜旧约，玉佩之谜不露。',
         'delivery_brief': '第一人称冷面叙述，短句，不解释。',
     }

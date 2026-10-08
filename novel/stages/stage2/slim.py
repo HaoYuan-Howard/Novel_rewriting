@@ -6,7 +6,10 @@ wire/canonical 词汇分层：evidence_refs 只给段 id，scene_location 上移
 CS-S 1a 升 v8——`src`→`start` 单段＋区间代码派生、`who`→`on_stage`、
 SlimEffect 删 `scope`/`hidden`/`prop`；CS-S Phase 2 升 v9——know 增 `fact`
 书级词表引用（与 `what` 恰写其一；fact 直通 f{nn} 引用，文本由 compile 从
-词表回填——转写漂移在构造上消失））。
+词表回填——转写漂移在构造上消失）；CS-S Phase 3 升 v10——字段改名
+`ev`→`event`、`state`→`change`＋增 `access`（获知通道：witnessed 默认不写、
+narrated 变体直陈时显式标注——reader 派生的输入）＋change 键入
+`CHANGE_KEYS` 闭集＋know.who 禁 reader（读者知情由 compile 派生）。
 
 【职责】LLM 面与 canonical 面之间的唯一转换：`expand_chapter_wire` 把瘦 wire
 派生成 canonical（`STAGE2_CHAPTERS_PROTOCOL`）形状的 dict，`slim_chapter_wire`
@@ -15,7 +18,7 @@ SlimEffect 删 `scope`/`hidden`/`prop`；CS-S Phase 2 升 v9——know 增 `fact
 evidence_refs 在 wire 上只是段 id（2026-10-07 裁决：模型只选段、代码切原文）：
 expand 产出 ``{'segment': id, 'quote': None}``，引文由 chapters 管道的
 Resolver 派生步按段全文填入（本模块不看原文）。拍级 `scene_location` 由
-expand 合成登记键 world 效应（首条），证据面＝本拍派生区间全体；state 里出现
+expand 合成登记键 world 效应（首条），证据面＝本拍派生区间全体；change 里出现
 scene_location 即拒（防双路径，S-04）。
 
 【区间派生（v8 起）】拍覆盖段不再由模型写区间/数组，由代码从各拍 `start`
@@ -166,12 +169,12 @@ def _target_of(address: str, where: str) -> tuple[dict | None, str | None]:
     if '+' in address:
         subject, _, object_ = address.partition('+')
         if not subject or not object_ or '+' in object_ or subject == object_:
-            return None, (f'{where} state 的 at 地址非法：{address!r}'
+            return None, (f'{where} change 的 at 地址非法：{address!r}'
                           '（关系须是 "subject+object"，两端非空、不自环、只一个 +）')
         return ({'kind': 'relation', 'char_id': None,
                  'subject': subject, 'object': object_}, None)
     if not address:
-        return None, f'{where} state 的 at 地址为空'
+        return None, f'{where} change 的 at 地址为空'
     return {'kind': 'character', 'char_id': address,
             'subject': None, 'object': None}, None
 
@@ -231,18 +234,18 @@ def expand_chapter_wire(
         where = f'第{chapter if chapter is not None else "?"}章拍{index + 1}'
         refs = intervals[index] if intervals is not None else [beat.start]
         effects_out: list[dict] = []
-        for j, effect in enumerate(beat.state):
+        for j, effect in enumerate(beat.change):
             if effect.key == 'scene_location':
-                # 单一通路（S-04）：场景位置走拍级字段，state 里出现即拒——
+                # 单一通路（S-04）：场景位置走拍级字段，change 里出现即拒——
                 # 双路径会让 canonical 出现两种来源的同一登记键。
                 issues.append((
-                    ('beats', index, 'state', j),
-                    f'{where} state[{j + 1}] 用 scene_location 表达场景位置——'
-                    'scene_location 是拍级字段（beats[i].scene_location），不进 state'))
+                    ('beats', index, 'change', j),
+                    f'{where} change[{j + 1}] 用 scene_location 表达场景位置——'
+                    'scene_location 是拍级字段（beats[i].scene_location），不进 change'))
                 continue
             target, target_error = _target_of(effect.at, where)
             if target_error is not None:
-                issues.append((('beats', index, 'state', j), target_error))
+                issues.append((('beats', index, 'change', j), target_error))
                 continue
             # 登记键的作用域读时按表派生（R-2.14，CS-S 1b：scope 不再进 canonical）；
             # disclosure／effect 命题锚已删——揭示链由 cognition 承载。
@@ -282,11 +285,14 @@ def expand_chapter_wire(
                 'basis': [{'segment': ref, 'quote': None} for ref in entry.evidence_refs],
             })
         beats_out.append({
-            'event': beat.ev,
+            'event': beat.event,
             'participants': list(beat.on_stage),
             'source_refs': refs,
             'scene_boundary': 'new' if beat.new_scene else 'continue',
             'temporal_mode': 'iterative' if beat.iterative else 'single',
+            # Phase 3：获知通道只写例外（narrated）；witnessed 缺省由 canonical
+            # 模型默认补齐，不进派生 dict。
+            **({'access': beat.access} if beat.access != 'witnessed' else {}),
             'effects': effects_out,
             'cognition': cognition_out,
             'loops': [loop.model_dump(mode='json') for loop in beat.loops],
@@ -336,7 +342,7 @@ def slim_chapter_wire(observation: dict) -> dict:
         if not refs:
             raise ValueError('拍没有可作 start 的 source_refs')
         slim_beat: dict[str, Any] = {
-            'ev': beat['event'],
+            'event': beat['event'],
             'on_stage': list(beat.get('participants') or ()),
             'start': refs[0],
         }
@@ -346,7 +352,10 @@ def slim_chapter_wire(observation: dict) -> dict:
             slim_beat['new_scene'] = True
         if beat['temporal_mode'] == 'iterative':
             slim_beat['iterative'] = True
-        state_out = []
+        if beat.get('access') == 'narrated':
+            # Phase 3：获知通道只写例外（witnessed 是缺省，不进 wire）。
+            slim_beat['access'] = 'narrated'
+        change_out = []
         for effect in effects:
             slim_effect: dict[str, Any] = {
                 'at': _address_of(effect['target']),
@@ -359,7 +368,7 @@ def slim_chapter_wire(observation: dict) -> dict:
             if effect['modality'] != 'actual':
                 slim_effect['modality'] = effect['modality']
             slim_effect['evidence_refs'] = [b['segment'] for b in effect['basis']]
-            state_out.append(slim_effect)
+            change_out.append(slim_effect)
         know_out = []
         for entry in beat.get('cognition') or ():
             prop = entry.get('proposition') or {}
@@ -376,8 +385,8 @@ def slim_chapter_wire(observation: dict) -> dict:
                 'what': prop.get('statement') or statements.get(ref) or '',
                 'evidence_refs': [basis['segment'] for basis in entry['basis']],
             })
-        if state_out:
-            slim_beat['state'] = state_out
+        if change_out:
+            slim_beat['change'] = change_out
         if know_out:
             slim_beat['know'] = know_out
         if beat.get('loops'):

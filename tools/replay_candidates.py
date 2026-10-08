@@ -52,6 +52,7 @@ from novel.stages.stage4 import (
     plan_material_repairs, project_brief,
 )
 from novel.store import Str06Repository
+from contracts.schema.observation import STAGE2_ASSOCIATE_PROTOCOL
 
 
 class ReplayNotRun(Exception):
@@ -208,51 +209,28 @@ def associate_inputs(repository: Str06Repository, *, chapter_count: int):
 
 
 def replay_associate_round(wire: dict, space) -> dict:
-    """已购 associate 回答在**当前维度投影**下的只读读数。
+    """已购 associate 回答的只读读数（CS-S Phase 3 起）。
 
-    v2 wire 的 `same_state_dimension` 配对逐条**写入句柄**——按 v3 投影分类：
-    同（作用对象，键）地址＝已由维度句柄合并，**不再需要**（csf4 根 90 对里
-    89 对即此类）；不同地址同对象＝键不同（近义键），v3 仍需维度配对；不同
-    对象＝目标冲突。v2 协议字面量对 v3 不可采用（reuse=obsolete：整份新购的
-    闭集原因「协议不兼容」），本读数只回答「哪些配对不再需要」，不判内容对错。
-    v3 wire 走当前机械验收（闭集核对）如实报 reuse。
+    v2～v4 wire 的 `same_state_dimension`／维度投影读数面已随 associate v5
+    删除（change 键入 `CHANGE_KEYS` 闭集＝键即 canonical，S-05）——旧协议
+    回答一律 reuse=obsolete（闭集原因「协议不兼容」，整份新购）；不再对旧根
+    做维度分类读数（states／dimensions 登记面已死）。现役 v5 wire 走当前
+    机械验收如实报 reuse。
     """
     from novel.stages.stage2 import compile_associate_observation
-    from novel.stages.stage2.associate import state_dimension_address
     if not isinstance(wire, dict):
         return {'status': 'ran', 'reuse': 'unknown', 'reason': 'wire 不是 JSON object'}
-    if wire.get('protocol_version') == 'stage2-associate-v3':
+    if wire.get('protocol_version') == STAGE2_ASSOCIATE_PROTOCOL:
         observation, errors = compile_associate_observation(wire, space)
         return {'status': 'ran', 'passed': observation is not None,
                 'error_count': len(errors),
                 'codes': dict(Counter(error_code(e) for e in errors)),
                 'reuse': 'green' if observation is not None else 'failed'}
-    pairs = wire.get('same_state_dimension') or []
-    counts = {'same_address_noop': 0, 'cross_key_needed': 0,
-              'target_mismatch': 0, 'unresolvable': 0}
-    for pair in pairs:
-        if not isinstance(pair, dict):
-            counts['unresolvable'] += 1
-            continue
-        entries = [space.states.get(pair.get(field)) for field in ('left', 'right')]
-        if any(entry is None for entry in entries):
-            counts['unresolvable'] += 1
-            continue
-        address_left = state_dimension_address(entries[0].target, entries[0].key)
-        address_right = state_dimension_address(entries[1].target, entries[1].key)
-        if address_left == address_right:
-            counts['same_address_noop'] += 1
-        elif address_left[0] == address_right[0]:
-            counts['cross_key_needed'] += 1
-        else:
-            counts['target_mismatch'] += 1
-    return {
-        'status': 'ran', 'passed': None,
-        'protocol': wire.get('protocol_version'),
-        'pairs_total': len(pairs), **counts,
-        'dimensions': len(space.dimensions), 'state_writes': len(space.states),
-        'reuse': 'obsolete',
-    }
+    return {'status': 'ran', 'passed': None,
+            'protocol': wire.get('protocol_version'),
+            'reuse': 'obsolete',
+            'reason': '维度配对面已随 CS-S Phase 3 associate v5 删除'
+                      '（旧协议整份新购，不做维度分类读数）'}
 
 
 def _associate_replayer(base: Path, sid: str, repository: Str06Repository,

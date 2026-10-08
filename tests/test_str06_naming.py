@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
 from contracts.schema.source import (
-    CharactersArtifactV5, CharactersCore, NameStructure,
+    CharactersArtifactV6, CharactersCore, NameStructure,
 )
 from novel.stages.common import apply_replacements
 from novel.stages.stage2.names import (
@@ -38,7 +38,7 @@ SRC = ('皇甫珩执剑护院。陈砚与陈松是亲兄弟，住在陈家。赵
 
 # ───────────────────────── 名称结构夹具 ─────────────────────────
 
-def _chars(**people_over) -> CharactersArtifactV5:
+def _chars(**people_over) -> CharactersArtifactV6:
     people = {
         'huang_fu_heng': {'family_id': 'fam_hpf', 'given': '珩', 'aliases': [],
                           'surface_forms': {'皇甫珩': '{family}{given}',
@@ -58,7 +58,7 @@ def _chars(**people_over) -> CharactersArtifactV5:
                    'surface_forms': {'夫人': None}},
     }
     people.update(people_over)
-    return CharactersArtifactV5.model_validate({
+    return CharactersArtifactV6.model_validate({
         'characters': {
             'huang_fu_heng': {'canonical': '皇甫珩', 'surfaces': [
                 _surface('皇甫珩'), _surface('皇甫公子')]},

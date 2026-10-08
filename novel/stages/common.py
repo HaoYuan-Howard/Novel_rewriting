@@ -660,7 +660,9 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态、世界
    {{target, key, value, persistence, source_refs}}（不输出编号，编号由
    compiler 生成）：
    - target：{{"kind":"character","char_id":"<slug>"}} 或 {{"kind":"relation","subject":"<slug>","object":"<slug>"}}；
-   - key：语义维度英文蛇形；一个原子只表达一个维度（财富与相貌分开），不写人物小传；
+   - key：**只能取自【变化键闭集】**（与章观察 change 同一张表）：
+     {change_keys}——语义细节由 value 承载，不自造新键；一个原子只表达一个维度
+     （财富与相貌分开），不写人物小传；
      位置类初始事实只收 residence（长期居所）——开场所在是场景作用域，由第 1 章第一个
      new 拍建立，不进 initial_state；
    - 只收故事开始时已成立的事实：晚章才发生的变化（如后来才购置的产业）绝不倒灌；
@@ -697,7 +699,7 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态、世界
 【证据段 id 清单】（每行一个自然段，行首方括号内是该段的 id；source_refs 只能从中选）
 {evidence}
 
-输出 JSON 顶层：{{"protocol_version":"stage2-book-v9","characters":{{...}},"initial_state":[...],"world_constraints":[...],"facts":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
+输出 JSON 顶层：{{"protocol_version":"stage2-book-v10","characters":{{...}},"initial_state":[...],"world_constraints":[...],"facts":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
 个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。
 
 【证据段指针】（R10a a1）initial_state 与 world_constraints 的每个条目必须带 evidence_refs：
@@ -707,18 +709,18 @@ evidence_refs 必须出自该条目自身的 source_refs（引你所引：先在
 预计／约／几天后）时，所选段必须实际承载该限定原文。facts 的证据面即 evidence_refs
 自身（无 source_refs），同样只写段 id。"""
 
-CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：ev 是给人读的事件表述，需要延续的变化全部由三类转移承载——state（事实）、know（认知）、loops（悬念）。机械字段（拍号、默认值、区间覆盖、命题句柄等）由 compiler 派生，你只写判断与例外。
+CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：event 是给人读的事件表述，需要延续的变化全部由三类转移承载——change（事实）、know（认知）、loops（悬念）。机械字段（拍号、默认值、区间覆盖、命题句柄等）由 compiler 派生，你只写判断与例外。
 
-【人物表】（on_stage / state 的 at / know 的 who 只能用这些 slug）
+【人物表】（on_stage / change 的 at / know 的 who 只能用这些 slug）
 {glossary}
 {facts_block}{prior}
 【第 {ch} 章正文】（每行一个自然段，行首方括号内的 eXX_YY 是该段的证据 id）
 {evidence}
 {pre_chapter}
 【要求】
-1. beats：按故事顺序拆拍，每拍 {{"ev","on_stage","start","new_scene","iterative","state","know","loops"}}。
+1. beats：按故事顺序拆拍，每拍 {{"event","on_stage","start","new_scene","iterative","access","change","know","loops"}}。
    **不输出拍号**：列表序即事件序：
-   - ev：写"发生了什么"，并保住足以正确演出这一事件的语义——必要前因、关键指代
+   - event：写"发生了什么"，并保住足以正确演出这一事件的语义——必要前因、关键指代
      （如"他那里"须写明指什么）、已成立的站位（谁在床上/床边/门外）、公开行为与内心
      反应的差别；不要混入动机分析或世界规则。
      转述对话/问句必须保真主客体：谁向谁借、谁问谁、借出方是谁，代词消解后写明对象，
@@ -726,7 +728,7 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    - 动作的范围与去向以原文为准：走了多远、去了哪里、交给了谁，原文写到哪就记到哪，
      不外推、不补全（没写"送出住处"就不得记成送离住处）；
    - on_stage：本拍中实际行动、说话、感知或被直接作用的人物 slug（可空数组）；
-     仅被提及者只留在 ev，不进 on_stage；
+     仅被提及者只留在 event，不进 on_stage；
    - start：本拍**起始**的本章证据段 id（单个，如 "e01_03"）。拍覆盖区间由程序派生：
      从本拍 start 到下一拍 start 的前一段，末拍到章末——**不写区间、不写数组**。
      start 必须按段号数值严格递增；首拍必须是本章第一段（第 1 章允许跳过开头的
@@ -734,23 +736,25 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    - new_scene：本拍开新场景（旧场景的 scene 作用域状态就此失效）才写 true，缺省＝
      延续当前场景。全书第一个拍必须 new；第 1 章之后的章若开场直接延续上一章末尾的
      同一场景，第一拍不写 new_scene，否则写；
-   - iterative：重复行为（如"连续三夜"）才写 true；缺省＝单次行为。
-2. state：事实的 postcondition——本拍结束后仍成立、且后续涉及该维度时必须以它为准的
+   - iterative：重复行为（如"连续三夜"）才写 true；缺省＝单次行为；
+   - access（获知通道，只写例外；缺省＝witnessed 当场上演）：本拍内容若不经角色
+     展演、由叙述者直接向读者陈述——回溯/往事交代、背景与世界观概括、跨时间
+     综述、「叙述者点明」一类——写 "access":"narrated"；普通对话、动作、当场
+     转述都不写。程序据此派生读者知情（narrated＝读者直接得知本拍内容）。
+2. change：事实的 postcondition——本拍结束后仍成立、且后续涉及该维度时必须以它为准的
    **叙述确立的**事实。每项 {{"at","key","val"[,"op","modality","evidence_refs"]}}：
    - at：作用地址——人物 slug｜关系 "subject+object"（顺序＝作用方向）｜"world"；
    - 只记叙述确立的事实（含 unknown）："谁认为、谁声称什么"只进 know；
-     自述与行为、内心矛盾时，事实层只记行为与叙述确立的事实，自述记进 ev；
-   - 不因"以后可能重要"而存：即时动作、表情、一次冷哼、一次脸红留在 ev；
+     自述与行为、内心矛盾时，事实层只记行为与叙述确立的事实，自述记进 event；
+   - 不因"以后可能重要"而存：即时动作、表情、一次冷哼、一次脸红留在 event；
      持续的恐惧/戒备/意图/关系变化才是状态；
    - 同一语义变化只选一个最自然的 owner：人物自己的意图/心态归其 slug；双方已形成的
      关系事实归 "a+b"；客观环境归 "world"；未决问题归 loops。不为"完整"把同一变化
      在人物和关系各写一遍；
-   - 位置分轴（作用域由 compiler 按表派生，你不写 scope）：**当前位置是拍级字段
-     scene_location**（与 new_scene／iterative 同级，换景或首次交代位置时给，如
-     "scene_location":"饭厅"；不写进 state——compiler 会把它编成场景作用域的登记效应）；
-     长期居所 residence 是 book 作用域的普通 state 键（换场不清除）；身体状态
-     各自一键（body_consciousness／body_restraint／body_head_covering 或新的英文蛇形
-     键），不塞进位置值；whereabouts／hiding_place／location 已退役，用了即拒；
+   - **key 只能取自【变化键闭集】**：{change_keys}。语义细节由 val 承载（具体是哪种
+     意图、哪种约定写进 val 文本），不自造新键、不用近义词另开一键；找不到贴切维度
+     时选最接近的通用键。当前位置不进 change（那是拍级字段 scene_location；长期
+     居所用 residence）；身体状态用 body_state、换身/意识归属用 body_occupancy；
    - op 缺省＝set（赋新值）；另可选 unset(清除，不带 val)／add(集合加入)／remove
      (集合移除)／unknown(显式未知，不带 val)。set/add/remove 需要显式 val
      （空字符串是合法空值）；
@@ -759,10 +763,10 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    - 改变哪个维度就替换哪个键；场景性临时状态（借宿、暂住、暂离）在结束或转移时必须
      替换对应维度的新值——去向未知就写"去向未交代"或 unknown（op），不得留旧值让
      下游补造；不另开新键；
-   - 无 postcondition 的拍 state 给空数组。
+   - 无 postcondition 的拍 change 给空数组。
 3. know：认知的 postcondition——谁对哪条命题持什么模式。每项 {{"who","how","fact","what","evidence_refs"}}
    （"fact" 与 "what" 恰写其一）：
-   - who：人物 slug 或 reader；
+   - who：人物 slug——**不写 reader**（读者知情由程序按 access 派生，不进观察面）；
    - how：learns(确凿得知)/suspects(起疑)/confirms(证实怀疑)/hears_claim(听到说法
      未知真假)/believes(以为为真，不代表世界为真)/asserts(公开主张)；
    - 命题优先引用书级词表：本章命题已在【书级命题词表】登记时，用 "fact":"f03"
@@ -773,8 +777,8 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      它们在别章的措辞——按本章视角写清本章可证的内容，措辞与词表近义的命题仍应
      改用 fact 引用，配对归关联节点判定；
    - 只收会约束后续行为、误解、隐瞒或揭示的信息不对称；普通在场见闻、例行告知、
-     ev 已说清的事实不建；
-   - 公开的表态、改口、说辞属于 ev，不得据此推导当事人内心偏好或决定已变，
+     event 已说清的事实不建；
+   - 公开的表态、改口、说辞属于 event，不得据此推导当事人内心偏好或决定已变，
      除非文本明确写出内心变化。
 4. loops：悬念的 postcondition——独立数组，每项 {{"ref","op","question"/"resolution"}}：
    - open：新建悬念线，必填 question（问题文本只出现在 open 处，之后不可改写）；
@@ -787,18 +791,18 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      不同次的藏身、不同的约定是不同的悬念线，不得并成一条；
    - 无 postcondition 的拍 loops 给空数组。
 5. 连续性契约：会改变后续人物选择、关系、位置、目标、知情或未决问题的内容，必须同时
-   进入 state／know／loops——只留在 ev 里，该拍就不完整。三类转移全空的拍
+   进入 change／know／loops——只留在 event 里，该拍就不完整。三类转移全空的拍
    合法，但请节制；这类拍的比例会被按章报出，供离线核读。
 6. 前文与正文的关系：上方前文原文是只读参考——本拍事实以本章正文原文为准，不得为迁就
    前文改写施事、受事或动作主体；前文与正文不一致时，按正文记录。
-7. 证据段指针与时态（R10a a1）：state 与 know 的每条转移必须带 evidence_refs：
+7. 证据段指针与时态（R10a a1）：change 与 know 的每条转移必须带 evidence_refs：
    ["e01_03", ...]（至少 1 条，只写段 id、不抄原文——逐字引文由程序按段全文切出）。
    evidence_refs 必须属于本拍 start 起的派生区间（引你所引：先定 start，再从中选
    evidence_refs；证据确实横跨拍边界时，把该拍 start 提前到能覆盖证据的最早段）。
    认识限定（觉得像是／以为／听说）只进 know 的 how（suspects／believes／hears_claim），
    what 写命题本身；所选段必须实际承载该限定原文。
 
-输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v8","beats":[...]}}
+输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v10","beats":[...]}}
 不要把财富、位置等不同维度塞入同一个 key。"""
 
 #: 七类保存类别与 `contracts/schema/policy.py::PreserveKind` 同源（B2）：定义只在
@@ -2854,7 +2858,7 @@ def wire_shape_issues(
         if kind == 'chapters':
             if loc[:1] == ('beats',) and len(loc) >= 2 and isinstance(loc[1], int):
                 path = ('beats', loc[1])
-                if len(loc) >= 4 and loc[2] in ('state', 'know') \
+                if len(loc) >= 4 and loc[2] in ('change', 'know') \
                         and isinstance(loc[3], int):
                     path = path + (loc[2], loc[3])
         elif kind == 'book':

@@ -651,7 +651,7 @@ def test_r2_version_constants():
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
-    assert STR06_RC_VERSION == 'str06-rc19'          # rc19 CS-S Phase 2 观察面收敛；rc18 CS-S 1b
+    assert STR06_RC_VERSION == 'str06-rc20'          # rc19 CS-S Phase 2 观察面收敛；rc18 CS-S 1b
     assert 'str06-rc10' in STR06_RC_LABELS
     assert RENDERER_VERSION == 'str06-render-v10'    # CS-F2：称谓投影（v9：RC-24 拍末结果作用域）
     assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v8'
@@ -686,7 +686,7 @@ def _wire_v2() -> dict:
         'world_rules': ['术法须以寿命为代价'],
         'initial_state': [
             {'domain': 'world', 'subjects': [], 'holder': None,
-             'key': 'light', 'op': 'set', 'modality': 'actual', 'value': '烛火未点'}],
+             'key': 'possession', 'op': 'set', 'modality': 'actual', 'value': '烛火未点'}],
         'scenes': [
             {'state_reads': [],
              'driver': {'focal_actor': 'yun', 'immediate_want': '安度新婚',
@@ -703,7 +703,7 @@ def _wire_v2() -> dict:
                                'subject': 'fu_jun', 'text': '再不隐瞒'}]}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}},
             {'state_reads': [
-                {'domain': 'world', 'subjects': [], 'key': 'light', 'at': 1}],
+                {'domain': 'world', 'subjects': [], 'key': 'possession', 'at': 1}],
              'driver': {'focal_actor': 'yun', 'immediate_want': '求证',
                         'opposition': '无凭据', 'turn': '发现玉佩'},
              'realization_brief': '重心在玉佩的发现；在字面露出时收束。',
@@ -711,7 +711,7 @@ def _wire_v2() -> dict:
                  {'event': '灯下翻检', 'participants': ['yun'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'world', 'subjects': [], 'op': 'set', 'modality': 'actual', 'scope': 'book',
-                       'key': 'light', 'value': '烛火亮起'}],
+                       'key': 'possession', 'value': '烛火亮起'}],
                   'delivery_hint': '',
                   'threads': [{'op': 'advance', 'ref': 't1', 'progress': '查到玉佩来历'}]},
                  {'event': '玉佩收线', 'participants': ['yun', 'fu_jun'],

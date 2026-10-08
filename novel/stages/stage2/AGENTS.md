@@ -8,11 +8,13 @@
 `str06.stage2.book`／`chapters`／`names`／`associate`（付费观察与关联）＋
 `str06.stage2.compile`（免费确定性编译）；`str06.stage2.source`（book＋chNN
 联合抽取）退役。观察与关联协议在 `contracts/schema/observation.py`
-（三类观察 `stage2-observation-v1`；R1 起 associate 独立版本，CS-S Phase 2 起
-`stage2-associate-v4`——**条目级窄 resolver**：候选由代码给出（确定性相似度＋
+（三类观察 `stage2-observation-v1`；R1 起 associate 独立版本，CS-S Phase 3 起
+`stage2-associate-v5`——**条目级窄 resolver**：候选由代码给出（确定性相似度＋
 结构投影）、逐候选恰答一次 verdict、无候选＝零调用；跨章因果独立窄调用
 `stage2-cross-cause-v1`（D-2 A：候选＝loop 配对拍对＋facts 流拍对，模型只选
-kind 或否决）；维度句柄（`dim{nn}`）语义延续 v3，显式版本化 I-13）。
+kind 或否决）；Phase 3 起 `same_state_dimension` 消失——change 键入
+`CHANGE_KEYS` 闭集＝键即 canonical，维度句柄与整类合并面删除，显式版本化
+I-13）。
 **B2 第二步（2026-09-27）已落地**：
 book／chapters 两 owner 引擎（`book.py`／`chapters.py`）与 `chain.py` 接线
 （`run_book`／`run_chapters` 替换 `run_source`，`run_names` 重挂书级观察输入，
@@ -39,8 +41,8 @@ Canonical = truth → Projection = expose → Validator = enforce。
 | S2-4 | Projection 是 canonical artifact 的只读派生视图，不得反写 truth，也不得形成第二真相源（I-16）。 |
 | S2-5 | `str06.stage2.compile` 是 Characters（`stage2/characters/characters.json`）与 Blueprint（`stage2/blueprints/chapter_blueprints.json`）两份真源的**唯一 writer**（D9）：解析证据、生成 ID、执行关联后以同一提交记录发布；存在未决项时拒绝发布并按 item 报告（D8），恢复走 owner patch 或 associate 定向修订。派生输入 `stage2/compiled/book_extraction.json` 与逐章输入快照已退役（D3/D9），Stage4 一律改读 canonical（人物 core 由 Characters 投影）。下游 owner 的单节点输入从盘面闭合，不靠内存传递。 |
 | S2-6 | Stage2 只产出 artifact、projection 与机械证明。是否进入下一节点由 orchestrator 决定；producer／compile 不得顺手启动下游节点。 |
-| S2-7 | `str06.stage2.associate` 只建立同一性与引用（D8）：输入是 compiler 给出的**未决候选＋最小文本**（近义命题对／近义键维度对／跨章 open×close／相邻章 seam），输出逐候选恰答一次 verdict——答案只能是已给候选，漏答／多答／编造即机械缺陷；缺项、歧义、冲突保持未决——不默认合并，也不默认不同；不移动事实成立、角色知情或读者揭示时点。跨章因果是同节点内独立窄调用（D-2 A），候选同样由代码给出。 |
-| S2-8 | Book／Chapters／Names／Associate 均为中间观察或解析产物，不得成为 Characters／Blueprints 之外的第三套 canonical story state。Book 的 facts 是后续抽取的**共享命题词表**（Phase 2）：F 编号代码派发，下游经章观察 know.fact 引用与 fold 知情时间线读数消费（T-5：读数不进下游 API），不作独立真源（S2-1／S2-5 补「词表不是真源」）。 |
+| S2-7 | `str06.stage2.associate` 只建立同一性与引用（D8）：输入是 compiler 给出的**未决候选＋最小文本**（近义命题对／跨章 open×close／相邻章 seam——Phase 3 起无维度候选：change 键闭集＝键即 canonical），输出逐候选恰答一次 verdict——答案只能是已给候选，漏答／多答／编造即机械缺陷；缺项、歧义、冲突保持未决——不默认合并，也不默认不同；不移动事实成立、角色知情或读者揭示时点。跨章因果是同节点内独立窄调用（D-2 A），候选同样由代码给出。 |
+| S2-8 | Book／Chapters／Names／Associate 均为中间观察或解析产物，不得成为 Characters／Blueprints 之外的第三套 canonical story state。Book 的 facts 是后续抽取的**共享命题词表**（Phase 2）：F 编号代码派发，下游经章观察 know.fact 引用与 fold 知情时间线读数消费（T-5：读数不进下游 API），不作独立真源（S2-1／S2-5 补「词表不是真源」）。Phase 3：change 键入 `CHANGE_KEYS` 闭集（键即 canonical）＋拍级 `access` 获知通道（witnessed 默认／narrated 叙述直陈例外）；观察面不自写读者知情——wire 的 know.who 禁 reader，reader cognition 由 compile 按 access 派生注入蓝图。 |
 | S2-9 | （已落地，2026-10-07 Phase 2）正常路径中 Associate 不重新理解整章或整书；只消费 compile 无法确定性闭合的 unresolved candidates，做条目级窄解析；候选由代码给出，无候选＝零调用。跨章同一性的正路是 chapters 的 know.fact 引用（引用即同一），候选只兜转写漂移。 |
 | S2-10 | Names＝词面解析，人物同一性归 Book：names 不得增删或拆合人物；归一只按显式 `same`＋证据段内局部替换，不全局替换、不模糊匹配、不猜笔误；变体候选由代码给出，未判定者保持 `unresolved` 并阻断发布；构词模板由 compiler 派生。 |
 
@@ -55,8 +57,8 @@ Canonical = truth → Projection = expose → Validator = enforce。
 stage2/
   book.py      # str06.stage2.book owner：书级观察引擎（闭集/锚点/canonical 闭合＋core view 投影，B2）
   chapters.py  # str06.stage2.chapters owner：逐章观察引擎（本章证据闭集/作用域归一/章内句柄纪律，D3，B2）
-  associate.py # str06.stage2.associate owner：条目级窄关联引擎（候选生成/逐候选 verdict/因果窄调用，D8，Phase 2）
-  compile.py   # str06.stage2.compile owner：双真源唯一发布引擎（ID 生成/关联执行/未决拒发＋源 fold 唯一实现，D9，B2）
+  associate.py # str06.stage2.associate owner：条目级窄关联引擎（候选生成/逐候选 verdict/因果窄调用，D8，Phase 2；Phase 3 维度面删除）
+  compile.py   # str06.stage2.compile owner：双真源唯一发布引擎（ID 生成/关联执行/未决拒发＋reader 派生＋源 fold 唯一实现，D9，B2）
   names.py     # stage2.names owner：源名称结构窄调用（语义协议不变，D9；输入已重挂 book 观察）
   resolver.py  # Stage2 证据 Resolver：句段闭集选择、逐字锚唯一定位、basis 引文所在段定位与证据清单渲染（B2；RC-26/27）
 ```

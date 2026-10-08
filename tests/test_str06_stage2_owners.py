@@ -67,7 +67,7 @@ def _book_wire() -> dict:
             'yun_niang': {'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'source_refs': ['e01_02']}]},
         }),
-        'protocol_version': 'stage2-book-v6',
+        'protocol_version': 'stage2-book-v7',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
@@ -209,8 +209,8 @@ def test_chapter_observation_refuses_evidence_outside_this_chapter():
 
 
 def test_chapter_observation_binds_registered_key_scope_and_refuses_retired():
-    from contracts.schema.source import RETIRED_STATE_KEYS
-    assert 'whereabouts' in RETIRED_STATE_KEYS
+    from contracts.schema.source import CHANGE_KEYS
+    assert 'residence' in CHANGE_KEYS and 'whereabouts' not in CHANGE_KEYS
     wire = _chapter_wire(_beat('云娘握紧剪刀', ('e02_02',), effects=(
         {'target': {'kind': 'character', 'char_id': 'yun_niang'}, 'key': 'residence',
          'op': 'set', 'value': '陆家', 'modality': 'actual', 'basis': _basis('e02_02')},)))
@@ -223,7 +223,7 @@ def test_chapter_observation_binds_registered_key_scope_and_refuses_retired():
         {'target': {'kind': 'character', 'char_id': 'yun_niang'}, 'key': 'whereabouts',
          'op': 'set', 'value': '床底', 'modality': 'actual', 'basis': _basis('e02_02')},)))
     _obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
-    assert any('whereabouts' in e and '退役' in e for e in errors), errors
+    assert any('whereabouts' in e and '变化键闭集' in e for e in errors), errors
 
 
 def test_chapter_observation_refuses_conflicting_statement_and_double_open():
@@ -344,7 +344,7 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
                 'stage2/observations/names.json'):
         artifact = repo.inspect(rel)
         assert artifact['protocol_version'] == (
-            'stage2-book-v6' if rel.endswith('/book.json')
+            'stage2-book-v7' if rel.endswith('/book.json')
             else STAGE2_NAMES_PROTOCOL if rel.endswith('/names.json')
             else STAGE2_CHAPTERS_PROTOCOL), rel
         assert '_provenance' in artifact, rel

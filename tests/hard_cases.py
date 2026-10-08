@@ -277,7 +277,7 @@ def _preserve_bad_wire() -> list:
     from novel.stages.stage4.grounding import assemble_preserve
 
     from contracts.schema.source import (
-        BlueprintsArtifactV16, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV17, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_facilities import anchor_stub, v13_beat, v13_effect
@@ -291,10 +291,10 @@ def _preserve_bad_wire() -> list:
             canonical='苏姑娘',
             surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                     source_refs=('e01_01',)),))}),
-        blueprint=BlueprintsArtifactV16(source_expression=sample_blueprint_expression(), chapters=(
+        blueprint=BlueprintsArtifactV17(source_expression=sample_blueprint_expression(), chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat('b01_01', 'e', effects=(
-                                 v13_effect({'kind': 'world'}, 'fate', '多舛'),)),),
+                                 v13_effect({'kind': 'world'}, 'social_standing', '多舛'),)),),
                              scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
                              causal_edges=()),),
             evidence={'e01_01': '苏姑娘初到陆家。'}),
@@ -654,7 +654,7 @@ def _chapter_blueprint_bad_wire() -> list:
     """章观察编译闭合：participants 引用书级人物账之外的人物（闭集归 compile，R-2.3）。"""
     from tests.test_str06_stage2_publish import _chapter_wires
     outcome = _stage2_outcome(chapters={**_chapter_wires(), 'ch01': {
-        'protocol_version': 'stage2-chapters-v6', 'beats': [
+        'protocol_version': 'stage2-chapters-v7', 'beats': [
             {'event': '开篇', 'participants': ['ghost'],
              'source_refs': ['e01_01'], 'scene_boundary': 'new',
              'temporal_mode': 'single', 'effects': [], 'cognition': [],
@@ -674,7 +674,7 @@ def _loop_reopened() -> list:
     """R-2.11：同一悬念句柄本章内重复 open（章观察 owner 的自含纪律）。"""
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v6', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v7', 'beats': [
         {'event': '开悬念', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single', 'effects': [],
          'cognition': [],
@@ -698,14 +698,14 @@ def _proposition_dangling() -> list:
 
 
 def _registered_key_wrong_scope() -> list:
-    """R-2.14：已退役的位置键（whereabouts 一值多义）在 wire 出现即拒。
+    """R-2.14／CS-S Phase 3：表外变化键（含退役键 whereabouts 一类）即拒。
 
-    CS-S 1b：作用域读时按登记表派生（wire 不再携带 scope）；这一条红例守的
-    是退役键拒识与指针。
+    键入 `CHANGE_KEYS` 闭集——退役键拒识并入闭集拒识（语义细节由 val 承载，
+    不自造新键）；这一条红例守的是闭集与指针。
     """
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v6', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v7', 'beats': [
         {'event': '旧位置键借道', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single',
          'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
@@ -774,7 +774,7 @@ CASES.update({
     'source_proposition_closure': Case(
         'stage2', _proposition_dangling, '悬空的跨章引用'),
     'source_registered_key_scope': Case(
-        'stage2', _registered_key_wrong_scope, '已退役'),
+        'stage2', _registered_key_wrong_scope, '变化键闭集'),
     'source_surface_anchor_literal': Case(
         'stage2', _surface_anchor_without_literal, '锚点不含该字面'),
     'names_structure_compile': Case(
@@ -807,7 +807,7 @@ def _source_effect_modality_off() -> list:
     try:
         ChapterBlueprint(chapter=1, beats=(
             v13_beat('b01_01', 'e', effects=(
-                v13_effect({'kind': 'world'}, 'fate', '多舛',
+                v13_effect({'kind': 'world'}, 'social_standing', '多舛',
                            modality='大概'),)),),
             scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
             causal_edges=())
@@ -821,7 +821,7 @@ def _preserve_unknown_anchor() -> list:
     from novel.stages.stage4.grounding import assemble_preserve
 
     from contracts.schema.source import (
-        BlueprintsArtifactV16, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV17, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_facilities import v13_beat, v13_effect
@@ -834,10 +834,10 @@ def _preserve_unknown_anchor() -> list:
             canonical='苏姑娘',
             surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                     source_refs=('e01_01',)),))}),
-        blueprint=BlueprintsArtifactV16(source_expression=sample_blueprint_expression(), chapters=(
+        blueprint=BlueprintsArtifactV17(source_expression=sample_blueprint_expression(), chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat('b01_01', 'e', effects=(
-                                 v13_effect({'kind': 'world'}, 'fate', '多舛'),)),),
+                                 v13_effect({'kind': 'world'}, 'social_standing', '多舛'),)),),
                              scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
                              causal_edges=()),),
             evidence={'e01_01': '苏姑娘初到陆家。'}),

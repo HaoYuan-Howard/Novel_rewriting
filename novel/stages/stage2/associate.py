@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """associate —— `str06.stage2.associate` 的条目级窄关联 owner 引擎（B2；D8/D9；
-R1 v2；CS-S Phase 2 v4——S2-9 正常路径落地）。
+R1 v2；CS-S Phase 2 v4——S2-9 正常路径落地；Phase 3 v5——维度候选消失）。
 
-【职责】跨章关联（同一命题、同维状态、悬念开合配对、跨章因果、跨章续场）的
-确定性面：
+【职责】跨章关联（同一命题、悬念开合配对、跨章因果、跨章续场）的确定性面：
   • 关联空间投影（`AssociationSpace`）：从 book 与 chapters 观察投影**已给句柄
     闭集及最小文本**——句柄是 compiler 编码的可读选择器（I-21 允许且仅允许
     compiler 产生坐标类字段），最小文本让 semantic unit 只看判断同一性所需的
     语义材料；
   • **候选生成（Phase 2）**：`project_identity_candidates` 用确定性相似度
     （char-bigram Jaccard＋包含，`norm()` 同一把尺）与结构投影筛出未决候选
-    ——近义命题对（章命题×书级 facts、跨章命题×命题）、同作用对象的近义键
-    维度对、跨章 open×close（时序正）、相邻章 seam 续场对。候选＝代码给出
-    （I-20：机械筛选不猜语义）；**无候选＝零调用**；
+    ——近义命题对（章命题×书级 facts、跨章命题×命题）、跨章 open×close
+    （时序正）、相邻章 seam 续场对。候选＝代码给出（I-20：机械筛选不猜语义）；
+    **无候选＝零调用**；
   • prompt 组装（`associate_candidates_prompt`／`cross_cause_prompt`）：输入
     只由（观察，投影，候选）决定——同输入逐字节可复算；
   • wire → `AssociateObservation` 的机械验收（S2-2）：协议版本字面量（I-13）、
@@ -38,30 +37,20 @@ book 观察内部近义重复的 facts（词表自重复）不生成本节点候
 owner 的纪律问题，本节点无修复面。
 
 【句柄编码（R1 v2：唯一的关联登记表）】`AssociationSpace` 是 prompt、闭集核对
-与 `compile.py`（`_StateClasses`／初态与章效应的句柄定位）共用的**唯一登记表**；
-句柄构造只经 `book_state_handle`／`chapter_state_handle` 两处，别处不得重写编码。
-构建时重复句柄即拒（`add_state`），不允许 dict 静默覆盖。
+与 `compile.py` 共用的**唯一登记表**；句柄构造只经本模块，别处不得重写编码。
   拍:   ``ch{nn}.b{idx}``            idx＝拍在本章列表序（1 起）
   命题: ``ch{nn}.{本地 ref}``        章观察里的命题本地句柄逐字
   悬念: ``ch{nn}.{本地 ref}``        章观察里的悬念本地句柄（open/close 角色分开闭集）
-  状态: ``ch{nn}.b{拍}.e{效应序}.{key}`` ／ ``book.e{条目序}.{key}``
-                                     位置编码（R1）：key 只是载荷，不承担唯一性；
-                                     book 初态无拍位，用独立命名空间按条目序定位
   场景: ``ch{nn}.sc{idx}``           idx＝本章内按开场序的场景序（1 起）
   词表: ``f{nn}``                    书级 facts 编号（Phase 2；与 k{nn} 章内句柄
                                      分属两个命名空间，闭集互不重叠）
 
-【维度句柄（CS-H H4，RC-65；stage2-associate-v3）】状态槽位在编译器里的身份是
-（作用对象，键）——同地址的全部写入（含书级初态与章内效应同键）已由投影聚合成
-一个**维度句柄** ``dim{nn}``（首次写入序编号）。`same_state_dimension` 候选只配
-维度句柄：同键配对（v2 的 89/90 空操作）按构造不可能，模型只为键不同但同维的
-维度配对；规范键由编译器按地址传播到整类（`compile.py::_StateClasses`）。可配对
-close 闭集排除章内已自开自闭的 close（`pairable_closes`）。
+【维度候选消失（CS-S Phase 3，v5）】状态写入句柄（``ch{nn}.b{拍}.e{序}.{key}``）
+与维度句柄（``dim{nn}``）已随 `same_state_dimension` 删除：change 键入
+`CHANGE_KEYS` 闭集后「键不同但同维」构造上不可能（键即 canonical），整类
+合并面（候选生成、`_StateClasses` 规范键传播、`dimension_of` 反查）一并退役。
+可配对 close 闭集仍排除章内已自开自闭的 close（`pairable_closes`）。
 
-【typed 目标显式序列化（AUD-01）】`serialize_target` 接受契约声明的 typed 对象
-（`StateTarget`／`EffectTarget`）或 dict，显式序列化为紧凑 dict：人物带
-char_id、关系保留主客体方向、world 是合法显式类型——不拿 `{}` 兜底表示「推测是
-world」；未知类型、缺必要字段、字段与 kind 不匹配均精确报错（fail fast，I-34）。
 """
 from __future__ import annotations
 
@@ -79,86 +68,9 @@ from novel.core.text import norm
 from novel.core.validation import ValidationIssue
 
 
-# ───────────────────────── typed 作用对象显式序列化（AUD-01） ─────────────────────────
-
-#: 作用对象 kind 闭集（StateTarget∪EffectTarget 的并；wire 层 schema 先行拒形）。
-_TARGET_KINDS: tuple[str, ...] = ('character', 'relation', 'world')
-#: kind 与必带字段的对应（与 `contracts/schema/source.py::EffectTarget` 同一张表）。
-_TARGET_FIELDS: dict[str, tuple[str, ...]] = {
-    'character': ('char_id',), 'relation': ('subject', 'object'), 'world': (),
-}
 
 
-def serialize_target(target: Any, *, where: str) -> dict[str, Any]:
-    """typed 作用对象 → 紧凑 dict（去 None；投影与 compile 的同维核对共用）。
 
-    人物带 char_id；关系保留主客体方向（subject×object 不交换）；world 是显式
-    类型。未知类型、缺必要字段、字段与 kind 不匹配、关系自环均精确报错——
-    不拿空 dict 兜底（AUD-01 的原缺陷）。
-    """
-    if hasattr(target, 'model_dump'):
-        data = dict(target.model_dump())
-    elif isinstance(target, Mapping):
-        data = dict(target)
-    else:
-        raise ValueError(
-            f'{where} 的作用对象类型非法：{type(target).__name__}'
-            '（期望 typed StateTarget/EffectTarget 或 dict）')
-    data = {k: v for k, v in data.items() if v is not None}
-    kind = data.get('kind')
-    if kind not in _TARGET_KINDS:
-        raise ValueError(
-            f'{where} 的作用对象 kind 非法：{kind!r}（闭集 {_TARGET_KINDS}）')
-    needed = _TARGET_FIELDS[kind]
-    given = [f for f in ('char_id', 'subject', 'object') if data.get(f)]
-    if set(given) != set(needed):
-        raise ValueError(
-            f'{where} 的作用对象 kind={kind} 与字段 {given} 不匹配'
-            f'（应为 {list(needed)}）')
-    if kind == 'relation' and data['subject'] == data['object']:
-        raise ValueError(f'{where} 的 relation 作用对象自环（subject==object）')
-    return data
-
-
-def target_label(target: Mapping[str, Any]) -> str:
-    """作用对象的可读标签（prompt 与未决项报告共用；方向保留）。"""
-    kind = target.get('kind')
-    if kind == 'character':
-        return f'character({target.get("char_id")})'
-    if kind == 'relation':
-        return f'relation({target.get("subject")}×{target.get("object")})'
-    if kind == 'world':
-        return 'world'
-    raise ValueError(
-        f'作用对象 kind 非法：{kind!r}（闭集 {_TARGET_KINDS}；'
-        'world 是显式类型，不是兜底）')
-
-
-def book_state_handle(entry_index: int, key: str) -> str:
-    """book 初态句柄（独立命名空间：无拍位，按条目序定位；key 只是载荷）。"""
-    return f'book.e{entry_index}.{key}'
-
-
-def chapter_state_handle(
-    chapter: int, beat_ordinal: int, effect_ordinal: int, key: str,
-) -> str:
-    """章内效应句柄：``ch{nn}.b{拍}.e{效应序}.{key}``（位置编码，R1 v2）。"""
-    return f'ch{chapter:02d}.b{beat_ordinal}.e{effect_ordinal}.{key}'
-
-
-def state_dimension_address(target: Mapping[str, Any], key: str) -> tuple:
-    """状态维度地址（R1 v2 唯一实现；compile 的 `_state_address` 同一函数）：
-    领域＋作用对象＋键——同地址的全部状态写入是同一维度（RC-65）。"""
-    kind = target.get('kind')
-    if kind == 'character':
-        head: tuple = ('char', target.get('char_id'))
-    elif kind == 'relation':
-        head = ('rel', target.get('subject'), target.get('object'))
-    elif kind == 'world':
-        head = ('world',)
-    else:
-        raise ValueError(f'作用对象 kind 非法：{kind!r}（闭集 {tuple(_TARGET_KINDS)}）')
-    return (head, key)
 
 
 # ───────────────────────── 确定性相似度（候选筛子，I-20） ─────────────────────────
@@ -167,8 +79,6 @@ def state_dimension_address(target: Mapping[str, Any], key: str) -> tuple:
 #: 召回向筛子——未过阈值的对保持分离（不默认合并，也不默认不同）；调阈值只
 #: 影响候选面，不影响任何机械判定。
 PROPOSITION_SIMILARITY_THRESHOLD: Final = 0.5
-#: 维度键近义阈值（英文蛇形键的 char-bigram Jaccard；如 trust⊂trust_level）。
-KEY_SIMILARITY_THRESHOLD: Final = 0.6
 #: 包含判定的最短字面（防「他是谁」一类短句被任意长句包含而误报）。
 CONTAINMENT_MIN_CHARS: Final = 4
 
@@ -210,16 +120,6 @@ class PropositionCandidate:
 
 
 @dataclass(frozen=True)
-class DimensionCandidate:
-    """同作用对象、键近义的维度对（维度句柄 ``dim{nn}``）。"""
-
-    left: str
-    right: str
-    left_label: str
-    right_label: str
-
-
-@dataclass(frozen=True)
 class LoopCandidate:
     """跨章悬念 open×close 候选（open 章严格早于 close 章）。"""
 
@@ -240,21 +140,23 @@ class SceneCandidate:
 
 @dataclass(frozen=True)
 class AssociationCandidates:
-    """身份判定的全部候选（`project_identity_candidates` 的唯一产出）。"""
+    """身份判定的全部候选（`project_identity_candidates` 的唯一产出）。
+
+    CS-S Phase 3：`same_state_dimension` 已删（change 键闭集＝键即 canonical）。
+    """
 
     same_proposition: tuple[PropositionCandidate, ...] = ()
-    same_state_dimension: tuple[DimensionCandidate, ...] = ()
     loop_pairing: tuple[LoopCandidate, ...] = ()
     scene_continuation: tuple[SceneCandidate, ...] = ()
 
     def __bool__(self) -> bool:
-        return bool(self.same_proposition or self.same_state_dimension
-                    or self.loop_pairing or self.scene_continuation)
+        return bool(self.same_proposition or self.loop_pairing
+                    or self.scene_continuation)
 
     def answer_count(self) -> int:
         """应答总数（逐候选恰答一次的对账分母）。"""
-        return (len(self.same_proposition) + len(self.same_state_dimension)
-                + len(self.loop_pairing) + len(self.scene_continuation))
+        return (len(self.same_proposition) + len(self.loop_pairing)
+                + len(self.scene_continuation))
 
 
 @dataclass(frozen=True)
@@ -272,7 +174,6 @@ def project_identity_candidates(
 
     • same_proposition：章命题×书级 facts（任何章——fact 是书级身份）、跨章
       命题×命题；同章对不生成（章内同一性归章观察的 norm 归并）；
-    • same_state_dimension：同作用对象（serialize 后逐字相等）且键近义；
     • loop_pairing：跨章 open×close 且 open 章严格早于 close 章（时序倒转的
       配对在 compile 必挂，不生成）；
     • scene_continuation：相邻章 seam（左＝前章最后场景，右＝后章首个场景
@@ -319,18 +220,6 @@ def project_identity_candidates(
                     left_text='（引用，未在本章登记文本）',
                     right_text=statement if statement is not None
                     else '（引用，未在本章登记文本）'))
-    dimensions = sorted(space.dimensions.values(), key=lambda d: d.handle)
-    dim_pairs: list[DimensionCandidate] = []
-    for index, left in enumerate(dimensions):
-        for right in dimensions[index + 1:]:
-            if left.target != right.target or left.key == right.key:
-                continue
-            if near_synonym_pair(left.key, right.key,
-                                 threshold=KEY_SIMILARITY_THRESHOLD):
-                dim_pairs.append(DimensionCandidate(
-                    left=left.handle, right=right.handle,
-                    left_label=f'{target_label(left.target)}.{left.key}',
-                    right_label=f'{target_label(right.target)}.{right.key}'))
     loop_pairs: list[LoopCandidate] = []
     for open_handle, open_entry in sorted(space.loop_opens.items()):
         for close_handle, close_entry in sorted(space.pairable_closes.items()):
@@ -359,8 +248,6 @@ def project_identity_candidates(
     return AssociationCandidates(
         same_proposition=tuple(sorted(
             prop_pairs, key=lambda c: (c.left, c.right))),
-        same_state_dimension=tuple(sorted(
-            dim_pairs, key=lambda c: (c.left, c.right))),
         loop_pairing=tuple(sorted(
             loop_pairs, key=lambda c: (c.open, c.close))),
         scene_continuation=tuple(sorted(
@@ -472,41 +359,6 @@ class BeatHandle:
 
 
 @dataclass(frozen=True)
-class StateHandle:
-    """状态写入句柄（R1 v2 位置编码）：章／拍／效应序定位＋typed 作用对象。
-
-    book 初态 chapter=0、beat_ordinal=0，effect_ordinal＝条目序——序字段是
-    `_state_rank` 的唯一来源（登记表 typed 字段，不做第二处字符串解析）。
-    """
-
-    chapter: int
-    beat_ordinal: int
-    effect_ordinal: int
-    target: dict[str, Any]
-    key: str
-    op: str
-    value: Any
-
-
-@dataclass(frozen=True)
-class DimensionHandle:
-    """状态维度句柄（CS-H H4，RC-65）：（作用对象，键）同地址的全部写入聚合。
-
-    `handle`＝``dim{nn}``（按首次写入的确定性序编号）；`first_rank`＝首次写入的
-    （章，拍，效应序）——规范键传播时类内 canonical＝first_rank 最小的维度键。
-    `writes` 只用于审计读数，prompt 不逐条携带（输出不随写入数增长）。
-    """
-
-    handle: str
-    target: dict[str, Any]
-    key: str
-    first_rank: tuple[int, int, int]
-    writes: tuple[str, ...]
-    first_op: str
-    first_value: Any
-
-
-@dataclass(frozen=True)
 class SceneHandle:
     """场景句柄：本章内按开场序的序号与开场拍序。"""
 
@@ -519,11 +371,11 @@ class SceneHandle:
 class AssociationSpace:
     """associate 的已给句柄闭集（唯一关联登记表；wire 只许从中选）。
 
-    R1（2026-09-28）：prompt、闭集核对与 `compile.py`（`_StateClasses` 的确定性
-    序、初态与章效应的句柄定位）共用本表；状态句柄登记只经 `add_state`，
-    重复句柄构建时即拒。
-    CS-H H4（RC-65）：`dimensions`／`dimension_of` 是状态写入的（作用对象，键）
-    聚合层——`same_state_dimension` 的闭集是维度句柄，不是逐条写入；
+    R1（2026-09-28）：prompt、闭集核对与 `compile.py` 共用本表。
+    CS-H H4（RC-65）曾设 `states`／`dimensions`／`dimension_of` 聚合层
+    （``dim{nn}`` 维度句柄）；CS-S Phase 3（2026-10-08）随 `same_state_dimension`
+    删除——change 键入 `CHANGE_KEYS` 闭集后键即 canonical，状态写入句柄与
+    维度聚合面不再有消费者，整体退役（S-05）。
     `pairable_closes` 排除章内已自开自闭的 close。
     """
 
@@ -531,21 +383,9 @@ class AssociationSpace:
     loop_opens: dict[str, LoopHandle] = field(default_factory=dict)
     loop_closes: dict[str, LoopHandle] = field(default_factory=dict)
     beats: dict[str, BeatHandle] = field(default_factory=dict)
-    states: dict[str, StateHandle] = field(default_factory=dict)
     scenes: dict[str, SceneHandle] = field(default_factory=dict)
-    #: 维度句柄层（dim{nn} → 维度）；写入句柄 → 维度句柄。
-    dimensions: dict[str, DimensionHandle] = field(default_factory=dict)
-    dimension_of: dict[str, str] = field(default_factory=dict)
     #: 可配对 close 闭集（章内已自开自闭的 close 不在其中；RC-65）。
     pairable_closes: dict[str, LoopHandle] = field(default_factory=dict)
-
-    def add_state(self, handle: str, entry: StateHandle) -> None:
-        """登记一条状态句柄；重复句柄当场拒（绝不允许 dict 静默覆盖）。"""
-        if handle in self.states:
-            raise ValueError(
-                f'状态句柄重复登记：{handle!r}（位置编码必须唯一——同键不同拍/'
-                f'对象由位置区分，覆盖即编码缺陷）')
-        self.states[handle] = entry
 
 
 def project_association_space(
@@ -554,29 +394,14 @@ def project_association_space(
     """book＋chapters 观察 → 已给句柄闭集及最小文本（唯一关联登记表）。
 
     编码规则见模块头；同一输入永远得到同一空间（闭集核对、prompt 组装与
-    compile 共用）。typed 作用对象经 `serialize_target` 显式序列化（AUD-01）。
+    compile 共用）。
     """
     space = AssociationSpace()
-    for index, atom in enumerate(book.initial_state, 1):
-        where = f'initial_state[{index}] {atom.key}'
-        space.add_state(book_state_handle(index, atom.key), StateHandle(
-            chapter=0, beat_ordinal=0, effect_ordinal=index,
-            target=serialize_target(atom.target, where=where), key=atom.key,
-            op='set', value=atom.value))
     for chapter in sorted(chapters):
         for beat_ordinal, beat in enumerate(chapters[chapter].beats, 1):
             where = f'ch{chapter:02d}.b{beat_ordinal}'
             space.beats[f'ch{chapter:02d}.b{beat_ordinal}'] = BeatHandle(
                 chapter=chapter, ordinal=beat_ordinal, event=beat.event)
-            for effect_ordinal, effect in enumerate(beat.effects, 1):
-                handle = chapter_state_handle(
-                    chapter, beat_ordinal, effect_ordinal, effect.key)
-                space.add_state(handle, StateHandle(
-                    chapter=chapter, beat_ordinal=beat_ordinal,
-                    effect_ordinal=effect_ordinal,
-                    target=serialize_target(
-                        effect.target, where=f'{where}.e{effect_ordinal}'),
-                    key=effect.key, op=effect.op, value=effect.value))
             statements: dict[str, str] = {}
             # CS-S 1b：命题面只在 cognition 上（effect 命题锚已删）。
             # CS-S Phase 2：f{nn} 词表引用不是章内命题（解析归 compile 直连）。
@@ -616,27 +441,6 @@ def project_association_space(
                 space.scenes.setdefault(f'ch{chapter:02d}.sc{scene_ordinal}',
                                         SceneHandle(chapter=chapter, ordinal=scene_ordinal,
                                                     opening_beat=beat_ordinal))
-    # 维度层（RC-65）：states 的插入序即首次写入的确定性序（book 初态在前，
-    # 其后按（章，拍，效应序））；同（作用对象，键）地址的写入聚合成 dim{nn}。
-    # 同键多写只占一个维度句柄——请求面与模型的配对面不随写入数增长。
-    by_address: dict[tuple, str] = {}
-    for handle, entry in space.states.items():
-        address = state_dimension_address(entry.target, entry.key)
-        dim = by_address.get(address)
-        if dim is None:
-            dim = f'dim{len(by_address) + 1:02d}'
-            by_address[address] = dim
-            space.dimensions[dim] = DimensionHandle(
-                handle=dim, target=dict(entry.target), key=entry.key,
-                first_rank=(entry.chapter, entry.beat_ordinal, entry.effect_ordinal),
-                writes=(handle,), first_op=entry.op, first_value=entry.value)
-        else:
-            existing = space.dimensions[dim]
-            space.dimensions[dim] = DimensionHandle(
-                handle=dim, target=existing.target, key=existing.key,
-                first_rank=existing.first_rank, writes=(*existing.writes, handle),
-                first_op=existing.first_op, first_value=existing.first_value)
-        space.dimension_of[handle] = dim
     # 可配对 close 闭集：章内已自开自闭的 close（同一句柄串也在 open 集里）不进
     # 跨章配对面（RC-65）——它们已有归属，配了只会被判重复 close。
     space.pairable_closes = {
@@ -649,14 +453,11 @@ def associate_candidates_prompt(candidates: AssociationCandidates) -> str:
     """身份判定请求的 prompt 组装（run_associate 的唯一组装点）。
 
     槽值全部由候选集决定——同输入逐字节可复算；只含候选句柄与最小文本
-    （编号归 compiler，I-21）。四类候选逐条列出，每条恰答一次。
+    （编号归 compiler，I-21）。三类候选逐条列出，每条恰答一次。
     """
     proposition_lines = '\n'.join(
         f'- [{c.left}]「{c.left_text}」 × [{c.right}]「{c.right_text}」'
         for c in candidates.same_proposition) or '（无候选——该类给空数组）'
-    dimension_lines = '\n'.join(
-        f'- [{c.left}] {c.left_label} × [{c.right}] {c.right_label}'
-        for c in candidates.same_state_dimension) or '（无候选——该类给空数组）'
     loop_lines = '\n'.join(
         f'- open [{c.open}] 问题：{c.question} × close [{c.close}] 收束：{c.resolution}'
         for c in candidates.loop_pairing) or '（无候选——该类给空数组）'
@@ -664,8 +465,7 @@ def associate_candidates_prompt(candidates: AssociationCandidates) -> str:
         f'- 前章末场 [{c.left}] × 后章首场 [{c.right}]'
         for c in candidates.scene_continuation) or '（无候选——该类给空数组）'
     return ASSOCIATE_CANDIDATES_PROMPT.format(
-        propositions=proposition_lines, dimensions=dimension_lines,
-        loops=loop_lines, scenes=scene_lines)
+        propositions=proposition_lines, loops=loop_lines, scenes=scene_lines)
 
 
 ASSOCIATE_CANDIDATES_PROMPT = """任务：条目级关联判定——程序已按确定性规则筛出下面的候选对，逐条给出判定。
@@ -678,11 +478,6 @@ unresolved——不默认合并，也不默认不同。
 命题编号 fNN——书级编号来自通读全书的词表）
 {propositions}
 
-【same_state_dimension 候选】（作用对象相同、键近义的状态维度对；同一维度
-（作用对象，键）的全部写入——含书级初态与各章效应——已由编译器合并为一个
-维度句柄，不需要也不可再配）
-{dimensions}
-
 【loop_pairing 候选】（跨章悬念 open×close；章内自开自闭的悬念不在此列）
 {loops}
 
@@ -694,14 +489,12 @@ unresolved——不默认合并，也不默认不同。
 【verdict 闭集】
 - same_proposition：same（同一命题——并入同一命题身份，书级编号一方为
   canonical）／distinct（不同命题）／unresolved（拿不准）；
-- same_state_dimension：same（键不同但同维——规范键传播整类）／distinct／
-  unresolved；
 - loop_pairing：pair（该 open 与该 close 是同一悬念）／distinct（不是同一
   悬念——close 保持未配对）／unresolved；
 - scene_continuation：continue（右场景是左场景的延续，应并回同一场）／
   distinct（确是新场）／unresolved。
 
-【输出 JSON 顶层】{{"protocol_version":"stage2-associate-v4","same_proposition":[{{"left":...,"right":...,"verdict":...}}],"same_state_dimension":[{{"left":...,"right":...,"verdict":...}}],"loop_pairing":[{{"open":...,"close":...,"verdict":...}}],"scene_continuation":[{{"left":...,"right":...,"verdict":...}}]}}
+【输出 JSON 顶层】{{"protocol_version":"stage2-associate-v5","same_proposition":[{{"left":...,"right":...,"verdict":...}}],"loop_pairing":[{{"open":...,"close":...,"verdict":...}}],"scene_continuation":[{{"left":...,"right":...,"verdict":...}}]}}
 每条候选恰答一次：句柄逐字取自上方方括号清单，不得增删候选、不得跨类混用、
 不得重复作答；漏答、多答、编造句柄都会被拒绝。无候选的类别给空数组。"""
 
@@ -792,8 +585,6 @@ def compile_associate_observation(
     unordered: dict[str, tuple[tuple[str, str], ...]] = {
         'same_proposition': tuple(
             (c.left, c.right) for c in candidates.same_proposition),
-        'same_state_dimension': tuple(
-            (c.left, c.right) for c in candidates.same_state_dimension),
         'scene_continuation': tuple(
             (c.left, c.right) for c in candidates.scene_continuation),
     }
@@ -802,7 +593,6 @@ def compile_associate_observation(
             (c.open, c.close) for c in candidates.loop_pairing),
     }
     fields = {'same_proposition': ('left', 'right'),
-              'same_state_dimension': ('left', 'right'),
               'scene_continuation': ('left', 'right'),
               'loop_pairing': ('open', 'close')}
     for kind, (left_field, right_field) in fields.items():
@@ -880,7 +670,6 @@ def compile_cross_cause(
 #: 配对数组名 → 参与句柄字段（定位时按句柄反查条目下标）。
 _PAIRING_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ('same_proposition', ('left', 'right')),
-    ('same_state_dimension', ('left', 'right')),
     ('loop_pairing', ('open', 'close')),
     ('scene_continuation', ('left', 'right')),
 )
@@ -889,7 +678,7 @@ _PAIR_KINDS = dict(_PAIRING_FIELDS)
 _PAIR_FIELD_NAMES = frozenset(f for _kind, fields in _PAIRING_FIELDS for f in fields)
 
 
-def _located_rows(wire: dict, location: tuple, space: AssociationSpace) -> set[tuple[str, int]]:
+def _located_rows(wire: dict, location: tuple) -> set[tuple[str, int]]:
     """一条错误的 `location` → 它能替换的答案条目候选集 ``{(kind, i)}``。
 
     位置形状全部由本模块与 `compile.py` 的 `association_issue` 铸造：
@@ -900,7 +689,6 @@ def _located_rows(wire: dict, location: tuple, space: AssociationSpace) -> set[t
     • `(kind, field, 句柄)`：只在该字段上匹配。
     missing_answer（候选无既有行可替换）与 duplicate_answer（两行都含该候选）
     都定位不到唯一行——返回空集/多行，由调用方退整份返修。
-    写入句柄（干跑未决的判定处）先经 `dimension_of` 归到维度句柄再比对。
     """
     scope = location[0] if location and isinstance(location[0], str)         and location[0] in _PAIR_KINDS else None
     if scope is not None and len(location) > 1 and isinstance(location[1], int):
@@ -922,14 +710,13 @@ def _located_rows(wire: dict, location: tuple, space: AssociationSpace) -> set[t
             if not isinstance(row, dict):
                 continue
             held = {row.get(field) for field in scoped_fields}
-            if all(handle in held or space.dimension_of.get(handle, handle) in held
-                   for handle in handles):
+            if all(handle in held for handle in handles):
                 found.add((kind, index))
     return found
 
 
 def associate_patch_locate(
-    wire: Any, errors: Sequence[object], *, space: AssociationSpace,
+    wire: Any, errors: Sequence[object],
 ) -> list[tuple[tuple[str | int, ...], list[object]]] | None:
     """associate 条目定位（`ask_json` 的 `patch` 协议；与验收同源）。
 
@@ -946,7 +733,7 @@ def associate_patch_locate(
         location = getattr(error, 'location', None)
         if not isinstance(location, tuple):
             return None
-        rows = _located_rows(wire, location, space)
+        rows = _located_rows(wire, location)
         if len(rows) != 1:
             return None
         bucket = grouped.setdefault(next(iter(rows)), [])

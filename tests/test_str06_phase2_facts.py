@@ -45,7 +45,7 @@ def _book_wire_v9(*facts: dict) -> dict:
             {'surface': '云娘', 'source_refs': ['e01_02']}]},
     }
     return {**sample_book_expression(characters),
-            'protocol_version': 'stage2-book-v9',
+            'protocol_version': 'stage2-book-v10',
             'characters': characters, 'initial_state': [], 'world_constraints': [],
             'facts': list(facts)}
 
@@ -113,16 +113,16 @@ def test_fact_wire_model_is_id_free_and_exactly_shaped():
 def _book_v6(characters: dict, facts: list) -> dict:
     """canonical v6 直通面：facts 带 F 编号与 basis（引文＝段全文前 6 字）。"""
     return {**sample_book_expression(characters),
-            'protocol_version': 'stage2-book-v6',
+            'protocol_version': 'stage2-book-v7',
             'characters': characters, 'initial_state': [], 'world_constraints': [],
             'facts': facts}
 
 
 def _chapter_wire_v9(know: list[dict]) -> dict:
     """章瘦 wire v9（模型输出面）：fact 与 what 恰写其一。"""
-    return {'protocol_version': 'stage2-chapters-v9', 'beats': [
-        {'ev': '云娘起疑', 'on_stage': ['yun_niang'], 'start': 'e01_01',
-         'state': [], 'know': know, 'loops': []}]}
+    return {'protocol_version': 'stage2-chapters-v10', 'beats': [
+        {'event': '云娘起疑', 'on_stage': ['yun_niang'], 'start': 'e01_01',
+         'change': [], 'know': know, 'loops': []}]}
 
 
 def test_slim_know_fact_xor_what_and_closed_set():
@@ -186,16 +186,17 @@ def test_compile_resolves_fact_refs_and_merges_near_synonym_via_verdict():
                           'holder': 'yun_niang', 'mode': 'confirms',
                           'basis': _basis('e02_01')}])]}
     ch03 = {'protocol_version': CPV, 'beats': [
-        _beat('读者揭示', ('e03_01',), participants=('yun_niang', 'fu_jun'),
+        _beat('揭示', ('e03_01',), participants=('yun_niang', 'fu_jun'),
+              access='narrated',
               cognition=[{'proposition': {'ref': 'f01', 'statement': None},
-                          'holder': 'reader', 'mode': 'learns',
+                          'holder': 'yun_niang', 'mode': 'confirms',
                           'basis': _basis('e03_01')}])]}
     book_obs, chapters = _observations(book, {1: ch01, 2: ch02, 3: ch03})
     associate = AssociateObservation.model_validate({
-        'protocol_version': 'stage2-associate-v4',
+        'protocol_version': 'stage2-associate-v5',
         'same_proposition': [{'left': 'ch02.p_drift', 'right': 'f01',
                               'verdict': 'same'}],
-        'same_state_dimension': [], 'loop_pairing': [], 'cross_chapter_cause': [],
+        'loop_pairing': [], 'cross_chapter_cause': [],
         'scene_continuation': []})
     outcome = compile_source_truth(book=book_obs, chapters=chapters,
                                    names=_names_observation(book_obs),
@@ -235,8 +236,8 @@ def test_compile_rejects_public_holder_after_d5():
                           'basis': _basis('e01_01')}])]}
     book_obs, chapters = _observations(book, {1: ch01})
     associate = AssociateObservation.model_validate({
-        'protocol_version': 'stage2-associate-v4', 'same_proposition': [],
-        'same_state_dimension': [], 'loop_pairing': [], 'cross_chapter_cause': [],
+        'protocol_version': 'stage2-associate-v5', 'same_proposition': [],
+        'loop_pairing': [], 'cross_chapter_cause': [],
         'scene_continuation': []})
     outcome = compile_source_truth(book=book_obs, chapters=chapters,
                                    names=_names_observation(book_obs),
@@ -269,7 +270,7 @@ def test_fold_knowledge_timeline_reads_only():
 def _blueprint_stub():
     """最小蓝图（source_fold 只读消费；一拍一场景）。"""
     from contracts.schema.source import (
-        Beat, BlueprintsArtifactV16, ChapterBlueprint, SceneSpan,
+        Beat, BlueprintsArtifactV17, ChapterBlueprint, SceneSpan,
     )
     beat = Beat(beat_id='b01_01', event='事件', participants=('fu_jun',),
                 source_refs=('e01_01',), scene_boundary='new', temporal_mode='single')
@@ -278,7 +279,7 @@ def _blueprint_stub():
     book_obs = BookObservation.model_validate(_book_v6({
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e01_01']}]}}, []))
-    return BlueprintsArtifactV16(
+    return BlueprintsArtifactV17(
         source_expression=compile_source_expression(book_obs.expression, texts=None),
         chapters=(ChapterBlueprint(chapter=1, beats=(beat,),
                                    scenes=(SceneSpan(scene_id='sc01',

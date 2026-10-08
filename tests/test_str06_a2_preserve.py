@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from contracts.schema.grounding import ObligationSeries, PreserveCheckpoint
 from contracts.schema.source import (
-    BlueprintsArtifactV16, ChapterBlueprint, CharactersCore,
+    BlueprintsArtifactV17, ChapterBlueprint, CharactersCore,
 )
 from novel.stages.stage4.grounding import (
     assemble_preserve, project_preserve_view,
@@ -37,13 +37,13 @@ def _characters() -> CharactersCore:
         },
         'initial_state': [
             {'state_id': 's0_01', 'target': {'kind': 'character', 'char_id': 'fu_jun'},
-             'key': 'birthright', 'value': '养子', 'persistence': 'stable',
+             'key': 'identity', 'value': '养子', 'persistence': 'stable',
              'source_refs': ['e01_01'], 'basis': [BASIS[0]]}],
     })
 
 
-def _blueprint() -> BlueprintsArtifactV16:
-    return BlueprintsArtifactV16.model_validate({
+def _blueprint() -> BlueprintsArtifactV17:
+    return BlueprintsArtifactV17.model_validate({
         'source_expression': sample_blueprint_expression(),
         'world_constraints': [
             {'constraint_id': 'wc_01', 'kind': 'hard_rule',
@@ -136,7 +136,7 @@ def test_preserve_input_keeps_operations_scope_known_holders_loops_and_causality
     second['effects'] = [{**first['effects'][0], 'op': 'unset', 'value': None}]
     raw['chapters'][0]['causal_edges'] = [
         {'from_beat': 'b01_01', 'to_beat': 'b01_02', 'kind': 'causes'}]
-    view = project_preserve_view(_characters(), BlueprintsArtifactV16.model_validate(raw))
+    view = project_preserve_view(_characters(), BlueprintsArtifactV17.model_validate(raw))
     assert 'stage4-preserve-input-v2' in view
     assert '（actual）' in view
     assert 'scene_location unset None' in view

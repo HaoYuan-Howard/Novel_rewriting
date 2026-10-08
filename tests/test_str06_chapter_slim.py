@@ -19,8 +19,11 @@ import copy
 
 import pytest
 
+from pydantic import ValidationError
+
 from contracts.schema.observation import (
     STAGE2_CHAPTERS_PROTOCOL, STAGE2_CHAPTERS_WIRE_PROTOCOL,
+    ChapterObservationWire,
 )
 from novel.stages.stage2.chapters import (
     chapter_patch_locate, compile_chapter_observation,
@@ -46,12 +49,12 @@ SLUGS = ('lu_fujun', 'yun_niang', 'pei_shuyuan')
 
 def _slim_wire(**overrides):
     beat = {
-        'ev': '新婚夜，夫君向芸娘坦白不能生育，并求娶报恩。',
+        'event': '新婚夜，夫君向芸娘坦白不能生育，并求娶报恩。',
         'on_stage': ['lu_fujun', 'yun_niang'],
         'start': 'e01_01',
         'new_scene': True,
-        'state': [{
-            'at': 'lu_fujun', 'key': 'body_condition',
+        'change': [{
+            'at': 'lu_fujun', 'key': 'health',
             'val': '幼时落水伤了根本，不能生育，不能行房事',
             'evidence_refs': ['e01_01'],
         }],
@@ -127,18 +130,18 @@ def test_intervals_start_out_of_closed_set_or_non_increasing():
 def test_expand_defaults_addresses_and_intervals():
     wire = _slim_wire()
     wire['beats'].append({
-        'ev': '芸娘落泪后，夫君提出借种之计。',
+        'event': '芸娘落泪后，夫君提出借种之计。',
         'on_stage': ['yun_niang'],
         'start': 'e01_03',
-        'state': [{
+        'change': [{
             'at': 'lu_fujun+pei_shuyuan', 'key': 'kinship', 'val': 'cousins',
             'evidence_refs': ['e01_04'],
         }, {
-            'at': 'world', 'key': 'social_norm', 'val': 'women_cannot_stand_alone',
+            'at': 'world', 'key': 'social_standing', 'val': 'women_cannot_stand_alone',
             'evidence_refs': ['e01_03'],
         }],
         'know': [{
-            'who': 'reader', 'how': 'learns', 'what': '夫君求娶芸娘是为报恩',
+            'who': 'yun_niang', 'how': 'learns', 'what': '夫君求娶芸娘是为报恩',
             'evidence_refs': ['e01_02'],
         }],
     })
@@ -171,7 +174,7 @@ def test_scene_location_is_beat_metadata_not_a_state_effect():
     效应（作用域由表固定为 scene、op/modality/disclosure 全默认），证据面＝
     本拍派生区间全体；state 里出现 scene_location 即按条目拒（单一通路，S-04）。"""
     wire = _slim_wire()
-    wire['beats'].append({'ev': '尾声。', 'on_stage': [], 'start': 'e01_04'})
+    wire['beats'].append({'event': '尾声。', 'on_stage': [], 'start': 'e01_04'})
     wire['beats'][0]['scene_location'] = '婚房'
     rc12, issues = expand_chapter_wire(wire, chapter=1, sequence=SEQUENCE)
     assert issues == []
@@ -183,24 +186,23 @@ def test_scene_location_is_beat_metadata_not_a_state_effect():
                   {'segment': 'e01_02', 'quote': None},
                   {'segment': 'e01_03', 'quote': None}],
     }
-    # 单一通路：state 里再写 scene_location → 该条目 issue（可条目返修）。
+    # 单一通路（CS-S Phase 3 收紧）：change 里再写 scene_location 直接被 wire
+    # 的键闭集拒绝（scene_location 不在模型面 CHANGE_KEYS——compiler 专用合成键）。
     wire = _slim_wire()
-    wire['beats'][0]['state'].append({
+    wire['beats'][0]['change'].append({
         'at': 'world', 'key': 'scene_location', 'val': '婚房',
         'evidence_refs': ['e01_01'],
     })
-    rc12, issues = expand_chapter_wire(wire, chapter=1, sequence=SEQUENCE)
-    assert rc12 is None
-    assert issues[0][0] == ('beats', 0, 'state', 1)
-    assert '拍级字段' in issues[0][1]
+    with pytest.raises(ValidationError, match='scene_location'):
+        ChapterObservationWire.model_validate(wire)
 
 
 def test_registered_keys_compile_with_derived_scope():
     """登记键照常编译：作用域读时按表派生（fold 侧 REGISTERED_STATE_KEYS），
     canonical 效应不再携带 scope 字段。"""
     wire = _slim_wire()
-    wire['beats'][0]['state'][0] = {
-        'at': 'yun_niang', 'key': 'body_head_covering', 'val': '头套',
+    wire['beats'][0]['change'][0] = {
+        'at': 'yun_niang', 'key': 'body_state', 'val': '头套',
         'evidence_refs': ['e01_01'],
     }
     observation, errors = compile_chapter_observation(
@@ -216,7 +218,7 @@ def test_wire_rejects_dead_fields_scope_hidden_prop():
     for dead in ({'scope': 'scene'}, {'prop': '表弟确已到府'},
                  {'hidden': {'by': ['lu_fujun'], 'what': '借种计划仍在推进'}}):
         wire = _slim_wire()
-        wire['beats'][0]['state'][0].update(dead)
+        wire['beats'][0]['change'][0].update(dead)
         with pytest.raises(Exception):
             expand_chapter_wire(wire, chapter=1, sequence=SEQUENCE)
         observation, errors = compile_chapter_observation(
@@ -224,14 +226,14 @@ def test_wire_rejects_dead_fields_scope_hidden_prop():
         assert observation is None and any('协议校验失败' in e for e in errors), errors
         located = chapter_patch_locate(wire, errors, evidence_ids=EVIDENCE,
                                        chapter=1, character_slugs=SLUGS)
-        assert located is not None and located[0][0] == ('beats', 0, 'state', 0)
+        assert located is not None and located[0][0] == ('beats', 0, 'change', 0)
 
 
 def test_expand_know_text_resolution():
     """know 命题文本归并（跨拍：首现建立、重引不带 statement）。"""
     wire = _slim_wire()
     wire['beats'][0]['know'].append({       # 标点宽度漂移的重引
-        'who': 'reader', 'how': 'learns', 'what': '夫君幼时落水伤了根本,不能生育,也不能行房事',
+        'who': 'lu_fujun', 'how': 'learns', 'what': '夫君幼时落水伤了根本,不能生育,也不能行房事',
         'evidence_refs': ['e01_01'],
     })
     wire['beats'][0]['know'].append({       # 真改写 → 新句柄
@@ -258,10 +260,10 @@ def test_expand_bad_start_and_address_are_item_issues():
     assert '不在本章证据闭集内' in issues[0][1]
 
     wire = _slim_wire()
-    wire['beats'][0]['state'][0]['at'] = 'a+b+c'
+    wire['beats'][0]['change'][0]['at'] = 'a+b+c'
     rc12, issues = expand_chapter_wire(wire, chapter=1, sequence=SEQUENCE)
     assert rc12 is None
-    assert issues[0][0] == ('beats', 0, 'state', 0)
+    assert issues[0][0] == ('beats', 0, 'change', 0)
     assert 'at 地址非法' in issues[0][1]
 
 
@@ -343,8 +345,8 @@ def test_patch_locate_routes_evidence_outside_derived_interval_to_beat():
     """CS-S 1a：evidence_refs 落在派生区间外 → 整拍路径，指引改选区间内的段、
     边界错位走整章修订（v8 的区间由 start 派生，不能只扩一拍）。"""
     wire = _slim_wire()
-    wire['beats'].append({'ev': '尾声。', 'on_stage': [], 'start': 'e01_03'})
-    wire['beats'][0]['state'][0]['evidence_refs'] = ['e01_04']  # 属下一拍区间
+    wire['beats'].append({'event': '尾声。', 'on_stage': [], 'start': 'e01_03'})
+    wire['beats'][0]['change'][0]['evidence_refs'] = ['e01_04']  # 属下一拍区间
     observation, errors = compile_chapter_observation(
         wire, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
     assert observation is None and errors
@@ -382,22 +384,26 @@ def test_wire_rejects_quote_text_in_evidence_refs():
     字符串（哪怕逐字正确）按条目定位窄修；转写失败类错误构造上不再存在
     （I-13：换字面量 v8，旧回答不做推断采用）。"""
     wire = _slim_wire()
-    wire['beats'][0]['state'][0]['evidence_refs'] = ['新婚夜,夫君坦白：幼时落水,伤了根本。']
+    wire['beats'][0]['change'][0]['evidence_refs'] = ['新婚夜,夫君坦白：幼时落水,伤了根本。']
     observation, errors = compile_chapter_observation(
         wire, evidence_ids=EVIDENCE, chapter=1, character_slugs=SLUGS)
     assert observation is None and any('协议校验失败' in e for e in errors), errors
     assert chapter_patch_locate(wire, errors, evidence_ids=EVIDENCE,
                                 chapter=1, character_slugs=SLUGS) == [
-        (('beats', 0, 'state', 0), errors)]
+        (('beats', 0, 'change', 0), errors)]
 
 
 # ── 回归：expand(slim(x)) == x（模本地句柄重命名） ─────────────────────────
 
 def _renamed(obs: dict) -> dict:
-    """本地命题句柄按首现序重标，两侧可比较（句柄是标签不是语义）。"""
+    """本地命题句柄按首现序重标，两侧可比较（句柄是标签不是语义）。
+
+    Phase 3：直通 fixture 缺省的 access 按 canonical 默认补齐（witnessed）。
+    """
     obs = copy.deepcopy(obs)
     table: dict[str, str] = {}
     for beat in obs['beats']:
+        beat.setdefault('access', 'witnessed')
         for transfer in beat.get('cognition', []):
             prop = transfer.get('proposition')
             if prop and prop.get('statement') is not None and prop['ref'] not in table:
@@ -425,7 +431,7 @@ def test_round_trip_rich_observation():
                 'effects': [{
                     'target': {'kind': 'character', 'char_id': 'lu_fujun',
                                'subject': None, 'object': None},
-                    'key': 'body_condition', 'op': 'set', 'modality': 'actual',
+                    'key': 'health', 'op': 'set', 'modality': 'actual',
                     'value': '伤了根本',
                     'basis': [{'segment': 'e01_01', 'quote': '新婚夜,夫君坦白：幼时落水,伤了根本,不能生,也不能行房。'}],
                 }],
@@ -451,16 +457,15 @@ def test_round_trip_rich_observation():
                                 'quote': '夫君提出向表弟借种,一家三口过日子。'}]},
                     {'target': {'kind': 'relation', 'char_id': None,
                                 'subject': 'lu_fujun', 'object': 'pei_shuyuan'},
-                     'key': 'trust', 'op': 'unset', 'modality': 'expected',
+                     'key': 'attitude', 'op': 'unset', 'modality': 'expected',
                      'value': None,
                      'basis': [{'segment': 'e01_04', 'quote': '夫君提出向表弟借种,一家三口过日子。'}],
                      },
                 ],
                 'cognition': [
+                    # CS-S Phase 3：观察面禁 reader——重引（statement=None）改由
+                    # 人物条目承载（蓝图里的 reader 是 compile 派生物，不逆映射）。
                     {'proposition': {'ref': 'p_impotent', 'statement': None},
-                     'holder': 'reader', 'mode': 'confirms',
-                     'basis': [{'segment': 'e01_04', 'quote': '夫君提出向表弟借种,一家三口过日子。'}]},
-                    {'proposition': {'ref': 'p_worry', 'statement': '芸娘担忧无子'},
                      'holder': 'yun_niang', 'mode': 'believes',
                      'basis': [{'segment': 'e01_03', 'quote': '芸娘落泪。'}]},
                 ],
@@ -472,17 +477,17 @@ def test_round_trip_rich_observation():
     assert slim['protocol_version'] == PV_WIRE
     # 瘦面形态：默认值不出现、例外保留。
     first, second = slim['beats']
-    assert first['ev'] == '新婚夜坦白。'
+    assert first['event'] == '新婚夜坦白。'
     assert first['start'] == 'e01_01'
     assert first['on_stage'] == ['lu_fujun', 'yun_niang']
     assert first['new_scene'] is True and 'iterative' not in first
-    assert first['state'][0]['at'] == 'lu_fujun' and 'op' not in first['state'][0]
+    assert first['change'][0]['at'] == 'lu_fujun' and 'op' not in first['change'][0]
     assert first['loops'] == observation['beats'][0]['loops']
     assert 'new_scene' not in second and second['iterative'] is True
     # scene_location 效应还原为拍级字段（合成效应的逆），不留在 state。
     assert second['scene_location'] == '婚房'
-    assert second['state'][0] == {
-        'at': 'lu_fujun+pei_shuyuan', 'key': 'trust', 'op': 'unset',
+    assert second['change'][0] == {
+        'at': 'lu_fujun+pei_shuyuan', 'key': 'attitude', 'op': 'unset',
         'modality': 'expected',
         'evidence_refs': ['e01_04'],
     }

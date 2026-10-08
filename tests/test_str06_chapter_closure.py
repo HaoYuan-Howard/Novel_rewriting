@@ -456,12 +456,12 @@ def _confirmation_graph() -> BodyDesign:
     confirm = TargetDelta(
         domain='knowledge', key='hiding', subjects=(), holder='reader',
         op='set', scope='scene', value='床底有人', knowledge_mode='known',
-        confirms={'domain': 'world', 'key': 'hiding'})
+        confirms={'domain': 'world', 'key': 'secret'})
     return _graph(
         scenes=[
-            _scene('s01', (_beat(1, '建立', (_delta('world', 'hiding', value='床底有人'),)),)),
+            _scene('s01', (_beat(1, '建立', (_delta('world', 'secret', value='床底有人'),)),)),
             _scene('s02', (_beat(1, '试探'), _beat(2, '确认', (confirm,))),
-                   reads=(StateRead(domain='world', key='hiding'),)),
+                   reads=(StateRead(domain='world', key='secret'),)),
             _scene('s03', (_beat(1, '无关章'),)),
         ],
         chapters=[(1, ('s01',)), (2, ('s02',)), (3, ('s03',))])

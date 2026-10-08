@@ -25,7 +25,7 @@ from copy import deepcopy
 import pytest
 
 from contracts.schema.grounding import PreserveCheckpoint, ReconstructionBrief
-from contracts.schema.source import BlueprintsArtifactV16, CharactersCore
+from contracts.schema.source import BlueprintsArtifactV17, CharactersCore
 from contracts.schema.workflow import route_owner_issue
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.grounding import (
@@ -68,8 +68,8 @@ def _expression():
         'readings': sample_readings().model_dump(mode='json')})
 
 
-def _blueprint() -> BlueprintsArtifactV16:
-    return BlueprintsArtifactV16.model_validate({
+def _blueprint() -> BlueprintsArtifactV17:
+    return BlueprintsArtifactV17.model_validate({
         'source_expression': _expression().model_dump(mode='json'),
         'world_constraints': [],
         'chapters': [
@@ -78,7 +78,7 @@ def _blueprint() -> BlueprintsArtifactV16:
                  v13_beat('b01_01', '芸娘起疑；凭据成立', participants=('yun_niang',),
                           source_refs=('e01_01',),
                           effects=(
-                              v13_effect({'kind': 'world'}, 'evidence_fact',
+                              v13_effect({'kind': 'world'}, 'secret',
                                          '床底藏物属实',
                                          basis=BASIS),),
                           cognition=({'proposition': {
@@ -98,7 +98,7 @@ def _blueprint() -> BlueprintsArtifactV16:
                      'b01_03', '巷口第一次现身', source_refs=('e01_03',),
                      effects=(
                          v13_effect(
-                             {'kind': 'world'}, 'apparition_count', '第一次',
+                             {'kind': 'world'}, 'secret', '第一次',
                              basis=({'segment': 'e01_03', 'quote': '第一次现身'},),
                          ),
                      ),
@@ -107,7 +107,7 @@ def _blueprint() -> BlueprintsArtifactV16:
                      'b01_04', '夜市第二次现身', source_refs=('e01_04',),
                      effects=(
                          v13_effect(
-                             {'kind': 'world'}, 'apparition_count', '第二次',
+                             {'kind': 'world'}, 'secret', '第二次',
                              basis=({'segment': 'e01_04', 'quote': '第二次现身'},),
                          ),
                      ),
@@ -118,7 +118,7 @@ def _blueprint() -> BlueprintsArtifactV16:
                      effects=(
                          # CS-S 1b：effect 命题锚删——时态锁由 modality 派生。
                          v13_effect(
-                             {'kind': 'world'}, 'return_time', '约半月',
+                             {'kind': 'world'}, 'agreement', '约半月',
                              modality='expected',
                              basis=({'segment': 'e01_05', 'quote': '约莫半月便回'},),
                          ),
@@ -214,7 +214,7 @@ def _design_wire(brief: ReconstructionBrief, *, flashback: bool = False) -> dict
                  {'event': '凭据成立', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'world', 'subjects': [], 'holder': None,
-                       'key': 'evidence_fact', 'op': 'set', 'value': '床底藏物属实',
+                       'key': 'secret', 'op': 'set', 'value': '床底藏物属实',
                        'scope': 'book', 'modality': 'actual'}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': f'拍{suspect_beat} 怀疑', 'participants': ['yun_niang'],
@@ -227,7 +227,7 @@ def _design_wire(brief: ReconstructionBrief, *, flashback: bool = False) -> dict
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
                        'key': kp_x, 'op': 'set', 'value': '床底藏物属实',
-                       'scope': 'book', 'knowledge_mode': 'known', 'confirms': {'domain': 'world', 'key': 'evidence_fact'}}],
+                       'scope': 'book', 'knowledge_mode': 'known', 'confirms': {'domain': 'world', 'key': 'secret'}}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '第一次现身', 'participants': [],
                   'delivery_hint': '', 'target_delta': [],
@@ -238,7 +238,7 @@ def _design_wire(brief: ReconstructionBrief, *, flashback: bool = False) -> dict
                  {'event': '约定归期', 'participants': ['fu_jun'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'world', 'subjects': [], 'holder': None,
-                       'key': 'return_time', 'op': 'set', 'value': '约半月后归家',
+                       'key': 'agreement', 'op': 'set', 'value': '约半月后归家',
                        'scope': 'book', 'modality': 'expected'}],
                   'expression_refs': [], 'surface_introductions': []},
              ]}],
@@ -288,7 +288,7 @@ def _fact_marks(brief: ReconstructionBrief):
     return (FactLockMark(
         kf_id=_kf_expected(brief), scene=0, beat=6, state=0,
         op='set', modality='expected',
-        address=StateAddress(domain=EffectDomain.WORLD, key='return_time')),
+        address=StateAddress(domain=EffectDomain.WORLD, key='agreement')),
     )
 
 
@@ -309,8 +309,8 @@ def test_initial_reader_confirmation_requires_an_actual_initial_fact():
     body, binding, brief = _green_graph_and_binding()
     confirmation = TargetDelta(domain='knowledge', key=_kp_x(brief), holder='reader',
                                op='set', scope='book', value='开篇前已确认', knowledge_mode='known',
-                               confirms={'domain': 'world', 'key': 'initial_evidence'})
-    fact = TargetDelta(domain='world', key='initial_evidence', op='set', scope='book',
+                               confirms={'domain': 'world', 'key': 'secret'})
+    fact = TargetDelta(domain='world', key='secret', op='set', scope='book',
                        value='证据已存在', modality='actual')
     for changes, passes in (((fact, confirmation), True), ((confirmation,), False),
                             ((fact.model_copy(update={'modality': 'planned'}),
@@ -350,7 +350,7 @@ def test_v7_composite_obligation_preserves_cognitive_change_positions():
         position = 3 if change.holder == 'reader' else 1 if change.mode == 'suspected' else 2
         placement = {'ref': ref}
         if change.holder == 'reader':
-            placement['confirms'] = {'domain': 'world', 'key': 'evidence_fact'}
+            placement['confirms'] = {'domain': 'world', 'key': 'secret'}
         beats[position].setdefault('know', []).append(placement)
     wire = {'protocol_version': 'stage4-design-v8', 'book_style': source['book_style'],
             'scenes': [{'driver': source['scenes'][0]['driver'], 'brief': '由起疑推进到证实',
@@ -361,7 +361,7 @@ def test_v7_composite_obligation_preserves_cognitive_change_positions():
     assert not errors, errors
     assert body.scenes[0].beats[1].target_delta[0].knowledge_mode == 'suspected'
     assert body.scenes[0].beats[2].target_delta[0].knowledge_mode == 'known'
-    assert body.scenes[0].beats[3].target_delta[0].confirms.key == 'evidence_fact'
+    assert body.scenes[0].beats[3].target_delta[0].confirms.key == 'secret'
     binding, errors = derive_semantic_binding(
         {ob: [(0, i) for i, beat in enumerate(beats) if ob in beat['real']]
          for ob in obligations}, body, checkpoint,
@@ -699,7 +699,7 @@ def test_preserve_model_validation_error_feeds_revision_not_crash():
     把 ValidationError 归入 errors（同节点修订轮带精确问题重问）。"""
     from novel.stages.stage4.grounding import assemble_preserve
     from contracts.schema.source import (
-        BlueprintsArtifactV16, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV17, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_expression_inputs import sample_blueprint_expression
@@ -721,12 +721,12 @@ def test_preserve_model_validation_error_feeds_revision_not_crash():
                 canonical='苏姑娘',
                 surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                         source_refs=('e01_01',)),))}),
-            blueprint=BlueprintsArtifactV16(
+            blueprint=BlueprintsArtifactV17(
                 source_expression=sample_blueprint_expression(),
                 chapters=(ChapterBlueprint(
                     chapter=1,
                     beats=(v13_beat('b01_01', 'e', effects=(
-                        v13_effect({'kind': 'world'}, 'fate', '多舛'),)),),
+                        v13_effect({'kind': 'world'}, 'social_standing', '多舛'),)),),
                     scenes=({'scene_id': 'sc01', 'beat_ids': ('b01_01',)},),
                     causal_edges=()),),
                 evidence={'e01_01': '苏姑娘初到陆家。'}),

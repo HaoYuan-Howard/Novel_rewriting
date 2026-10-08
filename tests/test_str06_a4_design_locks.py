@@ -27,7 +27,7 @@ from contracts.schema.grounding import (
     ReconstructionBrief,
 )
 from contracts.schema.source import (
-    BlueprintsArtifactV16, CharactersCore, SourceExpression,
+    BlueprintsArtifactV17, CharactersCore, SourceExpression,
 )
 from novel.stages.stage4.design import assemble_body_design, inspect_body_design
 from novel.stages.stage4.grounding import (
@@ -69,8 +69,8 @@ def _expression() -> SourceExpression:
         'readings': sample_readings().model_dump(mode='json')})
 
 
-def _blueprint() -> BlueprintsArtifactV16:
-    return BlueprintsArtifactV16.model_validate({
+def _blueprint() -> BlueprintsArtifactV17:
+    return BlueprintsArtifactV17.model_validate({
         'source_expression': _expression().model_dump(mode='json'),
         'world_constraints': [],
         'chapters': [
@@ -81,11 +81,11 @@ def _blueprint() -> BlueprintsArtifactV16:
                           effects=(
                               # CS-S 1b：effect 命题锚删——p_return 的登记走
                               # b01_01 的 cognition（时态锁仍由 modality 派生）。
-                              v13_effect({'kind': 'world'}, 'return_time', '约半月',
+                              v13_effect({'kind': 'world'}, 'agreement', '约半月',
                                          modality='expected',
                                          basis=BASIS),
                               v13_effect({'kind': 'character', 'char_id': 'fu_jun'},
-                                         'whereabouts_during_leave', None, op='unknown',
+                                         'residence', None, op='unknown',
                                          basis=BASIS),),
                           cognition=({'proposition': {'ref': 'p_x',
                                                       'statement': '夫君像是看穿了什么'},
@@ -216,7 +216,7 @@ def test_brief_derives_propositions_locks_and_fact_locks():
     tense = next(f for f in brief.fact_locks if f.kind == 'expected')
     # CS-S 1b：effect 命题锚删——事实锁陈述回落到地址＝值的确定性渲染
     # （命题文本面在 kp 登记里，走 cognition）。
-    assert tense.modality == 'expected' and tense.statement == "world.return_time = '约半月'"
+    assert tense.modality == 'expected' and tense.statement == "world.agreement = '约半月'"
     unanswered = next(f for f in brief.fact_locks if f.kind == 'unanswered')
     assert unanswered.statement == '婆母到底瞒着什么？'
 
@@ -275,7 +275,7 @@ def _design_wire(brief: ReconstructionBrief) -> dict:
                  {'event': '埋下可证实的凭据', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'world', 'subjects': [], 'holder': None,
-                       'key': 'evidence_fact', 'op': 'set', 'value': '床底藏物属实',
+                       'key': 'secret', 'op': 'set', 'value': '床底藏物属实',
                        'scope': 'book', 'modality': 'actual'}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '芸娘起疑', 'participants': ['yun_niang'],
@@ -297,18 +297,18 @@ def _design_wire(brief: ReconstructionBrief) -> dict:
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
                        'key': kp_reader, 'op': 'set', 'value': '床底藏物属实',
-                       'scope': 'book', 'knowledge_mode': 'known', 'confirms': {'domain': 'world', 'key': 'evidence_fact'}}],
+                       'scope': 'book', 'knowledge_mode': 'known', 'confirms': {'domain': 'world', 'key': 'secret'}}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '约定归期', 'participants': ['fu_jun'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'world', 'subjects': [], 'holder': None,
-                       'key': 'return_time', 'op': 'set', 'value': '约半月后归家',
+                       'key': 'agreement', 'op': 'set', 'value': '约半月后归家',
                        'scope': 'book', 'modality': 'expected'}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '去向成谜', 'participants': [],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'world', 'subjects': [], 'holder': None,
-                       'key': 'departure_whereabouts', 'op': 'unknown', 'value': None,
+                       'key': 'residence', 'op': 'unknown', 'value': None,
                        'scope': 'book'}],
                   'expression_refs': [], 'surface_introductions': []},
              ]}],
@@ -511,7 +511,7 @@ def _design_wire_v8(brief: ReconstructionBrief) -> dict:
             'brief': '从异样写起，在证实处收住。',
             'beats': [
                 {'ev': '埋下可证实的凭据', 'who': ['yun_niang'],
-                 'state': [{'at': 'world', 'key': 'evidence_fact', 'val': '床底藏物属实'}]},
+                 'state': [{'at': 'world', 'key': 'secret', 'val': '床底藏物属实'}]},
                 {'ev': '芸娘起疑', 'who': ['yun_niang'], 'real': ['ob01'],
                  'know': [{'ref': _know_ref(obligations, 'ob01', 'yun_niang', 'suspected')}]},
                 {'ev': '芸娘证实', 'who': ['yun_niang'], 'real': ['ob01'],
@@ -519,15 +519,15 @@ def _design_wire_v8(brief: ReconstructionBrief) -> dict:
                 {'ev': '错解的玩笑', 'who': ['yun_niang', 'fu_jun'], 'ex': ['ex_02']},
                 {'ev': '读者获知实证', 'who': ['yun_niang'], 'real': ['ob06'],
                  'know': [{'ref': _know_ref(obligations, 'ob06', 'reader', 'known'),
-                           'confirms': {'domain': 'world', 'key': 'evidence_fact'}}]},
+                           'confirms': {'domain': 'world', 'key': 'secret'}}]},
                 {'ev': '约定归期', 'who': ['fu_jun'], 'real': ['ob02'],
-                 'state': [{'at': 'world', 'key': 'return_time', 'val': '约半月后归家',
+                 'state': [{'at': 'world', 'key': 'agreement', 'val': '约半月后归家',
                             'modality': 'expected', 'lock': _kf(brief, 'expected')}]},
                 {'ev': '去向成谜', 'who': [], 'real': ['ob03'],
                  # CS-H H3（RC-63 主体包含）：该锁的主体是 fu_jun（源锚点
-                 # char:fu_jun.whereabouts_during_leave）——承载状态须是 fu_jun
+                 # char:fu_jun.residence）——承载状态须是 fu_jun
                  # 自己的状态，不再允许标到 world／他人状态上。
-                 'state': [{'at': 'fu_jun', 'key': 'departure_whereabouts', 'op': 'unknown',
+                 'state': [{'at': 'fu_jun', 'key': 'residence', 'op': 'unknown',
                             'lock': _kf(brief, 'unknown_value')}]},
             ]}],
         'chapters': [{'purpose': '起疑到证实', 'scenes': 1}],
@@ -561,7 +561,7 @@ def test_fact_lock_green_v8_marks_existing_states_and_binding_keeps_references_o
     by_lock = {f.kf_id: f for f in binding.fact_bindings}
     assert set(by_lock) == {_kf(brief, 'expected'), _kf(brief, 'unknown_value')}
     expected = by_lock[_kf(brief, 'expected')]
-    assert expected.beat_ref == 'sc01#b06' and expected.address.key == 'return_time'
+    assert expected.beat_ref == 'sc01#b06' and expected.address.key == 'agreement'
     assert expected.address.domain.value == 'world'
     # 映射不复制目标 value：字段只有锁句柄、承载拍、状态地址。
     assert set(expected.model_dump()) == {'kf_id', 'beat_ref', 'address'}
@@ -569,7 +569,7 @@ def test_fact_lock_green_v8_marks_existing_states_and_binding_keeps_references_o
     # 承载状态本身仍是 BodyDesign 的唯一目标事实（含 modality）。
     carrier = body.scenes[0].beats[5].target_delta[0]
     assert (carrier.key, carrier.value, carrier.modality) == (
-        'return_time', '约半月后归家', 'expected')
+        'agreement', '约半月后归家', 'expected')
 
 
 def test_c2_expected_lock_carried_by_actual_state_rejected_with_wire_path():
@@ -592,7 +592,7 @@ def test_planned_state_may_become_actual_later_without_the_old_lock_forbidding_i
     wire = _design_wire_v8(brief)
     wire['scenes'][0]['beats'].append(
         {'ev': '夫君如期归来', 'who': ['fu_jun'],
-         'state': [{'at': 'world', 'key': 'return_time', 'val': '已归家'}]})
+         'state': [{'at': 'world', 'key': 'agreement', 'val': '已归家'}]})
     body, errors = _inspect_v8(wire, brief)
     assert body is not None and not errors, errors
     assert body.scenes[0].beats[7].target_delta[0].modality == 'actual'
@@ -637,7 +637,7 @@ def test_fact_lock_dangling_duplicate_and_unrealized_are_rejected_precisely():
     # 一个锁只由一条已选状态承载：不为同一事实再写一条状态。
     wire = _design_wire_v8(brief)
     wire['scenes'][0]['beats'][5]['state'].append(
-        {'at': 'world', 'key': 'return_time_again', 'val': '约半月后归家',
+        {'at': 'world', 'key': 'agreement', 'val': '约半月后归家',
          'modality': 'expected', 'lock': _kf(brief, 'expected')})
     _, errors = _inspect_v8(wire, brief)
     duplicate = next(e for e in errors if getattr(e, 'code', '') == 'fact_lock_duplicate')
@@ -731,10 +731,10 @@ def test_fact_lock_does_not_ban_same_address_updates_in_other_beats_or_unlocked_
     wire = _design_wire_v8(brief)
     wire['scenes'][0]['beats'].append({
         'ev': '夫君归来并说明去向', 'who': ['fu_jun'], 'state': [
-            {'at': 'world', 'key': 'return_time', 'val': '已归家'},
-            {'at': 'world', 'key': 'departure_whereabouts', 'val': '南边'},
-            {'at': 'world', 'key': 'unlocked_progress', 'val': '尝试'},
-            {'at': 'world', 'key': 'unlocked_progress', 'val': '完成'}]})
+            {'at': 'world', 'key': 'agreement', 'val': '已归家'},
+            {'at': 'world', 'key': 'residence', 'val': '南边'},
+            {'at': 'world', 'key': 'intent', 'val': '尝试'},
+            {'at': 'world', 'key': 'intent', 'val': '完成'}]})
     body, errors = _inspect_v8(wire, brief)
     assert body is not None and not errors, errors
     binding, errors = _derive_binding_v8(wire, body)

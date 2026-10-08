@@ -252,8 +252,11 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 与 effect 的 disclosure／proposition／scope 删；旧 rc15 根只读拒收。
     # rc19（CS-S Phase 2）：book v6 增 facts（书级命题词表＋known_at_start）；
     # chapters v6 增 know.fact 引用——观察换身份，旧 rc18 根只读拒收。
-    'stage2/observations/book.json': 'str06-rc19',
-    'stage2/observations/ch{nn}.json': 'str06-rc19',
+    # rc20（CS-S Phase 3）：book v7／chapters v7——initial_state 键入 CHANGE_KEYS
+    # 闭集；chapters 增拍级 access（获知通道）、know.who 禁 reader（读者知情由
+    # compile 派生）。旧 rc19 根只读拒收。
+    'stage2/observations/book.json': 'str06-rc20',
+    'stage2/observations/ch{nn}.json': 'str06-rc20',
     # rc18（CS-S 1c）：names canonical 升 v4——构词 surface_forms 由 compiler
     # 派生、resolutions 来自变体窄调用（增 not_name）。Phase 2 形状未变不升。
     'stage2/observations/names.json': 'str06-rc18',
@@ -267,17 +270,24 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc19（CS-S Phase 2，S2-9 落地）：协议升 stage2-associate-v4——条目级窄
     # resolver（输入＝代码给出的未决候选＋最小文本，逐候选 verdict；无候选＝
     # 零调用）；跨章因果独立窄调用 wire stage2-cross-cause-v1（D-2 A）。
-    'stage2/observations/associate.json': 'str06-rc19',
+    # rc20（CS-S Phase 3）：协议升 stage2-associate-v5——same_state_dimension
+    # 消失（change 键闭集＝键即 canonical，维度句柄与整类合并面删除）。
+    'stage2/observations/associate.json': 'str06-rc20',
     # v13（2026-09-26 质量改进批次二）：拍模型三类转移＋场景分段；v12 存量拒读。
     # Phase 2：cognition 命题引用可指向 f{nn}（词表编号）——值域扩展非形状变化，
     # 不升版（Blueprints 保持 rc18）。
-    'stage2/blueprints/chapter_blueprints.json': 'str06-rc18',
+    # rc20（CS-S Phase 3）：Blueprints 升 v17——Beat 增 access、效果键入
+    # CHANGE_KEYS 闭集、cognition 的 reader 条目＝compile 派生读者知情。
+    'stage2/blueprints/chapter_blueprints.json': 'str06-rc20',
     # v13 同批：fold 读数结构化（每章空转移拍比例＋书末未揭示 concealed）。
     # rc18：fold 删 concealed_unrevealed（concealed 效应已删）。
     # rc19：fold 增知情时间线读数（facts known_at_start 起步的逐命题知情读数，
     # T-5：结构化只读读数，不进下游 API）。
-    'stage2/acceptance/fold.json': 'str06-rc19',
-    'stage2/characters/characters.json': 'str06-rc18',
+    # rc20：fold 时间线含派生 reader 条目（Phase 3 读者知情派生进 fold 读数）。
+    'stage2/acceptance/fold.json': 'str06-rc20',
+    # rc20（CS-S Phase 3）：Characters 升 v6——initial_state 键入 CHANGE_KEYS
+    # 闭集（schema 层兜底直接构造的表外键）。
+    'stage2/characters/characters.json': 'str06-rc20',
     'runtime/preserve_checkpoint.json': 'str06-rc12',
     # rc13（2026-10-03 CS-3 余项，D5 统一＋world 规则 id）：读者揭示统一走
     # knowledge(holder=reader)（TargetDelta 删 reader 域与 confirms；Brief 知

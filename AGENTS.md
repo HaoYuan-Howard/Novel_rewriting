@@ -141,7 +141,9 @@ wire 的 real 标注派生，`str06.stage4.bind` 节点随 stage4-bind-v1 协议
 SemanticBinding 由 body_design 双产物发布；Stage4 目标故事与确定性编译、
 Stage5 按章正文与 Hook、Stage7 命名与交付），节点表唯一登记在
 `contracts/invariants.py::NODES`。观察与
-关联协议见 `contracts/schema/observation.py`，目标架构见 `docs/schema/str06.md`，
+关联协议见 `contracts/schema/observation.py`（CS-S Phase 3 起 associate v5——
+`same_state_dimension` 随 change 键闭集消失、reader 知情由 compile 派生），
+目标架构见 `docs/schema/str06.md`，
 批次见 `docs/REQUIREMENTS.md`。
 Stage6 整层与旧 Stage2/4/5/7 链已退役（退役台账与存量解码面已随 STR-06
 关闭批删除，旧面不得回来由 `tests/test_retired_surface_scan.py` 守卫），

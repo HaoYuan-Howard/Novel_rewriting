@@ -145,7 +145,7 @@ def _checkpoint_with(statement: str):
 def test_self_gate_flags_ambiguous_name_bearing_surface():
     """多义带名面（同一登记称谓属于两个人物）永不投影——下游必成泄漏，必须在 Preserve
     自己的接受循环里被定位；可投影的唯一归属带名面仍合法（绿对照）。"""
-    from contracts.schema.source import CharactersArtifactV5
+    from contracts.schema.source import CharactersArtifactV6
     from novel.stages.stage4 import preserve_name_issues
     from tests.test_str06_hook import _characters
     data = _characters().model_dump(mode='json')
@@ -155,7 +155,7 @@ def test_self_gate_flags_ambiguous_name_bearing_surface():
     data['name_structure']['people']['lu_er'] = {
         'family_id': 'fam_lu', 'given': '二', 'aliases': [],
         'surface_forms': {'陆二': '{family}{given}', '陆大哥': '{family}大哥'}}
-    chars = CharactersArtifactV5.model_validate(data)
+    chars = CharactersArtifactV6.model_validate(data)
     ambiguous = preserve_name_issues(_checkpoint_with('陆大哥登门兴师问罪'), chars)
     assert [(i.context['literal'], i.context['field']) for i in ambiguous] == \
         [('陆', 'statement')], '多义带名面不可绑定、不可投影，须被逐条定位'

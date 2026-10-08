@@ -202,7 +202,7 @@ def test_binding_fact_bindings_reference_states_and_never_copy_values():
     from contracts.schema.grounding import FactLockBinding
     from contracts.schema.state import EffectDomain, StateAddress
     kf = 'kf_' + '0' * 16
-    address = StateAddress(domain=EffectDomain.WORLD, key='return_time')
+    address = StateAddress(domain=EffectDomain.WORLD, key='agreement')
     bound = FactLockBinding(kf_id=kf, beat_ref='sc01#b06', address=address)
     assert set(bound.model_dump()) == {'kf_id', 'beat_ref', 'address'}, '不复制目标 value'
     binding = SemanticBinding(**_binding(fact_bindings=(bound,)))

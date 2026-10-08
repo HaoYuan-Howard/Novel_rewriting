@@ -49,7 +49,7 @@ def _case():
                       'reason': '上下文延续同一人物，原文该处异写。'}]}
     wires['ch02']['beats'].append(_beat('苏芸孃决定次日出门', ('e02_03',),
         cognition=[{'proposition': {'ref': 'p_out', 'statement': '苏芸孃决定次日出门'},
-                    'holder': 'reader', 'mode': 'learns',
+                    'holder': 'yun_niang', 'mode': 'learns',
                     'basis': [{'segment': 'e02_03', 'quote': '苏芸孃决定次日出门'}]}]))
     # v4 候选面随夹具变化：ch02 追加拍自开新场（seam 右端变 ch02.sc2）且登记
     # p_out（悬空引用候选多一条）——默认答案须恰覆盖新候选集。

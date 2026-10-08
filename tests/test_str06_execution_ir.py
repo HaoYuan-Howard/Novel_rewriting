@@ -18,7 +18,7 @@ from contracts.schema.execution import EffectDomain
 from contracts.schema.grounding import BindingEntry, SourceLineage
 from contracts.schema.policy import PreserveKind
 from contracts.schema.source import (
-    ChapterBlueprint, CharactersArtifactV5,
+    ChapterBlueprint, CharactersArtifactV6,
 )
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.fold import FoldedState, fold_accepted_prefix

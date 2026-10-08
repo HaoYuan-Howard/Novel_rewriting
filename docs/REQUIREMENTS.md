@@ -65,11 +65,8 @@ Golden_Set_v3.0 三本 yaml 的成书对比评估金标复认（2026-10-05 用�
 完成后由用户手动经 CLI 逐节点跑书验收，自行判断首答通过率、token 消耗与产物质量。
 工程验证全程零付费（fake transport＋免费测试）；任何付费跑书由用户自跑，不走本路线预算。
 
-| 批 | 内容 | 状态 |
-|---|---|---|
-| Phase 3 | closed change keys（从 ≥3 本书真实键聚类定稿）＋`state→change`、`ev→event`；拍级 `access`（获知通道枚举按真实分布冻结）；reader 知情由 compile 派生、`know.who` 禁 reader；`same_state_dimension` 消失（associate 协议升版）；免费 oracle＝rc15 冻结根 25 条模型自写 reader 条目对比派生结果 | 待做 |
-
-批完成即撤行（验证分母与命令写提交说明）。Phase 4（devices A/B）未立项，不随本路线执行。
+CS-S 全部批次（1a–1c、Phase 2、Phase 3）已落地销账；验证分母与命令见各批提交说明。
+Phase 4（devices A/B）未立项，不随本路线执行。
 
 ## 待删除的兼容层与删除条件
 

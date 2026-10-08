@@ -653,13 +653,22 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 # 窄调用 wire `stage2-cross-cause-v1`，D-2 A）、认知持有者闭集删 public（D-5）、
 # fold 增知情时间线读数。观察（book／ch／associate）与 fold 换身份；names／
 # Characters／Blueprint 形状未变不升（rc18 沿用）。旧 rc18 根按契约表漂移只读拒收。
-STR06_RC_VERSION: Final = 'str06-rc19'
+# rc20（2026-10-08 CS-S Phase 3）：观察面收敛收官——change 键入 `CHANGE_KEYS`
+# 闭集（27 个通用维度，从 rc15 冻结根三本书 184 个真实键聚类定稿；键即 canonical，
+# same_state_dimension 随 associate v5 消失）；chapters wire v10（`ev`→`event`、
+# `state`→`change`＋拍级 `access` 获知通道：witnessed 默认／narrated 叙述直陈例外）
+# 与 canonical v7（ObsBeat.access）；book canonical v7（初态键闭集）；**reader
+# 知情由 compile 按拍级 access 派生**（wire 禁 reader，蓝图 reader 条目全部是
+# 派生物）；Blueprints v17（Beat.access＋派生 reader cognition）、Characters v6
+# （初态键闭集）。旧 rc19 根按契约表漂移只读拒收。
+STR06_RC_VERSION: Final = 'str06-rc20'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
                           'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
                           'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15',
-                          'str06-rc16', 'str06-rc17', 'str06-rc18', 'str06-rc19')
+                          'str06-rc16', 'str06-rc17', 'str06-rc18', 'str06-rc19',
+                          'str06-rc20')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒

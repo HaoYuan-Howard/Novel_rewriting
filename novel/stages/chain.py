@@ -603,7 +603,7 @@ def run_associate(ctx: ChainContext) -> dict:
             # CS-H H4（RC-57 覆盖）：答案条目定位——机械验收与干跑未决按句柄
             # 反查条目路径；需要新增条目（missing_answer）或歧义时返回 None，
             # 退整份返修。
-            return associate_patch_locate(w, errs, space=space)
+            return associate_patch_locate(w, errs)
 
         wire, associate_ref = ctx.ask(
             'associate', prompt, _validate, patch=_locate)
@@ -676,8 +676,6 @@ def run_associate(ctx: ChainContext) -> dict:
     return {'identity_candidates': candidates.answer_count(),
             'same_proposition': sum(1 for p in observation.same_proposition
                                     if p.verdict == 'same'),
-            'same_state_dimension': sum(1 for p in observation.same_state_dimension
-                                        if p.verdict == 'same'),
             'loop_pairing': sum(1 for p in observation.loop_pairing
                                 if p.verdict == 'pair'),
             'cross_chapter_cause': sum(1 for c in observation.cross_chapter_cause

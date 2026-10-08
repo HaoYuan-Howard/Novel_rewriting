@@ -235,13 +235,13 @@ def _unset_chain_wire(*, final_op: str) -> dict:
     wire = _body_wire()
     wire['scenes'][0]['beats'][0]['target_delta'] = [
         {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-         'key': 'whereabouts', 'op': 'set', 'modality': 'actual', 'value': '在府中', 'scope': 'book'}]
+         'key': 'residence', 'op': 'set', 'modality': 'actual', 'value': '在府中', 'scope': 'book'}]
     wire['scenes'][1]['beats'][0]['target_delta'] = [
         {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-         'key': 'whereabouts', 'op': final_op, 'value': None, 'scope': 'book'}]
+         'key': 'residence', 'op': final_op, 'value': None, 'scope': 'book'}]
     wire['scenes'].append({
         'state_reads': [{'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-                         'key': 'whereabouts'}],
+                         'key': 'residence'}],
         'driver': {'focal_actor': 'yun_niang', 'immediate_want': '确认夫君去向',
                    'opposition': '无人可问', 'turn': '决意亲自去寻'},
         'realization_brief': '重心在空堂回响；压缩寻问无果，在决意亲自去寻处收束。',
@@ -270,11 +270,11 @@ def test_unset_public_state_is_carried_as_explicit_removal():
                                      projection=chars.name_projection(),
                                      structure=chars.name_structure)
     entry = [e for e in book_ir.chapter(3).scenes[0].verification_ir.entry_state
-             if e.key == 'whereabouts']
+             if e.key == 'residence']
     assert len(entry) == 1, '解除项必须显式到达消费面，不得静默消失'
     assert entry[0].status == 'unset' and entry[0].value is None, '不得残留 stale 旧值'
     folded = fold_accepted_prefix(plan.scenes[:2], initial=plan.initial_establishments)
-    assert folded.value_of(EffectDomain.CHARACTER, 'whereabouts',
+    assert folded.value_of(EffectDomain.CHARACTER, 'residence',
                            subjects=('fu_jun',)) is None
     # 解除是真实输入：同一设计若不在 s02 收尾，s03 的消费身份随之变化（窄失效）。
     plain_wire = _unset_chain_wire(final_op='unset')
