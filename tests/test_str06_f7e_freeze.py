@@ -252,8 +252,8 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     # 升 v4——条目级窄 resolver；rc20（CS-S Phase 3）升 v5——same_state_dimension
     # 消失（change 键闭集＝键即 canonical）。
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v5',
-    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v3',
-    'STAGE4_PRESERVE_POLICY_VERSION': 6,
+    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v4',
+    'STAGE4_PRESERVE_POLICY_VERSION': 7,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
     'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v1',
     # CS-3（2026-10-03）：bind 协议随节点退役——wire 面由 design v6 的 real

@@ -129,7 +129,7 @@ def _checkpoint(*obligation_ids: str) -> PreserveCheckpoint:
 def test_protocols_are_independent_literals():
     """每个付费语义节点一个独立协议字面量：演进互不牵连（B3 前半；
     CS-3 bind 退役——承载位并入 design wire v6 的 real 标注）。"""
-    assert STAGE4_PRESERVE_PROTOCOL == 'stage4-preserve-v3'
+    assert STAGE4_PRESERVE_PROTOCOL == 'stage4-preserve-v4'
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
     assert STAGE4_HOOK_DESIGN_PROTOCOL == 'stage4-hook-design-v1'
     assert len({STAGE4_PRESERVE_PROTOCOL, STAGE4_DESIGN_PROTOCOL,

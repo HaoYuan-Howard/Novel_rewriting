@@ -104,12 +104,12 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 
 ### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
 
-现役版式为 `str06-rc21`（2026-10-09 创作材料批：Preserve v3/policy 6、Design wire v9、可选细节与系列前情；Stage2 仍为 rc20；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
+现役版式为 `str06-rc21`（2026-10-09 创作材料批：Preserve v4/policy 7、Design wire v9、可选细节与系列前情；Stage2 仍为 rc20；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
 `7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个（CS-3 bind
 退役后 13），运行配置未变。
 book 观察 `stage2-book-v3`、chapters 独立 `stage2-chapters-v2`（names 保持
 `stage2-observation-v1`、associate 保持 v2，输入投影变经 RC 表换身份）；
-Preserve 当前 `stage4-preserve-v3`＋policy 6、Design 内部展开 `stage4-design-v5`；
+Preserve 当前 `stage4-preserve-v4`＋policy 7、Design 内部展开 `stage4-design-v5`；
 hook-design 字面不变。当前正文 renderer v11／写手协议 v9（可选细节与前情送达；历史 R10b 升 v7）。
 
 **章观察瘦 wire（CS-2 第一步，2026-10-03）**：`str06.stage2.chapters` 的
@@ -232,7 +232,7 @@ series.summaries 显式给 member/covers，Brief 派生 summarizes_cores；Bindi
   时点（members≥2 闭集互斥、mechanism 属源表达）——不为满足阶段规则合并。
 - **证据冲突回派（a3）**：Preserve 报 `evidence_conflicts` 时 checkpoint 不
   发布，按锚点句柄回派 Stage2 语义 owner（拍句柄→逐章 chNN／书级→book；
-  不可解析即停）。三分支：修订（发布新 SourceTruth、按材料变化恢复）／保留
+  不可解析即停）。v4/policy 7 的冲突地址扩展为现有原子或真实拍（允许三类转移全空）；句段仍须属于该拍 source_refs。拍级地址不进入义务/details 锚点闭集。chapters 按所报拍局部修订，其他拍与章保留；不增加字段、节点或付费轮次。三分支：修订（发布新 SourceTruth、按材料变化恢复）／保留
   解释（处理结果作为同一 Preserve 任务 revise_self 的恢复输入，仍分歧即停止
   不二次回派）／未决（保持阻塞，不自动标源文未知）。同指纹重现无进展停。
 - **锁定项与 Design v5（a4）**：Brief 由 anchors 与 canonical loops 确定性

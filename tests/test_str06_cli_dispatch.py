@@ -88,6 +88,35 @@ def test_readonly_review_uses_explicit_request_configuration_not_local_defaults(
         review.main([*argv, '--reasoning-effort', 'high'])
 
 
+def test_chapter_patch_preview_accepts_existing_book_fact_reference(tmp_path):
+    """人工补丁预检与生产共用完整词表闭集，不能把合法 fact 误判为未知。"""
+    from types import SimpleNamespace
+    from contracts.schema.observation import Fact
+    from novel.config import Config
+    from novel.stages.stage2.slim import slim_chapter_wire
+    from tests.test_str06_a3_conflicts import _repo_with_observations
+    from tests.str06_facilities import synthetic_ref
+    from tests.test_str06_body import _chapters
+    from tools import str06_review as review
+
+    repo, wires = _repo_with_observations(tmp_path)
+    book = repo.read_model('stage2/observations/book.json')
+    fact = Fact(fact_id='f01', statement='苏芸娘嫁入陆家',
+                basis=({'segment': 'e01_01', 'quote': '苏芸娘嫁入陆家'},))
+    repo.write('stage2/observations/book.json', book.model_copy(update={'facts': (fact,)}),
+               owners=('book',), refs=(synthetic_ref('book', '词表基线'),))
+    profile = review.freeze_execution_profile(cfg=Config(), reasoning_effort='low',
+                                              base=tmp_path, sid=repo.root.name)
+    _, validate = review.request_preview(repo, 'ch01',
+        SimpleNamespace(chapters=_chapters(), hook_copy=''), profile)
+    wire = slim_chapter_wire(wires['ch01'])
+    wire['beats'][0]['know'] = [{'who': 'yun_niang', 'how': 'learns', 'fact': 'f01',
+                               'evidence_refs': ['e01_01']}]
+    assert validate(wire) == []
+    wire['beats'][0]['know'][0]['fact'] = 'f99'
+    assert validate(wire)
+
+
 def test_cli_profile_conflict_and_frozen_parent_mismatch_stop_before_execute(monkeypatch, tmp_path):
     from types import SimpleNamespace
     from novel.cli import main as cli

@@ -285,7 +285,7 @@ def _preserve_bad_wire() -> list:
              'must_preserve': True, 'satisfaction': '明确呈现',
              'anchors': ['b01_01.e1']}
     _checkpoint, errors = assemble_preserve(
-        {'protocol_version': 'stage4-preserve-v3', 'obligations': [entry]},
+        {'protocol_version': 'stage4-preserve-v4', 'obligations': [entry]},
         policy_id='preserve-default', policy_version=1,
         characters=CharactersCore(characters={'ch1': CharacterEntry(
             canonical='苏姑娘',
@@ -826,7 +826,7 @@ def _preserve_unknown_anchor() -> list:
     )
     from tests.str06_facilities import v13_beat, v13_effect
     _checkpoint, errors = assemble_preserve(
-        {'protocol_version': 'stage4-preserve-v3', 'obligations': [
+        {'protocol_version': 'stage4-preserve-v4', 'obligations': [
             {'kind': 'event_core', 'statement': 's', 'anchors': ['b09_99.e1'],
              'must_preserve': True, 'satisfaction': '明确呈现', 'requires': []}]},
         policy_id='preserve-default', policy_version=1,

@@ -44,18 +44,42 @@ from typing import Any, Iterable, Mapping
 from pydantic import ValidationError
 
 from contracts.schema.observation import (
-    STAGE2_CHAPTERS_WIRE_PROTOCOL, ChapterObservation, is_fact_ref,
+    STAGE2_CHAPTERS_WIRE_PROTOCOL, ChapterObservation, ChapterObservationWire, is_fact_ref,
 )
 from contracts.schema.source import CHANGE_KEYS, REGISTERED_STATE_KEYS
 from novel.stages.common import CHAPTER_PROMPT, PRE_CHAPTER_RULE
 from novel.stages.stage2.resolver import EvidenceResolver, render_evidence_block
 from novel.stages.stage2.slim import (
-    chapter_segment_sequence, expand_chapter_wire,
+    chapter_segment_sequence, expand_chapter_wire, slim_chapter_wire,
 )
 from novel.core.validation import ValidationIssue
 
 #: 变化键闭集的 prompt 渲染（CHANGE_KEYS 同一张表；Phase 3）。
 _CHANGE_KEYS_LINE = '／'.join(CHANGE_KEYS)
+
+
+def chapter_revision_scope_issues(previous: ChapterObservation, candidate: ChapterObservation,
+                                  *, beat_indexes: frozenset[int]) -> list[str]:
+    """源证据回派只改已定位拍；归一派生命题编号后比较，不判断谁应知情。
+
+    拍数和 start 固定，防止改边界把其他拍证据挪进修复范围；其他拍包括其知情
+    命题含义必须不变。局部编号因新增命题顺延属于 compiler 派生，不误报越界。
+    """
+    before = ChapterObservationWire.model_validate(
+        slim_chapter_wire(previous.model_dump(mode='json')))
+    after = ChapterObservationWire.model_validate(
+        slim_chapter_wire(candidate.model_dump(mode='json')))
+    if not beat_indexes or any(i < 0 or i >= len(before.beats) for i in beat_indexes):
+        raise ValueError('章观察回派没有有效的拍范围')
+    if len(before.beats) != len(after.beats):
+        return ['源证据窄修不得增删或重排拍；需要扩大范围时保留问题并停止']
+    errors = []
+    for i, (old, new) in enumerate(zip(before.beats, after.beats)):
+        if previous.beats[i].source_refs != candidate.beats[i].source_refs:
+            errors.append(f'源证据窄修不得移动第{i + 1}拍的 start 或改变证据覆盖范围')
+        elif i not in beat_indexes and old != new:
+            errors.append(f'源证据窄修越界：第{i + 1}拍未在回派范围，必须保持上一版内容')
+    return errors
 
 
 def chapter_loop_issues(beats: list[Any], *, chapter: int | None = None) -> list[ValidationIssue]:

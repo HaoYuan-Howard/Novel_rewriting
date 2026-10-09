@@ -279,6 +279,51 @@ def test_conflict_shape_is_validated_but_checkpoint_still_publishes():
     assert any('缺 note' in e for e in errors), errors
 
 
+def test_empty_beat_accepts_missing_conflict_but_not_obligation_anchor():
+    """事件及证据可见、三类转移全空时可报漏抽；不把拍升级成义务原子。"""
+    from copy import deepcopy
+    bp = _blueprint().model_dump(mode='json')
+    bp['chapters'][0]['beats'].append(v13_beat(
+        'b01_03', '云娘看见夫君从床底现身', source_refs=('e01_03',)))
+    bp['chapters'][0]['scenes'][0]['beat_ids'].append('b01_03')
+    bp['evidence']['e01_03'] = '我就见夫君从床底爬出来。'
+    blueprint = BlueprintsArtifactV17.model_validate(bp)
+    before = blueprint.model_dump(mode='json')
+
+    def assemble(wire):
+        return assemble_preserve(wire, policy_id='p', policy_version=7,
+                                 characters=_characters(), blueprint=blueprint,
+                                 provider='x', model='y', request_sha256='r' * 64)
+
+    assert '拍 b01_03' in project_preserve_view(_characters(), blueprint)
+    # 普通空拍无报告也合法；validator 不推断遗漏，不生成 cognition。
+    assert assemble(_wire())[1] == []
+    wire = _wire(evidence_conflicts=[{
+        'anchor': 'b01_03', 'segment': 'e01_03', 'note': '缺少云娘目睹现身的知情'}])
+    assert assemble(wire)[1] == []
+    assert blueprint.model_dump(mode='json') == before
+    for anchor, segment, message in [
+            ('b01_03', 'e01_02', '不属于锚点'),
+            ('b01_03', 'e99_01', '未知句段'),
+            ('b01_99', 'e01_03', '未知锚点'),
+            ('b01_03.c1', 'e01_03', '未知锚点')]:
+        bad = deepcopy(wire)
+        bad['evidence_conflicts'][0].update(anchor=anchor, segment=segment)
+        assert any(message in e for e in assemble(bad)[1])
+    for target in ('obligation', 'detail'):
+        bad = deepcopy(wire)
+        if target == 'obligation':
+            bad['obligations'][0]['anchors'] = ['b01_03']
+        else:
+            bad['obligations'][0]['details'] = [{'anchor': 'b01_03', 'text': '看见现身'}]
+        assert assemble(bad)[1], target
+
+
+def test_preserve_v3_wire_is_not_implicitly_upgraded():
+    assert any('protocol_version' in e for e in _assemble(_wire(
+        protocol_version='stage4-preserve-v3'))[1])
+
+
 # ───────────────────────── a2 案例面（str06_semantic_cases 索引） ─────────────────────────
 
 def test_a2_batch_cases_are_consumed_with_mechanical_faces():

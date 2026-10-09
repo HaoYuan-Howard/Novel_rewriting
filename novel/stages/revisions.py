@@ -351,11 +351,12 @@ def _verify_current_product(repository, record) -> None:
     raise revision_error(record.owner, '修订后正式产物再次变化，拒绝用补丁自动覆盖')
 
 
-def activate_node_revisions(repository, node: str) -> None:
+def activate_node_revisions(repository, node: str, *, owners: tuple[str, ...] | None = None) -> None:
     directory = repository.root / 'runtime/revisions/active'
     for path in sorted(directory.glob('*.json')):
         record = owner_revision_record_of_payload(repository.read_external(path))
-        if record.node != node or record.status != 'staged':
+        if (record.node != node or record.status != 'staged'
+                or (owners is not None and record.owner not in owners)):
             continue
         if repository.file_sha256(repository.path(record.evidence_rel)) != record.candidate_sha256:
             raise revision_error(record.owner, '修订证据摘要不符，不能激活恢复级联')

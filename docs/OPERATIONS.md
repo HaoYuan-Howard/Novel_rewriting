@@ -270,6 +270,16 @@ STR-06 新链的 Stage4 免费聚合由结构性禁付节点 `str06.stage4.compi
 
 ## 旧回派归因更正与历史用量补证
 
+章观察人工窄修先用 `python -m tools.str06_review --base <输出根> --sid <sid>
+patch-preview --owner chNN --candidate <wire文件> --request-profile <原请求配置JSON>`
+检查差异与原请求身份。已有 `--wire-dir` 采用时，目录内对应的 chNN_patch_note.json
+须登记 base_response_identity 和非空 reason，旁边放 chNN_wire.json。
+`novel.cli run str06.stage2.chapters` 发现这些 patch note 后只执行对应章，其他章只读验封，
+不重放、不重新发布；无 note 的普通运行仍执行全章。缺 wire 或未选章缺少有效产物即拒绝。
+采用沿用请求身份/原响应/成本三方核对及 ContentRevision 发布，CLI 外层仍需 `--yes`，
+无需 `--allow-egress`；已有完整 wire 的 owner patch 不产生模型调用。生成提示改变后不能
+伪造旧请求身份采用补丁，须先按原请求配置预检并完成登记。
+
 `python -m novel.cli issue-correction <sid> --base <输出根> --owner preserve`
 只读重建当前正式材料并给出 evidence_sha256；只有已证明旧二分归因错误且全部当前
 问题可归因时才给出更正清单。以同一命令追加 `--apply --subject-sha256 <预览摘要>

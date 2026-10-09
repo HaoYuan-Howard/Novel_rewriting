@@ -386,7 +386,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
              'beats': [{'ev': '确认床底有人', 'who': ['yun', 'fu_jun'],
                         'real': ['ob02'], 'know': [{'ref': 'ob02.k01', 'confirms': {'domain': 'world', 'key': 'secret'}}]}]}],
         'chapters': [{'purpose': '夜半响动到床底确认', 'scenes': 2}]}
-    preserve = {'protocol_version': 'stage4-preserve-v3', 'obligations': [
+    preserve = {'protocol_version': 'stage4-preserve-v4', 'obligations': [
         {'kind': 'event_core',
          'statement': '夫君佯称离开实则藏身床底',
          'anchors': ['b01_01.e1'],

@@ -1144,7 +1144,7 @@ def test_stage4_reads_only_canonical(tmp_path, synonymous):
     brief, identities = project_brief(
         __import__('novel.stages.stage4.grounding', fromlist=['assemble_preserve'])
         .assemble_preserve(
-            {'protocol_version': 'stage4-preserve-v3', 'obligations': [
+            {'protocol_version': 'stage4-preserve-v4', 'obligations': [
                 {'kind': 'event_core',
                  'statement': '夫君藏身床底',
                  'anchors': ['b01_01.e1'],

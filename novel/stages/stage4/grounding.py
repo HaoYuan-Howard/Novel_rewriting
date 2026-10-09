@@ -394,7 +394,7 @@ def assemble_preserve(
     characters: CharactersCore, blueprint: BlueprintsArtifactV17,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
-    """Preserve wire（stage4-preserve-v3）→ checkpoint。
+    """Preserve wire（stage4-preserve-v4）→ checkpoint。
 
     确定性校验：协议版本、义务 anchors 在投影句柄闭集内（每条义务至少锚定
     一个原子）、requires 序号闭合无环、series 成员闭集互斥且 mechanism 属源
@@ -555,14 +555,15 @@ def assemble_preserve(
     for n, conflict in enumerate(wire.get('evidence_conflicts') or (), 1):
         _reject_unknown_keys(errors, conflict, _CONFLICT_KEYS, f'evidence_conflicts {n}')
         anchor = conflict.get('anchor')
-        if anchor not in index:
+        # v4：遗漏可指向真实存在的空拍；仅扩展冲突地址，不把 event 升为义务原子。
+        if anchor not in index and anchor not in beat_refs:
             errors.append(f'evidence_conflicts {n} 引用未知锚点：{anchor!r}')
             continue
         segment = conflict.get('segment')
         if segment not in all_segments:
             errors.append(f'evidence_conflicts {n} 引用未知句段：{segment!r}')
             continue
-        beat_id = anchor.split('.', 1)[0] if '.' in anchor else None
+        beat_id = anchor.split('.', 1)[0]
         refs = beat_refs.get(beat_id) if beat_id else None
         if refs is not None and segment not in refs:
             errors.append(f'evidence_conflicts {n} 的句段 {segment!r} 不属于锚点'

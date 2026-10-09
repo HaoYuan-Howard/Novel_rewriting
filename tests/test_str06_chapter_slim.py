@@ -68,6 +68,40 @@ def _slim_wire(**overrides):
     return {'protocol_version': PV_WIRE, 'beats': [beat]}
 
 
+def test_revision_scope_allows_derived_id_shift_and_rejects_boundary_changes():
+    """新增知情导致后续 k 编号顺延不算越界；改证据边界/删拍仍被拒。"""
+    from copy import deepcopy
+    from novel.stages.stage2.chapters import chapter_revision_scope_issues
+    wire = _slim_wire(know=[])
+    wire['beats'].append({'event': '芸娘获知报恩说法', 'start': 'e01_03', 'know': [{
+        'who': 'yun_niang', 'how': 'hears_claim', 'what': '夫君求娶是为报恩',
+        'evidence_refs': ['e01_03']}]})
+
+    def compile(w):
+        result, errors = compile_chapter_observation(w, chapter=1,
+            evidence_ids=EVIDENCE, character_slugs=SLUGS)
+        assert not errors, errors
+        return result
+
+    previous = compile(wire)
+    revised = deepcopy(wire)
+    revised['beats'][0]['know'] = _slim_wire()['beats'][0]['know']
+    after = compile(revised)
+    assert previous.beats[1].cognition[0].proposition.ref != after.beats[1].cognition[0].proposition.ref
+    assert chapter_revision_scope_issues(previous, after, beat_indexes=frozenset({0})) == []
+    # canonical 采用也不能靠保留 start、缩短 source_refs 绕过范围闸。
+    shrunk = after.model_copy(update={'beats': (
+        after.beats[0], after.beats[1].model_copy(update={'source_refs': ('e01_03',)}))})
+    assert any('证据覆盖范围' in e for e in chapter_revision_scope_issues(
+        previous, shrunk, beat_indexes=frozenset({0})))
+    revised['beats'][1]['start'] = 'e01_02'
+    assert any('start' in e for e in chapter_revision_scope_issues(
+        previous, compile(revised), beat_indexes=frozenset({1})))
+    revised['beats'].pop()
+    assert any('增删' in e for e in chapter_revision_scope_issues(
+        previous, compile(revised), beat_indexes=frozenset({0})))
+
+
 # ── 区间派生（v8）：start 纪律全部机械可判 ──────────────────────────────────
 
 def test_intervals_derived_from_starts_sequence_position():

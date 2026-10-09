@@ -72,7 +72,8 @@ def request_preview(repository, owner, source, profile):
         # ch04 收口实证），预检就此失去判别力。
         validate = lambda w: chapter_acceptance(w, chapter=n, evidence_ids=local,
                                                character_slugs=frozenset(book.characters),
-                                               anchors=first_appearance_anchors(core))[1]
+                                               anchors=first_appearance_anchors(core),
+                                               fact_ids=frozenset(f.fact_id for f in book.facts))[1]
         capture = _Capture(prompt, validate, SYS, True, 0.3)
     elif owner.startswith('body_ch'):
         packet = project_chapter_packet(repository.read_model('stage4/ir/writer_book_ir.json'), int(owner[7:]))

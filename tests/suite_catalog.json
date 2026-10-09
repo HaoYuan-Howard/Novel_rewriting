@@ -716,6 +716,7 @@
         "stage7"
       ],
       "cases": {
+        "test_chapter_patch_preview_accepts_existing_book_fact_reference": "stage",
         "test_build_argv_keeps_the_run_shape_for_str06_nodes": "unit_contract",
         "test_check_only_is_the_only_node_flag_of_the_new_chain": "unit_contract",
         "test_cmd_run_routes_str06_nodes_before_legacy_preconditions": "stage",
@@ -1130,6 +1131,9 @@
         "stage4"
       ],
       "cases": {
+        "test_chapter_owner_patch_does_not_republish_other_chapters": "stage",
+        "test_empty_beat_conflict_revises_only_reported_beat": "stage",
+        "test_empty_beat_missing_conflict_full_chain_heals": "stage",
         "test_preserve_malformed_canonical_answer_enters_bounded_revision": "stage",
         "test_preserve_cross_node_revision_uses_wire_not_checkpoint_template": "stage"
       }

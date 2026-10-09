@@ -697,8 +697,8 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 #: believes→believes；asserts 转公开声称标记）＋kf 事实锁（时态/值未知/
 #: 原文未回答）；requirement 带 series 盲标记与 mechanism。kp/kf 键规则与
 #: 必保锁兑现归 assemble_body_design（revise_self）。
-STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v3'
-STAGE4_PRESERVE_POLICY_VERSION: Final = 6
+STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v4'
+STAGE4_PRESERVE_POLICY_VERSION: Final = 7
 STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v5'
 # CS-3（2026-10-03）：`str06.stage4.bind` 退役——承载位由 design wire 的 real
 # 标注派生（stage4-design-v6 的面），stage4-bind-v1 wire 协议随之退役。
@@ -1008,7 +1008,7 @@ def route_owner_issue(code: str, *, unbound_owner: str = '',
         return 'revise_upstream', node
     if target == 'conflict_anchor':
         import re as _re
-        if _re.fullmatch(r'b\d{2}_\d{2}\.[ecl]\d+', conflict_anchor):
+        if _re.fullmatch(r'b\d{2}_\d{2}(?:\.[ecl]\d+)?', conflict_anchor):
             return 'revise_upstream', 'str06.stage2.chapters'
         if _re.fullmatch(r'(s0_|wc_)\d{2}', conflict_anchor):
             return 'revise_upstream', 'str06.stage2.book'

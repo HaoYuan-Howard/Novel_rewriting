@@ -87,6 +87,147 @@ def test_unresolvable_anchor_stops_without_guessing(tmp_path):
             repo, [{'anchor': 'zzz', 'segment': 'e01_01', 'note': 'x'}])
 
 
+def test_chapter_owner_patch_does_not_republish_other_chapters(tmp_path):
+    """局部 owner patch 只执行目标章；其他章连同来源信封逐字节保留。"""
+    from copy import deepcopy
+    from novel.stages.chain import ChainContext, run_chapters, run_node
+    from tests.str06_facilities import synthetic_ref
+    from tests.test_str06_body import _chapters
+
+    repo, wires = _repo_with_observations(tmp_path)
+    with pytest.raises(OwnerRevisionRequired):
+        _backfill_source_evidence_conflicts(repo, [{
+            'anchor': 'b02_01', 'segment': 'e02_01', 'note': '另一个尚未处理的问题'}])
+    pending_before = repo.path('runtime/issues/ch02.json').read_bytes()
+    before = repo.path('stage2/observations/ch02.json').read_bytes()
+    calls = []
+
+    def ask(owner, prompt, validate, **kwargs):
+        calls.append(owner)
+        assert owner == 'ch01'
+        wire = deepcopy(wires[owner])
+        wire['beats'][0]['event'] += '（局部修订）'
+        assert not validate(wire)
+        return wire, synthetic_ref(owner, prompt)
+
+    ctx = ChainContext(repository=repo, chapters=_chapters(), ask=ask,
+                       ask_text=lambda *_: None, ask_body=lambda *_: None,
+                       chapter_patch_owners=('ch01',))
+    assert run_node('str06.stage2.chapters', ctx) == {'chapters': 1}
+    assert calls == ['ch01']
+    assert repo.path('runtime/issues/ch02.json').read_bytes() == pending_before
+    assert repo.path('stage2/observations/ch02.json').read_bytes() == before
+    assert repo.read('runtime/chapter_observation_failures.json')['attempted'] == [1]
+    repo.path('stage2/observations/ch02.json').unlink()
+    with pytest.raises(FileNotFoundError):
+        run_chapters(ctx)
+    assert calls == ['ch01']
+
+
+def test_retained_chapter_check_verifies_proof_without_recording_input(tmp_path):
+    """保留章不是修订内容依赖，但仍必须通过 seal 和 freshness。"""
+    from novel.errors import UnsealedArtifact, UpstreamStale
+    from tests.str06_facilities import synthetic_ref
+    repo, _ = _repo_with_observations(tmp_path)
+    rel = 'stage2/observations/ch02.json'
+    model = repo.read_model(rel)
+    repo.context.begin_run()
+    assert repo.check_model(rel) == model
+    assert repo.context.edges == {}
+    path = repo.path(rel)
+    path.write_bytes(path.read_bytes() + b'\n')
+    with pytest.raises(UnsealedArtifact):
+        repo.check_model(rel)
+    repo.context.record_edge('stage2/observations/ch01.json', '0' * 10)
+    repo.write(rel, model, owners=('ch02',), refs=(synthetic_ref('ch02', '过期输入'),))
+    repo.context.begin_run()
+    with pytest.raises(UpstreamStale):
+        repo.check_model(rel)
+    assert repo.context.edges == {}
+
+
+def test_chapter_patch_activation_does_not_touch_unselected_revision(tmp_path):
+    """单章修订不能激活另一章尚未提交的 staged 记录。"""
+    from contracts.schema.workflow import OwnerRevisionRecordV2
+    from novel.stages.revisions import activate_node_revisions
+    repo, _ = _repo_with_observations(tmp_path)
+    record = OwnerRevisionRecordV2(kind='owner_patch', owner='ch02', node='str06.stage2.chapters',
+        baseline_request_sha256='a' * 64, baseline_response_sha256='b' * 64,
+        baseline_source_root=str(repo.root), candidate_sha256='c' * 64,
+        evidence_rel=f'runtime/revisions/evidence/{"c" * 64}.json', diff_sha256='d' * 64,
+        reason='尚未提交的另一章补丁', sequence=0, product_rel='stage2/observations/ch02.json',
+        before_product_sha256=None, applies_to_request_sha256='a' * 64,
+        status='staged', created_at=1759000000)
+    rel = 'runtime/revisions/active/ch02.json'
+    repo.write(rel, record)
+    before = repo.path(rel).read_bytes()
+    activate_node_revisions(repo, 'str06.stage2.chapters', owners=('ch01',))
+    assert repo.path(rel).read_bytes() == before
+    with pytest.raises(FileNotFoundError):
+        activate_node_revisions(repo, 'str06.stage2.chapters', owners=('ch02',))
+
+
+@pytest.mark.parametrize('out_of_scope', [False, True])
+def test_empty_beat_conflict_revises_only_reported_beat(tmp_path, out_of_scope):
+    """空拍报告回到真实 chapters runner：知情由 owner 补，越界整答拒发。"""
+    from copy import deepcopy
+    from contracts.schema.observation import ChapterObservation
+    from novel.stages.chain import ChainContext, run_chapters
+    from novel.stages.owner_revision import MechanicalDefectStop
+    from novel.stages.stage2.slim import slim_chapter_wire
+    from tests.str06_facilities import synthetic_ref
+    from tests.test_str06_body import _chapters
+
+    repo, wires = _repo_with_observations(tmp_path)
+    chapters = deepcopy(_chapters())
+    chapters[0]['text'] += '\n我看见夫君从床底爬出来。\n我坐回椅子上。'
+    initial = deepcopy(wires['ch01'])
+    for event, ref in [('我看见夫君现身', 'e01_02'), ('我坐回椅子上', 'e01_03')]:
+        beat = deepcopy(initial['beats'][0])
+        beat.update(event=event, source_refs=[ref], scene_boundary='continue',
+                    effects=[], cognition=[], loops=[])
+        initial['beats'].append(beat)
+    repo.write('stage2/observations/ch01.json', ChapterObservation.model_validate(initial),
+               owners=('ch01',), refs=(synthetic_ref('ch01', '遗漏基线'),))
+    initial = repo.read_model('stage2/observations/ch01.json').model_dump(mode='json')
+    before = {n: repo.path(f'stage2/observations/ch{n:02d}.json').read_bytes() for n in (1, 2)}
+    with pytest.raises(OwnerRevisionRequired) as exc:
+        _backfill_source_evidence_conflicts(repo, [{
+            'anchor': 'b01_02', 'segment': 'e01_02', 'note': '缺少芸娘目睹现身的知情'}])
+    assert exc.value.owner == 'ch01'
+    assert not repo.path('runtime/preserve_checkpoint.json').exists()
+    calls = []
+
+    def ask(owner, prompt, validate, **kwargs):
+        calls.append(owner)
+        assert owner == 'ch01'
+        assert '本轮源证据窄修只允许修改以下拍：b01_02' in prompt
+        wire = slim_chapter_wire(initial)
+        wire['beats'][1]['know'] = [{'who': 'yun_niang', 'how': 'learns',
+            'what': '夫君从床底现身', 'evidence_refs': ['e01_02']}]
+        if out_of_scope:
+            wire['beats'][2]['event'] = '我离开了房间'
+            assert any('窄修越界' in str(e) for e in validate(wire))
+        else:
+            assert validate(wire) == []
+        return wire, synthetic_ref(owner, prompt)
+
+    ctx = ChainContext(repository=repo, chapters=chapters, ask=ask,
+                       ask_text=lambda *_: None, ask_body=lambda *_: None)
+    if out_of_scope:
+        with pytest.raises(MechanicalDefectStop, match='窄修越界'):
+            run_chapters(ctx)
+        assert repo.path('stage2/observations/ch01.json').read_bytes() == before[1]
+    else:
+        assert run_chapters(ctx) == {'chapters': 1}
+        after = slim_chapter_wire(repo.read_model('stage2/observations/ch01.json').model_dump(mode='json'))
+        for i in (0, 2):
+            assert after['beats'][i] == slim_chapter_wire(initial)['beats'][i]
+        assert after['beats'][1]['know'][0]['what'] == '夫君从床底现身'
+    assert calls == ['ch01']
+    assert repo.path('stage2/observations/ch02.json').read_bytes() == before[2]
+
+
 # ───────────────────────── 回跳闭环与无进展停（stage，fake transport） ─────────────────────────
 
 class _ConflictPreserveTransport:
@@ -118,7 +259,7 @@ class _ConflictPreserveTransport:
         return self._inner.send(request)
 
 
-def _run_to_preserve(tmp_path, transport_factory, monkeypatch):
+def _run_to_preserve(tmp_path, transport_factory, monkeypatch, prepare=None):
     from contracts.schema.hook import HookConstraints
     from novel.stages.chain import run_workflow
     from tests.str06_facilities import json_ask, text_ask, stub_body_runner
@@ -126,13 +267,16 @@ def _run_to_preserve(tmp_path, transport_factory, monkeypatch):
     from tests.str06_faults import looped_full_chain_wires
 
     wires = looped_full_chain_wires()
+    chapters = _chapters()
+    if prepare is not None:
+        prepare(wires, chapters)
     repo, session, transport = _make_session(
         tmp_path, wires, name='heal', transport=transport_factory(wires))
     stub_body_runner(monkeypatch)
 
     def runner():
         return run_workflow(
-            repository=repo, chapters=_chapters(), ask=json_ask(session),
+            repository=repo, chapters=chapters, ask=json_ask(session),
             ask_text=text_ask(session),
             ask_body=lambda o, p: (_ for _ in ()).throw(AssertionError('stub')),
             budget=2000, through='stage4',
@@ -140,6 +284,47 @@ def _run_to_preserve(tmp_path, transport_factory, monkeypatch):
                          'str06.stage2.names', 'str06.stage2.associate',
                          'str06.stage2.compile', 'str06.stage4.preserve'])
     return runner, repo, transport
+
+
+def test_empty_beat_missing_conflict_full_chain_heals(tmp_path, monkeypatch):
+    """Preserve 空拍地址经真实验收、回派、章修订、重编译到复验发布。"""
+    from copy import deepcopy
+    from novel.llm.transport import ChatResponse
+    import json
+
+    def prepare(wires, chapters):
+        chapters[0]['text'] += '\n我看见夫君从床底爬出来。'
+        beat = deepcopy(wires['ch01']['beats'][0])
+        beat.update(event='我看见夫君现身', source_refs=['e01_02'],
+                    scene_boundary='continue', effects=[], cognition=[], loops=[])
+        wires['ch01']['beats'].append(beat)
+
+    class Transport(_ConflictPreserveTransport):
+        def send(self, request):
+            owner = self._inner._owner(request)
+            if owner == 'ch01' and self._served:
+                self.calls.append(owner)
+                wire = deepcopy(self._inner.wires[owner])
+                wire['beats'][1]['cognition'] = [{
+                    'holder': 'yun_niang', 'mode': 'learns',
+                    'proposition': {'ref': 'k01', 'statement': '夫君从床底现身'},
+                    'basis': [{'segment': 'e01_02', 'quote': '我看见夫君从床底爬出来。'}]}]
+                return ChatResponse(content=json.dumps(wire, ensure_ascii=False),
+                                    finish_reason='stop', model='fake',
+                                    usage={'prompt_tokens': 100, 'completion_tokens': 40})
+            return super().send(request)
+
+    runner, repo, transport = _run_to_preserve(tmp_path, lambda wires: Transport(wires, [{
+        'anchor': 'b01_02', 'segment': 'e01_02', 'note': '关键现身漏记芸娘获知'}]),
+        monkeypatch, prepare=prepare)
+    assert 'obligations' in runner()
+    assert read_owner_issue_file(repo, 'ch01').status == 'resolved'
+    assert transport.calls.count('ch01') == 2 and transport.calls.count('ch02') == 1
+    assert transport.calls.count('preserve') == 2
+    assert repo.read_model('stage2/observations/ch01.json').beats[1].cognition[0].holder == 'yun_niang'
+    assert set(repo.inspect('stage2/observations/ch01.json')['_provenance']['inputs']) == {
+        'stage2/observations/book.json'}
+    assert repo.path('runtime/preserve_checkpoint.json').exists()
 
 
 def test_conflict_full_chain_heals_via_revision(tmp_path, monkeypatch):
@@ -306,7 +491,7 @@ def test_preserve_cross_node_revision_uses_wire_not_checkpoint_template(tmp_path
     runner()
     previous = transport.requests[-1].split('〔上一版〕\n', 1)[1].rsplit('\n请输出', 1)[0]
     wire = json.loads(previous)
-    assert wire['protocol_version'] == 'stage4-preserve-v3'
+    assert wire['protocol_version'] == 'stage4-preserve-v4'
     assert set(wire) == {'protocol_version', 'obligations', 'series', 'evidence_conflicts'}
     assert all(isinstance(a, str) for o in wire['obligations'] for a in o['anchors'])
     assert all('obligation_id' not in o and 'lineage' not in o for o in wire['obligations'])

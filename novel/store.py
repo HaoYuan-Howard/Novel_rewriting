@@ -2378,12 +2378,25 @@ class Str06Repository:
         已封存 CommitBundle（seal＋摘要双校验）即拒绝消费（AUD-05）；诊断面走
         `inspect` 不受此限。
         """
+        return self._read_checked_model(rel, consume=True)
+
+    def check_model(self, rel: str):
+        """核验要保留的正式产物：验封、版本、形状与新鲜度，但不登记内容依赖。
+
+        用于窄修时核对未选章；它们并未进入目标章生成输入，不能记成目标章上游。
+        与 inspect 不同，此入口不得放过未发布或过期的产物。
+        """
+        return self._read_checked_model(rel, consume=False)
+
+    def _read_checked_model(self, rel: str, *, consume: bool):
         spec = candidate_artifact(rel)
         model = _artifact_model(spec)
         if spec is None or model is None:
             raise ProvenanceRefused(f'{rel} 未登记契约模型，不能按模型读')
         self._require_sealed(rel)
-        data = self.read(rel)
+        data = self.read(rel) if consume else self.inspect(rel)
+        if not consume:
+            self._refuse_stale(rel, data)
         if isinstance(data, dict):
             data = {k: v for k, v in data.items() if k != '_provenance'}
             _require_current_quality_contract(spec, data)

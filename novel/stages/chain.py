@@ -89,6 +89,8 @@ from novel.stages.common import (
     hook_material_issues, writer_material_issues, hook_name_projections,
 )
 from novel.stages import candidates
+from novel.stages.stage2.chapters import chapter_revision_scope_issues
+from novel.stages.stage2.slim import slim_chapter_wire
 from novel.stages.stage2 import (
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
     book_patch_locate, chapter_observation_prompt, chapter_patch_locate,
@@ -223,6 +225,9 @@ class ChainContext:
     #: 或契约身份（`NodeSpec.flags` 不变）。从 canary 续跑到全书时，已提交章
     #: 的采用与恢复身份不变（集合恢复按目标集合补缺）。
     body_chapters: tuple[int, ...] | None = None
+    #: 已登记章观察 owner patch 的执行范围；由 wire-dir 的 patch note 派生，
+    #: 不是自由选章开关。其余章须已有有效产物，只读保留，不重放或重新发布。
+    chapter_patch_owners: tuple[str, ...] = ()
     provider: str = 'manual-adoption'
     model: str = 'unknown'
     #: canonical JSON 摘要（请求身份）；由调用方从付费边界注入——chain 层不 import
@@ -356,7 +361,8 @@ def _write_chapter_failures(repository, rel: str, *, requested: tuple[int, ...],
     """逐章失败留证（D3/W2）：「最近一次完成执行」的逐章失败清单。
 
     形状 `{requested, attempted, chapters, recorded_at}`：`requested` 是本次
-    请求的章范围（章观察＝全部源章；正文＝`body_chapters` 或全书）；`attempted`
+    请求的章范围（章观察＝全部源章或既有回派/owner patch 范围；正文＝
+    `body_chapters` 或全书）；`attempted`
     是本次实际进入逐章执行器的章（正文不含已提交章）；`chapters` 是
     `attempted` 的失败子集。写盘走 repository 的原子替换；崩溃不写，文件
     缺失因此表示「这个节点还没有一次完成执行」（I-42）。
@@ -368,6 +374,18 @@ def _write_chapter_failures(repository, rel: str, *, requested: tuple[int, ...],
                                     'detail': str(exc)}
                      for ordinal, exc in sorted(failures.items())},
         'recorded_at': int(time.time())})
+
+
+def _chapter_execution_owners(ctx: ChainContext) -> tuple[str, ...]:
+    """同一份 owner 范围同时用于执行与关闭派单，不能关闭未执行章的问题。"""
+    known = tuple(f'ch{c["chapter_ordinal"]:02d}' for c in ctx.chapters)
+    pending = tuple(owner for owner in known
+                    if (record := open_issue_record(ctx.repository, owner)) is not None
+                    and record.dispatch_pending and record.node == 'str06.stage2.chapters')
+    selected = ctx.chapter_patch_owners or pending or known
+    if set(selected) - set(known):
+        raise ValueError('章观察修订 owner 超出源章范围')
+    return tuple(owner for owner in known if owner in selected)
 
 
 def run_chapters(ctx: ChainContext) -> dict:
@@ -383,6 +401,8 @@ def run_chapters(ctx: ChainContext) -> dict:
     「最近一次完成执行」留证 `runtime/chapter_observation_failures.json`
     （D3/W2：正常完成写空清单，文件缺失＝本节点没有完成执行），恢复按请求
     身份重放、不重购已存结果（I-30/I-31）。
+    回派或显式 owner patch 只执行指定 owner，其他章须已有效发布并只读保留；
+    源证据冲突进一步按所报拍核对修复范围，不允许借修订改动其他拍。
     """
     repository = ctx.repository
     book = repository.read_model('stage2/observations/book.json')
@@ -404,17 +424,40 @@ def run_chapters(ctx: ChainContext) -> dict:
                                  per_book=ctx.slot_per_book,
                                  per_provider=ctx.slot_per_provider):
             chapter_evidence = _chapter_evidence(evidence, no)
+            record = open_issue_record(repository, f'ch{no:02d}')
+            conflicts = [i for i in record.issues if i.code == 'source_evidence_conflict'] if record else []
+            previous, scope = None, set()
+            if conflicts:
+                previous = repository.read_model(str06_chapter_observation_rel(no))
+                for issue in conflicts:
+                    anchor = str(issue.context.get('anchor') or '')
+                    match = re.fullmatch(fr'b{no:02d}_(\d{{2}})(?:\.[ecl]\d+)?', anchor)
+                    index = int(match[1]) - 1 if match else -1
+                    if (not 0 <= index < len(previous.beats)
+                            or issue.context.get('segment') not in previous.beats[index].source_refs):
+                        raise ValueError(f'章观察回派地址或证据归属无效：{anchor}')
+                    scope.add(index)
             prompt = revision_prompt_for_owner(
                 repository, f'ch{no:02d}',
                 chapter_observation_prompt(chapter=no, book=book,
                                            chapters=ctx.chapters,
                                            evidence=chapter_evidence),
-                str06_chapter_observation_rel(no))
+                str06_chapter_observation_rel(no),
+                previous_wire=slim_chapter_wire if conflicts else None)
+            if conflicts:
+                prompt += ('\n本轮源证据窄修只允许修改以下拍：'
+                           + '、'.join(f'b{no:02d}_{i + 1:02d}' for i in sorted(scope))
+                           + '。拍数、顺序和所有 start 不变，其余拍原样保留；'
+                           '你判断是否需要补足知情及其证据，程序不替你判定获知者。')
             def validate(w):
                 # R10a a1：传完整段映射（含 text），basis 引文可逐字判定
-                return chapter_acceptance(w, evidence_ids=chapter_evidence, chapter=no,
-                                          character_slugs=frozenset(book.characters),
-                                          anchors=anchors, fact_ids=fact_ids)
+                observation, errors = chapter_acceptance(
+                    w, evidence_ids=chapter_evidence, chapter=no,
+                    character_slugs=frozenset(book.characters), anchors=anchors, fact_ids=fact_ids)
+                if observation is not None and not errors and previous is not None:
+                    errors.extend(chapter_revision_scope_issues(
+                        previous, observation, beat_indexes=frozenset(scope)))
+                return observation, errors
 
             def locate(w, errs, *, _ev=chapter_evidence, _no=no,
                        _slugs=frozenset(book.characters), _facts=fact_ids):
@@ -436,6 +479,12 @@ def run_chapters(ctx: ChainContext) -> dict:
                              owners=(f'ch{no:02d}',), refs=(ch_ref,))
 
     ordinals = [chapter['chapter_ordinal'] for chapter in ctx.chapters]
+    selected_owners = _chapter_execution_owners(ctx)
+    for no in ordinals:
+        if f'ch{no:02d}' not in selected_owners:
+            # 必须有已封存的正式产物；缺失/失效不得被一次局部修补掩盖。
+            repository.check_model(str06_chapter_observation_rel(no))
+    ordinals = [no for no in ordinals if f'ch{no:02d}' in selected_owners]
     workers = ctx.pool_workers('str06.stage2.chapters', len(ordinals))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_one, no): no for no in ordinals}
@@ -447,7 +496,7 @@ def run_chapters(ctx: ChainContext) -> dict:
                 continue
             observed += 1
     # 「最近一次完成执行」逐章留证（D3/W2）：正常完成写空清单；带失败完成在
-    # 上抛之前写失败子集。章观察无集合恢复，requested＝attempted＝全部源章。
+    # 上抛之前写失败子集。requested＝attempted＝本次全章或修订 owner 范围。
     _write_chapter_failures(repository, CHAPTER_OBSERVATION_FAILURES_REL,
                             requested=tuple(ordinals), attempted=tuple(ordinals),
                             failures=failures)
@@ -854,7 +903,7 @@ def _resolve_handled_conflicts(repository, chapters) -> None:
 def _backfill_source_evidence_conflicts(repository, conflicts) -> None:
     """Preserve 报告的源证据冲突 → 按锚点句柄回派 Stage2 语义 owner（R10a a3）。
 
-    §二.2 三分支的工程入口：拍内句柄（bNN_MM.*）回逐章观察（owner=chNN、
+    §二.2 三分支的工程入口：拍/拍内句柄（bNN_MM 或 bNN_MM.*）回逐章观察（owner=chNN、
     item=chapter:N），书级句柄（s0_*/wc_*）回书级观察；句柄不可解析即停
     （机械路由不猜）。冲突条目已过 assemble 的形状与闭集校验；回答由 ask
     路径照常耐久——checkpoint 不发布。同指纹重现走 discover_owner_issues
@@ -875,7 +924,7 @@ def _backfill_source_evidence_conflicts(repository, conflicts) -> None:
         grouped.setdefault((owner, target, item), []).append(OwnerIssueV1(
             code='source_evidence_conflict', item=item,
             message=(f'Preserve 报告源证据冲突：锚点 {anchor}（句段 '
-                     f'{conflict.get("segment")}）与原子内容矛盾——'
+                     f'{conflict.get("segment")}）存在矛盾或遗漏——'
                      f'{conflict.get("note")}。请对照原句修订该观察，或维持原'
                      '解释并在观察中补足依据；源解释归 Stage2 owner，Preserve '
                      '不私建事实版本'),
@@ -901,7 +950,7 @@ def run_preserve(ctx: ChainContext) -> dict:
     preserve_prompt = revision_prompt_for_owner(
         repository, 'preserve',
         PRESERVE_RULES + _conflict_resolution_notes(repository, ctx.chapters)
-        + '\n输入（源证据投影视图，句柄即 anchors 闭集）：\n'
+        + '\n输入（源证据投影视图：原子句柄供义务 anchors；拍句柄仅供冲突报告）：\n'
         + project_preserve_view(core, blueprint)
         + ('\nStage2已留证的局部名称同一性（语义文本已归一，原句保持原字面；'
            '不得因该字面差异改写命题或重复报源观察冲突）：'
@@ -2221,13 +2270,18 @@ def run_node(node_id: str, ctx: ChainContext) -> dict:
     runner = NODE_RUNNERS.get(node_id)
     if runner is None:
         raise ValueError(f'未登记的候选节点 runner：{node_id}')
+    if getattr(ctx.repository, 'context', None) is not None:
+        # 同进程回跳时，下游失败前读到的材料不能成为上游修订的输入边。
+        # 节点内多产物仍共享同一窗口；仅在明确的节点执行边界清空。
+        ctx.repository.context.begin_run()
+    chapter_owners = (_chapter_execution_owners(ctx)
+                      if node_id == 'str06.stage2.chapters' else ())
     report = runner(ctx)
     ctx.after_node_commit(node_id)
-    complete_owner_dispatch(ctx.repository, node_id,
-        chapter_owners=tuple(f'ch{c["chapter_ordinal"]:02d}' for c in ctx.chapters)
-        if node_id == 'str06.stage2.chapters' else ())
+    complete_owner_dispatch(ctx.repository, node_id, chapter_owners=chapter_owners)
     from novel.stages.revisions import activate_node_revisions, resolve_node_revisions
-    activate_node_revisions(ctx.repository, node_id)
+    activate_node_revisions(ctx.repository, node_id,
+        owners=chapter_owners if node_id == 'str06.stage2.chapters' else None)
     if node_id in {'str06.stage2.compile', 'str06.stage4.compile', 'str06.stage7.assemble'}:
         if node_id != 'str06.stage7.assemble' or report.get('assembly', {}).get('status') == 'ready':
             resolve_node_revisions(ctx.repository, node_id)
@@ -2570,7 +2624,7 @@ def load_stage1_chapters(base, sid: str) -> Stage1Input:
 def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
                  through='stage4', provider='manual-adoption', model='unknown',
                  book_title='', hook_constraints=None, length_band=(0.6, 1.3),
-                 body_chapters=None, node_filter=None, hook_copy='',
+                 body_chapters=None, node_filter=None, hook_copy='', chapter_patch_owners=(),
                  concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
                  node_concurrency: Mapping[str, int] | None = None,
                  slot_per_book: int = PIPELINE_BOOK_CONCURRENCY,
@@ -2594,7 +2648,8 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
         repository=repository, ask=ask, ask_text=ask_text, ask_body=ask_body,
         chapters=chapters, hook_copy=hook_copy, budget=budget, book_title=book_title,
         hook_constraints=hook_constraints, length_band=length_band,
-        body_chapters=body_chapters, provider=provider, model=model,
+        body_chapters=body_chapters, chapter_patch_owners=chapter_patch_owners,
+        provider=provider, model=model,
         body_replay=body_replay, after_node_commit=after_node_commit,
         digest=digest, concurrency=concurrency,
         node_concurrency=dict(node_concurrency or {}),
@@ -3066,6 +3121,16 @@ def execute(args) -> None:
                 continue
             record_sample(owner, {'prose': text}, selection, lambda w: text_validation(owner, w))
 
+    chapter_patch_owners = ()
+    if args.wire_dir:
+        chapter_patch_owners = tuple(sorted(
+            p.name.removesuffix('_patch_note.json')
+            for p in args.wire_dir.glob('ch*_patch_note.json')
+            if re.fullmatch(r'ch\d{2}_patch_note\.json', p.name)))
+        for owner in chapter_patch_owners:
+            if wire_path(owner) is None:
+                raise ValueError(f'{owner} patch note 缺少对应 wire，拒绝扩大为自动重跑')
+
     print(run_workflow(repository=repository, chapters=chapters, hook_copy=hook_copy,
                        ask=ask, ask_text=ask_text,
                        ask_body=ask_body, budget=args.budget, through=args.through,
@@ -3077,6 +3142,7 @@ def execute(args) -> None:
                                                          hard_max_chars=args.hook_hard_max),
                        length_band=(args.body_band_low, args.body_band_high),
                        body_chapters=args.body_chapters,
+                       chapter_patch_owners=chapter_patch_owners,
                        **frozen_concurrency(cfg),
                        body_replay=body_replay, after_node_commit=after_node_commit,
                        # CS-H H1b：wire-dir 显式采用在场时不提供免费沿用闭包——

@@ -132,7 +132,7 @@ def _blueprint() -> BlueprintsArtifactV17:
 
 
 def _preserve_wire() -> dict:
-    return {'protocol_version': 'stage4-preserve-v3', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v4', 'obligations': [
         {'kind': 'event_core', 'statement': '芸娘从起疑到证实同一件事',
          'anchors': ['b01_01.c1', 'b01_02.c1'],
          'must_preserve': True, 'satisfaction': '正文呈现怀疑渐进到证实',
