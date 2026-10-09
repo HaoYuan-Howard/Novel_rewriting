@@ -1232,7 +1232,8 @@
         "stage4"
       ],
       "cases": {
-        "test_assemble_routes_v7_and_enforces_coverage": "stage"
+        "test_assemble_routes_v7_and_enforces_coverage": "stage",
+        "test_required_background_needs_real_and_can_share_an_existing_action_beat": "stage"
       }
     },
     "tests/test_str06_quality_materials.py": {
@@ -1316,7 +1317,8 @@
       ],
       "cases": {
         "test_one_obligation_repair_sends_only_that_item_and_keeps_others_intact": "stage",
-        "test_optional_details_use_same_name_gate_and_detail_item_paths": "unit_contract"
+        "test_optional_details_use_same_name_gate_and_detail_item_paths": "unit_contract",
+        "test_preserve_projection_block_is_reported_without_mutating_evidence": "unit_contract"
       }
     },
     "tests/test_str06_required_released.py": {

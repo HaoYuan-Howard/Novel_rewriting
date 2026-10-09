@@ -73,7 +73,8 @@ def test_readonly_review_uses_explicit_request_configuration_not_local_defaults(
     monkeypatch.setattr(review, 'load_stage1_chapters', lambda *_: object())
     class Captured(Exception):
         pass
-    def capture(_repo, owner, _source, profile):
+    def capture(_repo, owner, _source, profile, *, upstream_wires=None):
+        assert upstream_wires == {}
         assert owner == 'design'
         assert (profile.model, profile.reasoning_effort, profile.thinking) == ('deepseek-flash', 'low', True)
         assert cfg.model == 'deepseek-v4-pro' and cfg.thinking_mode == 'off'

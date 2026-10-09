@@ -281,20 +281,45 @@ def test_design_rules_prompt_carries_v7_and_obligation_table():
     from novel.stages.common import design_rules
     from novel.stages.stage4.slim import project_design_input
     rules = design_rules(known_char_ids={'yun_niang'})
-    assert 'stage4-design-v9' in rules and 'SlimDesignBeat' in rules
+    assert 'stage4-design-v10' in rules and 'SlimDesignBeatV10' in rules
     assert 'real' in rules and 'obNN' in rules
     brief = _brief()
     table = project_design_input(brief, _obligations(brief))['requirements']
     assert table['ob01']['knowledge_changes']['ob01.k01'] == {
-        'holder': 'yun_niang', 'kp': 'kp_1111111111111111', 'mode': 'known',
-        'requires_released': []}
+        'holder': 'yun_niang', 'kp': 'kp_11111111', 'mode': 'known'}
     assert 'ob03' in table      # 非必保也在清单（标注可选）
+
+
+def test_required_background_needs_real_and_can_share_an_existing_action_beat():
+    """付费配对反例：初态已有关系不能冒充必保承载，也不必因此新增说明拍。"""
+    from copy import deepcopy
+    raw = _brief().model_dump(mode='json')
+    raw['requirements'][2].update(
+        summary='芸娘与夫君是夫妻', kind='identity', must_preserve=True,
+        satisfaction='开篇须呈现二人的夫妻身份', participants=['lu_fujun', 'yun_niang'])
+    brief = ReconstructionBrief.model_validate(raw)
+    obligations = {f'ob{i:02d}': r for i, r in enumerate(brief.requirements, start=1)}
+    wire = _v9_wire()
+    wire['protocol_version'] = 'stage4-design-v10'
+    wire['scenes'][0]['beats'][0]['ev'] = '新婚之夜，芸娘的夫君坦白不能生育。'
+    before = deepcopy(wire)
+    args = dict(known_char_ids={'lu_fujun', 'yun_niang', 'pei_shuyuan'},
+                expression_requirements=brief.expression,
+                source_narration=brief.source_narration, brief=brief, obligations=obligations)
+    _, errors = assemble_body_design(wire, **args)
+    assert any('未被任何拍标注承载' in e and 'ob03' in e for e in errors)
+    assert wire == before, 'validator 不从初态或自然语言猜测承载位'
+    wire['scenes'][0]['beats'][0]['real'].append('ob03')
+    body, errors = assemble_body_design(wire, **args)
+    assert not errors, errors
+    assert sum(len(s.beats) for s in body.scenes) == 3, '两个条件共用已有行动拍'
+    assert wire['initial_state'] == before['initial_state']
 
 
 def test_design_projection_preserves_complete_semantics_and_references():
     from copy import deepcopy
     import pytest
-    from novel.stages.stage4.slim import project_design_input, knowledge_change_index
+    from novel.stages.stage4.slim import project_design_input, knowledge_change_index, design_reference_aliases
     raw = _brief().model_dump(mode='json')
     raw['requirements'][1]['requires_cores'] = ['req_aaaa']
     raw['requirements'][1]['satisfaction'] = '完整条件不截断。' * 30
@@ -304,17 +329,34 @@ def test_design_projection_preserves_complete_semantics_and_references():
     view = project_design_input(brief, obligations)
     assert view['requirements']['ob02']['requires'] == ['ob01']
     assert set(view['requirements']) == set(obligations)
-    # 除明确改为短引用的机械身份外，每个语义字段逐值保留。
+    assert view['input_version'] == 'stage4-design-input-v2'
+    aliases = design_reference_aliases(brief)
+    # 非引用语义字段逐值保留；省略字段仅使用 v2 明示的空集合/null 默认值。
     for key, value in brief.model_dump(mode='json').items():
-        if key not in {'brief_id', 'preserve_checkpoint_sha256', 'requirements'}:
-            assert view[key] == value
+        if key not in {'brief_id', 'preserve_checkpoint_sha256', 'requirements',
+                       'propositions', 'fact_locks', 'knowledge_locks'}:
+            assert view.get(key, value if value in (None, [], {}) else None) == value
     for ob, requirement in obligations.items():
         for key, value in requirement.model_dump(mode='json').items():
             if key not in {'core_id', 'requires_cores', 'knowledge_changes', 'details', 'summarizes_cores'}:
-                assert view['requirements'][ob][key] == value
+                expected = [aliases[ref] for ref in value] if key in ('locks', 'realize_locks') else value
+                assert view['requirements'][ob].get(key, value if value in (None, [], {}) else None) == expected
     for ref, (ob, change) in knowledge_change_index(obligations).items():
-        assert view['requirements'][ob]['knowledge_changes'][ref] == change.model_dump(
-            mode='json', exclude={'change_id'})
+        row = view['requirements'][ob]['knowledge_changes'][ref]
+        assert (row['holder'], row['kp'], row['mode'], row.get('requires_released', [])) == (
+            change.holder, aliases[change.kp], change.mode, list(change.requires_released))
+    for p in brief.propositions:
+        row = view['propositions'][aliases[p.kp_id]]
+        assert (row['statement'], row.get('publicly_claimed_by', [])) == (p.statement, list(p.publicly_claimed_by))
+    for f in brief.fact_locks:
+        row = view['fact_locks'][aliases[f.kf_id]]
+        assert (row['statement'], row['kind'], row.get('subjects', []), row.get('modality')) == (
+            f.statement, f.kind, list(f.subjects), f.modality)
+    authorized = {(c['holder'], c['kp'], c['mode']) for r in view['requirements'].values()
+                  for c in r.get('knowledge_changes', {}).values()}
+    authorized.update((c['holder'], c['kp'], c['mode']) for c in view.get('knowledge_locks', []))
+    assert authorized == {(k.holder, aliases[k.kp], k.mode) for k in brief.knowledge_locks}
+    assert view['requirements']['ob03']['must_preserve'] is False
     assert brief.model_dump() == before
     with pytest.raises(ValueError, match='完整且唯一'):
         project_design_input(brief, {'ob01': obligations['ob01']})
@@ -437,7 +479,7 @@ def test_lock_reference_is_a_closed_set_injected_from_the_brief():
     from novel.stages.common import design_rules
 
     def validator(**kw):
-        schema = _schema_of(design_rules(known_char_ids={'lead'}, **kw))
+        schema = _schema_of(design_rules(known_char_ids={'lead'}, protocol=PV9, **kw))
         Draft202012Validator.check_schema(schema)
         return Draft202012Validator({'$ref': '#/$defs/SlimDesignState',
                                      '$defs': schema['$defs']})
@@ -513,11 +555,78 @@ def test_detail_schema_closes_short_refs_and_empty_catalog_remains_optional():
     for refs in ((), ('ob01.d01', 'ob03.d01')):
         schema = json.loads(design_rules(detail_refs=refs).rsplit('\n', 1)[1])
         Draft202012Validator.check_schema(schema)
-        validator = Draft202012Validator(schema['$defs']['SlimDesignBeat']['properties']['details'])
+        validator = Draft202012Validator(schema['$defs']['SlimDesignBeatV10']['properties']['details'])
         assert not list(validator.iter_errors([]))
         assert list(validator.iter_errors(['ob99.d01']))
         assert list(validator.iter_errors(['dt_1234567890abcdef']))
         assert bool(list(validator.iter_errors(['ob01.d01']))) == (not refs)
+
+
+def test_v10_reference_expansion_matches_purchased_v9_and_keeps_raw_wire():
+    """短引用只能改类型化字段；原已购 wire 与自然语言中的 hash 字面不改。"""
+    from copy import deepcopy
+    from novel.stages.stage4.slim import design_wire_model, design_fact_marks
+    from contracts.schema.grounding import BriefFactLock
+    brief = _brief().model_copy(update={'fact_locks': (
+        BriefFactLock(kf_id=KF, statement='夫君仍有借种打算', kind='planned',
+                      modality='planned', subjects=('lu_fujun',)),)})
+    legacy = _v9_wire()
+    legacy['scenes'][0]['beats'][1]['state'][1]['lock'] = KF
+    legacy['scenes'][0]['beats'][1]['ev'] += f'（字面引用 {KF} 不应被替换）'
+    legacy['scenes'][1]['reads'] = [{'domain': 'knowledge', 'holder': 'yun_niang',
+                                    'key': 'kp_1111111111111111'}]
+    current = deepcopy(legacy)
+    current['protocol_version'] = 'stage4-design-v10'
+    current['scenes'][0]['beats'][1]['state'][1]['lock'] = KF[:11]
+    current['scenes'][1]['reads'][0]['key'] = 'kp_11111111'
+    before = deepcopy(current)
+    old_expanded, old_errors = expand_design_wire(legacy, brief=brief, obligations=_obligations(brief))
+    expanded, errors = expand_design_wire(current, brief=brief, obligations=_obligations(brief))
+    assert errors == old_errors == []
+    assert expanded == old_expanded
+    assert design_fact_marks(design_wire_model(current, brief))[0].kf_id == KF
+    assert current == before
+    current['scenes'][1]['reads'][0]['key'] = 'kp_99'
+    expanded, errors = expand_design_wire(current, brief=brief, obligations=_obligations(brief))
+    assert expanded is None and errors == [(('scenes', 1, 'reads', 0, 'key'), "闭集外短引用 'kp_99'")]
+
+
+def test_v2_keeps_repeated_changes_extra_authorizations_and_disclosure():
+    from contracts.schema.grounding import BriefKnowledgeChange, BriefKnowledgeLock
+    from novel.stages.stage4.slim import project_design_input
+    brief = _brief()
+    first = brief.requirements[0]
+    change = first.knowledge_changes[0].model_copy(update={'requires_released': ('芸娘',)})
+    repeated = BriefKnowledgeChange(change_id='kc_2222222222222222', holder=change.holder,
+                                    kp=change.kp, mode=change.mode)
+    first = first.model_copy(update={'knowledge_changes': (change, repeated)})
+    extra = BriefKnowledgeLock(holder='reader', kp=change.kp, mode='heard')
+    brief = brief.model_copy(update={'requirements': (first, *brief.requirements[1:]),
+                                    'knowledge_locks': (*brief.knowledge_locks, extra)})
+    view = project_design_input(brief, _obligations(brief))
+    changes = view['requirements']['ob01']['knowledge_changes']
+    assert len(changes) == 2 and changes['ob01.k01']['requires_released'] == ['芸娘']
+    assert view['knowledge_locks'] == [{'holder': 'reader', 'kp': 'kp_11111111', 'mode': 'heard'}]
+    assert view['requirements']['ob01']['satisfaction'] == first.satisfaction
+
+
+def test_short_references_stay_bound_across_upstream_additions_and_reject_collisions():
+    import pytest
+    from contracts.schema.grounding import BriefProposition
+    from novel.stages.stage4.slim import design_reference_aliases, design_wire_model
+    brief = _brief()
+    original = brief.propositions[0]
+    added = BriefProposition(kp_id='kp_0000000000000000', statement='新命题')
+    expanded = brief.model_copy(update={'propositions': (added, *brief.propositions)})
+    assert design_reference_aliases(expanded)[original.kp_id] == design_reference_aliases(brief)[original.kp_id]
+    wire = _v9_wire()
+    wire['protocol_version'] = 'stage4-design-v10'
+    wire['scenes'][0]['reads'] = [{'domain': 'knowledge', 'holder': 'yun_niang',
+                                 'key': original.kp_id[:11]}]
+    assert design_wire_model(wire, expanded).scenes[0].reads[0].key == original.kp_id
+    collision = BriefProposition(kp_id='kp_1111111100000000', statement='不同命题')
+    with pytest.raises(ValueError, match='短引用前缀冲突'):
+        design_reference_aliases(brief.model_copy(update={'propositions': (original, collision)}))
 
 
 def test_narrow_detail_context_carries_nonreal_owner_without_global_material_text():

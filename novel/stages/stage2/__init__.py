@@ -42,6 +42,7 @@ from novel.stages.stage2.book import (
 from novel.stages.stage2.chapters import (
     chapter_observation_prompt, chapter_patch_locate, chapter_prior_text,
     compile_chapter_observation, chapter_loop_issues,
+    chapter_revision_scope_issues,
 )
 from novel.stages.stage2.compile import (
     CompileOutcome, FoldResult, compile_source_truth, inspect_identity_associations,
@@ -61,6 +62,7 @@ from novel.stages.stage2.resolver import (
 from novel.stages.stage2.slim import expand_chapter_wire, slim_chapter_wire
 
 __all__ = [
+    'chapter_revision_scope_issues',
     'AnchorHit', 'AssociationCandidates', 'AssociationSpace', 'AssociateObservation',
     'BeatHandle', 'BookObservation', 'CauseCandidate', 'ChapterObservation',
     'CompileOutcome', 'EvidenceResolver',

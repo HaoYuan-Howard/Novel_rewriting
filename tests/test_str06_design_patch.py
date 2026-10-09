@@ -364,7 +364,7 @@ def test_carrier_missing_gets_one_optional_closed_set_round_instead_of_full_rewr
     assert optional == ['scenes[0].beats[2]', 'scenes[1].beats[0]', 'scenes[1].beats[1]'], \
         '闭集＝候选全部拍，泄漏拍已是必选不重复登记'
     assert '（当前值见依赖切片）' in patch_request
-    assert 'stage4-design-patch-slice-v1' in patch_request, '窄请求带依赖切片'
+    assert 'stage4-design-patch-slice-v2' in patch_request, '窄请求带依赖切片'
     assert 'stage4-design-input-v1' not in patch_request, '不带整份原请求输入投影'
     body = repo.read_model('stage4/design/body_design.json')
     assert [b.event for b in body.scenes[0].beats[:2]] == ['拜堂成亲', '洞房夜夫君立约']

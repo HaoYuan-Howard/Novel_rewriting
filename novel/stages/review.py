@@ -34,7 +34,7 @@ from novel.stages.common import (
     chapter_identities, project_chapter_packet, validate_writer_materials, validate_hook_materials,
     material_identities,
 )
-from novel.stages.stage4.grounding import preserve_name_issues
+from novel.stages.stage4 import preserve_name_issues
 
 
 def character_literals(repository) -> dict[str, tuple[str, ...]]:
@@ -151,7 +151,7 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                 candidate, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,
                 characters=chars.core_view(), blueprint=blueprint,
                 provider='preview', model='preview', request_sha256='0' * 64)
-            errors = list(errors) + preserve_name_issues(checkpoint, chars)
+            errors = list(errors) + preserve_name_issues(checkpoint, chars, blueprint)
             conflicts = candidate.get('evidence_conflicts', []) if isinstance(candidate, dict) else []
             if checkpoint is not None and not errors:
                 project_brief(checkpoint, chars.core_view(), blueprint,

@@ -731,7 +731,9 @@ class DesignWireV5(StrictModel):
 #: 当状态键另写一条复述事实的状态（《夫君的报恩》Design 因此把锁原文连同未释放
 #: 全名抄进自己的 val）；v7 旧 wire 关闭式拒读（I-13，无隐式迁移）。
 #: v9（rc21，2026-10-09）：可改写细节由短引用选择，文本来自正式 Brief。
-STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v9'
+#: v10（2026-10-09）：请求投影 v2 省略机械空值/重复知情授权；kp/kf 改短引用。
+#: v9 已购候选显式解码仍支持沿用与窄复核，删除条件在 REQUIREMENTS 登记。
+STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v10'
 
 
 class SlimDesignState(StrictModel):
@@ -885,3 +887,28 @@ class DesignWireV9(StrictModel):
     scenes: tuple[SlimDesignScene, ...] = Field(min_length=1)
     chapters: tuple[SlimDesignChapter, ...] = Field(min_length=1)
     scene_weights: tuple[float, ...] | None = None
+
+
+class SlimDesignStateV10(SlimDesignState):
+    """v10 只改引用传输：锁用 compiler 派发的短引用，不改事实语义。"""
+
+    lock: str | None = Field(default=None, pattern=r'^kf_[0-9a-f]{8}$')
+
+
+class SlimDesignBeatV10(SlimDesignBeat):
+    state: tuple[SlimDesignStateV10, ...] = Field(default=(), min_length=0)
+
+
+class SlimDesignSceneV10(SlimDesignScene):
+    beats: tuple[SlimDesignBeatV10, ...] = Field(min_length=1)
+
+
+class DesignWireV10(DesignWireV9):
+    """v10 短命题/锁引用；canonical 仍使用 Brief 的完整盲身份。
+
+    请求投影 v2 与 compiler 共用完整 Brief 的稳定前缀映射。v9 仅供已有付费
+    候选沿用/窄复核，适配集中在 stage4.slim，不再用于新整份生成。
+    """
+
+    protocol_version: Literal['stage4-design-v10']
+    scenes: tuple[SlimDesignSceneV10, ...] = Field(min_length=1)

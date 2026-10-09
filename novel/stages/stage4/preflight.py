@@ -27,7 +27,10 @@ from novel.stages.stage4.grounding import derive_semantic_binding, required_rele
 from novel.stages.stage4.guard import run_mechanical_guard
 from novel.stages.stage4.hook import publish_graph
 from novel.stages.stage4.hook_context import compile_hook_context
-from novel.stages.stage4.slim import design_fact_marks, design_placements
+from novel.stages.stage4.slim import (
+    design_fact_marks, design_placements, design_wire_model,
+    DESIGN_READ_PROTOCOLS, DesignReferenceError,
+)
 
 
 @dataclass(frozen=True)
@@ -190,10 +193,10 @@ def inspect_design_candidate(wire, *, checkpoint, brief, obligations, chars,
     checks = [PreflightCheck('design', 'failed' if errors else 'passed')]
     binding = None
     # placements与事实锁标注只接受现役wire；即使Design构造失败也独立检查标注形状。
-    placements, marks, placement_errors = _design_wire_projections(wire)
+    placements, marks, placement_errors = _design_wire_projections(wire, brief)
     # 现役wire同一份Pydantic形状错误已经由Design完整报告，不再复制一遍。
     shared_shape_failure = (body is None and placement_errors
-                            and wire.get('protocol_version') == STAGE4_DESIGN_WIRE_PROTOCOL)
+                            and wire.get('protocol_version') in DESIGN_READ_PROTOCOLS)
     if not shared_shape_failure:
         errors.extend(placement_errors)
     checks.append(PreflightCheck('placements', 'failed' if placement_errors else 'passed',
@@ -248,16 +251,19 @@ def inspect_design_candidate(wire, *, checkpoint, brief, obligations, chars,
                             tuple(checks), projections)
 
 
-def _design_wire_projections(wire) -> tuple[dict | None, tuple, list[str]]:
+def _design_wire_projections(wire, brief) -> tuple[dict | None, tuple, list[str]]:
     """现役wire的机械投影：real承载位与事实锁标注；旧wire不补造任一标注。"""
-    if wire.get('protocol_version') != STAGE4_DESIGN_WIRE_PROTOCOL:
+    if wire.get('protocol_version') not in DESIGN_READ_PROTOCOLS:
         return None, (), [design_issue(
             f'design wire 必须是 {STAGE4_DESIGN_WIRE_PROTOCOL}'
             f'（实得 {wire.get("protocol_version")!r}）——旧wire不补造'
             'real承载标注与事实锁引用',
             code='design_protocol_literal', location=('protocol_version',))]
     try:
-        model = DesignWireV9.model_validate(wire)
+        model = design_wire_model(wire, brief)
+    except DesignReferenceError as exc:
+        return None, (), [design_issue(str(exc), code='design_wire_expand',
+                                      location=exc.path, paths=(exc.path,))]
     except ValidationError as exc:
         return None, (), [design_issue(
             f'design 瘦 wire 协议校验失败：{exc}',

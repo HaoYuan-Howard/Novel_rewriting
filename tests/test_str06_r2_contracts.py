@@ -676,7 +676,7 @@ def test_r2_version_constants():
     from contracts.schema.grounding import SemanticBinding
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/grounding/semantic_binding.json'] \
         == 'str06-rc22'
-    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v9'
+    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v10'
     assert SemanticBinding.model_fields['contract_version'].default == 'str06-rc22'
 
 

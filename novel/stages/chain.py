@@ -60,7 +60,7 @@ from contracts.invariants import (
 )
 from contracts.schema.grounding import OutputConstraints, PreserveCheckpoint
 from contracts.schema.hook import HookConstraints, HookReceipt
-from contracts.schema.design import DesignWireV9, STAGE4_DESIGN_WIRE_PROTOCOL
+from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
 from contracts.schema.workflow import (
     OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1,
@@ -89,9 +89,8 @@ from novel.stages.common import (
     hook_material_issues, writer_material_issues, hook_name_projections,
 )
 from novel.stages import candidates
-from novel.stages.stage2.chapters import chapter_revision_scope_issues
-from novel.stages.stage2.slim import slim_chapter_wire
 from novel.stages.stage2 import (
+    chapter_revision_scope_issues, slim_chapter_wire,
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
     book_patch_locate, chapter_observation_prompt, chapter_patch_locate,
     character_core_view, names_patch_locate,
@@ -126,6 +125,8 @@ from novel.stages.stage4 import (
 from contracts.schema.orchestration import LegacyLlmProfile
 from novel.stages.stage4 import (
     design_patch_legal_values, design_patch_slice, hook_combination_errors,
+    design_reference_aliases, design_wire_model, DESIGN_READ_PROTOCOLS,
+    design_issue,
     hook_patch_legal_values, hook_patch_slice, inspect_body_materials,
     inspect_design_candidate, locate_design_patches, plan_material_repairs,
     wire_paths_of,
@@ -993,7 +994,7 @@ def run_preserve(ctx: ChainContext) -> dict:
                                                request_sha256=ctx.digest(preserve_prompt))
         # CS-H H3（RC-64）自闸：义务文本里的裸姓／未登记别名在本接受循环里被
         # 逐条定位（与下游材料归因同一把尺），不再等跨节点回派。
-        return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars)
+        return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars, blueprint)
 
     def locate_preserve_patches(wire, errors):
         """Preserve 自闸按义务或完整细节对象定位；其余问题沿用整份修订。"""
@@ -1234,10 +1235,10 @@ def _design_reuse_plan(ctx: ChainContext, *, checkpoint, chars, brief, obligatio
 def _design_candidate_compatible(wire, constraints: OutputConstraints) -> tuple[bool, str]:
     """兼容性检查（RC-53 闭集）：wire 协议字面量、可按当前 schema 构造、章数与
     篇幅约束未变。任一不符即整份新购的原因，不静默降级。"""
-    if not isinstance(wire, dict) or wire.get('protocol_version') != STAGE4_DESIGN_WIRE_PROTOCOL:
+    if not isinstance(wire, dict) or wire.get('protocol_version') not in DESIGN_READ_PROTOCOLS:
         return False, '协议字面量不兼容'
     try:
-        model = DesignWireV9.model_validate(wire)
+        model = design_wire_model(wire)
     except ValidationError as exc:
         return False, '候选无法按当前schema构造'
     if len(model.chapters) != constraints.target_chapter_count:
@@ -1258,25 +1259,27 @@ def run_body_design(ctx: ChainContext) -> dict:
                                     total_length_budget=ctx.budget)
     # wire 协议规则（schema＋指令）与合法取值闭集：整份请求与窄返修请求共用
     # 同一把尺——窄请求只裁掉整份输入材料，不另造一套协议（I-11）。
-    protocol_rules = design_rules(
+    rules_context = dict(
         known_char_ids=set(chars.characters),
         detail_refs=detail_index(obligation_index),
         knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
                         for ref, (_, change) in knowledge_change_index(obligation_index).items()},
         # 禁区（unanswered）不承载状态，不进 lock 闭集。
-        fact_lock_ids=[f.kf_id for f in brief.fact_locks
-                       if f.kind != 'unanswered'],
         registered_surfaces=expand_surface_releases(
             {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
             chars.name_structure))
-    legal_values = json.dumps(design_patch_legal_values(
-        known_char_ids=set(chars.characters), obligations=obligation_index,
-        knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
-                        for ref, (_, change) in knowledge_change_index(obligation_index).items()},
-        fact_lock_ids=[f.kf_id for f in brief.fact_locks if f.kind != 'unanswered'],
-        registered_surfaces=expand_surface_releases(
-            {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
-            chars.name_structure)), ensure_ascii=False, separators=(',', ':'))
+    def request_rules(protocol):
+        aliases = design_reference_aliases(brief) if protocol == STAGE4_DESIGN_WIRE_PROTOCOL else {}
+        context = {**rules_context, 'fact_lock_ids': [aliases.get(f.kf_id, f.kf_id)
+                   for f in brief.fact_locks if f.kind != 'unanswered']}
+        rules = design_rules(**context, protocol=protocol)
+        legal = json.dumps(design_patch_legal_values(
+            **{key: value for key, value in context.items() if key != 'detail_refs'},
+            obligations=obligation_index),
+                           ensure_ascii=False, separators=(',', ':'))
+        return rules, legal
+
+    protocol_rules, legal_values = request_rules(STAGE4_DESIGN_WIRE_PROTOCOL)
     design_prompt = revision_prompt_for_owner(
         repository, 'design',
         pack_prompt(protocol_rules,
@@ -1295,11 +1298,13 @@ def run_body_design(ctx: ChainContext) -> dict:
         slice_payload = design_patch_slice(base_wire, brief, obligation_index,
                                            targets=[t.path for t in targets],
                                            identities=identities)
+        # 旧候选窄复核仍使用它原来的引用语法；不改基底、不重铸付费摘要。
+        patch_rules, patch_legal = request_rules(base_wire['protocol_version'])
         return NarrowPatchRequest(
-            rules=protocol_rules,
+            rules=patch_rules,
             dependency=json.dumps(slice_payload, ensure_ascii=False,
                                   separators=(',', ':')),
-            legal_values=legal_values)
+            legal_values=patch_legal)
 
     def inspect(w):
         return inspect_design_candidate(
@@ -1322,9 +1327,14 @@ def run_body_design(ctx: ChainContext) -> dict:
     #: 都以此登记谱系——否则被回派的候选永远没有「生成时的上游版本」，上游修好后
     #: 免费沿用对它不可达（RC-52：登记全部已购候选）。
     produced: dict[str, dict] = {}
+    expected_protocol = STAGE4_DESIGN_WIRE_PROTOCOL
 
     def validate(w):
         nonlocal last_inspection
+        if isinstance(w, dict) and w.get('protocol_version') != expected_protocol:
+            return [design_issue(f'本请求 wire 协议必须是 {expected_protocol}',
+                                 code='design_protocol_literal',
+                                 location=('protocol_version',))]
         last_inspection = inspection = inspect(w)
         produced[candidates.wire_sha256(w)] = inspection.report()
         repairs = repairs_for(inspection)
@@ -1416,6 +1426,7 @@ def run_body_design(ctx: ChainContext) -> dict:
         # 判定已对它做过完整预检，不再整份新购一轮；基底 attempt 的引用经
         # `PatchBaseline.attempt` 由付费边界解析进 provenance（成本链分别聚合）。
         candidate = reuse_plan.candidate or {}
+        expected_protocol = candidate['wire']['protocol_version']
         baseline = PatchBaseline(
             wire=candidate['wire'], digest=candidates.wire_sha256(candidate['wire']),
             summary=f"已购候选第 {candidate.get('ordinal')} 轮（turn {candidate.get('turn_id')}）",

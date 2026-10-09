@@ -329,6 +329,35 @@ def _reopened_session(repo, transport):
                               allow_source_export=True, provider='fake', sid='run')
 
 
+@pytest.mark.parametrize('semantic_change', [False, True])
+def test_purchased_v9_candidate_uses_carry_or_narrow_review_after_v10_upgrade(tmp_path, semantic_change):
+    """真正 v9 已购账＋谱系 → v10 入口，不因请求升版整份重购。"""
+    from novel.stages.chain import _record_design_candidates
+    from novel.stages import candidates
+    from novel.stages.common import design_rules, pack_prompt
+    from novel.stages.stage4 import project_design_input, preserve_revision_wire
+    ctx, wires, transport, args = _prepare(tmp_path)
+    repo = ctx.repository
+    wires['design']['protocol_version'] = 'stage4-design-v9'
+    prompt = pack_prompt(design_rules(protocol='stage4-design-v9'),
+                         brief=project_design_input(args['brief'], args['obligations'],
+                                                    protocol='stage4-design-v9'))
+    wire, _ref = ctx.ask('design', prompt, lambda w: list(inspect_design_candidate(w, **args).errors))
+    inspection = inspect_design_candidate(wire, **args)
+    assert inspection.passed
+    _record_design_candidates(ctx, produced={candidates.wire_sha256(wire): inspection.report()},
+        upstream_wire=preserve_revision_wire(repo.read_model('runtime/preserve_checkpoint.json')))
+    calls = transport.calls.count('design')
+    republish_checkpoint(repo, lambda cp: cp.model_copy(update={
+        'obligations': tuple(o.model_copy(update={'statement': o.statement + '，且夫君许诺必归'})
+                             for o in cp.obligations)}) if semantic_change else _lineage_only_mutation(cp))
+    result = run_body_design(_design_ctx(ctx, _reopened_session(repo, transport)))
+    assert result['reuse']['action'] == ('narrow_review' if semantic_change else 'carried_forward')
+    assert transport.calls.count('design') == calls + int(semantic_change)
+    assert repo.read_model('stage4/design/body_design.json').scenes
+    assert repo.read_model('stage4/grounding/semantic_binding.json').entries
+
+
 def _ledger_rows(repo, purpose='design'):
     import json as _json
     path = repo.root.parent / '_service' / 'ledger.jsonl'

@@ -52,6 +52,12 @@ Stage2/4、发布、恢复、下游消费等共 861 项通过，0 失败/跳过�
 JUnit 分别为 .test_cache/missing-conflict-final.xml 与 missing-conflict-scope-final.xml。
 这是定向工程回归，不是全仓终验或 golden 成书质量验收。
 
+同日用户确认 Design 首轮可用率修复：按 Preserve 可交接条件、原子条件与自然叙事拍分离、
+版本化请求压缩的顺序实现。授权用本书冻结材料向 DeepSeek 付费配对，保持 flash/high/thinking on；
+费用仍走原根工作单元与整书总闸，不追加额度。首轮完整可用率必须含写手材料完整预检，失败、
+返修、累计 provider 调用耗时与设计核读分别记录；单书结果不外推总体成功率或成书质量。
+已购 v9 候选在正式 Preserve 修订后优先走现有免费沿用／窄复核规则。
+
 ## 未完成项
 
 2026-10-09 用户确认独立事件锚点方案：现役版式 rc22、Preserve v5/policy 8，
@@ -109,6 +115,7 @@ Phase 4（devices A/B）未立项，不随本路线执行。
 | 对象 | 有效义务与删除条件 |
 |---|---|
 | rc12／rc13 ExecutionPlan adapter | rc21 质量批删除已废止的五类旧质量产物迁移，仅 `novel/store.py::_upgrade_rc12_payload` 对形状未变的 ExecutionPlan 保留 rc12／rc13→rc14 无损适配。checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR 均须显式当前 rc22，旧版或缺版本拒读，不补造细节或概括判断。read_graph_hook 先验证当前图版本再摘组件，不绕版本读取旧图。存量 ExecutionPlan 全部重建或退役后删除此 adapter，禁止无限新增版本 |
+| Design v9 已购候选 | 用户 2026-10-09 明确要求修订后优先沿用／窄复核；v10/v2 新生成使用短引用，`novel/stages/stage4/slim.py::design_wire_model` 集中解码 v9，canonical rc22 不变。旧候选窄复核只用原 v9 引用语法与 v1 切片，原请求／响应／patch 基底摘要不改，不新增 v9 整份生成路径。所有存量 v9 候选已采用、归档且不再续跑后删除 v9 schema、解码与切片分支 |
 | OwnerIssue v1／v2 读兼容 | v3 显式 dispatch_pending、指纹历史与更正记录；只经 `contracts/schema/workflow.py::owner_issue_record_of_payload` 集中解码；所有存量 v1／v2 根只读归档／不再续跑后删除。旧错误路由账的更正按 RC-15 显式恢复，不重置轮数 |
 | OwnerRevisionRecord V1 读兼容 | V2 增必填 `applies_to_request_sha256` 与 kind `carried_forward`（CS-H H1b，RC-54/56：免费沿用的采用凭证）；只经 `contracts/schema/workflow.py::owner_revision_record_of_payload` 集中解码（v1 的应用身份即其 `baseline_request_sha256`——V1 只可能是 owner_patch／resample）。现存根盘上不再存在 `schema_version=1` 的修订记录（只读归档／不再续跑）后删除 V1 读兼容；未知版本显式拒绝，不向领域 schema 塞默认值 |
 | names／Characters旧信封 | names v2与两类信封v2显式拒识旧版；须新协议names重建后compile重建Characters，不推断空resolutions。原冻结根只读，授权新epoch再重建；无隐式adapter |

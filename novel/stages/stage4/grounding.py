@@ -43,12 +43,13 @@ from contracts.schema.source import (
     BlueprintsArtifactV17, CharactersCore,
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
+from contracts.schema.state import WithheldNameBinding
 from novel.core.name_materials import (
     family_form_literals, withheld_name_bindings,
 )
 from novel.core.validation import ValidationIssue
 from novel.stages.common import (
-    check_binding_covers_checkpoint, claim_spans, uncovered_occurrences,
+    check_binding_covers_checkpoint, claim_spans, project_withheld_names, uncovered_occurrences,
 )
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.fact_bindings import (
@@ -973,7 +974,7 @@ def _preserve_issue(message: str, code: str, location: tuple,
 
 
 def preserve_name_issues(
-    checkpoint: PreserveCheckpoint | None, chars,
+    checkpoint: PreserveCheckpoint | None, chars, blueprint=None,
 ) -> list[ValidationIssue]:
     """Preserve 自闸（CS-H H3，RC-64）：义务 statement／satisfaction 里的
     **裸姓与未登记别名**在 Preserve 自己的接受循环里被逐条定位。
@@ -986,6 +987,10 @@ def preserve_name_issues(
     不再等跨节点回派。家族构词（「陆家」一类集体指称）**不拒**：同家族人物释放后
     它是正文的合法字面，Preserve 阶段不知释放时点，拒收只会误报。
     quotes／anchors 是源文逐字证据，不在扫描面。纯函数、只读。
+
+    同一人物在同句混用不同已绑定带名称谓的无损投影阻断也提前定位；与 renderer
+    同样检查 statement＋satisfaction 的组合行。必保揭名由正式证据派生并排除，
+    未知揭名及目标拍位问题仍留给 Design，不在此模拟目标释放顺序。
     """
     structure = chars.name_structure
     if checkpoint is None or structure is None:
@@ -996,16 +1001,25 @@ def preserve_name_issues(
                         | {s for entry in projection.by_person
                            for s in entry.name_bearing_surfaces}
                         | family_forms)
-    bindable = {literal for literal, _cid, _enc in
-                withheld_name_bindings(registered, structure)}
+    bindings = tuple(WithheldNameBinding(literal=literal, char_id=cid, enclosing=enclosing)
+                     for literal, cid, enclosing in withheld_name_bindings(registered, structure))
+    bindable = {binding.literal for binding in bindings}
+    # 显示面具体字面不影响同句不同称谓的阻断判据；这里只模拟同一人物的统一面，
+    # 不决定目标释放位置、不改文本。必保揭名由正式证据信号派生，保持原字面。
+    display = {binding.char_id: f'人物<{binding.char_id}>' for binding in bindings}
+    required: dict[str, set[str]] = {}
+    if blueprint is not None:
+        _props, _knowledge, _facts, derived = _derive_brief_locks(
+            checkpoint, blueprint, chars.core_view(), structure)
+        required = {oid: {face for change in row['knowledge_changes']
+                          for face in change.requires_released}
+                    for oid, row in derived.items()}
     # 闸面＝裸姓（家族字面本身，含复姓整字）。认领面只有两类合法字面：家族构词
     # （「陆家」一类集体指称）与**唯一归属、可投影**的带名面——「陆」在「陆家」
     # 「陆兄」里被更长的合法字面认领；在「陆郎」「陆某」这类未登记别名里未被覆盖、
     # 如实报出。多义带名面（同一登记称谓属于两个人物）永不投影，**不**作认领面：
     # 它里面的裸姓同样如实报出（与下游材料归因同一把尺，RC-64）。
     gate = tuple(sorted({f.literal for f in structure.families.values()}))
-    if not gate:
-        return []
     claim_face = tuple(sorted((family_forms | bindable) - set(gate)))
     issues: list[ValidationIssue] = []
     for index, obligation in enumerate(checkpoint.obligations):
@@ -1014,6 +1028,34 @@ def preserve_name_issues(
         fields.extend((f'details/{detail.detail_id}', detail.text,
                        ('obligations', index, 'details', di))
                       for di, detail in enumerate(obligation.details))
+        # renderer 会将两字段拼成同一材料行；逐字段可投影不证明组合后也可投影。
+        portable_fields = [*fields, ('statement+satisfaction',
+                           f'{obligation.statement}（本拍验收时须兑现：{obligation.satisfaction}）',
+                           ('obligations', index))]
+        protected = required.get(obligation.obligation_id, set())
+        portable_bindings = tuple(b for b in bindings if b.literal not in protected)
+        # 离线缺 Blueprint 时无法证明 identity/reveal 的揭名要求；保持未知，
+        # 生产/预览/重放均传正式 Blueprint，不凭类别或自然语言推断揭名。
+        can_check_projection = (blueprint is not None
+                                or obligation.kind.value not in ('identity', 'reveal'))
+        blocked_literals: set[str] = set()
+        if can_check_projection:
+            for field, text, path in portable_fields:
+                _projected, _hits, blocks = project_withheld_names(
+                    text, bindings=portable_bindings, display=display)
+                literals = {block.literal for block in blocks} - blocked_literals
+                if not literals:
+                    continue
+                blocked_literals.update(literals)
+                issue = _preserve_issue(
+                    f'义务 {obligation.obligation_id} 的 {field} 同句混用同一人物的不同称谓 '
+                    f'{sorted(literals)}，无法无损投影；身份/别名映射以 Characters 为准，'
+                    '本项只写关系、行动与满足条件，统一可用指称；保留 anchors 与业务语义',
+                    'preserve_name_projection',
+                    ('preserve_name_projection', obligation.obligation_id, field), (path,))
+                issue.context.update({'obligation_id': obligation.obligation_id,
+                                      'field': field, 'literals': sorted(literals)})
+                issues.append(issue)
         for field, text, path in fields:
             if not text:
                 continue

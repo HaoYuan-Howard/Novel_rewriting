@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Design v9 的确定性编译层：real 声明验收/支撑拍，know 声明每次认知变化，
+"""Design v10 的确定性编译层：real 声明验收/支撑拍，know 声明每次认知变化，
 lock 在已选状态上标注事实锁。
 
 Brief.knowledge_changes 从 Preserve 正式 anchor 派生盲身份与完整三元组；
 代码派发 obNN.kNN 短引用，模型只标拍位。读者 known 另标 confirms 事实地址。
 不按最终验收拍猜中间模式，不按自由事实键和 kp 句柄猜同义。v9→v5 中间形状
-只服务同一次编译；正式输出是 rc21 BodyDesign，Binding 同源双产物发布。
+只服务同一次编译；正式输出是 rc22 BodyDesign，Binding 同源双产物发布。
+请求 v2 的 kp/kf 八位短引用按完整 Brief 确定性展开；已购 v9 解码集中在此。
 
 事实锁（CS-F2）：模型在**已选状态**上写 `lock: kf_*`，只做引用选择；本模块
 把标注投影成 `FactLockMark`（拍位、状态下标与由 `at`/`key` 派生的状态地址），
@@ -24,10 +25,99 @@ from typing import Any, Mapping
 from pydantic import ValidationError
 
 from contracts.schema.design import (
-    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV9,
+    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV9, DesignWireV10,
 )
 from contracts.schema.grounding import ReconstructionBrief
 from contracts.schema.state import EffectDomain, StateAddress
+
+
+# 显式 v9 付费候选适配面（删除条件登记在 REQUIREMENTS）；新生成只走 v10。
+DESIGN_READ_PROTOCOLS = (STAGE4_DESIGN_WIRE_PROTOCOL, 'stage4-design-v9')
+
+
+def design_reference_aliases(brief: ReconstructionBrief) -> dict[str, str]:
+    """盲身份 → 八位前缀；增加/删除其它条目不重排旧引用，不落第二份登记。
+
+    完整闭集校验短引用唯一；极低概率前缀碰撞明确拒绝，不猜映射、不改长身份。
+    旧候选的短引用若已被删除，编译报错并交已有窄复核，不绑定到另一个命题。
+    """
+    aliases = {ref: ref[:11] for ref in (
+        *(p.kp_id for p in brief.propositions), *(f.kf_id for f in brief.fact_locks))}
+    if len(set(aliases.values())) != len(aliases):
+        raise ValueError('Design 短引用前缀冲突；必须显式修订请求协议，不得猜测或重编号')
+    return aliases
+
+
+class DesignReferenceError(ValueError):
+    def __init__(self, path: tuple, message: str):
+        super().__init__(message)
+        self.path = path
+
+
+def design_wire_model(wire: Any, brief: ReconstructionBrief | None = None) -> DesignWireV9 | DesignWireV10:
+    """集中解码 v10 与已购 v9；只展开引用字段，绝不替换自然语言文本。
+
+    无 Brief 只验证传输形状（候选兼容性）；有 Brief 时返回使用 canonical
+    引用的同构 v9 内部模型，供同一 compiler/validator 消费。原始 wire 不变，
+    已购请求/响应摘要及 patch 基底身份不变。
+    """
+    protocol = wire.get('protocol_version') if isinstance(wire, dict) else None
+    if protocol == 'stage4-design-v9':
+        return DesignWireV9.model_validate(wire)
+    model = DesignWireV10.model_validate(wire)
+    if brief is None:
+        return model
+    canonical = {short: full for full, short in design_reference_aliases(brief).items()}
+    data = model.model_dump(mode='json')
+
+    def expand(row, field, path):
+        value = row.get(field)
+        if not isinstance(value, str) or not value.startswith(('kp_', 'kf_')):
+            return
+        if value not in canonical:
+            raise DesignReferenceError((*path, field), f'闭集外短引用 {value!r}')
+        row[field] = canonical[value]
+
+    for i, row in enumerate(data['initial_state']):
+        expand(row, 'key', ('initial_state', i))
+        if isinstance(row.get('confirms'), dict):
+            expand(row['confirms'], 'key', ('initial_state', i, 'confirms'))
+    for si, scene in enumerate(data['scenes']):
+        for ri, row in enumerate(scene['reads']):
+            expand(row, 'key', ('scenes', si, 'reads', ri))
+        for bi, beat in enumerate(scene['beats']):
+            for ti, row in enumerate(beat['state']):
+                path = ('scenes', si, 'beats', bi, 'state', ti)
+                expand(row, 'key', path)
+                expand(row, 'lock', path)
+            for ki, row in enumerate(beat['know']):
+                if isinstance(row.get('confirms'), dict):
+                    expand(row['confirms'], 'key', ('scenes', si, 'beats', bi, 'know', ki, 'confirms'))
+    data['protocol_version'] = 'stage4-design-v9'
+    return DesignWireV9.model_validate(data)
+
+
+def _compact(value: Any) -> Any:
+    """请求 v2 的显式默认：空集合/None 省略；False、空满足条件不删除。"""
+    if isinstance(value, dict):
+        return {key: _compact(item) for key, item in value.items()
+                if item is not None and item != [] and item != {}}
+    if isinstance(value, list):
+        return [_compact(item) for item in value]
+    return value
+
+
+def _alias_references(value: Any, aliases: Mapping[str, str]) -> Any:
+    """仅对类型化引用字段做映射，语义文本即使含同样字面也保持原样。"""
+    if isinstance(value, list):
+        return [_alias_references(item, aliases) for item in value]
+    if isinstance(value, dict):
+        return {key: (aliases.get(item, item) if key in ('kp', 'kp_id', 'kf_id')
+                      else [aliases.get(ref, ref) for ref in item]
+                      if key in ('locks', 'realize_locks')
+                      else _alias_references(item, aliases))
+                for key, item in value.items()}
+    return value
 
 
 @dataclass(frozen=True)
@@ -168,7 +258,8 @@ def project_hook_semantics(body, brief: ReconstructionBrief) -> dict[str, Any]:
             'world_constraints': dict(sorted(used_worlds.items()))}
 
 
-def _project_requirement(ob: str, obligations: Mapping[str, Any]) -> dict[str, Any]:
+def _project_requirement(ob: str, obligations: Mapping[str, Any], *,
+                         aliases: Mapping[str, str] | None = None) -> dict[str, Any]:
     """单条义务的源盲投影（`project_design_input` 与窄返修切片共用一把尺）。
 
     ``requires`` 翻成 ob 编号、``knowledge_changes`` 换成 obNN.kNN 短引用；
@@ -178,7 +269,7 @@ def _project_requirement(ob: str, obligations: Mapping[str, Any]) -> dict[str, A
     changes = knowledge_change_index(obligations)
     details = detail_index(obligations)
     requirement = obligations[ob]
-    return {
+    result = {
         **requirement.model_dump(mode='json',
                                  exclude={'core_id', 'requires_cores', 'knowledge_changes',
                                           'summarizes_cores', 'details'}),
@@ -190,15 +281,18 @@ def _project_requirement(ob: str, obligations: Mapping[str, Any]) -> dict[str, A
             ref: change.model_dump(mode='json', exclude={'change_id'})
             for ref, (owner, change) in changes.items() if owner == ob},
     }
+    return _compact(_alias_references(result, aliases)) if aliases is not None else result
 
 
 def project_design_input(
     brief: ReconstructionBrief, obligations: Mapping[str, Any],
+    *, protocol: str = STAGE4_DESIGN_WIRE_PROTOCOL,
 ) -> dict[str, Any]:
-    """Brief → 源盲输入 v1；同一语义只发一次，短引用与 wire 编译共用。
+    """Brief → 源盲输入 v2；同一语义只发一次，短引用与 wire 编译共用。
 
     仅撤去审计 hash／机械 core、change 身份；完整满足条件、锁、认知变化、
-    依赖、表达和世界约束不截断。正式 Brief 不变，输入版本及内容参与请求摘要。
+    依赖、表达和世界约束不截断。空集合/None 的省略与知情授权并集由 v2 明示。
+    正式 Brief 不变，输入版本及内容参与请求摘要。v1 只为登记的已购 v9 窄复核。
     """
     by_core = {r.core_id: r for r in brief.requirements}
     cores = {r.core_id: ob for ob, r in obligations.items()}
@@ -208,9 +302,23 @@ def project_design_input(
         raise ValueError('Design 输入义务映射与正式 Brief 不一致')
     projection = brief.model_dump(mode='json', exclude={
         'brief_id', 'preserve_checkpoint_sha256', 'requirements'})
-    projection['input_version'] = 'stage4-design-input-v1'
-    projection['requirements'] = {ob: _project_requirement(ob, obligations)
+    aliases = design_reference_aliases(brief) if protocol == STAGE4_DESIGN_WIRE_PROTOCOL else None
+    if protocol not in DESIGN_READ_PROTOCOLS:
+        raise ValueError(f'未登记 Design 请求协议 {protocol!r}')
+    projection['input_version'] = 'stage4-design-input-v2' if aliases is not None else 'stage4-design-input-v1'
+    projection['requirements'] = {ob: _project_requirement(ob, obligations, aliases=aliases)
                                   for ob in sorted(obligations)}
+    if aliases is not None:
+        # 知情授权是变化三元组的并集。保留额外授权（显式差集），不丢认知实例。
+        derived = {(c.holder, c.kp, c.mode) for r in obligations.values()
+                   for c in r.knowledge_changes}
+        projection['knowledge_locks'] = [k.model_dump(mode='json') for k in brief.knowledge_locks
+                                         if (k.holder, k.kp, k.mode) not in derived]
+        projection['propositions'] = {aliases[p.kp_id]: p.model_dump(mode='json', exclude={'kp_id'})
+                                      for p in brief.propositions}
+        projection['fact_locks'] = {aliases[f.kf_id]: f.model_dump(mode='json', exclude={'kf_id'})
+                                    for f in brief.fact_locks}
+        projection = _compact(_alias_references(projection, aliases))
     return projection
 
 
@@ -227,7 +335,10 @@ def expand_design_wire(
     `design_placements(wire)` 单独取用；事实锁标注经 `design_fact_marks`
     单独取用（锁引用只活在 wire 与 Binding，不进 v5 中间形状）。
     """
-    model = DesignWireV9.model_validate(wire)
+    try:
+        model = design_wire_model(wire, brief)
+    except DesignReferenceError as exc:
+        return None, [(exc.path, str(exc))]
     issues: list[tuple[tuple | None, str]] = []
     if obligations is None:
         return None, [(None, 'v9 瘦 wire 需要 obligations（ob 编号→需求）映射——'
@@ -651,8 +762,18 @@ def design_patch_slice(
     fact_locks = {f.kf_id: f.model_dump(mode='json') for f in brief.fact_locks}
     world_rules = {c.constraint_id: c.model_dump(mode='json')
                    for c in brief.book_constraints}
-    requirements = {ob: _project_requirement(ob, obligations)
+    protocol = wire.get('protocol_version')
+    aliases = design_reference_aliases(brief) if protocol == STAGE4_DESIGN_WIRE_PROTOCOL else None
+    requirements = {ob: _project_requirement(ob, obligations, aliases=aliases)
                     for ob in sorted(referenced_obs & set(obligations))}
+    for requirement in requirements.values():
+        referenced_keys.update(requirement.get('locks', ()))
+        referenced_locks.update(requirement.get('realize_locks', ()))
+        referenced_keys.update(c['kp'] for c in requirement.get('knowledge_changes', {}).values())
+    if aliases is not None:
+        projection = project_design_input(brief, obligations)
+        propositions = projection.get('propositions', {})
+        fact_locks = projection.get('fact_locks', {})
 
     # 涉及人物的身份投影（目标拍 who／pov／release／state 与 reads 的主体）。
     for scene_i, beat_i in target_beats:
@@ -679,7 +800,7 @@ def design_patch_slice(
                     'ref': f'scenes[{scene_i}].beats[{beat_i}]', **release})
 
     slice_payload: dict[str, Any] = {
-        'slice_version': 'stage4-design-patch-slice-v1',
+        'slice_version': 'stage4-design-patch-slice-v2' if aliases is not None else 'stage4-design-patch-slice-v1',
         'scenes': [scenes[i] for i in sorted(wanted_scenes)],
         'neighbor_beats': neighbors,
         'requirements': requirements,
@@ -695,6 +816,8 @@ def design_patch_slice(
         'release_prefix': release_prefix,
         'identities': identity_rows,
     }
+    if aliases is not None:
+        slice_payload.pop('knowledge_changes')  # 所属义务已带完整逐次变化，不重复发送。
     if want_initial:
         slice_payload['initial_state'] = list(wire.get('initial_state') or ())
     for field in sorted(top_fields):

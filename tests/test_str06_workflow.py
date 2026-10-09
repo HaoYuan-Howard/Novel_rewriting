@@ -24,7 +24,7 @@ def _kp_from_design_prompt(prompt: str, statement: str) -> str:
     """
     import json as _json
     payload = _json.loads(prompt.split('输入：\n', 1)[1])
-    return next(p['kp_id'] for p in payload['brief']['propositions']
+    return next(ref for ref, p in payload['brief']['propositions'].items()
                 if p['statement'] == statement)
 
 
@@ -39,7 +39,7 @@ def _design_wire_v7():
     """stage4-design-v8（CS-3）：real 承载标注替 bind；义务 ob01–ob03 的接受拍
     都是首拍（与原 bind wire 等价）；kp 知情行经 ob02 的锁派生，不写在 wire。"""
     return {
-        'protocol_version': 'stage4-design-v9',
+        'protocol_version': 'stage4-design-v10',
         'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],
@@ -166,10 +166,10 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
     assert 'b01_01' not in design_prompt
     import json
     design_input = json.loads(design_prompt.split('输入：\n', 1)[1])
-    assert design_input['brief']['input_version'] == 'stage4-design-input-v1'
+    assert design_input['brief']['input_version'] == 'stage4-design-input-v2'
     assert 'obligation_table' not in design_input
     assert set(design_input['brief']['requirements']) == {'ob01', 'ob02', 'ob03'}
-    assert 'realization_brief' in design_prompt and 'purpose' in design_prompt
+    assert '"brief"' in design_prompt and 'purpose' in design_prompt
     # CS-3 bind 退役：承载位由 design wire 的 real 标注派生，无 bind 请求。
     assert all(owner != 'bind' for owner, _prompt in requests)
     before = repo.path('stage4/ir/writer_book_ir.json').read_bytes()
@@ -364,7 +364,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                               'basis': [{'segment': 'e01_01',
                                          'quote': '夫君与云娘一处住着'}]}])]}
     design = {
-        'protocol_version': 'stage4-design-v9',
+        'protocol_version': 'stage4-design-v10',
         'book_style': '冷峻克制的第三人称叙事。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],

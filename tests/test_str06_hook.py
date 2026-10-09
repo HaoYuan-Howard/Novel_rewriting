@@ -186,7 +186,7 @@ def _design_wire_v7() -> dict:
     以 character 域事实断言承载同一信息。义务 ob01 的接受拍＝末次标注拍
     （sc01#b02），sc01#b01 是支撑位——与旧 bind wire 的 entries/supporting 等价。"""
     return {
-        'protocol_version': 'stage4-design-v9',
+        'protocol_version': 'stage4-design-v10',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'character_voices': [{'char_id': 'yun_niang', 'voice': '冷峻'}],
         'initial_state': [

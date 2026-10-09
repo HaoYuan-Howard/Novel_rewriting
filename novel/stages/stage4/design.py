@@ -66,6 +66,7 @@ from novel.stages.stage4.read_closure import confirmation_closure_errors, resolv
 from novel.stages.stage4.materials import validate_design_materials
 from novel.stages.stage4.slim import (
     FactLockMark, design_fact_marks, design_placements, expand_design_wire,
+    design_wire_model, DESIGN_READ_PROTOCOLS,
     knowledge_change_index,
 )
 
@@ -753,7 +754,7 @@ def inspect_body_design(
     real_sites: dict[str, list[tuple[int, int]]] = {}
     # 只有直接来自 v9 wire 的候选，下标才是 wire 路径（局部修订的编辑范围）；
     # 直接给 v5 中间形状的离线输入没有对应的可编辑 wire，问题不带路径。
-    locatable = wire.get('protocol_version') == STAGE4_DESIGN_WIRE_PROTOCOL
+    locatable = wire.get('protocol_version') in DESIGN_READ_PROTOCOLS
     v9_wire = wire
     if locatable:
         try:
@@ -769,7 +770,7 @@ def inspect_body_design(
         assert expanded is not None
         # 标注与承载位只在 v9 wire 上存在（不进中间 v5 形状与 BodyDesign）；
         # expand 已通过同一份模型校验。
-        wire_model = DesignWireV9.model_validate(wire)
+        wire_model = design_wire_model(wire, brief)
         marks = design_fact_marks(wire_model)
         real_sites = design_placements(wire_model)
         if obligations is not None:

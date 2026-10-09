@@ -904,6 +904,10 @@ source_refs 所指窗口；邻句只供上下文，不能借它添加事件内�
 人物使用人物表中的完整姓名或已登记且唯一归属的称谓；不要自行缩成裸姓、
 多人的姓氏并列或未登记别名。重复提及也写完整称呼，或使用主客体明确的无姓名表述。
 裸姓及多义带名面无法在写手材料中确定性投影，会被机械校验拒收。
+身份与别名映射只读人物表，不在义务里重复写“甲/乙指丙”的别名说明；
+statement／satisfaction 只写谁与谁的关系、行动、动机和验收条件。
+同一句不混用同一人物的不同带名称谓；改用统一的登记称谓或主体明确的纯关系称呼，
+使义务在姓名尚未揭示的目标位置也能无损呈现。源证据明确要求揭名时保留揭示事实与时点。
 家族集体指称照常保留，不改人物身份与称谓关系；源引文只读，不为此改写证据。
 
 【必须保住的两类反差】
@@ -989,7 +993,7 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/义务清单/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v9）。你是整书一次调用的结构设计者：只表达**选择、
+（wire 协议 stage4-design-v10）。你是整书一次调用的结构设计者：只表达**选择、
 结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一、默认值、
 知情增量的键与模式全部由 compiler 派生，你不输出任何 ID、编号或归一化数值
 （I-21）。机械字段（world_rules、expression 保留决定、narration、pov/voice、
@@ -1000,6 +1004,14 @@ entry 的 recap/锚点缺省）也由代码派生——你只写判断与例外�
 不得改写义务给出的事实、动机与满足条件。
 不增加无证据的人物偏好、价值判断或社会规则。
 自由设计场景，但不为每条义务机械拆场。
+义务是原子验收条件，叙事拍是自然行动或转折，二者不一一对应。
+先按行动、感知通道、因果转折与章末停点组织事件，再把同时兑现的条件放在同一拍的 real 中；
+一拍可同时承担关系事实、动机、行动与自然发生的认知变化，不为每条条件另造解释拍。
+例如一场迎接亲属的行动可同时兑现亲属关系、来访目的与到达事件，real 同时列出这些条件；
+不用在迎接前另造关系说明拍、迎接后再造目的解释拍。合拍后各条件的满足内容仍须完整。
+不同发生时点的系列实例、先怀疑后证实、不同决策与因果前提仍分别安排，不能为减少拍数合并。
+实例的第几次、间隔与前后条件也是语义内容，须在对应 ev/brief 中保留；仅分成两拍不等于已保留时点。
+不设置拍数目标或上限；保留全部必保条件、各次发生与真实反应，不用概括替代具体实例。
 目标状态只存会限制后续的持续事实；即时动作留在事件。初始态由你显式选择，不复制源书末态。
 
 【义务承载标注（real，核心新增）】
@@ -1015,6 +1027,9 @@ Brief.requirements 以 obNN 为键，包含完整语义、依赖 requires、锁�
 读者 known 的变化必须另写 confirms:{domain,key,subjects,holder}，明确确认的
 目标事实地址；必须是该拍及之前已建立的实际事实。其它认知变化不写 confirms。
 - 每条**必保**（must_preserve=true）义务至少标注一拍，漏标即拒（机械校验）；
+- identity／initial_state／world_fact 同样遵守必保覆盖：initial_state、world_rules
+  或 brief 中已有该事实，不能代替 real。把关系、家境等条件附在自然体现它们的行动拍上，
+  不另造背景说明拍；输出前逐项核对所有必保编号都在至少一拍的 real 中。
 - 承载位必须能单独完成该义务的 satisfaction（复合义务前半用支撑拍）；
 - 若 A requires B：跨场时B不得晚于A；同场接受拍和支撑拍允许交错；
   已声明事实读取和认知披露仍须满足各自建立时点与授权边界；
@@ -1130,7 +1145,7 @@ scene_weights（可选）：与场景等长的正数数组（相对篇幅重点�
 返回一个 JSON object，不要围栏、不要解释。
 """
 
-from contracts.schema.design import DesignWireV5, DesignWireV9
+from contracts.schema.design import DesignWireV5, DesignWireV9, DesignWireV10, STAGE4_DESIGN_WIRE_PROTOCOL
 _DESIGN_INSTRUCTIONS = DESIGN_RULES
 
 
@@ -1138,25 +1153,32 @@ def design_rules(*, known_char_ids: set[str] | None = None,
                  registered_surfaces: Mapping[str, set[str]] | None = None,
                  knowledge_refs: Mapping[str, bool] | None = None,
                  detail_refs: Iterable[str] | None = None,
-                 fact_lock_ids: Iterable[str] | None = None) -> str:
+                 fact_lock_ids: Iterable[str] | None = None,
+                 protocol: str = STAGE4_DESIGN_WIRE_PROTOCOL) -> str:
     """模型 Schema 是唯一形状源；动态闭集与接受函数使用同一输入。
 
-    CS-3（2026-10-03）：形状源换瘦模型（现为 DesignWireV9）；闭集注入面随
+    CS-3（2026-10-03）：形状源换瘦模型（现为 DesignWireV10）；闭集注入面随
     之换名（who／可选 pov 的 anyOf 分支），语义与 v5 面一致。CS-F2：
     `fact_lock_ids` 是可被 `lock` 引用的事实锁句柄闭集（Brief.fact_locks 去掉
     unanswered 禁区）；空集合时 `lock` 只允许 null。
     """
-    schema = DesignWireV9.model_json_schema()
+    if protocol not in (STAGE4_DESIGN_WIRE_PROTOCOL, 'stage4-design-v9'):
+        raise ValueError(f'未登记 Design wire 协议 {protocol!r}')
+    current = protocol == STAGE4_DESIGN_WIRE_PROTOCOL
+    schema = (DesignWireV10 if current else DesignWireV9).model_json_schema()
+    beat_def = 'SlimDesignBeatV10' if current else 'SlimDesignBeat'
+    state_def = 'SlimDesignStateV10' if current else 'SlimDesignState'
+    scene_def = 'SlimDesignSceneV10' if current else 'SlimDesignScene'
     if detail_refs is not None:
         allowed_details = sorted(detail_refs)
-        props = schema['$defs']['SlimDesignBeat']['properties']['details']
+        props = schema['$defs'][beat_def]['properties']['details']
         if allowed_details:
             props['items']['enum'] = allowed_details
         else:
             props['maxItems'] = 0
     if fact_lock_ids is not None:
         lock_ids = sorted(fact_lock_ids)
-        state_props = schema['$defs']['SlimDesignState']['properties']
+        state_props = schema['$defs'][state_def]['properties']
         if lock_ids:
             state_props['lock']['anyOf'][0]['enum'] = lock_ids
         else:
@@ -1181,14 +1203,14 @@ def design_rules(*, known_char_ids: set[str] | None = None,
         for model, field in (('CharacterVoice', 'char_id'),
                              ('SurfaceIntroduction', 'char_id')):
             definitions[model]['properties'][field]['enum'] = characters
-        pov_prop = definitions['SlimDesignScene']['properties']['pov']
+        pov_prop = definitions[scene_def]['properties']['pov']
         pov_enum = sorted(known_char_ids | {'narrator'})
         if 'anyOf' in pov_prop:
             pov_prop['anyOf'][0]['enum'] = pov_enum
         else:
             pov_prop['enum'] = pov_enum
         definitions['SceneDriver']['properties']['focal_actor']['enum'] = sorted(known_char_ids | {'narrator'})
-        definitions['SlimDesignBeat']['properties']['who']['items']['enum'] = characters
+        definitions[beat_def]['properties']['who']['items']['enum'] = characters
         for definition in definitions.values():
             props = definition.get('properties', {})
             if 'subjects' in props:
@@ -1200,7 +1222,18 @@ def design_rules(*, known_char_ids: set[str] | None = None,
                 {'if': {'properties': {'char_id': {'const': cid}}},
                  'then': {'properties': {'surfaces': {'items': {'enum': sorted(faces)}}}}}
                 for cid, faces in sorted(registered_surfaces.items())]
-    return _DESIGN_INSTRUCTIONS + '\n【wire JSON Schema（字段与分支以此为准）】\n' + json.dumps(
+    instructions = _DESIGN_INSTRUCTIONS.replace(STAGE4_DESIGN_WIRE_PROTOCOL, protocol)
+    if current:
+        instructions += '''
+【请求投影 v2】
+propositions 与 fact_locks 以 kp_／kf_ 加八位字符的短引用为键；所有引用只使用这些键。
+compiler 按完整 Brief 展开到 canonical 身份；不生成、不抄写长 hash。
+空集合与 null 字段省略：缺省表示无该项，must_preserve=false 仍是明确可选。
+每次知情变化完整列在所属义务 knowledge_changes 中，含持有者、命题、模式及揭名要求；
+知情授权是这些三元组的并集，再加 knowledge_locks 中的额外授权。缺省无额外授权。
+不把重复三元组的不同发生实例合并；满足条件、动机、因果与披露约束全部有效。
+'''
+    return instructions + '\n【wire JSON Schema（字段与分支以此为准）】\n' + json.dumps(
         schema, ensure_ascii=False, separators=(',', ':'))
 
 

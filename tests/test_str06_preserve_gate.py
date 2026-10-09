@@ -228,3 +228,72 @@ def test_preserve_real_entry_accepts_absent_optional_details(tmp_path):
     run_preserve(ctx)
     checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
     assert all(not obligation.details for obligation in checkpoint.obligations)
+
+
+def test_preserve_projection_block_is_reported_without_mutating_evidence():
+    """真实姓名映射反例：已登记别名仍可能触发下游无损性守卫。"""
+    from novel.stages.stage4 import preserve_name_issues
+    from tests.test_str06_display_surface import _characters
+    from contracts.schema.source import CharactersArtifactV6
+    data = _characters().model_dump(mode='json')
+    data['characters']['pei_shuyuan'] = {'canonical': '裴书远', 'surfaces': [
+        {'surface': s, 'from_chapter': 1, 'source_refs': ['e01_01']}
+        for s in ('裴书远', '书远', '表弟')]}
+    data['name_structure']['families']['fam_pei'] = {'literal': '裴', 'forms': []}
+    data['name_structure']['people']['pei_shuyuan'] = {
+        'family_id': 'fam_pei', 'given': '书远', 'aliases': [],
+        'surface_forms': {'裴书远': '{family}{given}', '书远': '{given}', '表弟': None}}
+    chars = CharactersArtifactV6.model_validate(data)
+    checkpoint = _checkpoint_with('表弟来了')
+    obligation = checkpoint.obligations[0].model_copy(update={
+        'satisfaction': "裴书远以夫君表弟的身份出现，'表弟/书远'指裴书远；不得张冠李戴。"})
+    checkpoint = checkpoint.model_copy(update={'obligations': (obligation,)})
+    before = checkpoint.model_dump()
+    issues = preserve_name_issues(checkpoint, chars)
+    assert any(i.code == 'preserve_name_projection' for i in issues), issues
+    assert all(i.context['wire_paths'] == [['obligations', 0]] for i in issues)
+    assert checkpoint.model_dump() == before, 'validator 不改条件与源证据'
+    fixed = checkpoint.model_copy(update={'obligations': (obligation.model_copy(update={
+        'satisfaction': '此人物须以夫君表弟身份出现，表兄弟关系不得错配。'}),)})
+    assert preserve_name_issues(fixed, chars) == []
+
+
+def test_projection_block_repairs_only_one_obligation_in_real_entry(tmp_path):
+    from novel.stages.chain import run_preserve
+    from tests.test_str06_design_patch import PatchingTransport
+    wires = _wires()
+    bad = deepcopy(wires['preserve'])
+    # fixture 登记“陆大哥／陆兄”两种带名面；在同一句中不能无损压成一面。
+    bad['obligations'][0]['statement'] = '陆大哥向娘子坦白，陆兄确有难言之隐'
+    transport = PatchingTransport(wires, bad, owner='preserve')
+    ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires, transport=transport)
+    run_preserve(ctx)
+    assert transport.calls.count('preserve') == 2
+    assert '- 路径 obligations[0]：' in transport.owner_requests[1]
+    checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
+    for index, item in enumerate(wires['preserve']['obligations']):
+        assert checkpoint.obligations[index].statement == item['statement']
+        assert [a.handle for a in checkpoint.obligations[index].anchors] == item['anchors']
+
+
+def test_normal_name_reveal_is_not_rewritten_by_preserve_portability_gate(tmp_path):
+    """源证据要求的两个姓名面不折叠；目标释放位置继续交给 Design 判断。"""
+    from contracts.schema.workflow import STAGE4_PRESERVE_POLICY_VERSION
+    from novel.stages.stage4 import assemble_preserve, preserve_name_issues, project_brief
+    wires = _wires()
+    wires['ch01']['beats'][0]['cognition'] = [{
+        'proposition': {'ref': 'p_name', 'statement': '陆大哥正是被称作陆兄的人'},
+        'holder': 'yun_niang', 'mode': 'learns',
+        'basis': [{'segment': 'e01_01', 'quote': '唤夫君为陆大哥'}]}]
+    _ctx, _repo, chars, blueprint = _prepared(tmp_path, wires)
+    wire = deepcopy(wires['preserve'])
+    wire['obligations'][0].update(kind='identity', anchors=['b01_01.c1'],
+        statement='陆大哥正是陆兄', satisfaction='第一次点明陆大哥就是陆兄')
+    checkpoint, errors = assemble_preserve(wire, policy_id='preserve-default',
+        policy_version=STAGE4_PRESERVE_POLICY_VERSION, characters=chars.core_view(),
+        blueprint=blueprint, provider='x', model='y', request_sha256='r' * 64)
+    assert checkpoint is not None and not errors, errors
+    brief, _ = project_brief(checkpoint, chars.core_view(), blueprint, structure=chars.name_structure)
+    assert set(brief.requirements[0].knowledge_changes[0].requires_released) == {'陆大哥', '陆兄'}
+    assert preserve_name_issues(checkpoint, chars, blueprint) == []
+    assert checkpoint.obligations[0].anchors[0].quotes

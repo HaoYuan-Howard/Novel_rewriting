@@ -145,7 +145,7 @@ RC-26～29，反例 `tests/test_stage2_evidence_addressing.py`、
 `tests/test_str06_chapter_slim.py`。
 
 **设计瘦 wire（CS-3 审阅修复，2026-10-03；事实锁引用升 v8，2026-10-04）**：LLM 输出为
-`stage4-design-v9`（`contracts/schema/design.py::DesignWireV9`）。`real` 保留
+`stage4-design-v10`（`contracts/schema/design.py::DesignWireV10`）。`real` 保留
 义务接受拍/支撑拍；Brief 每条 requirement 的 `knowledge_changes` 从正式
 anchor 派生，完整保留每次变化的盲身份、holder、kp、mode。代码按盲身份排序
 派发 `obNN.kNN` 短引用，模型在对应义务 real 拍的 `know:[{ref}]` 声明实际
@@ -954,10 +954,17 @@ Preserve 同时收到正式归一文本、原句及名称同一性依据，不�
 - Preserve输入`stage4-preserve-input-v2`补齐转移op／scope／known_by、认知命题引用、
   悬念操作／问题／解决、时序模式、场景边界和因果边。相同拍内相同证据段与逐字quote合并展示，
   保留全部锚点；初始状态只发一次。必要语义不能为降低字符数删除。
-- Design输入`stage4-design-input-v1`由`project_design_input`确定性投影：Brief义务以ob键编址，
-  requires与knowledge ref复用同一映射；去除可推导ID和审计摘要，保留完整satisfaction、locks、
-  propositions、facts、world约束与表达选择。动态schema将等价know分支按mode分组，仍验证每个ref。
-  producer和compiler使用相同映射，旧canonical Brief不能作为新wire模板。
+- Design输入`stage4-design-input-v2`由`project_design_input`确定性投影：Brief义务以ob键编址，
+  requires与knowledge ref复用同一映射；保留全部原子条件与分母。义务不是叙事拍，一拍可同时兑现
+  多个条件；series 实例、先疑后知和不同因果时点仍须分拍，不设拍数目标。
+  空集合与null省略，缺省只表示原字段为空；false与空satisfaction保留。知情授权由各义务完整
+  knowledge_changes三元组的并集，加knowledge_locks中的额外授权组成；不同变化实例不合并，
+  requires_released、动机、因果和完整满足条件保留。propositions/fact_locks用kp/kf八位前缀短引用为键，
+  按完整Brief的盲身份稳定前缀派发（闭集检查唯一，碰撞显式拒绝）；`design_reference_aliases`与v10 compiler共用映射，只有类型化
+  引用字段展开，语义文本不替换。canonical Brief、BodyDesign与Binding继续使用完整身份，
+  没有新领域真相源。动态schema闭集仍完整；输入版本和内容参与请求身份。
+  已购v9只经`design_wire_model`集中解码，原响应和付费摘要不改；窄复核保留v1输入切片与原v9
+  引用语法，新整份生成只用v10/v2。删除条件见REQUIREMENTS，旧canonical Brief不是wire模板。
 
 这些版本只描述语义输入，不能当正式artifact版本；输入变化自然进入请求身份。
 
