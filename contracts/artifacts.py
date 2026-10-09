@@ -290,9 +290,11 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 闭集（schema 层兜底直接构造的表外键）。
     'stage2/characters/characters.json': 'str06-rc20',
     # rc21 创作材料批：六类质量产物增可选细节/显式系列概括与目标前情。
+    # rc22 事件锚点批：ObligationAnchor 增独立事件与正式证据窗口，六类质量
+    # 产物同批显式升版；rc21/v4 不做隐式迁移，FREE owner patch 全量复验。
     # checkpoint 也携带 contract_version；旧版/缺版本不可补空值作为新证据。
     # 旧五质量产物迁移退役，仅未变化 ExecutionPlan 保留登记的 rc12/13 适配。
-    'runtime/preserve_checkpoint.json': 'str06-rc21',
+    'runtime/preserve_checkpoint.json': 'str06-rc22',
     # rc13（2026-10-03 CS-3 余项，D5 统一＋world 规则 id）：读者揭示统一走
     # knowledge(holder=reader)（TargetDelta 删 reader 域与 confirms；Brief 知
     # 情锁同写法）；Brief.book_constraints 升 WorldConstraint（wc_{nn} 稳定
@@ -301,11 +303,11 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc17（2026-10-06 CS-H H3，RC-61）：Brief 认知变化条目新增 requires_released
     # （必保揭名派生，随认知增量携带）；缺省读入兼容旧盘，身份随 rc17 换。
     # rc18：ObligationAnchor.visibility 删（effect 命题锚只在 cognition）。
-    'stage4/grounding/reconstruction_brief.json': 'str06-rc21',
+    'stage4/grounding/reconstruction_brief.json': 'str06-rc22',
     # rc16（2026-10-04 CS-F2）：Binding 增 fact_bindings（事实锁→已有目标状态的
     # 映射，只存引用不复制 value）；旧 rc12 Binding 缺该映射、无损推不回，拒读。
     # rc17（2026-10-06 CS-H H3，RC-63）：BriefFactLock 增 subjects（主体包含判定）。
-    'stage4/grounding/semantic_binding.json': 'str06-rc21',
+    'stage4/grounding/semantic_binding.json': 'str06-rc22',
     'stage4/compiled/execution_plan.json': 'str06-rc14',
     'stage4/acceptance/guard/compile.json': 'str06-rc12',
     'stage4/acceptance/guard/report.json': 'str06-rc12',
@@ -317,8 +319,8 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 确认必填事实地址（D4）。形状/判据变化，旧 Design／graph／WriterIR 拒读。
     # rc10（2026-09-28 R2 语义送达）：Design wire 升 stage4-design-v2——拍上线程
     # （threads）、书级 world_rules、章级 entry；四个静态跨章列表删除（AUD-04）。
-    'stage4/design/body_design.json': 'str06-rc21',
-    'stage4/design/presentation_graph.json': 'str06-rc21',
+    'stage4/design/body_design.json': 'str06-rc22',
+    'stage4/design/presentation_graph.json': 'str06-rc22',
     # rc16（2026-10-05 CS-F2）：HookContext 增 withheld_bindings（按 Hook 自选
     # surface_releases 算好的唯一绑定称谓表，渲染期投影）；旧 rc12 楔子上下文
     # 拒读，免费重编译。正文与楔子投影同尺（RC-40/41）。
@@ -339,7 +341,7 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc18（CS-S 1b 补升）：ChapterIR 经 VerificationIR.obligations 内嵌
     # ObligationAnchor，其 visibility 字段在 1b 已删，IR 形状随之变化；不升版则
     # 旧 rc17 IR 读入只得到无信息的 extra_forbidden（I-13）。免费重编译。
-    'stage4/ir/writer_book_ir.json': 'str06-rc21',
+    'stage4/ir/writer_book_ir.json': 'str06-rc22',
     'stage5/hook/hook.txt': 'str06-rc12',
     'stage5/hook/receipt.json': 'str06-rc12',
     'stage5/body/ch{nn}.txt': 'str06-rc12',

@@ -104,12 +104,12 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 
 ### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
 
-现役版式为 `str06-rc21`（2026-10-09 创作材料批：Preserve v4/policy 7、Design wire v9、可选细节与系列前情；Stage2 仍为 rc20；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
+现役版式为 `str06-rc22`（2026-10-09 独立事件锚点批：Preserve v5/policy 8、Design wire v9、可选细节与系列前情；Stage2 仍为 rc20；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
 `7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个（CS-3 bind
 退役后 13），运行配置未变。
 book 观察 `stage2-book-v3`、chapters 独立 `stage2-chapters-v2`（names 保持
 `stage2-observation-v1`、associate 保持 v2，输入投影变经 RC 表换身份）；
-Preserve 当前 `stage4-preserve-v4`＋policy 7、Design 内部展开 `stage4-design-v5`；
+Preserve 当前 `stage4-preserve-v5`＋policy 8、Design 内部展开 `stage4-design-v5`；
 hook-design 字面不变。当前正文 renderer v11／写手协议 v9（可选细节与前情送达；历史 R10b 升 v7）。
 
 **章观察瘦 wire（CS-2 第一步，2026-10-03）**：`str06.stage2.chapters` 的
@@ -176,7 +176,7 @@ Design 接受判据携带所有同址条目的 wire 路径，Binding 派生与�
 
 历史 R10 收口把 Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14。
 rc21 质量批后只保留未变化 ExecutionPlan 的 rc12/rc13→rc14 登记无损适配；六类质量产物
-（checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR）均显式 rc21，
+（checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR）均显式 rc22，
 旧版或缺版本关闭式拒读，不能把缺省空细节／空概括当成历史判断证据。checkpoint 本次增
 contract_version；policy 升 6，请求输入变更会换身份。旧根与已购响应保持原字节，
 需从上游正式输入在新契约根重建；付费／外发仍由用户显式授权，迁移删除条件见 REQUIREMENTS。
@@ -226,15 +226,28 @@ series.summaries 显式给 member/covers，Brief 派生 summarizes_cores；Bindi
   改由 Phase 2 的 facts `known_at_start` 承载）。Blueprint v15 派生证据窗口
   （被引段全文＋同章前后各一句、重叠机械合并）；Preserve 输入从整份 JSON 倾倒
   改为 `project_preserve_view` 确定性渲染（R10-0.3 实证 29.9k token/轮）。
-- **锚定与 series（a2）**：义务以 `anchors` 引用投影句柄（`b拍.e|c|l`／`s0_*`／
+- **锚定与 series（a2，rc22）**：义务以 `anchors` 引用投影句柄（`b拍.v1|e|c|l`／`s0_*`／
   `wc_*`，≥1），lineage 由 compiler 派生；锚点类型化拷贝源原子（持有者、mode、
   命题、modality、可见性、逐字引文）。顶层 `series` 登记同一机制的离散兑现
   时点（members≥2 闭集互斥、mechanism 属源表达）——不为满足阶段规则合并。
+  `bNN_MM.v1` 是独立事件：compiler 从正式 `beat.event` 和该拍 `source_refs`
+  对应的 `Blueprint.evidence` 确定性复制 `event_statement/event_evidence`；
+  证据指针与窗口必须完整，邻句仅供上下文，不改称逐字支持引文。事件 lineage
+  的人物来自 participants。三类转移全空的事件也可成为义务或细节来源；不补造
+  effect/cognition，不生成状态、知情、时态锁。锁仍只消费各自原子。
+  Brief 只投影义务条件与细节文本，Design 继续以 real/details 选择承载，IR
+  保留事件证据供审计，写手只收到已选文本。renderer v11/写手 v9 不变。
+  checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR
+  同批 rc22；v4/rc21 拒读，不补字段或自动改版本。源 schema 和节点集合不变。
 - **证据冲突回派（a3）**：Preserve 报 `evidence_conflicts` 时 checkpoint 不
   发布，按锚点句柄回派 Stage2 语义 owner（拍句柄→逐章 chNN／书级→book；
   不可解析即停）。v4/policy 7 的冲突地址扩展为现有原子或真实拍（允许三类转移全空）；句段仍须属于该拍 source_refs。拍级地址不进入义务/details 锚点闭集。chapters 按所报拍局部修订，其他拍与章保留；不增加字段、节点或付费轮次。三分支：修订（发布新 SourceTruth、按材料变化恢复）／保留
   解释（处理结果作为同一 Preserve 任务 revise_self 的恢复输入，仍分歧即停止
   不二次回派）／未决（保持阻塞，不自动标源文未知）。同指纹重现无进展停。
+  同答涉及多个可回派 owner 时，按 owner 合并条目并全部登记后再回跳最早节点；
+  同一 book owner 的不同锚点不相互覆盖。章修订上一版只验封与新鲜度，不作为
+  另一章的输入边；多章修订后统一重编译、复验 Preserve，不逐章重购下游。
+  resolved 的处理说明保持相同请求材料；清账不能改变已验身份导致重购。
 - **锁定项与 Design v5（a4）**：Brief 由 anchors 与 canonical loops 确定性
   派生 kp 命题登记、知情锁（唯一映射 learns/confirms→known、suspects→
   suspected、hears_claim→heard、believes→believes；asserts 转公开声称标记）、
@@ -622,7 +635,7 @@ CLI 的 medium 移除；整书上限从持久准入账派生传入付费边界�
 | ProviderAttempt | 一次实际外发：冻结配置、准确请求、原响应、成本 | `contracts/schema/workflow.py::WorkUnitAttempt`，每轮至多 4 次（`contracts/invariants.py::WORK_UNIT_MAX_DELIVERY_ATTEMPTS`） |
 | AcceptanceRecord | 解析、救回、引用解析、编译、机械验证分项结果；语义恒 `unver`；`accepted` 只表示“通过 owner 完整验收、可发布”，被拒或被回派上游的回答记 false 并带问题，是否被采用只看 CommitBundle（见 `docs/schema/work_units.md` 接受记录与发布语义） | 取代候选根的 validation 记录 |
 | CommitBundle | 输入清单、采用证据、输出摘要与 seal | 新增；采用状态从 seal 派生 |
-| OwnerRevisionRecord（V2） | owner_patch／resample／**carried_forward** 三类修订凭证；V2 增必填 `applies_to_request_sha256`（记录应用到的请求身份），v1 经 `owner_revision_record_of_payload` 集中迁移（删除条件见 REQUIREMENTS 兼容层表）。carried_forward＝免费沿用的采用凭证：`baseline_*` 是候选生成时的原请求/响应，落 `runtime/revisions/carried/<owner>/<身份>.json`，成本链 ledger-row 指向原 attempt | `contracts/schema/workflow.py`；原 `runtime/adopt_*` 的迁移面上浮 |
+| OwnerRevisionRecord（V2） | owner_patch／resample／**carried_forward** 三类修订凭证；V2 增必填 `applies_to_request_sha256`（记录应用到的请求身份），v1 经 `owner_revision_record_of_payload` 集中迁移（删除条件见 REQUIREMENTS 兼容层表）。rc22 的显式跨身份 owner patch 分别绑定真实已购 baseline 与当前应用请求，必须按当前完整接受闸复验，旧响应和成本不改。恢复只接受这对已绑定身份，任意新输入不得借道；清账恢复普通基线请求仍采用补丁，防止原稿覆盖。carried_forward＝免费沿用的采用凭证：`baseline_*` 是候选生成时的原请求/响应，落 `runtime/revisions/carried/<owner>/<身份>.json`，成本链 ledger-row 指向原 attempt | `contracts/schema/workflow.py`；原 `runtime/adopt_*` 的迁移面上浮 |
 | 候选登记 | 该单元全部已购候选（含补丁链合并）的索引：wire 原字节摘要、生成请求身份、采用引用链、上游版本摘要、最近一次预检摘要；**可由工作单元账与响应 blob 重建**，不是第二本账 | `runtime/candidates/<owner>.json`（CS-H H1b，RC-52） |
 
 - 原响应按 attempt 存储并被 attempt 引用，**空回答不再占据请求身份**。候选根现有
@@ -930,6 +943,12 @@ Preserve 同时收到正式归一文本、原句及名称同一性依据，不�
 
 ### 语义输入投影（CS-I）
 
+- Stage2 悬念按一个可回答的问题抽取；同主题下的接受安排、具体行动成败和去留分别
+  记录，不另建重复概括的复合问题。跨章关联候选除 question／resolution 外，逐字投影
+  两端所在拍的 event，帮助窄 resolver 区分问题；不加入整章、前章产物或新语义。
+  pair 行一对一，distinct 只否决该候选对，不否决端点与其他候选配对。复合问题、
+  缺失收束或把普通事件当答案由 chapters owner patch 修订；associate 只修关联答案。
+  这些抽取要求是语义要求，未新增自动语义硬闸。正式 schema 不变，材料变化进入请求身份。
 - 名称观察输入`stage2-names-input-v2`只发送一次完整evidence与书级观察，不再重复拼全文；evidence 是按阅读序排列的 `{segment,chapter,text}` 数组（v1 以段号为键，请求 JSON 键排序会把一章第 100 段排到第 11 段之前，RC-26 追加）。
   原文引用、Hook和所有章证据完整保留。
 - Preserve输入`stage4-preserve-input-v2`补齐转移op／scope／known_by、认知命题引用、

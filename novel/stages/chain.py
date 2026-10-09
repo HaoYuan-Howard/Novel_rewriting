@@ -388,6 +388,47 @@ def _chapter_execution_owners(ctx: ChainContext) -> tuple[str, ...]:
     return tuple(owner for owner in known if owner in selected)
 
 
+def prepare_chapter_request(repository, *, no, book, chapters, chapter_evidence, anchors, fact_ids):
+    """生产与免费预检共用的章请求与完整接受闸；包含源冲突的真实窄修范围。"""
+    record = open_issue_record(repository, f'ch{no:02d}')
+    conflicts = [i for i in record.issues if i.code == 'source_evidence_conflict'] if record else []
+    previous, scope = None, set()
+    if conflicts:
+        # 上一版是本 owner 的修订主体，已由已购请求绑定；只验 seal/新鲜度，
+        # 不记为上游边。多章并发时消费它会把兄弟章旧版串入彼此的来源账。
+        previous = repository.check_model(str06_chapter_observation_rel(no))
+        for issue in conflicts:
+            anchor = str(issue.context.get('anchor') or '')
+            match = re.fullmatch(fr'b{no:02d}_(\d{{2}})(?:\.(?:[ecl]\d+|v1))?', anchor)
+            index = int(match[1]) - 1 if match else -1
+            if (not 0 <= index < len(previous.beats)
+                    or issue.context.get('segment') not in previous.beats[index].source_refs):
+                raise ValueError(f'章观察回派地址或证据归属无效：{anchor}')
+            scope.add(index)
+    prompt = revision_prompt_for_owner(
+        repository, f'ch{no:02d}',
+        chapter_observation_prompt(chapter=no, book=book,
+                                   chapters=chapters,
+                                   evidence=chapter_evidence),
+        str06_chapter_observation_rel(no),
+        previous_wire=slim_chapter_wire if conflicts else None)
+    if conflicts:
+        prompt += ('\n本轮源证据窄修只允许修改以下拍：'
+                   + '、'.join(f'b{no:02d}_{i + 1:02d}' for i in sorted(scope))
+                   + '。拍数、顺序和所有 start 不变，其余拍原样保留；'
+                   '你判断是否需要补足知情及其证据，程序不替你判定获知者。')
+    def validate(w):
+        # R10a a1：传完整段映射（含 text），basis 引文可逐字判定
+        observation, errors = chapter_acceptance(
+            w, evidence_ids=chapter_evidence, chapter=no,
+            character_slugs=frozenset(book.characters), anchors=anchors, fact_ids=fact_ids)
+        if observation is not None and not errors and previous is not None:
+            errors.extend(chapter_revision_scope_issues(
+                previous, observation, beat_indexes=frozenset(scope)))
+        return observation, errors
+    return prompt, validate
+
+
 def run_chapters(ctx: ChainContext) -> dict:
     """`str06.stage2.chapters`：逐章并行观察——只含章内局部句柄（D3）。
 
@@ -424,40 +465,9 @@ def run_chapters(ctx: ChainContext) -> dict:
                                  per_book=ctx.slot_per_book,
                                  per_provider=ctx.slot_per_provider):
             chapter_evidence = _chapter_evidence(evidence, no)
-            record = open_issue_record(repository, f'ch{no:02d}')
-            conflicts = [i for i in record.issues if i.code == 'source_evidence_conflict'] if record else []
-            previous, scope = None, set()
-            if conflicts:
-                previous = repository.read_model(str06_chapter_observation_rel(no))
-                for issue in conflicts:
-                    anchor = str(issue.context.get('anchor') or '')
-                    match = re.fullmatch(fr'b{no:02d}_(\d{{2}})(?:\.[ecl]\d+)?', anchor)
-                    index = int(match[1]) - 1 if match else -1
-                    if (not 0 <= index < len(previous.beats)
-                            or issue.context.get('segment') not in previous.beats[index].source_refs):
-                        raise ValueError(f'章观察回派地址或证据归属无效：{anchor}')
-                    scope.add(index)
-            prompt = revision_prompt_for_owner(
-                repository, f'ch{no:02d}',
-                chapter_observation_prompt(chapter=no, book=book,
-                                           chapters=ctx.chapters,
-                                           evidence=chapter_evidence),
-                str06_chapter_observation_rel(no),
-                previous_wire=slim_chapter_wire if conflicts else None)
-            if conflicts:
-                prompt += ('\n本轮源证据窄修只允许修改以下拍：'
-                           + '、'.join(f'b{no:02d}_{i + 1:02d}' for i in sorted(scope))
-                           + '。拍数、顺序和所有 start 不变，其余拍原样保留；'
-                           '你判断是否需要补足知情及其证据，程序不替你判定获知者。')
-            def validate(w):
-                # R10a a1：传完整段映射（含 text），basis 引文可逐字判定
-                observation, errors = chapter_acceptance(
-                    w, evidence_ids=chapter_evidence, chapter=no,
-                    character_slugs=frozenset(book.characters), anchors=anchors, fact_ids=fact_ids)
-                if observation is not None and not errors and previous is not None:
-                    errors.extend(chapter_revision_scope_issues(
-                        previous, observation, beat_indexes=frozenset(scope)))
-                return observation, errors
+            prompt, validate = prepare_chapter_request(
+                repository, no=no, book=book, chapters=ctx.chapters,
+                chapter_evidence=chapter_evidence, anchors=anchors, fact_ids=fact_ids)
 
             def locate(w, errs, *, _ev=chapter_evidence, _no=no,
                        _slugs=frozenset(book.characters), _facts=fact_ids):
@@ -860,17 +870,19 @@ def run_compile(ctx: ChainContext) -> dict:
 def _conflict_resolution_notes(repository, chapters) -> str:
     """Preserve 重跑时的确定性「冲突处理结果」块（R10a a3，§二.2）。
 
-    对每个持有 open `source_evidence_conflict` 记录的 Stage2 owner：对比
+    对每个持有 `source_evidence_conflict` 记录的 Stage2 owner：对比
     记录的 against 摘要与该 owner 正式产物的**当前**摘要——变了＝「已修订
     （重编译后的材料已变）」，没变＝「维持原解释」。纯机械对比（digest），
     不判语义；块进 Preserve prompt（材料变化 ⇒ 新请求身份，不会缓存命中
     上一轮带冲突的回答——同身份缓存重放会让重问拿回同一份冲突 wire）。
+    resolved 记录保留同一处理说明：清账不是新的源材料，不能因此改变已验
+    请求身份，导致免费重放失效或下一次购买。
     """
-    from novel.stages.owner_revision import open_issue_record
+    from novel.stages.owner_revision import read_owner_issue_file
     lines: list[str] = []
     owners = ['book'] + [f'ch{c["chapter_ordinal"]:02d}' for c in chapters]
     for owner in owners:
-        record = open_issue_record(repository, owner)
+        record = read_owner_issue_file(repository, owner)
         if record is None or not any(
                 i.code == 'source_evidence_conflict' for i in record.issues):
             continue
@@ -909,7 +921,7 @@ def _backfill_source_evidence_conflicts(repository, conflicts) -> None:
     路径照常耐久——checkpoint 不发布。同指纹重现走 discover_owner_issues
     的无进展停（「已维持」原子再报同一冲突不二次回派，耗尽即停）。
     """
-    grouped: dict[tuple[str, str, str], list[OwnerIssueV1]] = {}
+    grouped: dict[tuple[str, str], list[OwnerIssueV1]] = {}
     for conflict in conflicts:
         anchor = str(conflict.get('anchor') or '')
         action, target = route_owner_issue('source_evidence_conflict',
@@ -921,7 +933,7 @@ def _backfill_source_evidence_conflicts(repository, conflicts) -> None:
             owner, item = f'ch{chapter_no:02d}', f'chapter:{chapter_no}'
         else:
             owner, item = _REVISION_TARGET_OWNERS[target], anchor
-        grouped.setdefault((owner, target, item), []).append(OwnerIssueV1(
+        grouped.setdefault((owner, target), []).append(OwnerIssueV1(
             code='source_evidence_conflict', item=item,
             message=(f'Preserve 报告源证据冲突：锚点 {anchor}（句段 '
                      f'{conflict.get("segment")}）存在矛盾或遗漏——'
@@ -930,9 +942,19 @@ def _backfill_source_evidence_conflicts(repository, conflicts) -> None:
                      '不私建事实版本'),
             context={'anchor': anchor, 'segment': conflict.get('segment'),
                      'note': conflict.get('note')}))
-    for (owner, target, item), issues in sorted(grouped.items()):
-        discover_owner_issues(repository, raised_by='str06.stage4.preserve',
-                              owner=owner, node=target, issues=issues)
+    # 同一已购回答的全部 owner 先登记，再回跳最早节点；否则唯一写口必然抛错，
+    # 第二个 owner 永远进不了账，只能等重购 Preserve 才有机会再次发现。
+    # 书级多个锚点同样合并一轮，item 留在每条 issue 上，不能相互覆盖。
+    first: OwnerRevisionRequired | None = None
+    for (owner, target), issues in sorted(grouped.items()):
+        try:
+            discover_owner_issues(repository, raised_by='str06.stage4.preserve',
+                                  owner=owner, node=target, issues=issues)
+        except OwnerRevisionRequired as required:
+            if first is None or NODE_ORDER.index(target) < NODE_ORDER.index(first.node):
+                first = required
+    if first is not None:
+        raise first
 
 
 def run_preserve(ctx: ChainContext) -> dict:
@@ -2870,17 +2892,14 @@ def execute(args) -> None:
                                'request': request.cache_payload()})
             revision['request_sha256'] = identity
             allow_patch, patch_reason = False, None
+            baseline_identity = identity
             note_path = (args.wire_dir / f'{owner}_patch_note.json'
                          if args.wire_dir else None)
             if note_path is not None and note_path.exists():
                 note = repository.read_external(note_path)
-                if note.get('base_response_identity') != identity:
-                    from novel.stages.revisions import revision_error
-                    raise revision_error(owner, f'{owner} patch note 的基线身份与当前请求不一致，拒绝采用')
-                allow_patch, patch_reason = True, note.get('reason')
-                if not isinstance(patch_reason, str) or not patch_reason.strip():
-                    from novel.stages.revisions import revision_error
-                    raise revision_error(owner, 'owner patch 必须登记非空修订理由')
+                from novel.stages.revisions import owner_patch_identity
+                baseline_identity, patch_reason = owner_patch_identity(owner, note, identity)
+                allow_patch = True
             if patch_requested and not session.adopt_roots:
                 session.adopt_roots = (repository.root,)
             previous_patch_sha = None
@@ -2889,9 +2908,12 @@ def execute(args) -> None:
                 previous = verified_previous_revision(repository, owner)
                 if previous is not None:
                     previous_patch_sha = previous.candidate_sha256
-            bound = session.bind_wire_adoption(owner, identity, path,
+            bound = session.bind_wire_adoption(owner, baseline_identity, path,
                                                allow_patch=allow_patch,
                                                previous_patch_sha256=previous_patch_sha)
+            if allow_patch and baseline_identity != identity and not bound.get('owner_patch'):
+                from novel.stages.revisions import revision_error
+                raise revision_error(owner, '跨身份 owner patch 缺少三方核实的已购基线，拒绝采用')
             revision.update({
                 'mode': bound.get('mode'), 'cost_link': bound.get('cost_link'),
                 'source_root': bound.get('source_root'),
@@ -2901,7 +2923,7 @@ def execute(args) -> None:
                 'adoption_chain_verified': bound.get('adoption_chain_verified', False)})
             if bound.get('owner_patch'):
                 # owner patch 是无外发的修订：绑定基线请求身份与修订说明。
-                revision['patch'] = {'baseline_request_sha256': identity,
+                revision['patch'] = {'baseline_request_sha256': baseline_identity,
                                      'reason': patch_reason,
                                      'candidate_sha256': hashlib.sha256(original_bytes).hexdigest()}
             model = bound.get('model') or 'unknown'
@@ -2913,9 +2935,10 @@ def execute(args) -> None:
             from novel.stages.revisions import preview_owner_patch, stage_revision
             from novel.stages.review import dry_run_patch, character_literals
             source_root = Path(revision['source_root'])
-            baseline = purchased_baseline(source_root, owner, revision['request_sha256'])
+            baseline_identity = revision['patch']['baseline_request_sha256']
+            baseline = purchased_baseline(source_root, owner, baseline_identity)
             preview = preview_owner_patch(
-                owner=owner, identity=revision['request_sha256'], candidate=raw,
+                owner=owner, identity=baseline_identity, candidate=raw,
                 baseline=baseline, validate=validate,
                 character_literals=character_literals(Str06Repository(repository.root)),
                 dry_run=(downstream_preview if downstream_preview is not None else
@@ -2925,9 +2948,10 @@ def execute(args) -> None:
                                                      hard_max_chars=args.hook_hard_max),
                     chapter_count=len(chapters), source_texts=tuple(c['text'] for c in chapters),
                     book_title=args.book_title, length_band=(args.body_band_low, args.body_band_high))))
-            stage_revision(repository, owner=owner, identity=revision['request_sha256'],
+            stage_revision(repository, owner=owner, identity=baseline_identity,
                            baseline=baseline, raw_bytes=original_bytes, preview=preview,
-                           reason=patch_reason)
+                           reason=patch_reason,
+                           applies_to_request_sha256=revision['request_sha256'])
         repository.write(f'runtime/revisions/{owner}.json', revision)
         ref = AdoptionRef(
             owner=owner, model=model, prompts={'system': system, 'user': prompt},
@@ -2960,7 +2984,7 @@ def execute(args) -> None:
             historical={'mode': 'owner-patch-replay', 'cost_link': 'ledger-row',
                         'source_root': baseline['source_root'], 'attempt_id': baseline['attempt_id'],
                         'new_paid_calls': 0},
-            patch={'baseline_request_sha256': identity, 'reason': record.reason,
+            patch={'baseline_request_sha256': record.baseline_request_sha256, 'reason': record.reason,
                    'candidate_sha256': record.candidate_sha256})
         return data, ref
 

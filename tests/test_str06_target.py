@@ -61,9 +61,9 @@ def _source_pair():
 
 
 def _preserve_wire():
-    """stage4-preserve-v4 形状：义务以 anchors 引用投影句柄
+    """stage4-preserve-v5 形状：义务以 anchors 引用投影句柄
     （b拍.e序/.c序/.l序、s0_*、wc_*），lineage 不再由模型输出。"""
-    return {'protocol_version': 'stage4-preserve-v4', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v5', 'obligations': [
         {'kind': 'event_core', 'statement': '借种之约成立',
          'anchors': ['b01_01.e1'],
          'must_preserve': True, 'satisfaction': '正文呈现约定被提出且被接受',
@@ -132,7 +132,7 @@ def test_assemble_preserve_rejects_dangling_and_cycles():
         provider='x', model='y', request_sha256='r' * 64)
     assert any('未知句柄' in e for e in errors)
 
-    cyclic = {'protocol_version': 'stage4-preserve-v4', 'obligations': [
+    cyclic = {'protocol_version': 'stage4-preserve-v5', 'obligations': [
         {'kind': 'event_core', 'statement': 'a',
          'anchors': ['b01_01.e1'],
          'must_preserve': False, 'satisfaction': '', 'requires': [2]},

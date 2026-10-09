@@ -154,6 +154,52 @@ def test_unordered_candidates_accept_swapped_left_right():
     assert observation is not None and errors == [], errors
 
 
+def test_loop_candidates_keep_endpoint_events_and_request_identity():
+    """同主题的问题靠各自开合事件区分；最小材料变化必须进入请求身份。"""
+    from novel.llm.paid_requests import digest
+
+    wires = {
+        1: {'protocol_version': CPV, 'beats': [
+            _beat('云娘尚未决定是否接受安排', ('e01_01',), loops=[
+                {'ref': 'q_accept', 'op': 'open', 'question': '她会接受安排吗？'}]),
+            _quiet_beat('与配对无关的灯火描写', 'e01_02')]},
+        2: {'protocol_version': CPV, 'beats': [
+            _beat('云娘决定照安排做；夫君提出具体行动', ('e02_01',),
+                  scene_boundary='continue', loops=[
+                      {'ref': 'r_accept', 'op': 'close', 'resolution': '她接受安排'},
+                      {'ref': 'q_attempt', 'op': 'open', 'question': '这次行动能成功吗？'}])]},
+        3: {'protocol_version': CPV, 'beats': [
+            _beat('具体行动因拒绝而失败', ('e03_01',), scene_boundary='continue', loops=[
+                {'ref': 'r_attempt', 'op': 'close', 'resolution': '行动失败'}])]},
+    }
+    book, chapters = _observations(_book_wire(), wires)
+    before = {n: c.model_dump(mode='json') for n, c in chapters.items()}
+    candidates = project_identity_candidates(project_association_space(book, chapters), book)
+    assert [(c.open, c.close) for c in candidates.loop_pairing] == [
+        ('ch01.q_accept', 'ch02.r_accept'), ('ch01.q_accept', 'ch03.r_attempt'),
+        ('ch02.q_attempt', 'ch03.r_attempt')]
+    for candidate in candidates.loop_pairing:
+        chapter = int(candidate.open[2:4])
+        assert candidate.open_event == chapters[chapter].beats[0].event
+        chapter = int(candidate.close[2:4])
+        assert candidate.close_event == chapters[chapter].beats[0].event
+    prompt = associate_candidates_prompt(candidates)
+    assert '与配对无关的灯火描写' not in prompt
+    assert '开启拍事件：云娘尚未决定是否接受安排' in prompt
+    assert '收束拍事件：具体行动因拒绝而失败' in prompt
+    assert '每个 open 至多配一个 close，每个 close 至多配一个 open' in prompt
+    assert '不妨碍该 close 与另一 open 配对' in prompt
+    assert before == {n: c.model_dump(mode='json') for n, c in chapters.items()}
+    changed = dict(chapters)
+    changed[3] = chapters[3].model_copy(update={'beats': (
+        chapters[3].beats[0].model_copy(update={'event': '具体行动已成功'}),)})
+    changed_prompt = associate_candidates_prompt(project_identity_candidates(
+        project_association_space(book, changed), book))
+    assert digest(prompt) != digest(changed_prompt), '端点事件属于真实请求材料，不能漏绑'
+    assert prompt == associate_candidates_prompt(project_identity_candidates(
+        project_association_space(book, chapters), book))
+
+
 def test_associate_patch_locate_maps_errors_to_answer_rows():
     """条目定位（RC-57 延续）：机械验收错误按句柄对反查答案行 `(kind, i)`。"""
     book = _book_wire()

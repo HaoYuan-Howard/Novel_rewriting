@@ -290,7 +290,7 @@ def test_item_patch_round_resends_only_the_failing_beats_and_merges_to_a_full_gr
     body = repo.read_model('stage4/design/body_design.json')
     assert [b.event for b in body.scenes[0].beats[:2]] == ['拜堂成亲', '洞房夜夫君立约']
     assert not any('陆大哥' in b.event for s in body.scenes for b in s.beats)
-    assert repo.read_model('stage4/grounding/semantic_binding.json').contract_version == 'str06-rc21'
+    assert repo.read_model('stage4/grounding/semantic_binding.json').contract_version == 'str06-rc22'
     # 成本记账：原轮＋条目返修各一次实付，不是整份重写两遍的另一种计法。
     from novel.llm.ledger import read_cost_snapshot
     rows, _ = read_cost_snapshot(repo.root.parent)

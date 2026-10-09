@@ -97,6 +97,54 @@ def test_patch_preview_is_readonly_and_separates_ids_text_and_residuals(tmp_path
                             validate=lambda w: [], dry_run=lambda w: {})
 
 
+def test_explicit_cross_identity_patch_replays_and_activates_with_original_cost(tmp_path):
+    from novel.stages.revisions import owner_patch_identity, registered_owner_patch
+    from tests.str06_facilities import synthetic_ref
+    repo, session, transport, answer, baseline = _baseline(tmp_path)
+    current = 'f' * 64
+    note = {'base_response_identity': answer.request_sha256, 'reason': '协议升版后完整复验'}
+    with pytest.raises(ValueError, match='应用身份'):
+        owner_patch_identity('preserve', note, current)
+    note['applies_to_request_sha256'] = current
+    assert owner_patch_identity('preserve', note, current)[0] == answer.request_sha256
+    preview = preview_owner_patch(owner='preserve', identity=answer.request_sha256,
+        candidate={'value': 2}, baseline=baseline, validate=lambda w: [], dry_run=lambda w: {})
+    record = stage_revision(repo, owner='preserve', identity=answer.request_sha256,
+        baseline=baseline, raw_bytes=b'{"value":2}', preview=preview, reason=note['reason'],
+        applies_to_request_sha256=current)
+    assert registered_owner_patch(repo, 'preserve', current)
+    assert registered_owner_patch(repo, 'preserve', answer.request_sha256)
+    assert not registered_owner_patch(repo, 'preserve', 'e' * 64)
+    repo.context.enter_node(record.node)
+    ref = synthetic_ref('preserve')._replace(request_sha256=current,
+        patch={'candidate_sha256': record.candidate_sha256,
+               'baseline_request_sha256': answer.request_sha256})
+    repo.write(record.product_rel, {'value': 2}, owners=('preserve',), refs=(ref,))
+    activate_node_revisions(repo, record.node)
+    data, replay, cost = adopted_patch(repo, 'preserve', current, lambda w: [])
+    assert data == {'value': 2} and replay.baseline_request_sha256 == answer.request_sha256
+    assert cost['attempt_id'] == answer.attempt_id and len(transport.calls) == 1
+    # 回派关闭后回到同一已购基线身份，仍须用补丁；新输入身份不能借道。
+    assert adopted_patch(repo, 'preserve', 'e' * 64, lambda w: []) is None
+    data, replay, cost = adopted_patch(repo, 'preserve', answer.request_sha256, lambda w: [])
+    assert data == {'value': 2} and replay.applies_to_request_sha256 == answer.request_sha256
+    ref = ref._replace(request_sha256=answer.request_sha256)
+    repo.write(record.product_rel, data, owners=('preserve',), refs=(ref,))
+    activate_node_revisions(repo, record.node)
+    # 同一候选的显式新应用必须重绑，不能因原字节相同沿用上一身份。
+    next_identity = 'd' * 64
+    restaged = stage_revision(repo, owner='preserve', identity=answer.request_sha256,
+        baseline=baseline, raw_bytes=b'{"value":2}', preview=preview, reason=note['reason'],
+        applies_to_request_sha256=next_identity)
+    assert restaged.applies_to_request_sha256 == next_identity
+    assert restaged.candidate_sha256 == record.candidate_sha256
+    assert adopted_patch(repo, 'preserve', current, lambda w: []) is None
+    repo.write(record.product_rel, data, owners=('preserve',),
+               refs=(ref._replace(request_sha256=next_identity),))
+    activate_node_revisions(repo, record.node)
+    assert len(transport.calls) == 1
+
+
 def test_patch_evidence_survives_external_file_and_binds_current_product(tmp_path):
     from tests.str06_facilities import synthetic_ref
     repo, _session, _transport, answer, baseline = _baseline(tmp_path)

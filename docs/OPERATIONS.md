@@ -276,9 +276,14 @@ patch-preview --owner chNN --candidate <wire文件> --request-profile <原请求
 须登记 base_response_identity 和非空 reason，旁边放 chNN_wire.json。
 `novel.cli run str06.stage2.chapters` 发现这些 patch note 后只执行对应章，其他章只读验封，
 不重放、不重新发布；无 note 的普通运行仍执行全章。缺 wire 或未选章缺少有效产物即拒绝。
-采用沿用请求身份/原响应/成本三方核对及 ContentRevision 发布，CLI 外层仍需 `--yes`，
-无需 `--allow-egress`；已有完整 wire 的 owner patch 不产生模型调用。生成提示改变后不能
-伪造旧请求身份采用补丁，须先按原请求配置预检并完成登记。
+采用沿用请求身份/原响应/成本三方核对及 ContentRevision 发布。免费采用显式带
+`--check-only`，不带 `--yes` 或 `--allow-egress`；缺少完整 wire 就拒绝，不补购。
+生成提示或协议改变后，预检显式给 `--baseline-request-sha256 <已购摘要>`，仍捕获
+当前生产请求与完整接受闸；patch note 同时登记预检返回的 `applies_to_request_sha256`。
+未给当前应用摘要的旧 note 仍只允许同身份采用，不能伪造旧请求或暗改协议。
+`cross_cause` 预检还须给 `--upstream-associate-candidate <本轮身份wire>`，不拿旧
+盘面冒充本轮前置答案。章预检与生产共用包含真实回派范围的请求；Preserve 预检
+在 checkpoint 尚未发布时仍验证候选、姓名与 Brief，并分别报告冲突和 Design 未运行。
 
 `python -m novel.cli issue-correction <sid> --base <输出根> --owner preserve`
 只读重建当前正式材料并给出 evidence_sha256；只有已证明旧二分归因错误且全部当前

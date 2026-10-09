@@ -968,6 +968,81 @@ def test_loop_pairing_conflict_preserves_truth_and_recovers_without_purchase(tmp
     assert repo.inspect('runtime/issues/associate.json')['status'] == 'resolved'
 
 
+def test_compound_loop_observations_recover_at_chapter_owner_without_purchase(tmp_path):
+    """复合问题与普通事件 close 回到章观察修订；关联不代删输入或吞未决。"""
+    from contracts.schema.observation import AssociateObservation, ChapterObservation
+    from novel.stages.owner_revision import OwnerRevisionRequired
+    from tests.str06_facilities import complete_associate_fixture
+
+    repo, _ask, _report = _run_stage2(tmp_path, 'loop_owner_recovery', _full_stage2_wires())
+    truth_rels = ('stage2/characters/characters.json',
+                  'stage2/blueprints/chapter_blueprints.json', 'stage2/acceptance/fold.json')
+    before = {rel: (repo.root / rel).read_bytes() for rel in truth_rels}
+    book = repo.read_model('stage2/observations/book.json')
+    bad = _chapter_wires()
+    bad['ch01']['beats'][1]['loops'].extend([
+        {'ref': 'q_confirm', 'op': 'open', 'question': '云娘会弄清实情吗？'},
+        {'ref': 'q_compound', 'op': 'open', 'question': '床底的人是谁、现身后事情会如何发展？'}])
+    bad['ch02']['beats'][0]['loops'] = [
+        {'ref': 'r_question', 'op': 'close', 'resolution': '云娘已经发出质问'}]
+    bad_chapters = {n: ChapterObservation.model_validate(bad[f'ch{n:02d}'])
+                    for n in (1, 2, 3)}
+    faulty = _associate_wire()
+    faulty['loop_pairing'].append(
+        {'open': 'ch01.q_compound', 'close': 'ch03.q_id', 'verdict': 'pair'})
+    faulty = complete_associate_fixture(
+        book, bad_chapters, AssociateObservation.model_validate(faulty))
+    snapshot = {n: c.model_dump(mode='json') for n, c in bad_chapters.items()}
+
+    def write_observation(owner, observation):
+        repo.attach_context(make_context(repo.root, ledger=CostLedger(path=None)))
+        repo.write(f'stage2/observations/{owner}.json', observation, owners=(owner,),
+                   refs=(synthetic_ref(owner, '同身份已购观察的免费修正'),))
+
+    for n, observation in bad_chapters.items():
+        write_observation(f'ch{n:02d}', observation)
+    write_observation('associate', faulty)
+
+    def compile_only():
+        repo.attach_context(make_context(repo.root, ledger=CostLedger(path=None),
+                                         node='str06.stage2.compile'))
+        def no_purchase(*_args):
+            raise AssertionError('修复后免费编译不得请求模型')
+        return run_workflow(repository=repo, chapters=deepcopy(CHAPTERS), hook_copy=HOOK,
+                            ask=no_purchase, ask_text=no_purchase, ask_body=no_purchase,
+                            budget=800, through='stage2', node_filter=['str06.stage2.compile'])
+
+    with pytest.raises(OwnerRevisionRequired, match='重复占用 close'):
+        compile_only()
+    assert {rel: (repo.root / rel).read_bytes() for rel in truth_rels} == before
+    assert snapshot == {n: c.model_dump(mode='json') for n, c in bad_chapters.items()}
+
+    corrected = deepcopy(bad)
+    corrected['ch01']['beats'][1]['loops'].pop()  # 撤掉重复概括的复合问题。
+    corrected['ch02']['beats'][0]['loops'] = []   # 质问本身没有回答未知问题。
+    corrected['ch03']['beats'][1]['loops'].append(
+        {'ref': 'r_confirm', 'op': 'close', 'resolution': '云娘已确认实情'})
+    good_chapters = {n: ChapterObservation.model_validate(corrected[f'ch{n:02d}'])
+                     for n in (1, 2, 3)}
+    # owner patch 只修悬念记录，不改事件、段指针或其他转移。
+    for n in (1, 2, 3):
+        for old, new in zip(bad_chapters[n].beats, good_chapters[n].beats):
+            assert old.model_dump(exclude={'loops'}) == new.model_dump(exclude={'loops'})
+        write_observation(f'ch{n:02d}', good_chapters[n])
+    identity = _associate_wire(loop_pairing=[
+        {'open': 'ch01.q_id', 'close': 'ch03.q_id', 'verdict': 'pair'},
+        {'open': 'ch01.q_confirm', 'close': 'ch03.r_confirm', 'verdict': 'pair'}])
+    final = complete_associate_fixture(book, good_chapters, AssociateObservation.model_validate(identity))
+    write_observation('associate', final)
+    compile_only()
+    blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
+    opens = [loop.ref for beat in blueprint.chapters[0].beats for loop in beat.loops]
+    closes = [loop.ref for beat in blueprint.chapters[2].beats for loop in beat.loops]
+    assert len(opens) == len(closes) == 2 and set(opens) == set(closes)
+    assert not blueprint.chapters[1].beats[0].loops
+    assert repo.inspect('runtime/issues/associate.json')['status'] == 'resolved'
+
+
 def test_loop_pairing_to_later_open_is_undecided(tmp_path):
     """时序倒转（compile 防御，I-34）：候选面按构造不生成倒转对——直接构造的
     已购回答把 close 配到更晚章的 open 时，compile 按未决拒发。"""
@@ -1144,7 +1219,7 @@ def test_stage4_reads_only_canonical(tmp_path, synonymous):
     brief, identities = project_brief(
         __import__('novel.stages.stage4.grounding', fromlist=['assemble_preserve'])
         .assemble_preserve(
-            {'protocol_version': 'stage4-preserve-v4', 'obligations': [
+            {'protocol_version': 'stage4-preserve-v5', 'obligations': [
                 {'kind': 'event_core',
                  'statement': '夫君藏身床底',
                  'anchors': ['b01_01.e1'],

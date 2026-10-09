@@ -139,7 +139,7 @@ def _blueprint() -> BlueprintsArtifactV17:
 
 
 def _preserve_wire() -> dict:
-    return {'protocol_version': 'stage4-preserve-v4', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v5', 'obligations': [
         {'kind': 'event_core', 'statement': '芸娘从起疑到证实同一件事',
          'anchors': ['b01_01.c1', 'b01_02.c1'],
          'must_preserve': True, 'satisfaction': '怀疑渐进到证实',
@@ -753,7 +753,7 @@ def _a5_wires():
 
     wires = deepcopy(looped_full_chain_wires())
     wires['preserve'] = {
-        'protocol_version': 'stage4-preserve-v4',
+        'protocol_version': 'stage4-preserve-v5',
         'obligations': [
             {'kind': 'event_core', 'statement': '苏芸娘嫁入陆家且夫君立下旧约',
              'anchors': ['b01_01.e1'], 'must_preserve': True,
@@ -878,7 +878,7 @@ def test_preserve_model_validation_error_feeds_revision_not_crash():
               'anchors': ['b01_01.e1']}
     try:
         checkpoint, errors = assemble_preserve(
-            {'protocol_version': 'stage4-preserve-v4',
+            {'protocol_version': 'stage4-preserve-v5',
              'obligations': [entry, entry2],
              'series': [{'members': [1, 2], 'mechanism': None},
                         {'members': [1, 2], 'mechanism': None}]},  # 全员双 series

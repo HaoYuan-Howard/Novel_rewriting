@@ -124,12 +124,17 @@ class PropositionCandidate:
 
 @dataclass(frozen=True)
 class LoopCandidate:
-    """跨章悬念 open×close 候选（open 章严格早于 close 章）。"""
+    """跨章悬念候选及两端所在拍的事件（open 章严格早于 close 章）。
+
+    事件由观察逐字投影，用于区分同主题下的不同问题，不重读整章或推断答案。
+    """
 
     open: str
     close: str
     question: str
     resolution: str
+    open_event: str
+    close_event: str
 
 
 @dataclass(frozen=True)
@@ -237,7 +242,8 @@ def project_identity_candidates(
             loop_pairs.append(LoopCandidate(
                 open=open_handle, close=close_handle,
                 question=open_entry.question or '',
-                resolution=close_entry.resolution or ''))
+                resolution=close_entry.resolution or '',
+                open_event=open_entry.event, close_event=close_entry.event))
     scene_pairs: list[SceneCandidate] = []
     scenes_by_chapter: dict[int, list[str]] = {}
     for handle, entry in space.scenes.items():
@@ -368,6 +374,7 @@ class LoopHandle:
     op: str
     question: str | None
     resolution: str | None
+    event: str
 
 
 @dataclass(frozen=True)
@@ -486,7 +493,8 @@ def project_association_space(
             for loop in beat.loops:
                 handle = f'ch{chapter:02d}.{loop.ref}'
                 entry = LoopHandle(chapter=chapter, ref=loop.ref, op=loop.op,
-                                   question=loop.question, resolution=loop.resolution)
+                                   question=loop.question, resolution=loop.resolution,
+                                   event=beat.event)
                 if loop.op == 'open':
                     space.loop_opens.setdefault(handle, entry)
                 else:
@@ -523,7 +531,8 @@ def associate_candidates_prompt(candidates: AssociationCandidates) -> str:
         f'- [{c.left}]「{c.left_text}」 × [{c.right}]「{c.right_text}」'
         for c in candidates.same_proposition) or '（无候选——该类给空数组）'
     loop_lines = '\n'.join(
-        f'- open [{c.open}] 问题：{c.question} × close [{c.close}] 收束：{c.resolution}'
+        f'- open [{c.open}] 问题：{c.question}（开启拍事件：{c.open_event}） × '
+        f'close [{c.close}] 收束：{c.resolution}（收束拍事件：{c.close_event}）'
         for c in candidates.loop_pairing) or '（无候选——该类给空数组）'
     scene_lines = '\n'.join(
         f'- 前章末场 [{c.left}]（末拍：{c.left_text}） × '
@@ -554,10 +563,19 @@ unresolved——不默认合并，也不默认不同。
 【verdict 闭集】
 - same_proposition：same（同一命题——并入同一命题身份，书级编号一方为
   canonical）／distinct（不同命题）／unresolved（拿不准）；
-- loop_pairing：pair（该 open 与该 close 是同一悬念）／distinct（不是同一
-  悬念——close 保持未配对）／unresolved；
+- loop_pairing：pair（收束确实完整回答该 open 的同一个具体问题）／distinct
+  （该候选对不是同一悬念；不妨碍该 close 与另一 open 配对）／unresolved；
 - scene_continuation：continue（右场景是左场景的延续，应并回同一场）／
   distinct（确是新场）／unresolved。
+
+【悬念配对约束】结合问题、收束和两端事件，区分同一主题下的不同问题：接受安排
+与具体行动成功是两条悬念；人物到来或阶段推进不等于完整回答更宽的问题。
+所有 pair 行必须一对一：每个 open 至多配一个 close，每个 close 至多配一个 open。
+同一行动回答多个问题时，章节观察须有分别对应的 close；不能让一条 close 兼收
+多个 open。逐候选恰答一次不等于逐候选都答 pair。
+某条 close 配不上时，仍逐对按语义回答；不存在的对应问题、遗漏的收束或复合问题
+须回到章节观察修订。不得为了消除未配对错误而强配、补造或改写问题，也不得因
+某条 close 未配对就把本可明确判 distinct 的所有候选都改成 unresolved。
 
 【输出 JSON 顶层】{{"protocol_version":"stage2-associate-v5","same_proposition":[{{"left":...,"right":...,"verdict":...}}],"loop_pairing":[{{"open":...,"close":...,"verdict":...}}],"scene_continuation":[{{"left":...,"right":...,"verdict":...}}]}}
 每条候选恰答一次：句柄逐字取自上方方括号清单，不得增删候选、不得跨类混用、

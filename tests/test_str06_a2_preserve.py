@@ -129,6 +129,62 @@ def test_project_preserve_view_is_deterministic_and_pure():
     assert chars.model_dump() == chars_before and bp.model_dump() == bp_before
 
 
+def test_event_only_obligation_and_detail_copy_evidence_without_inventing_locks():
+    from novel.stages.stage4.grounding import project_brief, preserve_patch_slice
+    raw = _blueprint().model_dump(mode='json')
+    beat = raw['chapters'][0]['beats'][0]
+    beat.update(effects=[], cognition=[], loops=[])
+    bp = BlueprintsArtifactV17.model_validate(raw)
+    wire = _wire(obligations=[{
+        'kind': 'event_core', 'statement': '夫君藏进床底',
+        'anchors': ['b01_01.v1'], 'must_preserve': True,
+        'satisfaction': '呈现夫君主动藏身', 'requires': [],
+        'details': [{'anchor': 'b01_02.v1', 'text': '云娘因响动起疑'}]}])
+    before = bp.model_dump(mode='json')
+    checkpoint, errors = assemble_preserve(
+        wire, policy_id='p', policy_version=8, characters=_characters(), blueprint=bp,
+        provider='x', model='y', request_sha256='a' * 64)
+    assert not errors
+    anchor = checkpoint.obligations[0].anchors[0]
+    assert anchor.source_kind == 'event' and anchor.event_statement == beat['event']
+    assert [(e.segment, e.window) for e in anchor.event_evidence] == [
+        ('e01_01', bp.evidence['e01_01'])]
+    assert anchor.quotes == () and anchor.holder is anchor.modality is None
+    assert checkpoint.obligations[0].lineage.character_ids == ('fu_jun',)
+    brief, _ = project_brief(checkpoint, _characters(), bp)
+    assert not brief.knowledge_locks and not brief.fact_locks
+    assert brief.requirements[0].details[0].text == '云娘因响动起疑'
+    assert 'b01_01' not in str(brief.model_dump())
+    sliced = preserve_patch_slice(wire, _characters(), bp, [0])
+    assert sliced['targets'][0]['atoms'][0]['event_evidence'] == [
+        {'segment': 'e01_01', 'window': bp.evidence['e01_01']}]
+    assert bp.model_dump(mode='json') == before
+
+
+def test_selected_event_missing_evidence_and_old_protocol_fail_closed():
+    from copy import deepcopy
+    wire = _wire()
+    wire['obligations'][0]['anchors'] = ['b01_01.v1']
+    bp = _blueprint().model_copy(update={'evidence': {}})
+    checkpoint, errors = assemble_preserve(
+        wire, policy_id='p', policy_version=8, characters=_characters(), blueprint=bp,
+        provider='x', model='y', request_sha256='a' * 64)
+    assert checkpoint is None and any('完整证据窗口' in str(e) for e in errors)
+    old = deepcopy(wire)
+    old['protocol_version'] = 'stage4-preserve-v4'
+    assert _assemble(old)[0] is None
+
+
+def test_event_cannot_smuggle_knowledge_or_state_fields():
+    import pytest
+    from pydantic import ValidationError
+    from contracts.schema.grounding import ObligationAnchor
+    for extra in ({'holder': 'yun_niang'}, {'modality': 'actual'}, {'quotes': ['伪引文']}):
+        with pytest.raises(ValidationError, match='不得混入'):
+            ObligationAnchor(handle='b01_01.v1', source_kind='event',
+                             event_statement='夫君出现', **extra)
+
+
 def test_preserve_input_keeps_operations_scope_known_holders_loops_and_causality():
     raw = _blueprint().model_dump(mode='json')
     first, second = raw['chapters'][0]['beats']
@@ -138,7 +194,7 @@ def test_preserve_input_keeps_operations_scope_known_holders_loops_and_causality
     raw['chapters'][0]['causal_edges'] = [
         {'from_beat': 'b01_01', 'to_beat': 'b01_02', 'kind': 'causes'}]
     view = project_preserve_view(_characters(), BlueprintsArtifactV17.model_validate(raw))
-    assert 'stage4-preserve-input-v2' in view
+    assert 'stage4-preserve-input-v3' in view
     assert '（actual）' in view
     assert 'scene_location unset None' in view
     assert 'loop_noise open：谁在床底？' in view

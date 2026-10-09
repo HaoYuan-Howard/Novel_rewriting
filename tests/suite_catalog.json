@@ -978,6 +978,7 @@
         "test_synonymous_class_keeps_local_restatement_validation": "stage",
         "test_dangling_cross_chapter_reference_stays_undecided_and_blocks": "stage",
         "test_loop_pairing_conflict_preserves_truth_and_recovers_without_purchase": "stage",
+        "test_compound_loop_observations_recover_at_chapter_owner_without_purchase": "stage",
         "test_publish_full_stage2_leg_writes_both_truths_under_one_outcome": "stage",
         "test_stage4_reads_only_canonical": "stage"
       }
@@ -1110,7 +1111,10 @@
         "stage4",
         "stage5",
         "stage7"
-      ]
+      ],
+      "cases": {
+        "test_explicit_cross_identity_patch_replays_and_activates_with_original_cost": "stage"
+      }
     },
     "tests/test_str06_a1_semantics.py": {
       "layer": "unit_contract",
@@ -1134,6 +1138,7 @@
         "test_chapter_owner_patch_does_not_republish_other_chapters": "stage",
         "test_empty_beat_conflict_revises_only_reported_beat": "stage",
         "test_empty_beat_missing_conflict_full_chain_heals": "stage",
+        "test_multi_chapter_conflicts_heal_together_before_preserve_reverification": "stage",
         "test_preserve_malformed_canonical_answer_enters_bounded_revision": "stage",
         "test_preserve_cross_node_revision_uses_wire_not_checkpoint_template": "stage"
       }

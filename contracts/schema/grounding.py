@@ -36,9 +36,16 @@ class SourceLineage(StrictModel):
         return self
 
 
-#: 投影句柄的原子类别闭集（R10a a2）：拍内效应／认知／悬念、书级初态、世界约束。
+#: rc22：独立事件＋拍内效应／认知／悬念、书级初态、世界约束。
 ANCHOR_SOURCE_KINDS: tuple[str, ...] = (
-    'effect', 'cognition', 'loop', 'initial_state', 'world_constraint')
+    'event', 'effect', 'cognition', 'loop', 'initial_state', 'world_constraint')
+
+
+class EventEvidence(StrictModel):
+    """事件的正式证据指针及上下文窗口；邻句不是独立支持引文。"""
+
+    segment: str = Field(min_length=1)
+    window: str = Field(min_length=1)
 
 
 class ObligationAnchor(StrictModel):
@@ -46,7 +53,8 @@ class ObligationAnchor(StrictModel):
 
     Preserve 只给句柄（如 ``b06_21.e1``／``s0_01``／``wc_01``）；本模型的内容
     全部由 compiler 从 canonical 拷贝（持有者、mode、命题、效应目标/值/
-    modality、逐字引文），不由模型复述（I-15/I-21）。a4 的知情/时态锁直接
+    modality、逐字引文），不由模型复述（I-15/I-21）。rc22 的 v1 事件单独
+    复制 beat.event/source_refs 及其证据窗口，不从自然语言推断锁。a4 的知情/时态锁直接
     消费 holder／mode／proposition_ref／modality。CS-S 1b：`visibility` 删
     （effect.disclosure 已删——单写者、零逻辑读者的死字段）。
     """
@@ -72,6 +80,27 @@ class ObligationAnchor(StrictModel):
     question: str | None = None
     #: 逐字引文（basis quotes 原样拷贝；段归属已在 Stage2 判定，不重验证）
     quotes: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 事件仅复制 beat.event 与 source_refs 对应的 Blueprint.evidence；不生成锁。
+    event_statement: str | None = None
+    event_evidence: tuple[EventEvidence, ...] = ()
+
+    @model_validator(mode='after')
+    def _event_shape(self) -> 'ObligationAnchor':
+        if self.source_kind == 'event':
+            if not self.event_statement or not self.event_statement.strip():
+                raise ValueError('事件锚点必须复制正式 beat.event')
+            if any(getattr(self, field) is not None for field in (
+                    'holder', 'mode', 'op', 'proposition_ref', 'proposition_statement',
+                    'address', 'value', 'modality', 'question')) or self.quotes:
+                raise ValueError('事件锚点不得混入状态、知情、悬念或逐字引文字段')
+            if not self.event_evidence:
+                raise ValueError('事件锚点必须有正式证据窗口')
+            refs = [e.segment for e in self.event_evidence]
+            if len(refs) != len(set(refs)):
+                raise ValueError('事件锚点证据指针不得重复')
+        elif self.event_statement is not None or self.event_evidence:
+            raise ValueError('只有事件锚点可以携带事件与证据窗口')
+        return self
 
 
 class ObligationDetail(StrictModel):
@@ -198,7 +227,7 @@ class PreserveCheckpoint(StrictModel):
     R10a a2：义务带类型化 anchors；顶层增 series（同一机制的多次发生）。
     """
 
-    contract_version: Literal['str06-rc21'] = 'str06-rc21'
+    contract_version: Literal['str06-rc22'] = 'str06-rc22'
     provenance: FreeProvenance | LlmProvenance | None = Field(
         default=None, alias='_provenance', exclude=True)
     checkpoint_id: str = Field(min_length=1)
@@ -406,7 +435,7 @@ class ReconstructionBrief(StrictModel):
     不得经状态或说明改写；兑现与越权校验归 assemble_body_design。
     """
 
-    contract_version: Literal['str06-rc21'] = 'str06-rc21'
+    contract_version: Literal['str06-rc22'] = 'str06-rc22'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
@@ -538,7 +567,7 @@ class SemanticBinding(StrictModel):
     产物没有该映射，由 `contract_version` 字面量拒读——缺省空表不会冒充旧产物。
     """
 
-    contract_version: Literal['str06-rc21'] = 'str06-rc21'
+    contract_version: Literal['str06-rc22'] = 'str06-rc22'
     binding_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     obligations: tuple[SourceObligation, ...] = Field(min_length=1)

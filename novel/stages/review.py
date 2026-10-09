@@ -34,6 +34,7 @@ from novel.stages.common import (
     chapter_identities, project_chapter_packet, validate_writer_materials, validate_hook_materials,
     material_identities,
 )
+from novel.stages.stage4.grounding import preserve_name_issues
 
 
 def character_literals(repository) -> dict[str, tuple[str, ...]]:
@@ -49,7 +50,8 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                   hook_constraints: HookConstraints, chapter_count: int,
                   source_texts: tuple[str, ...] | None = None, book_title: str = '',
                   length_band: tuple[float, float] = (
-                      STR06_RUNTIME_CONFIG.length_band_low, STR06_RUNTIME_CONFIG.length_band_high)) -> dict:
+                      STR06_RUNTIME_CONFIG.length_band_low, STR06_RUNTIME_CONFIG.length_band_high),
+                  associate_candidate: dict | None = None) -> dict:
     """最近确定性入口的真实干跑；候选正文的拟定回执不落盘、不授予接受状态。"""
     try:
         if owner in {'book', 'names', 'name_variants', 'associate', 'cross_cause'} or owner.startswith('ch'):
@@ -115,7 +117,9 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                         'association_phase': 'identity', 'final_status': 'not_run',
                         'errors': errors, 'undecided': undecided}
             elif owner == 'cross_cause':
-                current_associate = repository.read_model('stage2/observations/associate.json')
+                current_associate = (AssociateObservation.model_validate(associate_candidate)
+                                     if associate_candidate is not None else
+                                     repository.read_model('stage2/observations/associate.json'))
                 identity = current_associate.model_copy(update={'cross_chapter_cause': ()})
                 try:
                     book, chapters = normalize_name_observations(book, chapters, names.structure)
@@ -141,6 +145,24 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         if owner == 'naming' or owner == 'hook_writer' or owner.startswith('body_ch'):
             return _delivery_preview(repository, owner, candidate, chars)
         projection = chars.name_projection()
+        if owner == 'preserve':
+            blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+            checkpoint, errors = assemble_preserve(
+                candidate, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,
+                characters=chars.core_view(), blueprint=blueprint,
+                provider='preview', model='preview', request_sha256='0' * 64)
+            errors = list(errors) + preserve_name_issues(checkpoint, chars)
+            conflicts = candidate.get('evidence_conflicts', []) if isinstance(candidate, dict) else []
+            if checkpoint is not None and not errors:
+                project_brief(checkpoint, chars.core_view(), blueprint,
+                              structure=chars.name_structure)
+            # 新候选的义务集合与身份可能变化，旧 Binding 不得 model_copy 冒充
+            # 重新承载；接受 Preserve 后由正式 Design 恢复入口重建。
+            return {'node': 'str06.stage4.preserve', 'status': 'ran', 'errors': errors,
+                    'evidence_conflicts': conflicts,
+                    'publishable': checkpoint is not None and not errors and not conflicts,
+                    'downstream': {'node': 'str06.stage4.body_design', 'status': 'not_run',
+                                   'reason': '须依据新 Brief 重新验证正式 Design 候选'}}
         checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
         errors = []
         # Brief 是确定性派生；免费预览从正式 checkpoint 重建，旧 Brief 缺认知
@@ -156,18 +178,7 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         binding = repository.read_model('stage4/grounding/semantic_binding.json')
         body = repository.read_model('stage4/design/body_design.json')
         graph = repository.read_model('stage4/design/presentation_graph.json')
-        if owner == 'preserve':
-            checkpoint, errors = assemble_preserve(
-                candidate, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,
-                characters=chars.core_view(), blueprint=repository.read_model('stage2/blueprints/chapter_blueprints.json'),
-                provider='preview', model='preview', request_sha256='0' * 64)
-            if checkpoint is not None:
-                brief, _ = project_brief(checkpoint, chars.core_view(),
-                                          repository.read_model('stage2/blueprints/chapter_blueprints.json'),
-                                          structure=chars.name_structure)
-                binding = binding.model_copy(update={
-                    'obligations': checkpoint.obligations, 'series': checkpoint.series})
-        elif owner == 'hook_design':
+        if owner == 'hook_design':
             hook, errors = assemble_hook_design(candidate, body=body, known_char_ids=set(chars.characters),
                                                 name_projection=projection, name_structure=chars.name_structure)
             if hook is not None:

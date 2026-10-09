@@ -142,6 +142,88 @@ def test_real_preserve_without_details_keeps_existing_tasks(tmp_path):
     assert transport.calls.count('preserve') == transport.calls.count('design') == 1
 
 
+def test_event_only_details_reach_design_and_writer_with_source_kept_in_audit(tmp_path):
+    wires = _detail_wires()
+    obligation = wires['preserve']['obligations'][1]
+    obligation['anchors'] = ['b02_01.v1']
+    obligation['details'][0]['anchor'] = 'b02_01.v1'
+    ctx, transport = _prepare(tmp_path, wires, through='stage5')
+    repo = ctx.repository
+    checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
+    anchor = checkpoint.obligations[1].details[0].anchor
+    assert anchor.source_kind == 'event' and anchor.event_evidence
+    binding = repo.read_model('stage4/grounding/semantic_binding.json')
+    assert binding.obligations[1].details[0].anchor == anchor
+    ir = repo.read_model('stage4/ir/writer_book_ir.json')
+    assert DETAIL in render_chapter_packet(project_chapter_packet(ir, 1))
+    for prompt in (transport.requests['design'][0], transport.requests['body_ch01'][0]):
+        assert DETAIL in prompt
+        assert anchor.handle not in prompt and anchor.event_statement not in prompt
+        assert 'event_evidence' not in prompt and 'e02_01' not in prompt
+
+
+def test_required_event_without_transfers_reaches_its_real_writer_position(tmp_path):
+    wires = _full_chain_wires()
+    condition = '夫君离开后，芸娘须独自发现玉佩线索'
+    wires['preserve']['obligations'].append({
+        'kind': 'event_core', 'statement': '夜半离家与玉佩线索',
+        'anchors': ['b02_01.v1'], 'must_preserve': True,
+        'satisfaction': condition, 'requires': []})
+    wires['design']['scenes'][1]['beats'][0]['real'] = ['ob02']
+    ctx, transport = _prepare(tmp_path, wires, through='stage5')
+    repo = ctx.repository
+    brief = repo.read_model('stage4/grounding/reconstruction_brief.json')
+    requirement = next(r for r in brief.requirements if r.summary == '夜半离家与玉佩线索')
+    assert not requirement.knowledge_changes and not requirement.realize_locks
+    binding = repo.read_model('stage4/grounding/semantic_binding.json')
+    assert any(e.obligation_id == 'ob02' for e in binding.entries)
+    ir = repo.read_model('stage4/ir/writer_book_ir.json')
+    text = render_chapter_packet(project_chapter_packet(ir, 2))
+    assert condition in text and 'b02_01.v1' not in text
+    assert condition in transport.requests['body_ch02'][0]
+    assert condition not in transport.requests['body_ch01'][0]
+
+
+def test_preserve_preview_runs_without_checkpoint_and_keeps_conflicts_unpublishable(tmp_path):
+    from novel.stages.review import dry_run_patch
+    from tests.test_str06_preserve_gate import _prepared
+    wires = _detail_wires()
+    _ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires)
+    assert not repo.path('runtime/preserve_checkpoint.json').exists()
+    before = {p: p.read_bytes() for p in repo.root.rglob('*') if p.is_file()}
+    options = dict(evidence={}, budget=2000,
+                   hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360), chapter_count=2)
+    report = dry_run_patch(repo, 'preserve', wires['preserve'], **options)
+    assert report['status'] == 'ran' and report['publishable'] and not report['errors']
+    assert report['downstream']['status'] == 'not_run'
+    conflict = deepcopy(wires['preserve'])
+    conflict['evidence_conflicts'] = [{'anchor': 'b01_01.v1', 'segment': 'e01_01',
+                                     'note': '待源 owner 核实'}]
+    report = dry_run_patch(repo, 'preserve', conflict, **options)
+    assert report['status'] == 'ran' and not report['publishable']
+    assert report['evidence_conflicts'] == conflict['evidence_conflicts']
+    assert before == {p: p.read_bytes() for p in repo.root.rglob('*') if p.is_file()}
+
+
+def test_source_conflict_closure_keeps_preserve_request_replayable(tmp_path):
+    from novel.stages.chain import _backfill_source_evidence_conflicts, _conflict_resolution_notes, run_preserve
+    from novel.stages.owner_revision import OwnerRevisionRequired, read_owner_issue_file
+    from tests.test_str06_preserve_gate import _prepared
+    wires = _detail_wires()
+    ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires)
+    with pytest.raises(OwnerRevisionRequired):
+        _backfill_source_evidence_conflicts(repo, [{'anchor': 'b01_01.v1',
+            'segment': 'e01_01', 'note': '经核读保持原解释'}])
+    before = _conflict_resolution_notes(repo, ctx.chapters)
+    assert before
+    run_preserve(ctx)
+    assert read_owner_issue_file(repo, 'ch01').status == 'resolved'
+    assert _conflict_resolution_notes(repo, ctx.chapters) == before
+    checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
+    run_preserve(ctx)
+    assert repo.read_model('runtime/preserve_checkpoint.json') == checkpoint
+
+
 def test_saved_current_schema_dangling_detail_is_rejected_by_free_compile_and_recovers(tmp_path):
     """已封存当前 schema 的悬空细节在真实免费 compile typed 拒绝；修复后零新购。"""
     ctx, transport = _prepare(tmp_path, _detail_wires())

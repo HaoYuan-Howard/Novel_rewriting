@@ -53,7 +53,7 @@ from contracts.schema.consumption import (
 from contracts.schema.context import (
     KnowledgeEntry, PendingConfirmation, PriorSeriesEvent, StateEntry, WriterDetail,
 )
-from contracts.schema.grounding import SourceDetail
+from contracts.schema.grounding import EventEvidence, ObligationAnchor, SourceDetail
 from contracts.schema.hook import HookContext, HookOpeningFact, HookPov
 from contracts.schema.naming import NameMapV5
 from contracts.schema.state import EffectDomain, StateAddress
@@ -370,10 +370,10 @@ def _inject_prior_series_event(ir: WriterBookIR, **updates) -> WriterBookIR:
     return _patch_scene_ir(ir, 2, 'sc02', prior_series_events=(prior,))
 
 
-def _inject_source_detail(ir: WriterBookIR, *, anchor_updates=None,
+def _inject_source_detail(ir: WriterBookIR, *, anchor=None, anchor_updates=None,
                           **detail_updates) -> WriterBookIR:
     source = _scene(ir, 1, 'sc01').verification_ir.obligations[0]
-    anchor = source.anchors[0].model_copy(update=anchor_updates or {})
+    anchor = (anchor or source.anchors[0]).model_copy(update=anchor_updates or {})
     detail = SourceDetail(detail_id='dt_2222222222222222', anchor=anchor,
                           text='未选中的源细节只作审计').model_copy(update=detail_updates)
     obligation = source.model_copy(update={'obligation_id': 'ob_source_detail',
@@ -733,6 +733,16 @@ def _body_mutations() -> list[_BodyMutation]:
         ('quotes', ('审计细节引文九九',), '审计细节引文九九'),
     )
 
+    def event_detail(ir, **updates):
+        anchor = ObligationAnchor(
+            handle='b01_01.v1', source_kind='event', event_statement='她关门后回到床边',
+            event_evidence=(EventEvidence(segment='e01_01', window='她把门关上。'),))
+        return _inject_source_detail(ir, anchor=anchor, anchor_updates=updates)
+
+    def event_evidence(ir, field, value):
+        evidence = EventEvidence(segment='e01_01', window='她把门关上。')
+        return event_detail(ir, event_evidence=(evidence.model_copy(update={field: value}),))
+
     return [
         # rc21：新集合缺省为空，审计身份变异先注入固定材料基底；text 不豁免。
         *[_BodyMutation(f'{quality_path}.beats[].details[].{field}', 2, sentinel,
@@ -765,6 +775,15 @@ def _body_mutations() -> list[_BodyMutation]:
                         _inject_source_detail(ir, anchor_updates={field: value}),
                         _inject_source_detail)
           for field, value, sentinel in source_anchor_mutations],
+        _BodyMutation(f'{quality_path}.obligations[].details[].anchor.event_statement',
+                      2, '审计源事件九九',
+                      lambda ir: event_detail(ir, event_statement='审计源事件九九'),
+                      event_detail),
+        *[_BodyMutation(f'{quality_path}.obligations[].details[].anchor.event_evidence[].{field}',
+                        2, value, lambda ir, field=field, value=value:
+                        event_evidence(ir, field, value), event_detail)
+          for field, value in (('segment', '审计事件证据号九九'),
+                               ('window', '审计事件窗口九九'))],
         # ── 书级（every_chapter）──
         _BodyMutation('writer_book_ir.book_brief.narration.person', None, None,
                       lambda ir: _book_brief(ir, narration=ir.book_brief.narration.model_copy(update={'person': 'first'}))),
@@ -997,7 +1016,7 @@ def test_quality_field_mutation_cases_cover_each_new_registered_leaf_without_wai
         '.beats[].details[].', '.prior_series_events[].', '.obligations[].details[].'))
     registered = {path for path in STR06_FIELD_DELIVERY if path.startswith(families)}
     cases = [case for case in _body_mutations() if case.path.startswith(families)]
-    assert len(cases) == len(registered) == 21, '3 个拍细节叶子、4 个系列叶子、14 个源细节叶子'
+    assert len(cases) == len(registered) == 24, '3 个拍细节叶子、4 个系列叶子、17 个源细节叶子'
     assert {case.path for case in cases} == registered
     assert all(case.located == 2 for case in cases), '新增材料的变异只定位第 2 章 sc02'
     assert not (registered & set(_WRITER_CASE_WAIVERS))

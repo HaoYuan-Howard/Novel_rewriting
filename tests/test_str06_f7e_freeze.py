@@ -152,7 +152,9 @@ from novel.llm.paid_requests import candidate_contract_identity
 # I-13）；RC 版式头仍为 rc20（同一未发布批次内补齐），冻结身份随该行重钉。
 # rc21（2026-10-09，用户批准）：Preserve v3/policy 6、Design wire v9，
 # 六类质量产物显式升版；原文同场/顺序仍不作为目标设计硬约束。
-FROZEN_CONTRACT_IDENTITY = '7d04c2c74fdfbd2bbbaed6fb5fef7aaecaa450ad87ee8e6c03ce1fad315ae202'
+# rc22（2026-10-09，用户确认独立事件锚点）：Preserve v5/policy 8，六类质量
+# 产物再次显式升版；旧 v4/rc21 拒读，免费 owner 修订须完整复验与双身份绑定。
+FROZEN_CONTRACT_IDENTITY = '9a7e1067bbbcca471d237f52ee2df63fc75020ed2166ff0aceb4272b2a51932d'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -224,7 +226,7 @@ def test_frozen_rc_version_label():
     # rc17：CS-H H3 称谓面＋H4 associate v3；rc18：CS-S Phase 1 死字段收口；
     # rc19：CS-S Phase 2 观察面收敛（facts／know.fact／associate v4／D-5／fold 时间线）；
     # rc20：CS-S Phase 3 收官（CHANGE_KEYS 闭集／access／reader 派生／associate v5）。
-    assert STR06_RC_VERSION == 'str06-rc21'
+    assert STR06_RC_VERSION == 'str06-rc22'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是
@@ -252,8 +254,8 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     # 升 v4——条目级窄 resolver；rc20（CS-S Phase 3）升 v5——same_state_dimension
     # 消失（change 键闭集＝键即 canonical）。
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v5',
-    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v4',
-    'STAGE4_PRESERVE_POLICY_VERSION': 7,
+    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v5',
+    'STAGE4_PRESERVE_POLICY_VERSION': 8,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
     'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v1',
     # CS-3（2026-10-03）：bind 协议随节点退役——wire 面由 design v6 的 real
@@ -273,6 +275,6 @@ def test_frozen_semantic_protocols_match_the_live_literals():
         'STAGE4_HOOK_DESIGN_PROTOCOL': STAGE4_HOOK_DESIGN_PROTOCOL,
     }
     assert live == FROZEN_SEMANTIC_PROTOCOLS, (
-        '语义层协议字面量与 2026-09-29 语义冻结闸（裁决 D8）不符：升版意味着已购 '
-        'Stage2/4 产物作废、须重购，先取得用户裁决并在 REQUIREMENTS 登记，'
+        '语义层协议字面量与 2026-09-29 语义冻结闸（裁决 D8）不符：先取得用户裁决并在 REQUIREMENTS 登记；'
+        '升版改变产物准入，已购回答须完整免费修订复验或另行授权新购，'
         '再更新本冻结记录')

@@ -34,7 +34,7 @@ from typing import Any, Final, Iterable
 from contracts.schema.design import BodyDesign
 from contracts.schema.grounding import (
     BriefFactLock, BriefKnowledgeChange, BriefKnowledgeLock, BriefProposition, BriefRequirement,
-    BriefDetail, FactLockBinding, IdentityProjection, ObligationAnchor, ObligationDetail,
+    BriefDetail, EventEvidence, FactLockBinding, IdentityProjection, ObligationAnchor, ObligationDetail,
     ObligationSeries, PreserveCheckpoint, SeriesSummary, SourceDetail,
     ReconstructionBrief, SemanticBinding, SourceLineage, SourceObligation,
     BookConstraint, _lock_id,
@@ -99,7 +99,8 @@ def _anchor_index(
 ) -> dict[str, ObligationAnchor]:
     """投影句柄 → 类型化拷贝（compiler 拷贝，模型不复述；I-15/I-21）。
 
-    句柄闭集＝`s0_*`（初态）、`wc_*`（世界约束）、`b拍.eN/.cN/.lN`（拍内
+    句柄闭集＝`s0_*`（初态）、`wc_*`（世界约束）、`b拍.v1`（有正式证据的
+    事件）、`b拍.eN/.cN/.lN`（拍内
     效应/认知/悬念）。命题带正式 ID（k*，无本地句柄）；初态/约束的地址
     含 state_id／constraint_id 本体。
     """
@@ -116,6 +117,13 @@ def _anchor_index(
             quotes=tuple(b.quote for b in rule.basis))
     for chapter_bp in sorted(blueprint.chapters, key=lambda c: c.chapter):
         for beat in chapter_bp.beats:
+            handle = f'{beat.beat_id}.v1'
+            if beat.source_refs and all(blueprint.evidence.get(ref, '').strip()
+                                        for ref in beat.source_refs):
+                index[handle] = ObligationAnchor(
+                    handle=handle, source_kind='event', event_statement=beat.event,
+                    event_evidence=tuple(EventEvidence(segment=ref, window=blueprint.evidence[ref])
+                                         for ref in beat.source_refs))
             for n, effect in enumerate(beat.effects, 1):
                 handle = f'{beat.beat_id}.e{n}'
                 # CS-S 1b：effect 删 disclosure／proposition——锚点不再拷贝
@@ -149,7 +157,7 @@ def _derive_lineage(
     """义务 anchors → SourceLineage（I-15/I-21：compiler 派生，wire 不再输出）。
 
     blueprint_refs＝锚点主体（拍内转移归其 beat_id；初态/约束归自身 id）；
-    character_ids＝初态 target 人物＋效应作用对象人物＋人物认知 holder——同一
+    character_ids＝事件 participants＋初态 target 人物＋效应作用对象人物＋人物认知 holder——同一
     既有语义（可综合多个源主体），只是来源从模型声明改为锚点解析。
     """
     blueprint_refs: list[str] = []
@@ -158,6 +166,7 @@ def _derive_lineage(
     transfers: dict[str, Any] = {}
     for chapter_bp in blueprint.chapters:
         for beat in chapter_bp.beats:
+            transfers[f'{beat.beat_id}.v1'] = beat
             for n, effect in enumerate(beat.effects, 1):
                 transfers[f'{beat.beat_id}.e{n}'] = effect
             for n, cognition in enumerate(beat.cognition, 1):
@@ -174,7 +183,9 @@ def _derive_lineage(
             transfer = initial_by_handle.get(handle)
         if transfer is None:
             continue
-        if anchor.source_kind == 'cognition':
+        if anchor.source_kind == 'event':
+            character_ids.extend(transfer.participants)
+        elif anchor.source_kind == 'cognition':
             # reader 是知情持有者，人物表没有它；其锁仍由 cognition anchor
             # 派生，不能经 lineage 变成 Brief 的参演人物。
             if transfer.holder != 'reader' and transfer.holder in characters.characters:
@@ -213,7 +224,7 @@ def project_preserve_view(
     I-20/I-21 机械渲染归 compiler）。R10-0.3 实证旧形态整份 Blueprint JSON
     倾倒 29.9k token/轮——本投影只给语义判断实际需要的原子与证据。
     """
-    lines: list[str] = ['输入版本：stage4-preserve-input-v2']
+    lines: list[str] = ['输入版本：stage4-preserve-input-v3']
     cited: set[str] = set()
     if characters.initial_state:
         lines.append('【书级初始事实（故事开始前成立）】')
@@ -248,6 +259,12 @@ def project_preserve_view(
                          f'{beat.scene_boundary}；{beat.temporal_mode}；'
                          f'{"；".join(beat.participants) or "无人物"}；'
                          f'来源 {",".join(beat.source_refs)}）：{beat.event}')
+            if beat.source_refs and all(blueprint.evidence.get(ref, '').strip()
+                                        for ref in beat.source_refs):
+                lines.append(f'  [{beat.beat_id}.v1] 事件：{beat.event}；'
+                             f'证据指针 {",".join(beat.source_refs)}（窗口见文末）')
+            else:
+                lines.append('  事件缺少完整正式证据窗口，不提供可选事件句柄')
             bases: dict[tuple[str, str], list[str]] = {}
             for letter, transfers in (('e', beat.effects), ('c', beat.cognition),
                                       ('l', beat.loops)):
@@ -394,7 +411,7 @@ def assemble_preserve(
     characters: CharactersCore, blueprint: BlueprintsArtifactV17,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
-    """Preserve wire（stage4-preserve-v4）→ checkpoint。
+    """Preserve wire（stage4-preserve-v5）→ checkpoint。
 
     确定性校验：协议版本、义务 anchors 在投影句柄闭集内（每条义务至少锚定
     一个原子）、requires 序号闭合无环、series 成员闭集互斥且 mechanism 属源
@@ -431,8 +448,14 @@ def assemble_preserve(
             continue
         for handle in anchors:
             if handle not in index:
-                errors.append(f'义务 {ordinal} anchors 引用未知句柄：{handle!r}'
-                              '（只能取投影视图给出的 s0_*/wc_*/b拍.e|c|l 句柄）')
+                if handle.endswith('.v1') and handle[:-3] in beat_refs:
+                    errors.append(_preserve_issue(
+                        f'义务 {ordinal} 事件 {handle} 缺少正式 source_refs 或完整证据窗口',
+                        'preserve_event_evidence', ('event_evidence', ordinal - 1, handle),
+                        (('obligations', ordinal - 1),)))
+                else:
+                    errors.append(f'义务 {ordinal} anchors 引用未知句柄：{handle!r}'
+                                  '（只能取投影视图给出的 s0_*/wc_*/b拍.v1|e|c|l 句柄）')
         for di, detail in enumerate(item.get('details') or ()):
             if detail['anchor'] not in index:
                 errors.append(_preserve_issue(
@@ -1012,6 +1035,8 @@ def preserve_name_issues(
 
 def _anchor_line(anchor: ObligationAnchor) -> str:
     """锚点类型化拷贝 → 切片里的人读原子行（与投影视图同一语法，不新造语义）。"""
+    if anchor.source_kind == 'event':
+        return f'事件：{anchor.event_statement}'
     if anchor.source_kind == 'cognition':
         statement = anchor.proposition_statement or ''
         return (f'认知 {anchor.holder} {anchor.mode or ""} 命题 '
@@ -1056,9 +1081,11 @@ def preserve_patch_slice(
             if anchor is None:
                 continue
             atoms.append({'handle': handle, 'line': _anchor_line(anchor),
-                          'quotes': list(anchor.quotes)})
+                          'quotes': list(anchor.quotes),
+                          **({'event_evidence': [e.model_dump() for e in anchor.event_evidence]}
+                             if anchor.source_kind == 'event' else {})})
         slices.append({'index': i, 'obligation': raw[i], 'atoms': atoms})
-    return {'input_version': 'stage4-preserve-slice-v1', 'targets': slices}
+    return {'input_version': 'stage4-preserve-slice-v2', 'targets': slices}
 
 
 def required_releases(brief: ReconstructionBrief) -> dict[tuple[str, str, str], tuple[str, ...]]:

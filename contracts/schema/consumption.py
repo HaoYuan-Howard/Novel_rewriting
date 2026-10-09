@@ -1095,6 +1095,11 @@ for _field in ('detail_id', 'text'):
         _path, consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
         note='源细节存档；只有拍上选中的提示送达写手')
 _ANCHOR_PREFIX = f'{_QUALITY_IR_PREFIX}.obligations[].anchors[].'
+for _field in ('event_statement', 'event_evidence[].segment', 'event_evidence[].window'):
+    _path = _ANCHOR_PREFIX + _field
+    STR06_FIELD_DELIVERY[_path] = _spec(
+        _path, consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='rc22 事件原子与正式证据窗口；只供审计，不推导锁或进入源盲阅读面')
 for _path, _entry in tuple(STR06_FIELD_DELIVERY.items()):
     if _path.startswith(_ANCHOR_PREFIX):
         _detail_path = _path.replace('.anchors[].', '.details[].anchor.', 1)

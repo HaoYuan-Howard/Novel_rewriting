@@ -272,6 +272,9 @@ def test_chapter_prior_text_and_prompt_are_request_pure():
     again = chapter_observation_prompt(chapter=2, book=book, chapters=CHAPTERS,
                                        evidence=_ch2_evidence())
     assert prompt2 == again
+    assert '每个 question 只问一个能由具体答案收束的问题' in prompt2
+    assert '某个子问题有结果不能当作复合问题的完整答案' in prompt2
+    assert '分别用不同句柄记录有证据的收束' in prompt2
     assert '【前文原文】' in prompt2 and '夫君走进门来' in prompt2
     assert '【第 2 章正文】' in prompt2 and 'e02_01' in prompt2
     assert 'fu_jun' in prompt2 and 'yun_niang' in prompt2, '人物表来自 book 观察'

@@ -114,7 +114,7 @@ def test_observation_artifacts_are_registered_with_independent_versions():
     assert ARTIFACT_SPECS['stage2/observations/associate.json']
     assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc20'
     # R2（语义送达）起 RC 版式头升 rc10；associate 冻结在 rc9（R1 身份）不动。
-    assert STR06_RC_VERSION == 'str06-rc21'     # 质量产物换身份；Stage2 独立维持 rc20。
+    assert STR06_RC_VERSION == 'str06-rc22'     # 质量产物换身份；Stage2 独立维持 rc20。
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/compiled/execution_plan.json'] == 'str06-rc14'
     for rel in ('runtime/preserve_checkpoint.json',
                 'stage4/grounding/reconstruction_brief.json',
@@ -122,7 +122,7 @@ def test_observation_artifacts_are_registered_with_independent_versions():
                 'stage4/design/body_design.json',
                 'stage4/design/presentation_graph.json',
                 'stage4/ir/writer_book_ir.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc21'
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc22'
     # rc16 续（CS-F2 Hook 称谓投影）：楔子上下文随绑定表换身份，旧 rc12 拒读。
     # rc17 续（CS-H H3）：hook 上下文增 display_faces/avoid_lines。
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/context/hook/hook.json'] == 'str06-rc17'

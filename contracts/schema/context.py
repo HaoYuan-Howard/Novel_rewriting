@@ -288,7 +288,7 @@ class WriterContext(StrictModel):
     消费该地址的章包。rc10（R2）：拍级读取值挂 BeatIR.reads；线程投影面
     thread_ops／open_threads 进 IR。"""
 
-    contract_version: Literal['str06-rc21'] = 'str06-rc21'
+    contract_version: Literal['str06-rc22'] = 'str06-rc22'
     scene_id: str = Field(min_length=1)
     execution_slice_sha256: str = Field(min_length=64, max_length=64)
     verification_ir: VerificationIR

@@ -79,6 +79,33 @@ def test_book_level_anchor_routes_to_book_owner(tmp_path):
     assert excinfo.value.owner == 'book'
 
 
+def test_all_conflict_owners_are_registered_before_dispatch_and_replay(tmp_path):
+    """同答多章及多个书级冲突一起登记；同 owner 只起一轮，重放不重复计数。"""
+    repo, _wires = _repo_with_observations(tmp_path)
+    conflicts = [
+        {'anchor': 'b02_01', 'segment': 'e02_01', 'note': '第二章漏抽知情'},
+        {'anchor': 's0_01', 'segment': 'e01_01', 'note': '初态冲突'},
+        {'anchor': 'wc_01', 'segment': 'e01_01', 'note': '世界约束冲突'},
+        {'anchor': 'b01_01', 'segment': 'e01_01', 'note': '第一章漏抽知情'},
+    ]
+    for _ in range(2):
+        with pytest.raises(OwnerRevisionRequired) as excinfo:
+            _backfill_source_evidence_conflicts(repo, conflicts)
+        assert excinfo.value.owner == 'book'
+        assert excinfo.value.node == 'str06.stage2.book'
+        records = {owner: read_owner_issue_file(repo, owner)
+                   for owner in ('book', 'ch01', 'ch02')}
+        assert all(record is not None for record in records.values()), \
+            '不能在第一个 owner 抛错后漏掉同一已购回答中的其他问题'
+        assert all(record.rounds_total == 1 and record.dispatch_pending
+                   for record in records.values())
+        assert [issue.item for issue in records['book'].issues] == ['s0_01', 'wc_01']
+        assert records['ch01'].issues[0].context['anchor'] == 'b01_01'
+        assert records['ch02'].issues[0].context['anchor'] == 'b02_01'
+        assert repo.read('runtime/cascade_rewinds.json')['count'] == 3
+    assert not repo.path('runtime/preserve_checkpoint.json').exists()
+
+
 def test_unresolvable_anchor_stops_without_guessing(tmp_path):
     """锚点不可解析 → 显式 ValueError（机械路由不猜，E-8）。"""
     repo, _wires = _repo_with_observations(tmp_path)
@@ -346,6 +373,26 @@ def test_conflict_full_chain_heals_via_revision(tmp_path, monkeypatch):
     assert transport.calls.count('preserve') == 2
 
 
+def test_multi_chapter_conflicts_heal_together_before_preserve_reverification(tmp_path, monkeypatch):
+    """真实消费链把同答两章一起窄修，重编译后只复验一次 Preserve 并清两笔账。"""
+    conflicts = [*CONFLICTS, {'anchor': 'b02_01', 'segment': 'e02_01',
+                             'note': '第二章关键揭示漏抽知情'}]
+    runner, repo, transport = _run_to_preserve(
+        tmp_path, lambda wires: _ConflictPreserveTransport(wires, conflicts), monkeypatch)
+    assert 'obligations' in runner()
+    assert transport.calls.count('ch01') == transport.calls.count('ch02') == 2
+    assert transport.calls.count('preserve') == 2
+    for owner in ('ch01', 'ch02'):
+        record = read_owner_issue_file(repo, owner)
+        assert record.status == 'resolved' and record.rounds_total == 1
+        assert not record.dispatch_pending
+        assert set(repo.inspect(f'stage2/observations/{owner}.json')['_provenance']['inputs']) == {
+            'stage2/observations/book.json'}
+    assert repo.read('runtime/cascade_rewinds.json')['count'] == 2
+    assert repo.read_model('runtime/preserve_checkpoint.json').obligations
+    assert repo.read_model('stage4/grounding/reconstruction_brief.json').requirements
+
+
 def test_sticky_conflict_stops_after_revision_without_progress(tmp_path,
                                                                monkeypatch):
     """粘性冲突：Stage2 修订后 Preserve 再报**同一**冲突 → 同指纹无进展停
@@ -491,7 +538,7 @@ def test_preserve_cross_node_revision_uses_wire_not_checkpoint_template(tmp_path
     runner()
     previous = transport.requests[-1].split('〔上一版〕\n', 1)[1].rsplit('\n请输出', 1)[0]
     wire = json.loads(previous)
-    assert wire['protocol_version'] == 'stage4-preserve-v4'
+    assert wire['protocol_version'] == 'stage4-preserve-v5'
     assert set(wire) == {'protocol_version', 'obligations', 'series', 'evidence_conflicts'}
     assert all(isinstance(a, str) for o in wire['obligations'] for a in o['anchors'])
     assert all('obligation_id' not in o and 'lineage' not in o for o in wire['obligations'])

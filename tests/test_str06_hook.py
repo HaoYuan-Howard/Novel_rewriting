@@ -792,7 +792,7 @@ def _full_chain_wires():
                           {'left': 'ch01.sc1', 'right': 'ch02.sc1',
                            'verdict': 'distinct'}]},
         'cross_cause': {'protocol_version': 'stage2-cross-cause-v1', 'causes': []},
-        'preserve': {'protocol_version': 'stage4-preserve-v4', 'obligations': [
+        'preserve': {'protocol_version': 'stage4-preserve-v5', 'obligations': [
             {'kind': 'event_core',
              'statement': '苏芸娘嫁入陆家且夫君立下旧约',
              'anchors': ['b01_01.e1'],

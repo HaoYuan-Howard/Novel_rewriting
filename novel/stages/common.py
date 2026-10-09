@@ -180,8 +180,14 @@ def positive_material_issues(
                                         claim.literal, sources, chapter_ordinal))
         if identity_pattern is not None:
             for match in identity_pattern.finditer(text):
+                # 句柄原样出自某个正式字段（owner 把代号写进了自己的文本）才带来源；
+                # 来源文本里没有它＝渲染期引入，保持无来源，归因停在代码缺陷。
+                sources = tuple(
+                    source for source in part.sources
+                    if any(hit.group() == match.group()
+                           for hit in identity_pattern.finditer(source.text)))
                 issues.append(MaterialIssue('internal_id_leak', where, match.start(),
-                                            match.group()))
+                                            match.group(), sources, chapter_ordinal))
     return tuple(issues)
 
 
@@ -805,12 +811,17 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      除非文本明确写出内心变化。
 4. loops：悬念的 postcondition——独立数组，每项 {{"ref","op","question"/"resolution"}}：
    - open：新建悬念线，必填 question（问题文本只出现在 open 处，之后不可改写）；
+     每个 question 只问一个能由具体答案收束的问题。是否接受安排、某次行动能否成功、
+     人物是否离开是不同问题，不能概括成“事情与人物去留会如何发展”再建一条重复悬念。
+     普通已确定的到来、转场或等待不自动构成悬念；只记录原文实际留下的未知问题；
    - close：必填 resolution（收束内容）。本章 open 过的悬念用其本地句柄 close；
      前文章节开启、本章收束的悬念，同样用一个本章新本地句柄落账（resolution 必填，
      问题文本不必知道）——跨章开合配对由后续关联节点建立，你不输出任何正式编号；
      前文已提出的问题在本章有明确答案时，不能仅另开一个近似问题再自开自闭，遗漏
      原问题的 close。没有问句也可能已用行动回答；同一行动确实解决多个不同问题时，
-     分别记录有证据的收束。不因故事继续或人物暂时退场就擅自宣布问题已解决；
+     分别用不同句柄记录有证据的收束。收束必须回答同一个具体问题，普通到来、阶段推进
+     或某个子问题有结果不能当作复合问题的完整答案。人物明确接受安排即回答“是否接受”，
+     后续具体执行成败另记；不因故事继续或人物暂时退场就擅自宣布问题已解决；
    - 同一本地句柄的 open／close 各最多一次；已收束的悬念不得重复 close。
      本章自开自闭须先 open 再 close，按拍序及同拍 loops 条目序排列；
      关闭前文悬念与开启新悬念须用不同本地句柄，不得用同一句柄先 close 后 open。
@@ -862,16 +873,22 @@ _PRESERVE_KIND_LINES = '\n'.join(
     f'- {kind}：{definition}' for kind, definition in PRESERVE_KIND_DEFS.items())
 
 PRESERVE_RULES = f"""任务：从源证据投影视图选择改写不可丢失的最小语义义务
-（保存策略 v7；wire 协议 stage4-preserve-v4）。
+（保存策略 v8；wire 协议 stage4-preserve-v5）。
 
 【输入的形状（源证据投影视图，R10a a2）】视图按「书级初态 → 世界约束 →
 逐章逐拍」给出源真值的原子，每原子一行：方括号内是**投影句柄**（书级初态
-s0_*、世界约束 wc_*、拍内转移 b拍号.e序/.c序/.l序——e＝事实、c＝认知、
+s0_*、世界约束 wc_*、事件 b拍号.v1、拍内转移 b拍号.e序/.c序/.l序——e＝事实、c＝认知、
 l＝悬念），随后是类型化内容（认知带持有者与模式 learns/suspects/confirms/
 hears_claim/believes/asserts；事实带 modality：actual＝已发生／planned＝已定
 计划／expected＝预计／conditional＝条件性执行）
 和**逐字引文**（依据 e段号：「原句」）。文末证据窗口给被引句段全文（含同章
 前后各一句——邻句是上下文，不是该命题的证据）。锚定以引文为准，不以邻句为准。
+
+【独立事件锚点（v5）】每拍 v1 直接来自正式 beat.event，证据仅是该拍列出的
+source_refs 所指窗口；邻句只供上下文，不能借它添加事件内容。事件没有状态、
+认知或悬念转移也可以承载 event_core、必要行动与可选 details；不能因此要求
+源观察补造转移。关键知情与状态条件必须另选对应 c/e 原子：v1 不生成知情或
+时态锁，事件文本不能替代这些原子的持有者、模式和时态。真实漏抽仍报冲突。
 
 【七类 kind（与 PreservationPolicy 的 PreserveKind 同源，只能取这些值）】
 {_PRESERVE_KIND_LINES}
@@ -882,6 +899,12 @@ hears_claim/believes/asserts；事实带 modality：actual＝已发生／planned
 - identity／world_fact／initial_state：写成立的事实；
 - statement 与 satisfaction 同时保留主客体、必要动机、公开说辞和真实想法的差别：
   公开说辞与真实动机不一致时，两者都写。
+
+【义务文本的称呼（statement／satisfaction／details.text）】
+人物使用人物表中的完整姓名或已登记且唯一归属的称谓；不要自行缩成裸姓、
+多人的姓氏并列或未登记别名。重复提及也写完整称呼，或使用主客体明确的无姓名表述。
+裸姓及多义带名面无法在写手材料中确定性投影，会被机械校验拒收。
+家族集体指称照常保留，不改人物身份与称谓关系；源引文只读，不为此改写证据。
 
 【必须保住的两类反差】
 - 说辞与行为的反差：人物自称／对外表态（cognition 的 asserts／hears_claim／
@@ -913,6 +936,8 @@ satisfaction 写正文必须成立的条件，也写哪些表现不足以兑现�
 - 同一机制的**多次发生**（如反复现身、两次求医）各自独立登记为义务，并在顶层
   series 里用成员序号登记为同一机制（members≥2；mechanism 取视图内源表达的
   ex_id，没有合用的填 null）——不得合并成一次「反复出现」；
+  保留源文明示的发生与概括。原文只写「第三次」而省略第二次过程时，不要求源
+  观察补出第二次场面，也不把这种省略当作漏抽；仍须保留已明示的第三次条件；
 - 揭示义务只在源文确有**读者确认**（视图里 reader 的 learns/confirms）时要求
   读者确认；线索、怀疑、传闻阶段合法，不为满足阶段规则新增确认或故事事件；
 - 源文未说明的（unknown、未收束的悬念）保持未知——不得在义务里替源文补答案。
@@ -959,7 +984,7 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
 - series 可选 summaries：[{{"member":回顾义务序号,"covers":[已发生实例序号,...]}}]。
   member 和 covers 都必须属于该组；covers 不得含回顾义务或自身。允许中途回顾，
   不要求回顾是全组最后一项；只回顾明确覆盖的实例。
-- wire 顶层：{{"protocol_version":"stage4-preserve-v4","obligations":[...],
+- wire 顶层：{{"protocol_version":"stage4-preserve-v5","obligations":[...],
   "series":[...],"evidence_conflicts":[...]}}（后两项可省略）。
 返回一个 JSON object，不要围栏、不要解释。"""
 
