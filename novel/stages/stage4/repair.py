@@ -123,6 +123,11 @@ def _source_owner(source: MaterialSource, *, brief: ReconstructionBrief, literal
         return 'design', '认知know拍位／读取位置与称谓释放须一致；源命题保持不变'
     if source.kind == 'obligation':
         obligation = next((o for o in binding.obligations if o.obligation_id == source.ref), None)
+        if obligation is not None and source.field.startswith('details/'):
+            detail_id = source.field.removeprefix('details/')
+            if any(d.detail_id == detail_id and d.text == source.text for d in obligation.details):
+                return 'preserve', '仅修订可改写细节的指称，保留其源锚点和必要事实条件'
+            return '', '细节来源缺失或投影与正式binding不一致'
         if obligation is None or source.field not in ('statement', 'satisfaction') \
                 or getattr(obligation, source.field) != source.text:
             return '', '义务来源缺失或投影与正式binding不一致'
@@ -215,7 +220,8 @@ def plan_material_repairs(
                         for source in problem.sources]
         owners = {owner for owner, _ in explanations}
         owner = next(iter(owners)) if len(owners) == 1 and '' not in owners else ''
-        if owner == 'design' and structure is not None:
+        internal_id = problem.code == 'internal_id_leak'
+        if owner == 'design' and structure is not None and not internal_id:
             all_released = expand_surface_releases(
                 {cid: set(person.surface_forms) for cid, person in structure.people.items()}, structure)
             faces = {face for values in all_released.values() for face in values}
@@ -225,7 +231,13 @@ def plan_material_repairs(
                 owner = ''
                 explanations.append(('', '源命题即使允许全部登记称谓仍有未认领字面；'
                                           '不能靠目标释放修复，须核验源证据与名称观察'))
-        if problem.code != 'positive_material_leak':
+        # 内部句柄同样只按正式来源归因：owner 把代号写进自有字段（来源已逐字核对）
+        # 即归该 owner 改写；出自源命题的代号目标设计无权改，没有来源证明的是渲染期
+        # 引入——这两种都停，不购买修不了它的语义输出。
+        if internal_id and any(source.kind == 'knowledge' for source in problem.sources):
+            owner = ''
+            explanations.append(('', '内部句柄出自源命题文本，目标设计无权改写；须核验上游观察'))
+        if problem.code not in ('positive_material_leak', 'internal_id_leak'):
             owner = ''
         action, target = route_owner_issue('material_name_leak', material_owner=owner)
         positions = _release_positions(body, problem.literal, structure)
@@ -243,8 +255,12 @@ def plan_material_repairs(
         }
         # 反馈只含目标坐标／源盲句柄；来源诊断不把源拍证据送进Design prompt。
         label = f'目标第{problem.chapter_ordinal}章' if problem.chapter_ordinal else 'Hook'
-        message = (f'{label}材料含未释放字面 {problem.literal!r}；'
-                   f'字段={fields or "未决"}；目标释放位置={positions or "未声明"}。{reasons}')
+        if internal_id:
+            message = (f'{label}材料含内部句柄 {problem.literal!r}（代号不是可读文字，'
+                       f'须改写为自然语言指称）；字段={fields or "未决"}。{reasons}')
+        else:
+            message = (f'{label}材料含未释放字面 {problem.literal!r}；'
+                       f'字段={fields or "未决"}；目标释放位置={positions or "未声明"}。{reasons}')
         issue = OwnerIssueV1(code='material_name_leak',
                              item=f'chapter:{problem.chapter_ordinal}' if problem.chapter_ordinal else 'hook',
                              message=message, context=context)

@@ -19,7 +19,6 @@ patch（提取已购 wire、最小修订、经 --wire-dir 采用留证），不�
 """
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any, Iterable, Mapping, Sequence
 
 from pydantic import ValidationError
@@ -30,46 +29,22 @@ from contracts.schema.source import NameProjection, NameStructure
 from contracts.schema.workflow import STAGE4_HOOK_DESIGN_PROTOCOL
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.hook_validation import validate_hook_payload
+from novel.stages.stage4.hook_wire import expand_hook_wire, hook_catalog, hook_wire_schema
 
 _WIRE_KEYS = frozenset({
     'protocol_version', 'pov', 'opening_facts', 'materials', 'concealed',
     'surface_releases', 'forbidden_reveals', 'design_brief', 'delivery_brief'})
-
-Init = 'init'
-
-
-def _resolve_ref(raw: Any, where: str, errors: list[str],
-                 path: tuple = ()) -> str | None:
-    """wire 位置引用 → canonical 复合引用（B3 前半：模型不写复合引用，I-21）。
-
-    `'init'` 原样保留；否则必须是 {"scene": scene_id, "beat": beat_id} 分量
-    （闭集内单 ID），compiler 组成 `场景#拍`。形状非法的问题带该条目的 wire
-    路径（CS-F1：条目返修只发该条，不退整份）。"""
-    if raw == Init:
-        return Init
-    if isinstance(raw, dict) and set(raw) == {'scene', 'beat'}:
-        scene, beat = raw['scene'], raw['beat']
-        if isinstance(scene, str) and scene and isinstance(beat, str) and beat:
-            return f'{scene}#{beat}'
-    errors.append(design_issue(
-        f'{where} 的位置引用形状非法：{raw!r}'
-        f'（应为 "init" 或 {{"scene": 场景id, "beat": 拍id}}）',
-        code='hook_ref_shape', location=(*path, 'ref'),
-        paths=(path,) if path else ()))
-    return None
-
 
 def assemble_hook_design(
     wire: dict[str, Any], *, body: BodyDesign, known_char_ids: set[str],
     name_projection: NameProjection,
     name_structure: NameStructure | None = None,
 ) -> tuple[HookDesign | None, list[str]]:
-    """Hook Design wire（stage4-hook-design-v1）→ HookDesign
+    """Hook Design wire（stage4-hook-design-v2）→ HookDesign
     （canonical 候选，待 publish_graph 发布）。
 
-    B3 前半：wire 顶层 `protocol_version` 逐字对账；位置引用只给
-    {"scene","beat"} 分量（或 "init"），复合引用由本 compiler 组成——
-    wire 先解析成 canonical 形状再走既有校验与 schema 构造。"""
+    事实只选目录 fact_ref，材料只给位置分量；compiler 展开 canonical 引用，
+    validator 独立验证一次建立与披露边界。协议逐字对账，不隐式收 v1。"""
     errors: list[str] = []
     if wire.get('protocol_version') != STAGE4_HOOK_DESIGN_PROTOCOL:
         errors.append(design_issue(
@@ -84,25 +59,10 @@ def assemble_hook_design(
             code='hook_wire_key_whitelist', location=('wire_keys', tuple(sorted(extra)))))
     if errors:
         return None, errors
-    data = deepcopy(wire)
-    data.pop('protocol_version', None)  # wire 协议版本不进 canonical
-    for k, item in enumerate(data.get('materials') or []):
-        ref = _resolve_ref(item.get('beat_ref'), f'materials[{k}]', errors,
-                           path=('materials', k))
-        if ref is not None:
-            item['beat_ref'] = ref
-    for k, item in enumerate(data.get('opening_facts') or []):
-        ref = _resolve_ref(item.get('ref'), f'opening_facts[{k}]', errors,
-                           path=('opening_facts', k))
-        if ref is not None:
-            item['ref'] = ref
-    for k, item in enumerate(data.get('forbidden_reveals') or []):
-        ref = _resolve_ref(item.get('ref'), f'forbidden_reveals[{k}]', errors,
-                           path=('forbidden_reveals', k))
-        if ref is not None:
-            item['ref'] = ref
+    data, errors = expand_hook_wire(wire, body)
     if errors:
         return None, errors
+    assert data is not None
     errors = validate_hook_payload(
         data, body=body, known_char_ids=known_char_ids,
         name_projection=name_projection, name_structure=name_structure)
@@ -147,9 +107,12 @@ def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple]) -> 
     order = [(scene.scene_id, beat.beat_id)
              for scene in body.scenes for beat in scene.beats]
     wanted: list[tuple[str, str]] = []
+    catalog = hook_catalog(body)
     for path in targets:
         entry = wire.get(path[0]) if path and isinstance(path[0], str) else None
-        rows = entry if isinstance(entry, list) else ()
+        rows = ([entry[path[1]]] if isinstance(entry, list) and len(path) > 1
+                and isinstance(path[1], int) and path[1] < len(entry)
+                else entry if isinstance(entry, list) else ())
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -157,6 +120,14 @@ def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple]) -> 
                 parts = _hook_ref_parts(row.get(key))
                 if parts is not None and parts in index:
                     wanted.append(parts)
+            fact = catalog.get(row.get('fact_ref'))
+            if fact and isinstance(fact['ref'], dict):
+                wanted.append((fact['ref']['scene'], fact['ref']['beat']))
+    # 呈现起点与视界是修正起笔事实所需的只读边界，不能只给失败条目的来源拍。
+    for material in wire.get('materials', []):
+        parts = _hook_ref_parts(material.get('beat_ref'))
+        if parts in index:
+            wanted.append(parts)
     beats: list[dict] = []
     for scene_id, beat_id in dict.fromkeys(wanted):
         scene, beat = index[(scene_id, beat_id)]
@@ -175,7 +146,11 @@ def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple]) -> 
             'event': beat.event, 'participants': list(beat.participants),
             'target_delta': [d.model_dump(mode='json') for d in beat.target_delta],
             'release_prefix': releases})
-    return {'slice_version': 'stage4-hook-patch-slice-v1', 'beats': beats}
+    return {'slice_version': 'stage4-hook-patch-slice-v2', 'facts': catalog,
+            'initial_surfaces': [s.model_dump(mode='json') for s in body.initial_surfaces],
+            'materials': wire.get('materials', []),
+            'forbidden_reveals': wire.get('forbidden_reveals', []), 'pov': wire.get('pov'),
+            'beats': beats}
 
 
 def hook_patch_legal_values(*, body: BodyDesign, known_char_ids: Iterable[str] = (),
@@ -189,6 +164,8 @@ def hook_patch_legal_values(*, body: BodyDesign, known_char_ids: Iterable[str] =
     return {
         'beat_refs': beats,
         'init': 'init',
+        'fact_refs': list(hook_catalog(body)),
+        'wire_schema': hook_wire_schema(body),
         'char_ids': sorted(known_char_ids),
         'surfaces': {char_id: sorted(faces)
                      for char_id, faces in sorted((registered_surfaces or {}).items())},

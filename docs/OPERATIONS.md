@@ -61,7 +61,10 @@ effort/thinking）。本地 Agent CLI（`kind=agent` / driver / execution_mode�
 无回答的传输失败可由开发维护 agent 免费收口：先用
 `python -m novel.orchestrator.work_unit_recovery --base <根> --sid <sid> --unit-id <id> --turn-id <id>`
 取得预览；将 `preview_token`、执行者 `actor`、核实理由 `reason` 写入 JSON 后，同命令增加
-`--apply-request <JSON路径>`。该入口逐项核成本、session、原请求、日志和 owner 排空证据，
+`--apply-request <JSON路径>`。已保存回答（delivered）未被正式提交引用而挡住额度追加时
+（自动对账只在取轮路径触发，额度已尽则取轮不可能），用
+`novel.orchestrator.work_unit_grants.reconcile_delivered(base, sid, unit_id, actor=…, reason=…)`
+显式让位（幂等、不返还轮次、保留回答与费用证据）。该入口逐项核成本、session、原请求、日志和 owner 排空证据，
 只把已确认失败的 unknown 改为 failed，不生成语义决定、不退还额度、不清除未知用量。
 存在已购回答或证据缺失时继续阻断，先恢复原结果；同一请求重放幂等。该入口不是产品跑书步骤；
 admission 账沿用历史命名（`commander_admissions.jsonl`）。两个分支：存量书 Commander 连接失败
@@ -267,6 +270,21 @@ STR-06 新链的 Stage4 免费聚合由结构性禁付节点 `str06.stage4.compi
 
 ## 旧回派归因更正与历史用量补证
 
+章观察人工窄修先用 `python -m tools.str06_review --base <输出根> --sid <sid>
+patch-preview --owner chNN --candidate <wire文件> --request-profile <原请求配置JSON>`
+检查差异与原请求身份。已有 `--wire-dir` 采用时，目录内对应的 chNN_patch_note.json
+须登记 base_response_identity 和非空 reason，旁边放 chNN_wire.json。
+`novel.cli run str06.stage2.chapters` 发现这些 patch note 后只执行对应章，其他章只读验封，
+不重放、不重新发布；无 note 的普通运行仍执行全章。缺 wire 或未选章缺少有效产物即拒绝。
+采用沿用请求身份/原响应/成本三方核对及 ContentRevision 发布。免费采用显式带
+`--check-only`，不带 `--yes` 或 `--allow-egress`；缺少完整 wire 就拒绝，不补购。
+生成提示或协议改变后，预检显式给 `--baseline-request-sha256 <已购摘要>`，仍捕获
+当前生产请求与完整接受闸；patch note 同时登记预检返回的 `applies_to_request_sha256`。
+未给当前应用摘要的旧 note 仍只允许同身份采用，不能伪造旧请求或暗改协议。
+`cross_cause` 预检还须给 `--upstream-associate-candidate <本轮身份wire>`，不拿旧
+盘面冒充本轮前置答案。章预检与生产共用包含真实回派范围的请求；Preserve 预检
+在 checkpoint 尚未发布时仍验证候选、姓名与 Brief，并分别报告冲突和 Design 未运行。
+
 `python -m novel.cli issue-correction <sid> --base <输出根> --owner preserve`
 只读重建当前正式材料并给出 evidence_sha256；只有已证明旧二分归因错误且全部当前
 问题可归因时才给出更正清单。以同一命令追加 `--apply --subject-sha256 <预览摘要>
@@ -316,3 +334,20 @@ provider、model、reasoning_effort和thinking_mode。编排器从冻结profiles
 
 `tools/str06_review.py ... patch-preview`同样接受`--request-profile`，须与被审阅请求一致；
 显式effort冲突即拒绝，工具通过同一冻结函数构造实际请求身份，始终不授予付费权限。
+
+Hook v1 已购首答可显式换算为 v2，保持原文语义与原成本：
+
+```powershell
+python -X utf8 -B -m tools.str06_review --base <输出根> --sid <sid> --save upgrade-hook `
+  --baseline-request-sha256 <原首答请求身份> `
+  --request-profile '{"provider":"deepseek","model":"deepseek-flash","reasoning_effort":"high","thinking_mode":"on"}'
+```
+
+工具核验原请求、响应与 ledger，捕获现役生产接受闸；即使正式 graph 尚未发布也运行
+完整确定性下游预检。通过才导出本书 `runtime/review/hook_v2_upgrade/` 下的
+`hook_design_wire.json` 与 `hook_design_patch_note.json`；失败只留诊断，不导出采用材料。
+不带 `--save` 只打印，不写盘。换算不新增模型调用，不覆盖历史首答的失败记录。
+采用走正常 Hook 节点，带 `--check-only --wire-dir <上述目录> --request-profile <同配置>`；
+该入口不得带 `--yes`／`--allow-egress`，缺已购绑定或当前完整闸失败就拒绝。采用会写正式
+graph 和修订证据，但不运行下一 compile 节点。首答通过率须另冻结真实新请求的首轮结果，
+不能把历史回答免费复验接受率记成首答通过率。

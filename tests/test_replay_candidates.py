@@ -226,3 +226,63 @@ def test_missing_stage1_is_not_run_not_a_crash(tmp_path):
     assert report['inputs'] == {}
     assert report['owners']['design']['status'] == 'not_run'
     assert 'Stage1' in report['owners']['design']['reason']
+
+
+# ─── associate：按当前候选集重放（逐候选恰答一次）＋旧协议轮次的渲染 ─────────────
+
+def _associate_wire(*, scene=({'left': 'ch01.sc1', 'right': 'ch02.sc1', 'verdict': 'distinct'},),
+                    **over):
+    from contracts.schema.observation import STAGE2_ASSOCIATE_PROTOCOL
+    return {'protocol_version': STAGE2_ASSOCIATE_PROTOCOL, 'same_proposition': [],
+            'loop_pairing': [], 'cross_chapter_cause': [],
+            'scene_continuation': list(scene), **over}
+
+
+def test_associate_replay_judges_against_the_current_candidate_set(tmp_path):
+    """判据（D#10）：重放按当前候选集验收——漏答的 wire 不能被宽松验收误报为
+    “完整预检全绿、可零调用采用”（真跑 run_associate 会拒它），多余的因果行同理。"""
+    base, repo, _ = _build_root(tmp_path)
+    space, candidates = rc.associate_inputs(repo, chapter_count=2)
+    assert [(c.left, c.right) for c in candidates.scene_continuation] == [('ch01.sc1', 'ch02.sc1')]
+    assert candidates.scene_continuation[0].left_text and candidates.scene_continuation[0].right_text
+    # 恰答一次：全绿。
+    green = rc.replay_associate_round(_associate_wire(), space, candidates)
+    assert green['reuse'] == 'green' and green['error_count'] == 0
+    # 漏答唯一的 seam 候选：未通过，规则码为 missing_answer。
+    missing = rc.replay_associate_round(_associate_wire(scene=()), space, candidates)
+    assert missing['reuse'] == 'failed'
+    assert missing['codes'] == {'association_missing_answer': 1}
+    # 身份答案携带因果行：未通过，规则码为 stray_cause。
+    stray = rc.replay_associate_round(_associate_wire(cross_chapter_cause=[
+        {'from_beat': 'ch01.b1', 'to_beat': 'ch02.b1', 'kind': 'causes'}]), space, candidates)
+    assert stray['reuse'] == 'failed' and stray['codes'] == {'association_stray_cause': 1}
+    # 盘上已购的那一轮（当前协议、恰答）经完整 replay 入口同样全绿。
+    entry = rc.replay(base, SID, owners=('associate',))['owners']['associate']
+    assert entry['rounds'][0]['replay']['reuse'] == 'green'
+
+
+def test_render_states_obsolete_associate_rounds_instead_of_crashing(tmp_path):
+    """旧协议（v2～v4）的已购回答：replay 给出 reuse=obsolete 的行（无 passed／
+    error_count），render 不得再按“通过／未通过”版式取不存在的键而 KeyError；
+    汇总单列“协议已淘汰”，非对象 wire 单独报“无法判定”。"""
+    base, repo, _ = _build_root(tmp_path)
+    space, candidates = rc.associate_inputs(repo, chapter_count=2)
+    obsolete = rc.replay_associate_round(
+        {'protocol_version': 'stage2-associate-v3'}, space, candidates)
+    unreadable = rc.replay_associate_round(['不是', '对象'], space, candidates)
+    assert obsolete['reuse'] == 'obsolete' and unreadable['reuse'] == 'unknown'
+
+    def row(ordinal, replay):
+        return {'ordinal': ordinal, 'state': 'delivered', 'reason_code': '',
+                'request_sha256': 'a' * 64, 'attempt_id': f'x{ordinal}', 'shape': 'full',
+                'salvage': 'none', 'note': '', 'usage': {}, 'recorded': None, 'replay': replay}
+    rows = [row(1, obsolete), row(2, unreadable)]
+    summary = rc._summary(rows)
+    assert (summary['obsolete'], summary['unknown'], summary['green'], summary['failed']) \
+        == ([1], [2], [], [])
+    report = {'base': str(base), 'sid': SID, 'book': '书', 'inputs': {}, 'owners': {
+        'associate': {'owner': 'associate', 'status': 'ran', 'node': 'str06.stage2.associate',
+                      'rounds': rows, 'summary': summary}}}
+    text = rc.render(report)
+    assert '协议已淘汰（stage2-associate-v3）' in text and '无法判定' in text
+    assert '协议已淘汰 [1]' in text, '汇总单列协议已淘汰的轮次'

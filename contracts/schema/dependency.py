@@ -141,6 +141,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         module='novel.stages.stage4.hook',
         allows=('contracts.schema.*', 'novel.core.name_materials',
                 'novel.stages.stage4.hook_validation',
+                'novel.stages.stage4.hook_wire',
                 'novel.stages.stage4.design_paths'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
@@ -152,9 +153,24 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage4.hook_validation',
         allows=('contracts.schema.*', 'novel.core.name_materials',
+                'novel.stages.stage4.hook_facts',
                 'novel.stages.stage4.design_paths'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
                  'novel.stages.stage4.fold', 'novel.stages.stage4.guard') + _STAGE457),
+    # 事实索引只查询正式 BodyDesign；不依赖 wire 展开或语义 producer。
+    DependencyRule(
+        module='novel.stages.stage4.hook_facts',
+        allows=('contracts.schema.*',),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
+                 'novel.stages.stage4.hook_wire', 'novel.stages.stage4.hook_validation')
+        + _STAGE457),
+    # wire compiler 仅展开引用；不借 validator 或下游编译推断缺失语义。
+    DependencyRule(
+        module='novel.stages.stage4.hook_wire',
+        allows=('contracts.schema.*', 'novel.stages.stage4.hook_facts',
+                'novel.stages.stage4.design_paths'),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
+                 'novel.stages.stage4.hook_validation') + _STAGE457),
     # hook_writer 只能消费 hook／receipt 契约：禁止 LLM 与 Stage2/4/7 模块。
     # ⚠ F8c 起 literal_scan 与 prompts 同住 `novel/stages/common.py`，模块粒度
     # 无法再把「禁 prompt 组装」与「准用 literal_scan」分开——那条禁项改由本行的

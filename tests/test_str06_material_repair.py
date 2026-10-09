@@ -156,9 +156,12 @@ def test_correction_preserves_history_and_refuses_stale_preview(tmp_path):
     from novel.stages.stage4 import assemble_hook_design, publish_graph
     from novel.stages.owner_revision import read_owner_issue_file, open_issue_record
     from tests.str06_facilities import make_context, synthetic_ref
+    from tests.factories import hook_wire_v2
     from tests.test_str06_hook import _hook_wire
     body, binding, brief, chars = _conflict()
-    hook, errors = assemble_hook_design(_hook_wire(opening_facts=[], forbidden_reveals=[]), body=body, known_char_ids=set(chars.characters),
+    hook, errors = assemble_hook_design(
+        hook_wire_v2(_hook_wire(opening_facts=[], forbidden_reveals=[])),
+        body=body, known_char_ids=set(chars.characters),
         name_projection=chars.name_projection(), name_structure=chars.name_structure)
     assert not errors
     repo = Str06Repository(tmp_path / 'run')
@@ -227,6 +230,82 @@ def test_design_own_field_is_verified_before_routing():
     for value, expected in [(body.book_style, 'design'), ('投影凭空改出的名称', '')]:
         problem = MaterialIssue('positive_material_leak', 'positive', 0, value,
             (MaterialSource('design', 'book', 'book_style', value),), 1)
+        repair, = plan_material_repairs([problem], body=body, binding=binding, brief=brief)
+        assert repair.owner == expected
+
+
+def test_internal_id_issue_carries_only_sources_that_contain_the_handle():
+    """句柄来源只认逐字含它的正式字段；来源文本里没有它＝渲染期引入，保持无来源。"""
+    from novel.core.material_trace import MaterialPart
+    from novel.stages.common import positive_material_issues
+    own = MaterialSource('design', 'sc01#b01', 'target_delta/0', 'fu_jun')
+    other = MaterialSource('design', 'sc01#b01', 'event', '夫君出门')
+    longer = MaterialSource('design', 'sc01#b01', 'event', 'fu_jun_x 是另一个标识')
+    issue, = positive_material_issues(
+        {'must_realize/0': MaterialPart('夫君出门——拍末应成立：fu_jun', (own, other, longer))},
+        released=(), withheld=(), internal_ids=['fu_jun'], chapter_ordinal=7)
+    assert issue.code == 'internal_id_leak' and issue.sources == (own,)
+    assert issue.chapter_ordinal == 7
+    rendered, = positive_material_issues(
+        {'must_realize/0': MaterialPart('fu_jun：出门', (other,))},
+        released=(), withheld=(), internal_ids=['fu_jun'], chapter_ordinal=7)
+    assert rendered.sources == ()
+
+
+def test_internal_id_in_design_own_value_routes_design_not_code_defect():
+    """实证反例（2026-10-09《夫君的报恩》rc21 新根）：Design 把人物代号写成状态值，
+    建立章与后续读取章的写手材料都带出该代号。来源是 Design 自有字段，归 Design
+    改写；无来源或出自源命题的同一代号仍停止，不购买修不了它的 Design 修订。"""
+    body = _design()
+    scenes, beats = list(body.scenes), list(body.scenes[0].beats)
+    deltas = list(beats[0].target_delta)
+    deltas[0] = deltas[0].model_copy(update={'value': 'fu_jun'})
+    beats[0] = beats[0].model_copy(update={'target_delta': tuple(deltas)})
+    scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})
+    body = body.model_copy(update={'scenes': tuple(scenes)})
+    binding, brief, chars = _binding(body), _requirements(), _characters()
+    before = [x.model_dump_json() for x in (body, binding, brief, chars)]
+    view = inspect_body_materials(body, binding, brief, chars, budget=4000,
+                                  length_band=(0.6, 1.3))
+    leaks = [m for m in view.materials if m.code == 'internal_id_leak']
+    assert {m.chapter_ordinal for m in leaks} == {1, 2}
+    assert all(m.sources for m in leaks)
+    assert all(s.kind == 'design' and s.ref == 'sc01#b01' and s.text == 'fu_jun'
+               for m in leaks for s in m.sources)
+    repairs = plan_material_repairs(leaks, body=body, binding=binding, brief=brief,
+                                    structure=chars.name_structure)
+    assert {(r.action, r.owner, r.node) for r in repairs} == {
+        ('revise_upstream', 'design', 'str06.stage4.body_design')}
+    assert {r.issue.item for r in repairs} == {'chapter:1', 'chapter:2'}
+    assert all('内部句柄' in r.issue.message and '未释放字面' not in r.issue.message
+               for r in repairs)
+    proposition = brief.propositions[0]
+    for origins in ((), (MaterialSource('knowledge', proposition.kp_id, 'statement',
+                                        proposition.statement),)):
+        stopped, = plan_material_repairs([replace(leaks[0], sources=origins)],
+                                         body=body, binding=binding, brief=brief)
+        assert stopped.action == 'stop' and stopped.owner == ''
+    assert [x.model_dump_json() for x in (body, binding, brief, chars)] == before
+
+
+def test_selected_detail_routes_to_preserve_only_with_exact_formal_source():
+    """软材料的错误也有窄回派入口；错误来源身份或改写后的文本不得冒充正式证据。"""
+    from contracts.schema.grounding import SourceDetail
+    body, binding, brief, _ = _conflict()
+    obligation = binding.obligations[0]
+    detail = SourceDetail(detail_id='dt_1234567890abcdef',
+                          anchor=obligation.anchors[0], text='陆大哥停在灯下')
+    changed = obligation.model_copy(update={'details': (detail,)})
+    binding = binding.model_copy(update={'obligations': (
+        changed, *binding.obligations[1:])})
+    for detail_id, text, expected in (
+            (detail.detail_id, detail.text, 'preserve'),
+            ('dt_ffffffffffffffff', detail.text, ''),
+            (detail.detail_id, '陆大哥停在窗边', '')):
+        source = MaterialSource('obligation', obligation.obligation_id,
+                                f'details/{detail_id}', text)
+        problem = MaterialIssue('positive_material_leak', 'creative_guidance', 0,
+                                '陆大哥', (source,), 1)
         repair, = plan_material_repairs([problem], body=body, binding=binding, brief=brief)
         assert repair.owner == expected
 

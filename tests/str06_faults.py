@@ -59,7 +59,13 @@ def looped_full_chain_wires() -> dict:
     wires['ch02']['beats'][0]['loops'] = [
         {'ref': 'q_yu', 'op': 'close', 'resolution': '玉佩刻着沈字，指向旧案。'}]
     wires['associate']['loop_pairing'] = [
-        {'open': 'ch01.q_yu', 'close': 'ch02.q_yu'}]
+        {'open': 'ch01.q_yu', 'close': 'ch02.q_yu', 'verdict': 'pair'}]
+    wires['associate']['scene_continuation'] = [
+        {'left': 'ch01.sc1', 'right': 'ch02.sc1', 'verdict': 'distinct'}]
+    # Phase 2：因果窄调用（loop 配对拍对 ch01.b1→ch02.b1 候选，默认否决）。
+    wires['cross_cause'] = {'protocol_version': 'stage2-cross-cause-v1',
+                            'causes': [{'from_beat': 'ch01.b1', 'to_beat': 'ch02.b1',
+                                        'kind': 'none'}]}
     return wires
 
 
@@ -74,7 +80,10 @@ def apply_fault(wires: dict, fault: str | None) -> dict:
     elif fault == 'unknown_slug':
         mutated['ch01']['beats'][0]['participants'] = ['ghost']
     elif fault == 'missing_pairing':
-        mutated['associate']['loop_pairing'] = []
+        # Phase 2：候选判 distinct（漏答本身是机械缺陷；本故障＝模型判定不是
+        # 同一悬念——close 未配对，compile 按未决拒发）。
+        mutated['associate']['loop_pairing'] = [
+            {'open': 'ch01.q_yu', 'close': 'ch02.q_yu', 'verdict': 'distinct'}]
     elif fault == 'obligation_unbound':
         # CS-3 bind 退役：承载位＝design wire 的 real 标注。清空全部标注 ⇒
         # 必保义务覆盖闸在 body_design 同节点修订轮拦下（不再有跨节点回派面）。

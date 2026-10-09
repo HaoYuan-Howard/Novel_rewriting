@@ -60,7 +60,7 @@ from contracts.invariants import (
 )
 from contracts.schema.grounding import OutputConstraints, PreserveCheckpoint
 from contracts.schema.hook import HookConstraints, HookReceipt
-from contracts.schema.design import DesignWireV8, STAGE4_DESIGN_WIRE_PROTOCOL
+from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
 from contracts.schema.workflow import (
     OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1,
@@ -90,16 +90,24 @@ from novel.stages.common import (
 )
 from novel.stages import candidates
 from novel.stages.stage2 import (
+    chapter_revision_scope_issues, slim_chapter_wire,
     NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
     book_patch_locate, chapter_observation_prompt, chapter_patch_locate,
     character_core_view, names_patch_locate,
-    compile_associate_observation, associate_observation_prompt,
-    associate_patch_locate,
+    compile_associate_observation, associate_candidates_prompt,
+    associate_patch_locate, compile_cross_cause, cross_cause_prompt,
+    project_identity_candidates, project_cause_candidates,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
-    compile_source_truth, project_association_space,
+    compile_name_variants, name_variant_candidates, name_variants_prompt,
+    compile_source_truth, inspect_identity_associations, project_association_space,
     first_appearance_anchors, first_appearance_issues, NAMES_INPUT_VERSION,
     names_evidence_view, normalize_name_observations, validate_name_resolutions,
+    merge_name_structure,
 )
+from contracts.schema.observation import (
+    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_NAMES_PROTOCOL, AssociateObservation,
+)
+from contracts.schema.source import SourceNameResolution
 from novel.stages.owner_revision import (
     MechanicalDefectStop, OwnerRevisionRequired, OwnerRevisionStop,
     discover_owner_issues, open_issue_record, owner_product_digest,
@@ -109,15 +117,16 @@ from novel.stages.stage4 import (
     assemble_hook_design,
     assemble_preserve, compile_execution_plan, compile_hook_context,
     compile_writer_book_ir, design_obligation_index,
-    knowledge_change_index, lock_order_violations, obligation_core_id,
+    detail_index, knowledge_change_index, lock_order_violations, obligation_core_id,
     preserve_name_issues, preserve_patch_slice, project_brief,
     project_design_input, project_preserve_view, preserve_revision_wire,
     publish_graph,
 )
-from contracts.schema.observation import STAGE2_NAMES_PROTOCOL
 from contracts.schema.orchestration import LegacyLlmProfile
 from novel.stages.stage4 import (
     design_patch_legal_values, design_patch_slice, hook_combination_errors,
+    design_reference_aliases, design_wire_model, DESIGN_READ_PROTOCOLS,
+    design_issue,
     hook_patch_legal_values, hook_patch_slice, inspect_body_materials,
     inspect_design_candidate, locate_design_patches, plan_material_repairs,
     wire_paths_of,
@@ -184,10 +193,11 @@ class ChainContext:
     """
 
     repository: Any
-    #: JSON 节点回调 ``(owner, prompt, validate[, patch, review_targets, baseline, narrow])``。
+    #: JSON 节点回调 ``(owner, prompt, validate[, patch, review_targets, baseline, narrow,
+    #: downstream_preview])``；downstream_preview 是本轮当前输入的只读干跑，不进请求身份。
     #: `review_targets`／`baseline`／`narrow`（CS-H H1b/H2）只对实现了窄返修协议的
     #: owner 有意义；未实现的边界忽略它们（普通购买路径）。
-    ask: Callable[[str, str, Callable], tuple[Any, Any]]
+    ask: Callable[..., tuple[Any, Any]]
     #: 文本节点回调 `(owner, prompt[, validate])`：`validate` 是该节点的机械校验（stage 纯函数），
     #: 付费边界据此如实记录接受结果（RC-54）；缺省＝只判空回答。
     ask_text: Callable[..., tuple[str | None, list[str], Any]]
@@ -216,6 +226,9 @@ class ChainContext:
     #: 或契约身份（`NodeSpec.flags` 不变）。从 canary 续跑到全书时，已提交章
     #: 的采用与恢复身份不变（集合恢复按目标集合补缺）。
     body_chapters: tuple[int, ...] | None = None
+    #: 已登记章观察 owner patch 的执行范围；由 wire-dir 的 patch note 派生，
+    #: 不是自由选章开关。其余章须已有有效产物，只读保留，不重放或重新发布。
+    chapter_patch_owners: tuple[str, ...] = ()
     provider: str = 'manual-adoption'
     model: str = 'unknown'
     #: canonical JSON 摘要（请求身份）；由调用方从付费边界注入——chain 层不 import
@@ -322,7 +335,8 @@ def run_book(ctx: ChainContext) -> dict:
                      owners=('book',), refs=(book_ref,))
     return {'characters': len(observation.characters),
             'initial_state': len(observation.initial_state),
-            'world_constraints': len(observation.world_constraints)}
+            'world_constraints': len(observation.world_constraints),
+            'facts': len(observation.facts)}
 
 
 def _chapter_evidence(evidence: dict, chapter: int) -> dict:
@@ -331,10 +345,12 @@ def _chapter_evidence(evidence: dict, chapter: int) -> dict:
             if v['chapter'] == chapter or (chapter == 1 and v.get('pre_chapter'))}
 
 
-def chapter_acceptance(wire, *, chapter: int, evidence_ids, character_slugs, anchors):
+def chapter_acceptance(wire, *, chapter: int, evidence_ids, character_slugs, anchors,
+                       fact_ids=None):
     """生产章观察与只读预检共用接受闸；首现锚点由书级 core 派生。"""
     observation, errors = compile_chapter_observation(
-        wire, evidence_ids=evidence_ids, chapter=chapter, character_slugs=character_slugs)
+        wire, evidence_ids=evidence_ids, chapter=chapter, character_slugs=character_slugs,
+        fact_ids=fact_ids)
     if observation is not None:
         errors.extend(first_appearance_issues(anchors, chapter=chapter, beats=observation.beats))
     return observation, errors
@@ -346,7 +362,8 @@ def _write_chapter_failures(repository, rel: str, *, requested: tuple[int, ...],
     """逐章失败留证（D3/W2）：「最近一次完成执行」的逐章失败清单。
 
     形状 `{requested, attempted, chapters, recorded_at}`：`requested` 是本次
-    请求的章范围（章观察＝全部源章；正文＝`body_chapters` 或全书）；`attempted`
+    请求的章范围（章观察＝全部源章或既有回派/owner patch 范围；正文＝
+    `body_chapters` 或全书）；`attempted`
     是本次实际进入逐章执行器的章（正文不含已提交章）；`chapters` 是
     `attempted` 的失败子集。写盘走 repository 的原子替换；崩溃不写，文件
     缺失因此表示「这个节点还没有一次完成执行」（I-42）。
@@ -358,6 +375,59 @@ def _write_chapter_failures(repository, rel: str, *, requested: tuple[int, ...],
                                     'detail': str(exc)}
                      for ordinal, exc in sorted(failures.items())},
         'recorded_at': int(time.time())})
+
+
+def _chapter_execution_owners(ctx: ChainContext) -> tuple[str, ...]:
+    """同一份 owner 范围同时用于执行与关闭派单，不能关闭未执行章的问题。"""
+    known = tuple(f'ch{c["chapter_ordinal"]:02d}' for c in ctx.chapters)
+    pending = tuple(owner for owner in known
+                    if (record := open_issue_record(ctx.repository, owner)) is not None
+                    and record.dispatch_pending and record.node == 'str06.stage2.chapters')
+    selected = ctx.chapter_patch_owners or pending or known
+    if set(selected) - set(known):
+        raise ValueError('章观察修订 owner 超出源章范围')
+    return tuple(owner for owner in known if owner in selected)
+
+
+def prepare_chapter_request(repository, *, no, book, chapters, chapter_evidence, anchors, fact_ids):
+    """生产与免费预检共用的章请求与完整接受闸；包含源冲突的真实窄修范围。"""
+    record = open_issue_record(repository, f'ch{no:02d}')
+    conflicts = [i for i in record.issues if i.code == 'source_evidence_conflict'] if record else []
+    previous, scope = None, set()
+    if conflicts:
+        # 上一版是本 owner 的修订主体，已由已购请求绑定；只验 seal/新鲜度，
+        # 不记为上游边。多章并发时消费它会把兄弟章旧版串入彼此的来源账。
+        previous = repository.check_model(str06_chapter_observation_rel(no))
+        for issue in conflicts:
+            anchor = str(issue.context.get('anchor') or '')
+            match = re.fullmatch(fr'b{no:02d}_(\d{{2}})(?:\.(?:[ecl]\d+|v1))?', anchor)
+            index = int(match[1]) - 1 if match else -1
+            if (not 0 <= index < len(previous.beats)
+                    or issue.context.get('segment') not in previous.beats[index].source_refs):
+                raise ValueError(f'章观察回派地址或证据归属无效：{anchor}')
+            scope.add(index)
+    prompt = revision_prompt_for_owner(
+        repository, f'ch{no:02d}',
+        chapter_observation_prompt(chapter=no, book=book,
+                                   chapters=chapters,
+                                   evidence=chapter_evidence),
+        str06_chapter_observation_rel(no),
+        previous_wire=slim_chapter_wire if conflicts else None)
+    if conflicts:
+        prompt += ('\n本轮源证据窄修只允许修改以下拍：'
+                   + '、'.join(f'b{no:02d}_{i + 1:02d}' for i in sorted(scope))
+                   + '。拍数、顺序和所有 start 不变，其余拍原样保留；'
+                   '你判断是否需要补足知情及其证据，程序不替你判定获知者。')
+    def validate(w):
+        # R10a a1：传完整段映射（含 text），basis 引文可逐字判定
+        observation, errors = chapter_acceptance(
+            w, evidence_ids=chapter_evidence, chapter=no,
+            character_slugs=frozenset(book.characters), anchors=anchors, fact_ids=fact_ids)
+        if observation is not None and not errors and previous is not None:
+            errors.extend(chapter_revision_scope_issues(
+                previous, observation, beat_indexes=frozenset(scope)))
+        return observation, errors
+    return prompt, validate
 
 
 def run_chapters(ctx: ChainContext) -> dict:
@@ -373,6 +443,8 @@ def run_chapters(ctx: ChainContext) -> dict:
     「最近一次完成执行」留证 `runtime/chapter_observation_failures.json`
     （D3/W2：正常完成写空清单，文件缺失＝本节点没有完成执行），恢复按请求
     身份重放、不重购已存结果（I-30/I-31）。
+    回派或显式 owner patch 只执行指定 owner，其他章须已有效发布并只读保留；
+    源证据冲突进一步按所报拍核对修复范围，不允许借修订改动其他拍。
     """
     repository = ctx.repository
     book = repository.read_model('stage2/observations/book.json')
@@ -382,6 +454,8 @@ def run_chapters(ctx: ChainContext) -> dict:
         raise MechanicalDefectStop(f'书级称谓锚点无效：{core_errors}',
                                   node='str06.stage2.chapters', issues=tuple(core_errors))
     anchors = first_appearance_anchors(core)
+    # Phase 2：书级命题词表编号闭集（know 的 fact 引用按闭集核对）。
+    fact_ids = frozenset(fact.fact_id for fact in book.facts)
     failures: dict[int, BaseException] = {}
     observed = 0
 
@@ -392,24 +466,17 @@ def run_chapters(ctx: ChainContext) -> dict:
                                  per_book=ctx.slot_per_book,
                                  per_provider=ctx.slot_per_provider):
             chapter_evidence = _chapter_evidence(evidence, no)
-            prompt = revision_prompt_for_owner(
-                repository, f'ch{no:02d}',
-                chapter_observation_prompt(chapter=no, book=book,
-                                           chapters=ctx.chapters,
-                                           evidence=chapter_evidence),
-                str06_chapter_observation_rel(no))
-            def validate(w):
-                # R10a a1：传完整段映射（含 text），basis 引文可逐字判定
-                return chapter_acceptance(w, evidence_ids=chapter_evidence, chapter=no,
-                                          character_slugs=frozenset(book.characters), anchors=anchors)
+            prompt, validate = prepare_chapter_request(
+                repository, no=no, book=book, chapters=ctx.chapters,
+                chapter_evidence=chapter_evidence, anchors=anchors, fact_ids=fact_ids)
 
             def locate(w, errs, *, _ev=chapter_evidence, _no=no,
-                       _slugs=frozenset(book.characters)):
+                       _slugs=frozenset(book.characters), _facts=fact_ids):
                 # CS-patch（2026-10-03）：条目级返修的定位协议——与章观察验收
                 # 同源（闭集／basis／人物闭集／句柄纪律），其它闸在拦时自动退
                 # 整份返修（返回 None）。
                 return chapter_patch_locate(w, errs, evidence_ids=_ev, chapter=_no,
-                                            character_slugs=_slugs)
+                                            character_slugs=_slugs, fact_ids=_facts)
 
             wire, ch_ref = ctx.ask(f'ch{no:02d}', prompt, lambda w: validate(w)[1],
                                    patch=locate)
@@ -423,6 +490,12 @@ def run_chapters(ctx: ChainContext) -> dict:
                              owners=(f'ch{no:02d}',), refs=(ch_ref,))
 
     ordinals = [chapter['chapter_ordinal'] for chapter in ctx.chapters]
+    selected_owners = _chapter_execution_owners(ctx)
+    for no in ordinals:
+        if f'ch{no:02d}' not in selected_owners:
+            # 必须有已封存的正式产物；缺失/失效不得被一次局部修补掩盖。
+            repository.check_model(str06_chapter_observation_rel(no))
+    ordinals = [no for no in ordinals if f'ch{no:02d}' in selected_owners]
     workers = ctx.pool_workers('str06.stage2.chapters', len(ordinals))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_one, no): no for no in ordinals}
@@ -434,7 +507,7 @@ def run_chapters(ctx: ChainContext) -> dict:
                 continue
             observed += 1
     # 「最近一次完成执行」逐章留证（D3/W2）：正常完成写空清单；带失败完成在
-    # 上抛之前写失败子集。章观察无集合恢复，requested＝attempted＝全部源章。
+    # 上抛之前写失败子集。requested＝attempted＝本次全章或修订 owner 范围。
     _write_chapter_failures(repository, CHAPTER_OBSERVATION_FAILURES_REL,
                             requested=tuple(ordinals), attempted=tuple(ordinals),
                             failures=failures)
@@ -448,12 +521,14 @@ def run_chapters(ctx: ChainContext) -> dict:
 # ─── stage2 names ────────────────────────────────────────────────────────────
 
 def run_names(ctx: ChainContext) -> dict:
-    """`str06.stage2.names`：源名称结构观察（引擎不变，D9 只重挂输入）。
+    """`str06.stage2.names`：源名称结构观察＋条件变体窄调用（CS-S 1c）。
 
-    输入改挂书级观察（`stage2/observations/book.json` 的人物表投影）＋完整
-    MainText 与 hook_copy 的逐段证据；不再把同一正文另发一遍。名称结构 wire
-    落 `stage2/observations/names.json`。
-    Characters 的合并发布归 compile（S2-5 唯一 writer），本节点不再写
+    结构答案（wire v6）只登记部件（姓／名／化名／歧义例外）；构词模板由
+    compiler 派生（`derive_surface_forms`）。随后代码生成变体候选
+    （`name_variant_candidates`——无候选＝零调用，S2-10 的 B）：有候选才发
+    节点内窄调用 `name_variants`（wire `stage2-name-variants-v1`，逐条
+    verdict），判定合入 structure.resolutions（not_name 只作完整性证明）。
+    Characters 的合并发布归 compile（S2-5 唯一 writer），本节点不写
     characters.json。
     """
     repository = ctx.repository
@@ -481,22 +556,67 @@ def run_names(ctx: ChainContext) -> dict:
     structure, errors = compile_name_structure(names_wire, core, full, evidence=evidence)
     if errors:
         raise ValueError(errors)
+    resolutions: tuple = ()
+    variants_ref = None
+    # B：候选由代码给出——有候选才发窄调用（同节点第二 ask，独立工作单元
+    # book:name_variants，请求身份含 owner 字符串，与结构答案互不混用）。
+    candidates = name_variant_candidates(structure, core, evidence)
+    if candidates:
+        def _validate_variants(w):
+            derived, located = compile_name_variants(
+                w, candidates, evidence=evidence, characters=core)
+            return [message for _path, message in located]
+
+        def _locate_variants(w, errs):
+            derived, located = compile_name_variants(
+                w, candidates, evidence=evidence, characters=core)
+            if not located or any(path is None for path, _message in located):
+                return None
+            if len(errs) != len(located) or sorted(errs) != sorted(
+                    message for _path, message in located):
+                return None
+            grouped: dict[tuple, list] = {}
+            for path, message in located:
+                grouped.setdefault(path, []).append(message)
+            return list(grouped.items())
+
+        variants_wire, variants_ref = ctx.ask(
+            'name_variants',
+            name_variants_prompt(candidates, evidence, structure),
+            _validate_variants, patch=_locate_variants)
+        derived, located = compile_name_variants(
+            variants_wire, candidates, evidence=evidence, characters=core)
+        assert derived is not None and not located, located
+        resolutions = tuple(
+            SourceNameResolution.model_validate(item) for item in derived)
+        structure = structure.model_copy(update={'resolutions': resolutions})
+        validation = validate_name_resolutions(structure, core, evidence=evidence)
+        if validation:
+            raise MechanicalDefectStop('变体判定不闭合', node='str06.stage2.names',
+                                       issues=tuple(validation))
     observation = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL,
                                    structure=structure)
+    # 来源账带全部实际发生的 ask（结构答案＋有候选时的变体窄调用）：窄调用的
+    # 付费用量不得无人认领（I-17/I-37）。
+    refs = (names_ref,) if variants_ref is None else (names_ref, variants_ref)
     repository.write('stage2/observations/names.json', observation,
-                     owners=('names',), refs=(names_ref,))
-    return {'name_structure_people': len(structure.people)}
+                     owners=('names',), refs=refs)
+    return {'name_structure_people': len(structure.people),
+            'name_variant_candidates': len(candidates)}
 
 
 # ─── stage2 associate／compile（B2 五节点：关联与双真源发布，D8/D9） ─────────
 
 def run_associate(ctx: ChainContext) -> dict:
-    """`str06.stage2.associate`：跨章关联——只选已给句柄建立同一性与引用（D8）。
+    """`str06.stage2.associate`：条目级窄关联——候选由代码给出，逐候选判定（D8）。
 
-    输入是 compiler 从 book 与 chapters 观察投影的句柄闭集及最小文本；输出观察
-    wire 落 `stage2/observations/associate.json`。缺项、歧义、冲突保持未决——
-    **RC-18～20**：请求前复验章内生命周期并按来源回派；验收时compile干跑
-    只把有稳定身份且归属associate的诊断交同节点修订。最终未决拒绝发布保留
+    Phase 2（S2-9 落地）：输入不再是整书投影——`project_identity_candidates`
+    用确定性相似度筛出未决候选（近义命题、跨章 open×close、相邻章 seam），
+    **无候选＝零调用**；身份答案接受后由 `project_cause_candidates`
+    从已判定答案派生因果候选拍对（D-2 A），有候选才发第二窄调用（owner
+    `cross_cause`，模型只选 kind 或否决）。缺项、歧义、冲突保持未决——
+    **RC-18～20**：请求前复验章内生命周期并按来源回派；验收时 compile 干跑
+    只把有稳定身份且归属 associate 的诊断交同节点修订。最终未决拒绝发布保留
     （崩溃窗口／单节点重跑／owner patch 后的防御）。跨节点回派的 open 记录
     在案时，修订要求并入 prompt（原请求＋上一版＋typed 问题）。
     """
@@ -509,11 +629,16 @@ def run_associate(ctx: ChainContext) -> dict:
     evidence = build_evidence(ctx.chapters, ctx.hook_copy)
     core, errors = character_core_view(book, evidence=evidence)
     if not errors:
+        # 正式 names 的人工编辑／恢复也须符合 Characters 的唯一结构判据；
+        # 在购买关联前纯合并复验，防止漏人物、漏称谓或坏家族引用延迟到发布才拒。
+        _characters, structure_errors = merge_name_structure(core, names.structure)
+        errors.extend(structure_errors)
+    if not errors:
         errors.extend(validate_name_resolutions(names.structure, core, evidence=evidence))
     errors.extend(f'名称同一性未决：{r.literal}；{r.reason}' for r in names.structure.resolutions
                   if r.status == 'unresolved')
     if errors:
-        raise MechanicalDefectStop('名称同一性未闭合，不购买下游判断',
+        raise MechanicalDefectStop('名称同一性不闭合，不购买下游判断',
                                    node='str06.stage2.associate', issues=tuple(errors))
     try:
         book, chapters = normalize_name_observations(book, chapters, names.structure)
@@ -521,42 +646,133 @@ def run_associate(ctx: ChainContext) -> dict:
         raise MechanicalDefectStop('名称局部归一未闭合，不购买下游判断',
                                    node='str06.stage2.associate', issues=(str(exc),)) from exc
     space = project_association_space(book, chapters)
-    prompt = revision_prompt_for_owner(
-        repository, 'associate', associate_observation_prompt(space),
-        'stage2/observations/associate.json')
+    candidates = project_identity_candidates(space, book)
+    observation = AssociateObservation.model_validate(
+        {'protocol_version': STAGE2_ASSOCIATE_PROTOCOL})
+    associate_ref = None
+    if candidates:
+        prompt = revision_prompt_for_owner(
+            repository, 'associate', associate_candidates_prompt(candidates),
+            'stage2/observations/associate.json')
 
-    def _validate(w):
-        observation, errors = compile_associate_observation(w, space)
-        if errors:
-            return errors
-        outcome = compile_source_truth(book=book, chapters=chapters, names=names,
-                                       associate=observation, evidence=evidence,
-                                       source_texts=tuple(c['text'] for c in ctx.chapters))
-        # 干跑发现位置不授予修复权；代码缺陷/无归属诊断禁止购买关联自修。
-        from novel.core.validation import ValidationIssue
-        if outcome.errors or any(not isinstance(issue, ValidationIssue)
-                                 or issue.owner != 'associate' for issue in outcome.undecided):
-            raise MechanicalDefectStop('关联干跑存在非本单位可修问题',
-                                       node='str06.stage2.associate',
-                                       issues=tuple(outcome.errors + outcome.undecided))
-        return outcome.undecided
+        def _validate(w):
+            _observation, w_errors = compile_associate_observation(w, space, candidates)
+            if w_errors:
+                return w_errors
+            identity_errors, identity_undecided = inspect_identity_associations(
+                book=book, chapters=chapters, names=names,
+                associate=_observation, evidence=evidence,
+                source_texts=tuple(c['text'] for c in ctx.chapters))
+            # 干跑发现位置不授予修复权；代码缺陷/无归属诊断禁止购买关联自修。
+            from novel.core.validation import ValidationIssue
+            if identity_errors or any(not isinstance(issue, ValidationIssue)
+                                      or issue.owner != 'associate' for issue in identity_undecided):
+                raise MechanicalDefectStop('关联干跑存在非本单位可修问题',
+                                           node='str06.stage2.associate',
+                                           issues=tuple(identity_errors + identity_undecided))
+            return identity_undecided
 
-    def _locate(w, errs):
-        # CS-H H4（RC-57 覆盖）：配对条目定位——机械验收与干跑未决按句柄反查
-        # 条目路径；需要新增条目或歧义时返回 None，退整份返修。
-        return associate_patch_locate(w, errs, space=space)
+        def _locate(w, errs):
+            # CS-H H4（RC-57 覆盖）：答案条目定位——机械验收与干跑未决按句柄
+            # 反查条目路径；需要新增条目（missing_answer）或歧义时返回 None，
+            # 退整份返修。
+            return associate_patch_locate(w, errs)
 
-    wire, associate_ref = ctx.ask('associate', prompt, _validate, patch=_locate)
-    observation, errors = compile_associate_observation(wire, space)
-    if errors:
-        raise ValueError(errors)
-    repository.write('stage2/observations/associate.json', observation,
-                     owners=('associate',), refs=(associate_ref,))
-    return {'same_proposition': len(observation.same_proposition),
-            'same_state_dimension': len(observation.same_state_dimension),
-            'loop_pairing': len(observation.loop_pairing),
-            'cross_chapter_cause': len(observation.cross_chapter_cause),
-            'scene_continuation': len(observation.scene_continuation)}
+        wire, associate_ref = ctx.ask(
+            'associate', prompt, _validate, patch=_locate)
+        observation, w_errors = compile_associate_observation(wire, space, candidates)
+        if w_errors:
+            raise ValueError(w_errors)
+
+    # 第二窄任务（D-2 A）：因果候选从**已判定的身份答案**派生——候选为空＝零调用。
+    causes: tuple = ()
+    cause_ref = None
+    cause_candidates = project_cause_candidates(space, chapters, book, observation)
+    if cause_candidates:
+        def _validate_cause(w):
+            _causes, c_errors = compile_cross_cause(w, cause_candidates)
+            return c_errors
+
+        def _preview_cause(w):
+            # 主身份尚未发布：恢复/重采审计必须用本轮已接受的身份与拍对分母，
+            # 不能从盘上旧 associate 重建。闭包只编译，不写中间产物或发请求。
+            current_causes, current_errors = compile_cross_cause(w, cause_candidates)
+            if current_errors:
+                return {'node': 'str06.stage2.compile', 'status': 'ran',
+                        'errors': current_errors, 'undecided': []}
+            final = observation.model_copy(update={'cross_chapter_cause': current_causes})
+            result = compile_source_truth(
+                book=book, chapters=chapters, names=names, associate=final,
+                evidence=evidence, source_texts=tuple(c['text'] for c in ctx.chapters))
+            return {'node': 'str06.stage2.compile', 'status': 'ran',
+                    'errors': result.errors, 'undecided': result.undecided}
+
+        def _locate_cause(w, errs):
+            # 窄调用答案的条目定位：候选对反查行（unknown／duplicate）；
+            # missing_answer（无行可替换）与歧义返回 None 退整份。
+            if not isinstance(w, dict) or not errs:
+                return None
+            rows = w.get('causes')
+            if not isinstance(rows, list):
+                return None
+            grouped: dict[tuple, list] = {}
+            for error in errs:
+                location = getattr(error, 'location', None)
+                if not isinstance(location, tuple) or not location:
+                    return None
+                if location[0] == 'cross_chapter_cause' and len(location) >= 3:
+                    key = (location[1], location[2])
+                    hits = [i for i, row in enumerate(rows)
+                            if isinstance(row, dict)
+                            and (row.get('from_beat'), row.get('to_beat')) == key]
+                elif location[0] == 'causes' and len(location) > 1 \
+                        and isinstance(location[1], int):
+                    hits = [location[1]] if 0 <= location[1] < len(rows) else []
+                else:
+                    return None
+                if len(hits) != 1:
+                    return None
+                grouped.setdefault(('causes', hits[0]), []).append(error)
+            return list(grouped.items())
+
+        cause_wire, cause_ref = ctx.ask(
+            'cross_cause', cross_cause_prompt(cause_candidates, space),
+            _validate_cause, patch=_locate_cause, downstream_preview=_preview_cause)
+        causes, c_errors = compile_cross_cause(cause_wire, cause_candidates)
+        if c_errors:
+            raise ValueError(c_errors)
+        observation = observation.model_copy(
+            update={'cross_chapter_cause': causes})
+
+    # 防御干跑（I-34）：组装后的最终观察过一遍 compile——非本单位可修问题当场
+    # 停，不落盘半成品（无候选时也执行——悬空 close 等未决仍须在此拦下）。
+    outcome = compile_source_truth(book=book, chapters=chapters, names=names,
+                                   associate=observation, evidence=evidence,
+                                   source_texts=tuple(c['text'] for c in ctx.chapters))
+    from novel.core.validation import ValidationIssue
+    if outcome.errors or any(not isinstance(issue, ValidationIssue)
+                             or issue.owner != 'associate' for issue in outcome.undecided):
+        raise MechanicalDefectStop('关联干跑存在非本单位可修问题',
+                                   node='str06.stage2.associate',
+                                   issues=tuple(outcome.errors + outcome.undecided))
+    # 来源账带全部实际发生的 ask（身份调用、因果窄调用各一）：只有因果候选而无
+    # 身份候选的常态路径同样是付费产物，不能被标成免费来源。
+    refs = tuple(ref for ref in (associate_ref, cause_ref) if ref is not None)
+    repository.write(
+        'stage2/observations/associate.json', observation, owners=('associate',),
+        refs=refs,
+        # 零调用（无身份候选且无因果候选）＝零模型参与：确定性空判定面，
+        # 显式声明免费来源账（I-35；付费节点缺引用的写盘默认按造假拦）。
+        declared_free=not refs)
+    return {'identity_candidates': candidates.answer_count(),
+            'same_proposition': sum(1 for p in observation.same_proposition
+                                    if p.verdict == 'same'),
+            'loop_pairing': sum(1 for p in observation.loop_pairing
+                                if p.verdict == 'pair'),
+            'cross_chapter_cause': sum(1 for c in observation.cross_chapter_cause
+                                       if c.kind != 'none'),
+            'scene_continuation': sum(1 for p in observation.scene_continuation
+                                      if p.verdict == 'continue')}
 
 
 def _read_chapter_observations(
@@ -655,17 +871,19 @@ def run_compile(ctx: ChainContext) -> dict:
 def _conflict_resolution_notes(repository, chapters) -> str:
     """Preserve 重跑时的确定性「冲突处理结果」块（R10a a3，§二.2）。
 
-    对每个持有 open `source_evidence_conflict` 记录的 Stage2 owner：对比
+    对每个持有 `source_evidence_conflict` 记录的 Stage2 owner：对比
     记录的 against 摘要与该 owner 正式产物的**当前**摘要——变了＝「已修订
     （重编译后的材料已变）」，没变＝「维持原解释」。纯机械对比（digest），
     不判语义；块进 Preserve prompt（材料变化 ⇒ 新请求身份，不会缓存命中
     上一轮带冲突的回答——同身份缓存重放会让重问拿回同一份冲突 wire）。
+    resolved 记录保留同一处理说明：清账不是新的源材料，不能因此改变已验
+    请求身份，导致免费重放失效或下一次购买。
     """
-    from novel.stages.owner_revision import open_issue_record
+    from novel.stages.owner_revision import read_owner_issue_file
     lines: list[str] = []
     owners = ['book'] + [f'ch{c["chapter_ordinal"]:02d}' for c in chapters]
     for owner in owners:
-        record = open_issue_record(repository, owner)
+        record = read_owner_issue_file(repository, owner)
         if record is None or not any(
                 i.code == 'source_evidence_conflict' for i in record.issues):
             continue
@@ -698,13 +916,13 @@ def _resolve_handled_conflicts(repository, chapters) -> None:
 def _backfill_source_evidence_conflicts(repository, conflicts) -> None:
     """Preserve 报告的源证据冲突 → 按锚点句柄回派 Stage2 语义 owner（R10a a3）。
 
-    §二.2 三分支的工程入口：拍内句柄（bNN_MM.*）回逐章观察（owner=chNN、
+    §二.2 三分支的工程入口：拍/拍内句柄（bNN_MM 或 bNN_MM.*）回逐章观察（owner=chNN、
     item=chapter:N），书级句柄（s0_*/wc_*）回书级观察；句柄不可解析即停
     （机械路由不猜）。冲突条目已过 assemble 的形状与闭集校验；回答由 ask
     路径照常耐久——checkpoint 不发布。同指纹重现走 discover_owner_issues
     的无进展停（「已维持」原子再报同一冲突不二次回派，耗尽即停）。
     """
-    grouped: dict[tuple[str, str, str], list[OwnerIssueV1]] = {}
+    grouped: dict[tuple[str, str], list[OwnerIssueV1]] = {}
     for conflict in conflicts:
         anchor = str(conflict.get('anchor') or '')
         action, target = route_owner_issue('source_evidence_conflict',
@@ -716,18 +934,28 @@ def _backfill_source_evidence_conflicts(repository, conflicts) -> None:
             owner, item = f'ch{chapter_no:02d}', f'chapter:{chapter_no}'
         else:
             owner, item = _REVISION_TARGET_OWNERS[target], anchor
-        grouped.setdefault((owner, target, item), []).append(OwnerIssueV1(
+        grouped.setdefault((owner, target), []).append(OwnerIssueV1(
             code='source_evidence_conflict', item=item,
             message=(f'Preserve 报告源证据冲突：锚点 {anchor}（句段 '
-                     f'{conflict.get("segment")}）与原子内容矛盾——'
+                     f'{conflict.get("segment")}）存在矛盾或遗漏——'
                      f'{conflict.get("note")}。请对照原句修订该观察，或维持原'
                      '解释并在观察中补足依据；源解释归 Stage2 owner，Preserve '
                      '不私建事实版本'),
             context={'anchor': anchor, 'segment': conflict.get('segment'),
                      'note': conflict.get('note')}))
-    for (owner, target, item), issues in sorted(grouped.items()):
-        discover_owner_issues(repository, raised_by='str06.stage4.preserve',
-                              owner=owner, node=target, issues=issues)
+    # 同一已购回答的全部 owner 先登记，再回跳最早节点；否则唯一写口必然抛错，
+    # 第二个 owner 永远进不了账，只能等重购 Preserve 才有机会再次发现。
+    # 书级多个锚点同样合并一轮，item 留在每条 issue 上，不能相互覆盖。
+    first: OwnerRevisionRequired | None = None
+    for (owner, target), issues in sorted(grouped.items()):
+        try:
+            discover_owner_issues(repository, raised_by='str06.stage4.preserve',
+                                  owner=owner, node=target, issues=issues)
+        except OwnerRevisionRequired as required:
+            if first is None or NODE_ORDER.index(target) < NODE_ORDER.index(first.node):
+                first = required
+    if first is not None:
+        raise first
 
 
 def run_preserve(ctx: ChainContext) -> dict:
@@ -745,7 +973,7 @@ def run_preserve(ctx: ChainContext) -> dict:
     preserve_prompt = revision_prompt_for_owner(
         repository, 'preserve',
         PRESERVE_RULES + _conflict_resolution_notes(repository, ctx.chapters)
-        + '\n输入（源证据投影视图，句柄即 anchors 闭集）：\n'
+        + '\n输入（源证据投影视图：原子句柄供义务 anchors；拍句柄仅供冲突报告）：\n'
         + project_preserve_view(core, blueprint)
         + ('\nStage2已留证的局部名称同一性（语义文本已归一，原句保持原字面；'
            '不得因该字面差异改写命题或重复报源观察冲突）：'
@@ -766,10 +994,10 @@ def run_preserve(ctx: ChainContext) -> dict:
                                                request_sha256=ctx.digest(preserve_prompt))
         # CS-H H3（RC-64）自闸：义务文本里的裸姓／未登记别名在本接受循环里被
         # 逐条定位（与下游材料归因同一把尺），不再等跨节点回派。
-        return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars)
+        return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars, blueprint)
 
     def locate_preserve_patches(wire, errors):
-        """RC-64 条目定位器：自闸问题按 `obligations[i]` 给出最小可替换单元。"""
+        """Preserve 自闸按义务或完整细节对象定位；其余问题沿用整份修订。"""
         if not isinstance(wire, dict) or not errors:
             return None
         targets: dict[tuple, list] = {}
@@ -778,12 +1006,23 @@ def run_preserve(ctx: ChainContext) -> dict:
             if not paths:
                 return None
             for path in paths:
-                if (len(path) != 2 or path[0] != 'obligations'
-                        or not isinstance(path[1], int)):
+                if (len(path) not in (2, 3, 4) or path[0] != 'obligations'
+                        or not isinstance(path[1], int)
+                        or (len(path) >= 3 and path[2] != 'details')
+                        or (len(path) == 4 and not isinstance(path[3], int))):
                     return None
                 targets.setdefault(tuple(path), [])
                 if error not in targets[tuple(path)]:
                     targets[tuple(path)].append(error)
+        # 同一义务的整项与细节同时有问题时，完整父项覆盖子项；替换不能重叠。
+        merged: dict[tuple, list] = {}
+        for path in sorted(targets, key=lambda p: (len(p), p)):
+            parent = next((p for p in merged if path[:len(p)] == p), None)
+            if parent is None:
+                merged[path] = list(targets[path])
+            else:
+                merged[parent].extend(e for e in targets[path] if e not in merged[parent])
+        targets = merged
         covered = {id(e) for errs in targets.values() for e in errs}
         if {id(e) for e in errors} != covered:
             return None
@@ -791,14 +1030,16 @@ def run_preserve(ctx: ChainContext) -> dict:
 
     def preserve_narrow_context(base_wire, targets):
         """RC-64 窄输入：协议规则＋失败条目＋该义务 anchors 的源原子与引文。"""
-        indices = {t.path[1] for t in targets if len(t.path) == 2}
+        indices = {t.path[1] for t in targets if t.path[0] == 'obligations'}
         return NarrowPatchRequest(
             rules=PRESERVE_RULES,
             dependency=json.dumps(preserve_patch_slice(base_wire, core, blueprint, indices),
                                   ensure_ascii=False, separators=(',', ':')),
             legal_values=json.dumps({
                 'obligation_keys': sorted(['kind', 'statement', 'anchors',
-                                           'must_preserve', 'satisfaction', 'requires']),
+                                           'must_preserve', 'satisfaction', 'requires',
+                                           'details']),
+                'detail_keys': ['anchor', 'text'],
                 'obligation_count': len(base_wire.get('obligations') or []),
                 'protocol_version': STAGE4_PRESERVE_PROTOCOL,
             }, ensure_ascii=False, separators=(',', ':')))
@@ -869,30 +1110,38 @@ def _design_root_causes(inspection) -> int:
     return len(codes)
 
 
-def _design_beat_paths(body) -> tuple[tuple[str | int, ...], ...]:
+def _design_beat_paths(body, wire=None) -> tuple[tuple[str | int, ...], ...]:
     """候选 Design 全部拍的 wire 路径（新增条目可选目标的闭集，RC-58）。"""
     if body is None:
-        return ()
+        # 当前上游使旧短引用失效时，canonical body 尚不可构造；已购 wire 的
+        # 场/拍容器仍给出同一有限闭集，不为可定位引用错误开启整份新购。
+        if not isinstance(wire, dict):
+            return ()
+        return tuple(('scenes', si, 'beats', bi)
+                     for si, scene in enumerate(wire.get('scenes') or ())
+                     if isinstance(scene, dict)
+                     for bi, beat in enumerate(scene.get('beats') or ())
+                     if isinstance(beat, dict))
     return tuple(('scenes', si, 'beats', bi)
                  for si, scene in enumerate(body.scenes)
                  for bi in range(len(scene.beats)))
 
 
-def _design_carriers(inspection, obligation_keys: Mapping[str, tuple[str, tuple[str, ...]]]
+def _design_carriers(inspection, obligation_keys: Mapping[str, tuple[str, tuple[str, ...]]],
+                     *, wire=None, recorded_obligation_keys=None,
                      ) -> dict[tuple[str, tuple[str, ...]], tuple[tuple[str | int, ...], ...]]:
-    """上游条目键 → 引用它的承载拍 wire 路径（Binding 的 beat_ref／支撑拍派生）。
+    """上游条目键 → 引用它的拍；包含 real、know 与所选软细节材料。
 
-    承载拍来自候选自己的 Binding（`beat_ref`＋`supporting_beat_refs`），映射到
-    Design wire 的拍路径；引用不存在的拍不猜（Design 构造已拒，这里只做投影）。
+    Binding 给出当前可构造候选的正式承载位；已购 wire 的 ob 前缀另按旧/新
+    对齐键同时定位，覆盖短引用删失、编号漂移与未选 real 的软细节。只解析
+    登记引用，不猜文本语义；即使当前 body 构造失败也仍能定位窄复核。
     """
     body, binding = inspection.body, inspection.binding
-    if body is None or binding is None:
-        return {}
     position_of = {(scene.scene_id, beat.beat_id): ('scenes', si, 'beats', bi)
                    for si, scene in enumerate(body.scenes)
-                   for bi, beat in enumerate(scene.beats)}
+                   for bi, beat in enumerate(scene.beats)} if body is not None else {}
     carriers: dict[tuple[str, tuple[str, ...]], set[tuple[str | int, ...]]] = {}
-    for entry in binding.entries:
+    for entry in binding.entries if binding is not None else ():
         key = obligation_keys.get(entry.obligation_id)
         if key is None:
             continue
@@ -901,6 +1150,22 @@ def _design_carriers(inspection, obligation_keys: Mapping[str, tuple[str, tuple[
             path = position_of.get((scene_id, beat_id))
             if path is not None:
                 carriers.setdefault(key, set()).add(path)
+    if isinstance(wire, dict):
+        recorded_obligation_keys = recorded_obligation_keys or {}
+        for path in _design_beat_paths(None, wire):
+            beat = wire['scenes'][path[1]]['beats'][path[3]]
+            refs = list(beat.get('real') or ())
+            refs.extend(item.get('ref') for item in beat.get('know') or ()
+                        if isinstance(item, dict))
+            refs.extend(beat.get('details') or ())
+            for ref in refs:
+                if not isinstance(ref, str):
+                    continue
+                obligation = ref.split('.', 1)[0]
+                for keys in (obligation_keys, recorded_obligation_keys):
+                    key = keys.get(obligation)
+                    if key is not None:
+                        carriers.setdefault(key, set()).add(path)
     return {key: tuple(sorted(paths)) for key, paths in carriers.items()}
 
 
@@ -934,6 +1199,9 @@ def _design_reuse_plan(ctx: ChainContext, *, checkpoint, chars, brief, obligatio
         has_lineage = isinstance(recorded_wire, dict)
         diff = (candidates.upstream_diff(recorded_wire, upstream_wire)
                 if has_lineage else None)
+        recorded_obligation_keys = {
+            f'ob{item.before_index + 1:02d}': item.key for item in diff.entries
+            if item.before_index is not None} if diff is not None else {}
         if has_lineage and diff.empty is False:
             # 条目键毫无交集＝上游是全新回答，与候选生成时的版本没有修订谱系
             # （RC-53 闭集原因）：此时差异不能证明任何东西。
@@ -958,18 +1226,19 @@ def _design_reuse_plan(ctx: ChainContext, *, checkpoint, chars, brief, obligatio
             has_lineage=has_lineage, diff=diff, changed_equivalent=changed_equivalent,
             preflight_passed=inspection.passed,
             root_causes=_design_root_causes(inspection),
-            carriers=_design_carriers(inspection, obligation_keys),
-            beat_closed_set=_design_beat_paths(inspection.body)))
+            carriers=_design_carriers(inspection, obligation_keys, wire=rnd.wire,
+                                      recorded_obligation_keys=recorded_obligation_keys),
+            beat_closed_set=_design_beat_paths(inspection.body, rnd.wire)))
     return candidates.plan_reuse(assessments), tuple(assessments)
 
 
 def _design_candidate_compatible(wire, constraints: OutputConstraints) -> tuple[bool, str]:
     """兼容性检查（RC-53 闭集）：wire 协议字面量、可按当前 schema 构造、章数与
     篇幅约束未变。任一不符即整份新购的原因，不静默降级。"""
-    if not isinstance(wire, dict) or wire.get('protocol_version') != STAGE4_DESIGN_WIRE_PROTOCOL:
+    if not isinstance(wire, dict) or wire.get('protocol_version') not in DESIGN_READ_PROTOCOLS:
         return False, '协议字面量不兼容'
     try:
-        model = DesignWireV8.model_validate(wire)
+        model = design_wire_model(wire)
     except ValidationError as exc:
         return False, '候选无法按当前schema构造'
     if len(model.chapters) != constraints.target_chapter_count:
@@ -990,24 +1259,27 @@ def run_body_design(ctx: ChainContext) -> dict:
                                     total_length_budget=ctx.budget)
     # wire 协议规则（schema＋指令）与合法取值闭集：整份请求与窄返修请求共用
     # 同一把尺——窄请求只裁掉整份输入材料，不另造一套协议（I-11）。
-    protocol_rules = design_rules(
+    rules_context = dict(
         known_char_ids=set(chars.characters),
+        detail_refs=detail_index(obligation_index),
         knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
                         for ref, (_, change) in knowledge_change_index(obligation_index).items()},
         # 禁区（unanswered）不承载状态，不进 lock 闭集。
-        fact_lock_ids=[f.kf_id for f in brief.fact_locks
-                       if f.kind != 'unanswered'],
         registered_surfaces=expand_surface_releases(
             {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
             chars.name_structure))
-    legal_values = json.dumps(design_patch_legal_values(
-        known_char_ids=set(chars.characters), obligations=obligation_index,
-        knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
-                        for ref, (_, change) in knowledge_change_index(obligation_index).items()},
-        fact_lock_ids=[f.kf_id for f in brief.fact_locks if f.kind != 'unanswered'],
-        registered_surfaces=expand_surface_releases(
-            {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
-            chars.name_structure)), ensure_ascii=False, separators=(',', ':'))
+    def request_rules(protocol):
+        aliases = design_reference_aliases(brief) if protocol == STAGE4_DESIGN_WIRE_PROTOCOL else {}
+        context = {**rules_context, 'fact_lock_ids': [aliases.get(f.kf_id, f.kf_id)
+                   for f in brief.fact_locks if f.kind != 'unanswered']}
+        rules = design_rules(**context, protocol=protocol)
+        legal = json.dumps(design_patch_legal_values(
+            **{key: value for key, value in context.items() if key != 'detail_refs'},
+            obligations=obligation_index),
+                           ensure_ascii=False, separators=(',', ':'))
+        return rules, legal
+
+    protocol_rules, legal_values = request_rules(STAGE4_DESIGN_WIRE_PROTOCOL)
     design_prompt = revision_prompt_for_owner(
         repository, 'design',
         pack_prompt(protocol_rules,
@@ -1026,11 +1298,13 @@ def run_body_design(ctx: ChainContext) -> dict:
         slice_payload = design_patch_slice(base_wire, brief, obligation_index,
                                            targets=[t.path for t in targets],
                                            identities=identities)
+        # 旧候选窄复核仍使用它原来的引用语法；不改基底、不重铸付费摘要。
+        patch_rules, patch_legal = request_rules(base_wire['protocol_version'])
         return NarrowPatchRequest(
-            rules=protocol_rules,
+            rules=patch_rules,
             dependency=json.dumps(slice_payload, ensure_ascii=False,
                                   separators=(',', ':')),
-            legal_values=legal_values)
+            legal_values=patch_legal)
 
     def inspect(w):
         return inspect_design_candidate(
@@ -1053,9 +1327,14 @@ def run_body_design(ctx: ChainContext) -> dict:
     #: 都以此登记谱系——否则被回派的候选永远没有「生成时的上游版本」，上游修好后
     #: 免费沿用对它不可达（RC-52：登记全部已购候选）。
     produced: dict[str, dict] = {}
+    expected_protocol = STAGE4_DESIGN_WIRE_PROTOCOL
 
     def validate(w):
         nonlocal last_inspection
+        if isinstance(w, dict) and w.get('protocol_version') != expected_protocol:
+            return [design_issue(f'本请求 wire 协议必须是 {expected_protocol}',
+                                 code='design_protocol_literal',
+                                 location=('protocol_version',))]
         last_inspection = inspection = inspect(w)
         produced[candidates.wire_sha256(w)] = inspection.report()
         repairs = repairs_for(inspection)
@@ -1147,6 +1426,7 @@ def run_body_design(ctx: ChainContext) -> dict:
         # 判定已对它做过完整预检，不再整份新购一轮；基底 attempt 的引用经
         # `PatchBaseline.attempt` 由付费边界解析进 provenance（成本链分别聚合）。
         candidate = reuse_plan.candidate or {}
+        expected_protocol = candidate['wire']['protocol_version']
         baseline = PatchBaseline(
             wire=candidate['wire'], digest=candidates.wire_sha256(candidate['wire']),
             summary=f"已购候选第 {candidate.get('ordinal')} 轮（turn {candidate.get('turn_id')}）",
@@ -1327,7 +1607,7 @@ def run_hook_design(ctx: ChainContext) -> dict:
     projection = chars.name_projection()
     kp_statements = {p.kp_id: p.statement for p in brief.propositions}
     world_statements = {wc.constraint_id: wc.statement for wc in brief.book_constraints}
-    from novel.stages.stage4 import project_hook_semantics
+    from novel.stages.stage4 import project_hook_semantics, project_hook_input, hook_wire_schema
     try:
         semantics = project_hook_semantics(body, brief)
     except ValueError as exc:
@@ -1335,7 +1615,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
                                    node='str06.stage4.hook_design',
                                    issues=(str(exc),)) from exc
     hook_design_prompt = pack_prompt(
-        HOOK_DESIGN_RULES, book_title=ctx.book_title, design=body.model_dump(mode='json'),
+        HOOK_DESIGN_RULES, book_title=ctx.book_title, story=project_hook_input(body),
+        wire_schema=hook_wire_schema(body),
         semantics=semantics,
         identities=[i.model_dump(mode='json') for i in identities],
         constraints=ctx.hook_constraints.model_dump(mode='json'))
@@ -1369,8 +1650,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
         """
         return NarrowPatchRequest(
             rules=HOOK_DESIGN_RULES,
-            dependency=json.dumps(hook_patch_slice(body, base_wire,
-                                                   [t.path for t in targets]),
+            dependency=json.dumps({**hook_patch_slice(body, base_wire,
+                                                   [t.path for t in targets]), 'semantics': semantics},
                                   ensure_ascii=False, separators=(',', ':')),
             legal_values=json.dumps(hook_patch_legal_values(
                 body=body, known_char_ids=set(chars.characters),
@@ -2023,13 +2304,18 @@ def run_node(node_id: str, ctx: ChainContext) -> dict:
     runner = NODE_RUNNERS.get(node_id)
     if runner is None:
         raise ValueError(f'未登记的候选节点 runner：{node_id}')
+    if getattr(ctx.repository, 'context', None) is not None:
+        # 同进程回跳时，下游失败前读到的材料不能成为上游修订的输入边。
+        # 节点内多产物仍共享同一窗口；仅在明确的节点执行边界清空。
+        ctx.repository.context.begin_run()
+    chapter_owners = (_chapter_execution_owners(ctx)
+                      if node_id == 'str06.stage2.chapters' else ())
     report = runner(ctx)
     ctx.after_node_commit(node_id)
-    complete_owner_dispatch(ctx.repository, node_id,
-        chapter_owners=tuple(f'ch{c["chapter_ordinal"]:02d}' for c in ctx.chapters)
-        if node_id == 'str06.stage2.chapters' else ())
+    complete_owner_dispatch(ctx.repository, node_id, chapter_owners=chapter_owners)
     from novel.stages.revisions import activate_node_revisions, resolve_node_revisions
-    activate_node_revisions(ctx.repository, node_id)
+    activate_node_revisions(ctx.repository, node_id,
+        owners=chapter_owners if node_id == 'str06.stage2.chapters' else None)
     if node_id in {'str06.stage2.compile', 'str06.stage4.compile', 'str06.stage7.assemble'}:
         if node_id != 'str06.stage7.assemble' or report.get('assembly', {}).get('status') == 'ready':
             resolve_node_revisions(ctx.repository, node_id)
@@ -2283,7 +2569,7 @@ class PaidBoundary:
 
     正式 CLI 节点执行（`execute`）经本装配走付费边界——**不另建付费通路**：
     同一 session、同一 ledger、同一 `enforce_request_budget` 闸、同一 workflow／
-    epoch 生命周期。授权仍由调用方显式给出（`--yes`／`--allow-source-export`），
+    epoch 生命周期。授权仍由调用方显式给出（`--yes`／`--allow-egress`），
     本装配不代批。
     """
 
@@ -2372,7 +2658,7 @@ def load_stage1_chapters(base, sid: str) -> Stage1Input:
 def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
                  through='stage4', provider='manual-adoption', model='unknown',
                  book_title='', hook_constraints=None, length_band=(0.6, 1.3),
-                 body_chapters=None, node_filter=None, hook_copy='',
+                 body_chapters=None, node_filter=None, hook_copy='', chapter_patch_owners=(),
                  concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
                  node_concurrency: Mapping[str, int] | None = None,
                  slot_per_book: int = PIPELINE_BOOK_CONCURRENCY,
@@ -2396,7 +2682,8 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
         repository=repository, ask=ask, ask_text=ask_text, ask_body=ask_body,
         chapters=chapters, hook_copy=hook_copy, budget=budget, book_title=book_title,
         hook_constraints=hook_constraints, length_band=length_band,
-        body_chapters=body_chapters, provider=provider, model=model,
+        body_chapters=body_chapters, chapter_patch_owners=chapter_patch_owners,
+        provider=provider, model=model,
         body_replay=body_replay, after_node_commit=after_node_commit,
         digest=digest, concurrency=concurrency,
         node_concurrency=dict(node_concurrency or {}),
@@ -2485,7 +2772,7 @@ def execute(args) -> None:
     if not 0 < args.body_band_low < args.body_band_high:
         raise ValueError('--body-band-low/high 必须满足 0 < low < high')
     if args.check_only and (args.yes or args.allow_source_export):
-        raise ValueError('--check-only 不签发新调用：去掉 --yes/--allow-source-export 再跑')
+        raise ValueError('--check-only 不签发新调用：去掉 --yes/--allow-egress 再跑')
     resample_owner = getattr(args, 'resample', None)
     resample_reason = getattr(args, 'reason', None)
     if bool(resample_owner) != bool(resample_reason):
@@ -2582,7 +2869,8 @@ def execute(args) -> None:
             owner, prompt, json_mode=json_mode, system=system, temperature=temperature,
             enforce=not args.wire_dir)
 
-    def adopt(owner, path, validate, *, system, prompt, json_mode, temperature):
+    def adopt(owner, path, validate, *, system, prompt, json_mode, temperature,
+              downstream_preview=None):
         """wire 采用：核验后落修订记录（ContentRevision 层），返回显式采用引用。"""
         if args.repair_manifest and (
                 owner not in adopted or Path(adopted[owner]['path']).resolve() != path.resolve()
@@ -2616,17 +2904,14 @@ def execute(args) -> None:
                                'request': request.cache_payload()})
             revision['request_sha256'] = identity
             allow_patch, patch_reason = False, None
+            baseline_identity = identity
             note_path = (args.wire_dir / f'{owner}_patch_note.json'
                          if args.wire_dir else None)
             if note_path is not None and note_path.exists():
                 note = repository.read_external(note_path)
-                if note.get('base_response_identity') != identity:
-                    from novel.stages.revisions import revision_error
-                    raise revision_error(owner, f'{owner} patch note 的基线身份与当前请求不一致，拒绝采用')
-                allow_patch, patch_reason = True, note.get('reason')
-                if not isinstance(patch_reason, str) or not patch_reason.strip():
-                    from novel.stages.revisions import revision_error
-                    raise revision_error(owner, 'owner patch 必须登记非空修订理由')
+                from novel.stages.revisions import owner_patch_identity
+                baseline_identity, patch_reason = owner_patch_identity(owner, note, identity)
+                allow_patch = True
             if patch_requested and not session.adopt_roots:
                 session.adopt_roots = (repository.root,)
             previous_patch_sha = None
@@ -2635,9 +2920,12 @@ def execute(args) -> None:
                 previous = verified_previous_revision(repository, owner)
                 if previous is not None:
                     previous_patch_sha = previous.candidate_sha256
-            bound = session.bind_wire_adoption(owner, identity, path,
+            bound = session.bind_wire_adoption(owner, baseline_identity, path,
                                                allow_patch=allow_patch,
                                                previous_patch_sha256=previous_patch_sha)
+            if allow_patch and baseline_identity != identity and not bound.get('owner_patch'):
+                from novel.stages.revisions import revision_error
+                raise revision_error(owner, '跨身份 owner patch 缺少三方核实的已购基线，拒绝采用')
             revision.update({
                 'mode': bound.get('mode'), 'cost_link': bound.get('cost_link'),
                 'source_root': bound.get('source_root'),
@@ -2647,7 +2935,7 @@ def execute(args) -> None:
                 'adoption_chain_verified': bound.get('adoption_chain_verified', False)})
             if bound.get('owner_patch'):
                 # owner patch 是无外发的修订：绑定基线请求身份与修订说明。
-                revision['patch'] = {'baseline_request_sha256': identity,
+                revision['patch'] = {'baseline_request_sha256': baseline_identity,
                                      'reason': patch_reason,
                                      'candidate_sha256': hashlib.sha256(original_bytes).hexdigest()}
             model = bound.get('model') or 'unknown'
@@ -2659,20 +2947,23 @@ def execute(args) -> None:
             from novel.stages.revisions import preview_owner_patch, stage_revision
             from novel.stages.review import dry_run_patch, character_literals
             source_root = Path(revision['source_root'])
-            baseline = purchased_baseline(source_root, owner, revision['request_sha256'])
+            baseline_identity = revision['patch']['baseline_request_sha256']
+            baseline = purchased_baseline(source_root, owner, baseline_identity)
             preview = preview_owner_patch(
-                owner=owner, identity=revision['request_sha256'], candidate=raw,
+                owner=owner, identity=baseline_identity, candidate=raw,
                 baseline=baseline, validate=validate,
                 character_literals=character_literals(Str06Repository(repository.root)),
-                dry_run=lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
+                dry_run=(downstream_preview if downstream_preview is not None else
+                         lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
                     evidence=build_evidence(chapters, hook_copy), budget=args.budget,
                     hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
                                                      hard_max_chars=args.hook_hard_max),
                     chapter_count=len(chapters), source_texts=tuple(c['text'] for c in chapters),
-                    book_title=args.book_title, length_band=(args.body_band_low, args.body_band_high)))
-            stage_revision(repository, owner=owner, identity=revision['request_sha256'],
+                    book_title=args.book_title, length_band=(args.body_band_low, args.body_band_high))))
+            stage_revision(repository, owner=owner, identity=baseline_identity,
                            baseline=baseline, raw_bytes=original_bytes, preview=preview,
-                           reason=patch_reason)
+                           reason=patch_reason,
+                           applies_to_request_sha256=revision['request_sha256'])
         repository.write(f'runtime/revisions/{owner}.json', revision)
         ref = AdoptionRef(
             owner=owner, model=model, prompts={'system': system, 'user': prompt},
@@ -2705,7 +2996,7 @@ def execute(args) -> None:
             historical={'mode': 'owner-patch-replay', 'cost_link': 'ledger-row',
                         'source_root': baseline['source_root'], 'attempt_id': baseline['attempt_id'],
                         'new_paid_calls': 0},
-            patch={'baseline_request_sha256': identity, 'reason': record.reason,
+            patch={'baseline_request_sha256': record.baseline_request_sha256, 'reason': record.reason,
                    'candidate_sha256': record.candidate_sha256})
         return data, ref
 
@@ -2722,7 +3013,7 @@ def execute(args) -> None:
         selected_samples[owner] = selection
         return selected, selection
 
-    def record_sample(owner, data, selection, validate):
+    def record_sample(owner, data, selection, validate, *, downstream_preview=None):
         if selection is None:
             return
         from novel.stages.revisions import preview_owner_patch, stage_revision
@@ -2732,24 +3023,26 @@ def execute(args) -> None:
             owner=owner, identity=selection.baseline_request_sha256, candidate=data,
             baseline=baseline, validate=validate,
             character_literals=character_literals(Str06Repository(repository.root)),
-            dry_run=lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
+            dry_run=(downstream_preview if downstream_preview is not None else
+                     lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
                 evidence=build_evidence(chapters, hook_copy), budget=args.budget,
                 hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
                                                  hard_max_chars=args.hook_hard_max), chapter_count=len(chapters),
                 source_texts=tuple(c['text'] for c in chapters), book_title=args.book_title,
-                length_band=(args.body_band_low, args.body_band_high)))
+                length_band=(args.body_band_low, args.body_band_high))))
         stage_revision(repository, owner=owner, identity=selection.baseline_request_sha256,
                        baseline=baseline, raw_bytes=json.dumps(data, ensure_ascii=False).encode('utf-8'),
                        preview=preview, reason=selection.reason, kind='resample', sequence=selection.sequence)
 
     def ask(owner, prompt, validate, patch=None, review_targets=None,
-            baseline=None, narrow=None):
+            baseline=None, narrow=None, downstream_preview=None):
         path = wire_path(owner)
         if path is not None:
             # 人工/离线 wire 显式采用优先于免费沿用与窄复核：它经同一 validate
             # 验收，但不参与候选集合判定（H1b 沿用闭包的同一条优先级）。
             raw, ref = adopt(owner, path, validate, system=SYS, prompt=prompt,
-                             json_mode=True, temperature=0.3)
+                             json_mode=True, temperature=0.3,
+                             downstream_preview=downstream_preview)
             return raw, ref
         request = build_request(owner, prompt, json_mode=True, system=SYS, temperature=0.3)
         patch_replay = replay_patch(owner, request, validate, SYS, prompt)
@@ -2761,7 +3054,7 @@ def execute(args) -> None:
                                revision_rules=semantic_revision_rules(owner),
                                review_targets=review_targets, baseline=baseline,
                                narrow=narrow)
-        record_sample(owner, raw, selection, validate)
+        record_sample(owner, raw, selection, validate, downstream_preview=downstream_preview)
         return raw, answer
 
     def carry_forward(owner, prompt, decision):
@@ -2864,6 +3157,16 @@ def execute(args) -> None:
                 continue
             record_sample(owner, {'prose': text}, selection, lambda w: text_validation(owner, w))
 
+    chapter_patch_owners = ()
+    if args.wire_dir:
+        chapter_patch_owners = tuple(sorted(
+            p.name.removesuffix('_patch_note.json')
+            for p in args.wire_dir.glob('ch*_patch_note.json')
+            if re.fullmatch(r'ch\d{2}_patch_note\.json', p.name)))
+        for owner in chapter_patch_owners:
+            if wire_path(owner) is None:
+                raise ValueError(f'{owner} patch note 缺少对应 wire，拒绝扩大为自动重跑')
+
     print(run_workflow(repository=repository, chapters=chapters, hook_copy=hook_copy,
                        ask=ask, ask_text=ask_text,
                        ask_body=ask_body, budget=args.budget, through=args.through,
@@ -2875,6 +3178,7 @@ def execute(args) -> None:
                                                          hard_max_chars=args.hook_hard_max),
                        length_band=(args.body_band_low, args.body_band_high),
                        body_chapters=args.body_chapters,
+                       chapter_patch_owners=chapter_patch_owners,
                        **frozen_concurrency(cfg),
                        body_replay=body_replay, after_node_commit=after_node_commit,
                        # CS-H H1b：wire-dir 显式采用在场时不提供免费沿用闭包——

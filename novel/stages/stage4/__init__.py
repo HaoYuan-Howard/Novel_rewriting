@@ -44,8 +44,9 @@ from novel.stages.stage4.book_ir import (
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.slim import (
-    design_patch_legal_values, design_patch_slice, knowledge_change_index,
+    design_patch_legal_values, design_patch_slice, detail_index, knowledge_change_index,
     project_design_input, project_hook_semantics,
+    design_reference_aliases, design_wire_model, DESIGN_READ_PROTOCOLS,
 )
 from novel.stages.stage4.fold import (
     FoldedState, ThreadFold, fold_accepted_prefix, fold_thread_faces,
@@ -71,9 +72,12 @@ from novel.stages.stage4.hook import (
     assemble_hook_design, hook_patch_legal_values, hook_patch_slice, publish_graph,
 )
 from novel.stages.stage4.hook_validation import validate_hook_design
+from novel.stages.stage4.hook_wire import (
+    hook_catalog, hook_wire_schema, project_hook_input, upgrade_purchased_hook_wire,
+)
 from novel.stages.stage4.hook_context import compile_hook_context
 from novel.stages.stage4.slim import design_fact_marks, design_placements
-from novel.stages.stage4.design_paths import locate_design_patches, wire_paths_of
+from novel.stages.stage4.design_paths import design_issue, locate_design_patches, wire_paths_of
 
 __all__ = [
     'inspect_body_materials', 'inspect_design_candidate', 'plan_material_repairs',
@@ -87,12 +91,14 @@ __all__ = [
     'check_read_projection', 'check_thread_lifecycle', 'check_thread_projection',
     'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
     'design_fact_marks', 'design_obligation_index', 'design_patch_legal_values',
-    'design_patch_slice', 'design_placements',
+    'design_patch_slice', 'design_placements', 'detail_index',
+    'design_reference_aliases', 'design_wire_model', 'DESIGN_READ_PROTOCOLS', 'design_issue',
     'derive_semantic_binding', 'locate_design_patches', 'wire_paths_of',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
     'init_establishments', 'lock_order_violations', 'obligation_core_id',
     'project_brief', 'project_design_input', 'project_hook_semantics', 'project_preserve_view',
     'preserve_name_issues', 'preserve_patch_slice', 'preserve_revision_wire', 'fact_lock_subjects',
     'hook_combination_errors', 'hook_patch_legal_values', 'hook_patch_slice',
+    'hook_catalog', 'hook_wire_schema', 'project_hook_input', 'upgrade_purchased_hook_wire',
     'publish_graph', 'run_mechanical_guard', 'scene_order', 'validate_hook_design',
 ]

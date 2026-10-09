@@ -41,7 +41,8 @@ from novel.stages.stage4.compile import compile_execution_plan
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.fold import fold_accepted_prefix
 from novel.stages.common import (
-    chapter_identities, project_chapter_packet, surface_engine_release,
+    BODY_PARAGRAPH_REPAIR_SYSTEM, chapter_identities, project_chapter_packet,
+    surface_engine_release,
 )
 from novel.store import Str06Repository
 from novel.work_units import WorkUnitBudget, read_book_budget
@@ -133,12 +134,21 @@ def test_withheld_literal_is_hard_failure_never_disclosed():
     packet = project_chapter_packet(book_ir, 1)
     dirty = '芸娘望着空房，' * 100 + '陆大哥没有回来。'
     clean = '芸娘坐在窗前，烛火摇了三摇，门外没有脚步声。' * 30
-    answers = [AnsweredText(text=dirty, finish_reason='stop',
+    # 首稿后走现役行替换协议；合法修句回答仍泄漏同一未释放姓名，必须继续硬拒。
+    patch = json.dumps({'paragraphs': [{'index': 0, 'text': dirty}]}, ensure_ascii=False)
+    answers = [AnsweredText(text=dirty if i == 0 else patch, finish_reason='stop',
                             identity=f'attempt-{i}', cached=False)
                for i in range(1 + MAX_BODY_REWRITES)]
-    outcome = write_chapter(packet=packet, ask=lambda prompt, validate: answers.pop(0))
+    systems = []
+
+    def ask(prompt, validate, *, system=None):
+        systems.append(system)
+        return answers.pop(0)
+
+    outcome = write_chapter(packet=packet, ask=ask)
     assert outcome.prose is None and outcome.receipt is None, '硬失败不得披露放行'
     assert len(outcome.attempts) == 1 + MAX_BODY_REWRITES
+    assert systems == [None] + [BODY_PARAGRAPH_REPAIR_SYSTEM] * MAX_BODY_REWRITES
     assert all(any(e.startswith('[withheld_literals]') for e in a.errors)
                for a in outcome.attempts)
     # 同一把标尺下，只用已释放称谓的稿正常接受（纪律针对未释放面，不是全部专名）。
@@ -235,13 +245,13 @@ def _unset_chain_wire(*, final_op: str) -> dict:
     wire = _body_wire()
     wire['scenes'][0]['beats'][0]['target_delta'] = [
         {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-         'key': 'whereabouts', 'op': 'set', 'modality': 'actual', 'value': '在府中', 'scope': 'book'}]
+         'key': 'residence', 'op': 'set', 'modality': 'actual', 'value': '在府中', 'scope': 'book'}]
     wire['scenes'][1]['beats'][0]['target_delta'] = [
         {'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-         'key': 'whereabouts', 'op': final_op, 'value': None, 'scope': 'book'}]
+         'key': 'residence', 'op': final_op, 'value': None, 'scope': 'book'}]
     wire['scenes'].append({
         'state_reads': [{'domain': 'character', 'subjects': ['fu_jun'], 'holder': None,
-                         'key': 'whereabouts'}],
+                         'key': 'residence'}],
         'driver': {'focal_actor': 'yun_niang', 'immediate_want': '确认夫君去向',
                    'opposition': '无人可问', 'turn': '决意亲自去寻'},
         'realization_brief': '重心在空堂回响；压缩寻问无果，在决意亲自去寻处收束。',
@@ -270,11 +280,11 @@ def test_unset_public_state_is_carried_as_explicit_removal():
                                      projection=chars.name_projection(),
                                      structure=chars.name_structure)
     entry = [e for e in book_ir.chapter(3).scenes[0].verification_ir.entry_state
-             if e.key == 'whereabouts']
+             if e.key == 'residence']
     assert len(entry) == 1, '解除项必须显式到达消费面，不得静默消失'
     assert entry[0].status == 'unset' and entry[0].value is None, '不得残留 stale 旧值'
     folded = fold_accepted_prefix(plan.scenes[:2], initial=plan.initial_establishments)
-    assert folded.value_of(EffectDomain.CHARACTER, 'whereabouts',
+    assert folded.value_of(EffectDomain.CHARACTER, 'residence',
                            subjects=('fu_jun',)) is None
     # 解除是真实输入：同一设计若不在 s02 收尾，s03 的消费身份随之变化（窄失效）。
     plain_wire = _unset_chain_wire(final_op='unset')

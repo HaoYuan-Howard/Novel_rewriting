@@ -25,6 +25,7 @@ from novel.orchestrator import execution_permit as P
 from novel.orchestrator import operator as O
 from novel.orchestrator import queue as Q
 from novel.orchestrator.inspection import OperatorReadSnapshot
+from novel.paths import derive_source_meta
 
 
 def _overview(sid: str = 'book-1') -> NovelOverview:
@@ -430,3 +431,37 @@ def test_queue_public_entry_delegates_to_the_shared_overview_planner(
         (tmp_path, 'book-1', overview),
         {'until_stage': 'stage7', 'follow_check': True},
     )]
+
+
+def test_next_action_accepts_directory_name_sid_end_to_end(tmp_path):
+    """目录名与 source_id 两种可定位 sid 形态必须给出同一份 next 判定。
+
+    历史缺陷：快照 sid 原样保留调用形态，而 ``overview_at`` 的 sid 恒从
+    per-novel 目录名派生；传 ``书名_123`` 目录名时 ``OperatorNextDecision``
+    的 sid 一致性校验以未捕获 ValidationError 崩溃（exit 70），CLI 手动逐步
+    跑书拿不到 ready/blocked 判定。快照入口把 sid 收口为目录名派生形态后，
+    两种调用形态的 base/sid/seal/action 指纹必须逐项一致。
+    """
+    from tests.fixtures_ingest import CASES
+    from novel.stages.stage0 import removal as stage0_removal
+    from novel.stages.stage1.partition import run_partition
+
+    case = next(c for c in CASES if c.name == 'end_marker_then_fanwai')
+    source = tmp_path / 'FQ_dir_sid_123.txt'
+    source.write_bytes(case.to_bytes())
+    base = tmp_path / 'Output'
+
+    novel_dir, _removal, _initial = stage0_removal.run_source(source, base)
+    run_partition(stage0_removal._context(novel_dir, 'stage1.partition'))
+
+    canonical_sid = derive_source_meta(novel_dir.name)[0]
+    assert canonical_sid != novel_dir.name, '用例必须覆盖两种形态确实不同的书名'
+
+    by_dirname = O.next_action(base, novel_dir.name)
+    by_source_id = O.next_action(base, canonical_sid)
+
+    assert by_dirname.sid == by_source_id.sid == canonical_sid
+    assert by_dirname.state == 'ready'
+    assert by_dirname.action is not None
+    assert by_dirname.action.action_sha256 == by_source_id.action.action_sha256
+    assert by_dirname.surface_seal == by_source_id.surface_seal

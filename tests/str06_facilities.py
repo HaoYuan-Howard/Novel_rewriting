@@ -31,25 +31,16 @@ def make_context(root: Path, *, ledger: CostLedger, node: str = 'str06.stage2.bo
         configured_model=configured_model, readonly=readonly)
 
 
-def v13_effect(target: dict, key: str, value, *, op: str = 'set', scope: str = 'book',
-               visibility: str = 'on_page', known_by: tuple[str, ...] = (),
-               modality: str = 'actual', proposition: dict | None = None,
+def v13_effect(target: dict, key: str, value, *, op: str = 'set',
+               modality: str = 'actual',
                basis: tuple[dict, ...] | None = None) -> dict:
-    """v13 effect（R10a a1 起带 modality 与逐字 basis）：必填 scope 与
-    disclosure；concealed 必声明已知者并带命题。basis 缺省给 e01_01 一条
-    （引用方保证段文本含该引文）。"""
-    eff: dict = {'target': target, 'key': key, 'op': op, 'value': value,
-                 'scope': scope, 'modality': modality,
-                 'disclosure': {'visibility': visibility},
-                 'basis': list(basis) if basis is not None
-                 else [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}
-    if visibility == 'concealed':
-        eff['disclosure']['known_by'] = list(known_by)
-        eff['proposition'] = proposition or {
-            'ref': f'p_{key}', 'statement': f'{key} 的隐藏事实'}
-    elif proposition is not None:
-        eff['proposition'] = proposition
-    return eff
+    """v13 effect（R10a a1 起带 modality 与逐字 basis；CS-S 1b 起无
+    scope／disclosure／proposition——作用域读时按登记表派生）。basis 缺省给
+    e01_01 一条（引用方保证段文本含该引文）。"""
+    return {'target': target, 'key': key, 'op': op, 'value': value,
+            'modality': modality,
+            'basis': list(basis) if basis is not None
+            else [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}
 
 
 def v13_beat(beat_id: str, event: str, *, participants: tuple[str, ...] = (),
@@ -66,6 +57,20 @@ def v13_beat(beat_id: str, event: str, *, participants: tuple[str, ...] = (),
 def v13_chapter(*beats: dict, causal_edges: tuple = ()) -> dict:
     """v13 章 wire：拍列表＋因果边。"""
     return {'beats': list(beats), 'causal_edges': list(causal_edges)}
+
+
+def names_v6_wire(structure: dict) -> dict:
+    """canonical NameStructure dump → v6 结构 wire（CS-S 1c 夹具助手）：
+    剥 people 的 surface_forms（构词由程序派生）与顶层 resolutions（同一性
+    走窄调用）；form_overrides 默认空（派生结果应与原 surface_forms 一致——
+    不一致的夹具会在断言处暴露）。"""
+    people = {}
+    for slug, person in (structure.get('people') or {}).items():
+        people[slug] = {key: value for key, value in person.items()
+                        if key != 'surface_forms'}
+    return {'protocol_version': 'stage2-names-v6',
+            'families': structure.get('families') or {},
+            'people': people}
 
 
 def anchor_stub(handle: str = 's0_01') -> tuple:
@@ -91,7 +96,7 @@ def json_ask(session, *, model='fake', max_tokens=1000):
     from novel.stages.common import SYS, semantic_revision_rules
 
     def ask(owner, prompt, validate, patch=None, review_targets=None,
-            baseline=None, narrow=None):
+            baseline=None, narrow=None, downstream_preview=None):
         request = ChatRequest(model=model, system=SYS, user=prompt,
                               reasoning_effort='high', thinking=True,
                               json_mode=True, max_tokens=max_tokens)
@@ -184,6 +189,41 @@ def republish_checkpoint(repository, mutate, *, owner='preserve'):
 
 
 # ─── W1 选章：正文 runner 的测试替身 ───
+
+def complete_associate_fixture(book, chapters, observation):
+    """为其他 compiler 反例补齐无关候选的明确否决；保留传入的全部判定及缺陷。
+
+    只用于不测试候选生成/完整性的最小基座：无关身份答 distinct，因果答 none。
+    不删除候选外行、不改已有 verdict，不能用于缺项或候选召回本身的测试。
+    """
+    from contracts.schema.observation import AssociateObservation
+    from novel.stages.stage2 import (
+        project_association_space, project_identity_candidates, project_cause_candidates,
+    )
+    wire = observation.model_dump(mode='json')
+    space = project_association_space(book, chapters)
+    candidates = project_identity_candidates(space, book)
+    for kind, fields in (
+            ('same_proposition', ('left', 'right')),
+            ('loop_pairing', ('open', 'close')),
+            ('scene_continuation', ('left', 'right'))):
+        rows = wire[kind]
+        answered = {(row[fields[0]], row[fields[1]]) for row in rows}
+        if kind == 'same_proposition':
+            answered |= {(right, left) for left, right in answered}
+        for candidate in getattr(candidates, kind):
+            pair = (getattr(candidate, fields[0]), getattr(candidate, fields[1]))
+            if pair not in answered:
+                rows.append({fields[0]: pair[0], fields[1]: pair[1], 'verdict': 'distinct'})
+    identity = AssociateObservation.model_validate(wire)
+    answered_causes = {(row['from_beat'], row['to_beat']) for row in wire['cross_chapter_cause']}
+    for candidate in project_cause_candidates(space, chapters, book, identity):
+        pair = (candidate.from_beat, candidate.to_beat)
+        if pair not in answered_causes:
+            wire['cross_chapter_cause'].append({
+                'from_beat': pair[0], 'to_beat': pair[1], 'kind': 'none'})
+    return AssociateObservation.model_validate(wire)
+
 
 def stub_body_runner(monkeypatch):
     """把 `str06.stage5.body` 的 runner 换成如实报告零提交的替身（W1/D2）。

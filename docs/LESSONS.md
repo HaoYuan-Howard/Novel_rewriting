@@ -233,7 +233,10 @@ F6d 的登记表每条 target 用四种可核对格式（文件/符号/dict 键/
 互相牵制的判据间来回。修法是让段＝自然段、一段一行，并把可由引文推导的段号交给 Resolver
 （RC-26/27）。只改反馈措辞（「该引文命中于句段 X」）或扩大返修范围都是补丁。另：reasoning 模型
 一次条目返修的输出 token 接近首答（实测 17.8K 对 23.6K），降本靠首答通过率，不靠缩小返修条目。
-落点：`novel/stages/chain.py::build_evidence`、`novel/stages/stage2/resolver.py::locate_quote`。
+落点：`novel/stages/chain.py::build_evidence`、`novel/stages/stage2/resolver.py::basis_quote`。
+（2026-10-07 收口：RC-27 只把段号交给代码，引文仍由模型逐字抄——flash/low 两轮漏抄「在冬日」
+触发 validation_no_progress 实证这一半仍是模型负担。用户裁决「模型只选段、代码切原文」：wire 的
+basis 只给段 id，引文＝段全文由 compiler 派生，转写失败类错误构造上消失——本条教训的完整版。）
 
 ## 42. 标定 LLM 前先自证装置的量程与渲染；判官与被测执行器不得同源
 
@@ -247,3 +250,43 @@ CS-F3 语义核验标定（2026-10-05，45 次真实调用，已封口）的三�
 unver、「已裁决反例不得错误支持」硬规则，拦下了一个 51/59 正确却背书事故模式的判官——装置的
 保守纪律在判官不达标时给出的是「不启用」，这正是它的职责。落点（已删，Git 提交 2d17a898）：
 tests/semantic_calibration.py、tests/csf3_golden.py；裁决与重开条件见 DECISIONS 2026-10-05 行。
+
+## 43. 关联失败先核对上游问题粒度；结构通过不证明悬念已完整抽取
+
+同一主题下的复合 open、具体行动 open 和普通事件 close 混用，会让关联模型在重复占用
+close、未配对和 unresolved 之间往返；扩大关联重试不能补回章观察漏掉的答案。抽取按
+一个具体问题建悬念，明确接受安排与执行成败的分别收束；关联材料带两端拍事件，明确
+pair 一对一及 distinct 只否决候选对。结构守卫继续拒发，人工核读确认的上游语义错误
+通过原请求身份的 chapters owner patch 恢复，不由 compiler 猜测、删记录或强配。
+比较历史成功盘必须同时检查未收束 open：旧版本通过可能只是没有抽到冲突项。
+落点：`novel/stages/common.py::CHAPTER_PROMPT`、
+`novel/stages/stage2/associate.py::project_identity_candidates` 与正式免费修订入口。
+
+## 44. 已购回答的多 owner 问题须先完整登记；修订主体不是兄弟任务的上游
+
+Preserve 同答报告两章冲突时，在遍历中直接调用必抛异常的登记口，会只记第一章，
+另一章的问题仍留在已购回答却不进入恢复范围。按 owner 合并全部条目，捕获可回派
+结论后再抛最早节点；重放复用 pending 记录，不重复起轮或计级联次数。
+多章同时修订又暴露共享来源窗口串扰：读取各自上一版会把兄弟章旧版串入输入边，
+新稿刚发布便被判 stale。上一版是同 owner 的修订主体，经 check_model 验封/新鲜度，
+其字节随修订请求留证，不登记成上游。验证必须覆盖「同答多章 → 各章修订 →
+重编译 → Preserve 复验发布」，并检查两章 provenance，无兄弟章或下游依赖。
+姓名自闸也须在首答协议中说明，不能只在付费后的拒绝反馈里揭示合法称呼规则。
+落点：`novel/stages/chain.py::_backfill_source_evidence_conflicts`／`run_chapters`、
+`novel/stages/common.py::PRESERVE_RULES`；反例 `tests/test_str06_a3_conflicts.py`。
+
+## 45. 事件来源与锁分开；恢复必须验证失败书和清账后的真实路径
+
+beat.event 有真实行动而三类转移全空，并不意味着源观察失败。若保存协议只准引用
+转移，模型只能借邻拍原子、漏掉行动或要求补造转移；增加 effort 和修订轮次不能
+补上这个契约缺口。独立事件句柄只复制事件与正式证据，事件/细节可以合法入选，
+状态与知情锁仍消费各自原子，邻句窗口不能变成支持新事实的逐字引文。
+
+免费补丁预检先验证本 owner 候选，再报告尚未运行的下游，不能要求失败书已有
+checkpoint/Design。升版修订的已购基线与当前应用请求分别留证；完整验收之后
+只允许这对身份重放，任意新输入仍需显式裁决。回派清账不是新源材料，不能让
+处理说明消失、改变已验请求并造成重购；返回同一基线请求也不能用原稿覆盖补丁。
+验证须包含真实章请求范围、前置关联候选、Preserve 发布、无临时 wire 重放和
+事件材料送达写手的完整链。工程通过与人工修订不等于模型首答或成书质量通过。
+落点：`novel/stages/stage4/grounding.py`、`novel/stages/review.py`、
+`novel/stages/revisions.py`；反例 `tests/test_str06_quality_materials.py`、`tests/test_str06_r9.py`。

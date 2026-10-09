@@ -482,9 +482,13 @@ def resolve_executor_backend(
     tokens = frozenset(flag_tokens(flags))
     if tokens not in PROFILED_LLM_RUNS[node]:
         supported = [sorted(item) for item in PROFILED_LLM_RUNS[node]]
+        # 常见误用是 --check-only 配 --executor-backend：免费复检不接 executor，
+        # 只继承 --request-profile——按实际 flag 给出对症提示，其余组合保持通用措辞。
+        hint = ('；--check-only 是免费复检，去掉 --executor-backend、只给 '
+                '--request-profile 即可' if '--check-only' in tokens else '')
         raise UnsupportedRunMode(
-            f'{node} 的 executor 尚未迁移 flag 组合 {sorted(tokens)}；'
-            f'当前只接受 {supported}，拒绝静默回退')
+            f'{node} 的 flag 组合 {sorted(tokens)} 不是已登记的付费跑法'
+            f'（已登记 {supported}）{hint}；拒绝静默回退')
     if not is_paid(node, flags):  # pragma: no cover —— 当前空 flags 纵切均为付费
         raise UnsupportedRunMode(
             'executor_backend 只属于真正付费生成步，0 成本恢复步不接 executor')

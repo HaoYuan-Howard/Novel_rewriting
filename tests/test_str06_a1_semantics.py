@@ -39,7 +39,7 @@ def _beat(event: str, refs: tuple[str, ...], **over) -> dict:
 
 
 def _compile(beats: list[dict]):
-    wire = {'protocol_version': 'stage2-chapters-v4', 'beats': beats}
+    wire = {'protocol_version': 'stage2-chapters-v7', 'beats': beats}
     return compile_chapter_observation(
         wire, evidence_ids=EVIDENCE, chapter=1,
         character_slugs=frozenset({'qi_niang', 'zhang_fu'}))
@@ -57,10 +57,9 @@ def test_c4_quote_not_in_segment_is_rejected_precisely():
     _obs, errors = _compile([
         _beat(case.title, ('e01_01',),
               effects=[{'target': {'kind': 'character', 'char_id': 'qi_niang'},
-                        'key': 'mood', 'op': 'set', 'value': '紧',
-                        'scope': 'book', 'modality': 'actual',
-                        'disclosure': {'visibility': 'on_page'},
-                        'basis': [{'segment': 'e01_01', 'quote': '他攥紧了帕子'}]}]),
+                        'key': 'emotional_state', 'op': 'set', 'value': '紧',
+                                                'modality': 'actual',
+                                                'basis': [{'segment': 'e01_01', 'quote': '他攥紧了帕子'}]}]),
     ])
     assert any('quote_not_in_segment' in e or '不逐字存在' in e for e in errors), errors
 
@@ -76,10 +75,9 @@ def test_c4_misattributed_quote_feedback_names_verbatim_home():
     _obs, errors = _compile([
         _beat('归期', ('e01_01', 'e01_03'),
               effects=[{'target': {'kind': 'character', 'char_id': 'zhang_fu'},
-                        'key': 'promise', 'op': 'set', 'value': '半月归',
-                        'scope': 'book', 'modality': 'actual',
-                        'disclosure': {'visibility': 'on_page'},
-                        'basis': [{'segment': 'e01_01',
+                        'key': 'agreement', 'op': 'set', 'value': '半月归',
+                                                'modality': 'actual',
+                                                'basis': [{'segment': 'e01_01',
                                    'quote': '他说此去约莫半个月便回'}]}]),
     ])
     hit = [e for e in errors if '不逐字存在' in e]
@@ -89,10 +87,9 @@ def test_c4_misattributed_quote_feedback_names_verbatim_home():
     _obs2, errors2 = _compile([
         _beat('归期', ('e01_01',),
               effects=[{'target': {'kind': 'character', 'char_id': 'zhang_fu'},
-                        'key': 'promise', 'op': 'set', 'value': '半月归',
-                        'scope': 'book', 'modality': 'actual',
-                        'disclosure': {'visibility': 'on_page'},
-                        'basis': [{'segment': 'e01_01',
+                        'key': 'agreement', 'op': 'set', 'value': '半月归',
+                                                'modality': 'actual',
+                                                'basis': [{'segment': 'e01_01',
                                    'quote': '他说大约过半个月就会回来'}]}]),
     ])
     hit2 = [e for e in errors2 if '不逐字存在' in e]
@@ -106,10 +103,9 @@ def test_c4_segment_outside_beat_refs_is_rejected():
     _obs, errors = _compile([
         _beat('攥帕子', ('e01_02',),
               effects=[{'target': {'kind': 'character', 'char_id': 'qi_niang'},
-                        'key': 'mood', 'op': 'set', 'value': '紧',
-                        'scope': 'book', 'modality': 'actual',
-                        'disclosure': {'visibility': 'on_page'},
-                        'basis': [{'segment': 'e01_01', 'quote': '她攥紧了帕子'}]}]),
+                        'key': 'emotional_state', 'op': 'set', 'value': '紧',
+                                                'modality': 'actual',
+                                                'basis': [{'segment': 'e01_01', 'quote': '她攥紧了帕子'}]}]),
     ])
     assert any('不在条目自身 source_refs' in e for e in errors), errors
 
@@ -119,10 +115,9 @@ def test_c4_verbatim_quote_from_declared_segment_is_green():
     obs, errors = _compile([
         _beat('攥帕子', ('e01_01',),
               effects=[{'target': {'kind': 'character', 'char_id': 'qi_niang'},
-                        'key': 'mood', 'op': 'set', 'value': '紧',
-                        'scope': 'book', 'modality': 'actual',
-                        'disclosure': {'visibility': 'on_page'},
-                        'basis': [{'segment': 'e01_01', 'quote': '她攥紧了帕子'}]}]),
+                        'key': 'emotional_state', 'op': 'set', 'value': '紧',
+                                                'modality': 'actual',
+                                                'basis': [{'segment': 'e01_01', 'quote': '她攥紧了帕子'}]}]),
     ])
     assert errors == [] and obs is not None
     assert obs.beats[0].effects[0].basis[0].quote == '她攥紧了帕子'
@@ -156,9 +151,8 @@ def test_c2_expected_modality_slot_exists_and_reads_out():
         _beat('辞行', ('e01_03',),
               effects=[{'target': {'kind': 'relation', 'subject': 'zhang_fu',
                                    'object': 'qi_niang'},
-                        'key': 'apart_duration', 'op': 'set', 'value': '半月',
-                        'scope': 'book', 'modality': 'expected',
-                        'disclosure': {'visibility': 'on_page'},
+                        'key': 'residence', 'op': 'set', 'value': '暂离约半月',
+                        'modality': 'expected',
                         'basis': [{'segment': 'e01_03',
                                    'quote': '此去约莫半个月便回'}]}]),
     ])
@@ -171,21 +165,19 @@ def test_c2_expected_modality_slot_exists_and_reads_out():
 def test_fold_evidence_metrics_count_quotes_hedges_and_modality():
     """读数如实计数：引文总数与长度、引文等于称谓字面、命题含限定词比例、
     modality 计数（度量不是门，§四诊断表）。"""
-    from contracts.schema.source import BlueprintsArtifactV15, ChapterBlueprint
+    from contracts.schema.source import BlueprintsArtifactV17, ChapterBlueprint
     from tests.str06_facilities import v13_beat
 
     quote = '她攥紧了帕子'
     beat = v13_beat(
         'b01_01', '攥帕子', participants=('qi_niang',), source_refs=('e01_01',),
         effects=({'target': {'kind': 'character', 'char_id': 'qi_nuang'},
-                  'key': 'mood', 'op': 'set', 'value': '紧', 'scope': 'book',
-                  'modality': 'expected',
-                  'disclosure': {'visibility': 'on_page'},
+                  'key': 'emotional_state', 'op': 'set', 'value': '紧',
+                  'modality': 'actual',
                   'basis': ({'segment': 'e01_01', 'quote': quote},)},
                  {'target': {'kind': 'character', 'char_id': 'qi_niang'},
-                  'key': 'surface_echo', 'op': 'set', 'value': 'x', 'scope': 'book',
-                  'modality': 'actual',
-                  'disclosure': {'visibility': 'on_page'},
+                  'key': 'address_term', 'op': 'set', 'value': 'x',
+                  'modality': 'expected',
                   'basis': ({'segment': 'e01_01', 'quote': '夫君'},)}),
         cognition=({'proposition': {'ref': 'p1', 'statement': '他以为天要塌了'},
                     'holder': 'qi_niang', 'mode': 'suspects',
@@ -193,7 +185,7 @@ def test_fold_evidence_metrics_count_quotes_hedges_and_modality():
                    {'proposition': {'ref': 'p2', 'statement': '帕子攥紧了'},
                     'holder': 'qi_niang', 'mode': 'learns',
                     'basis': ({'segment': 'e01_01', 'quote': quote},)}))
-    blueprint = BlueprintsArtifactV15(
+    blueprint = BlueprintsArtifactV17(
         source_expression=__import__(
             'tests.str06_expression_inputs', fromlist=['sample_blueprint_expression']
         ).sample_blueprint_expression(),
@@ -230,7 +222,7 @@ def test_book_surface_from_chapter_must_match_earliest_source_chapter():
     ev = build_evidence(chapters)
     assert '表弟' in ev['e01_01']['text']
     wire = {
-        'protocol_version': 'stage2-book-v4',
+        'protocol_version': 'stage2-book-v7',
         'characters': {'pei_shuyuan': {
             'canonical': '表弟', 'surfaces': [
                 {'surface': '表弟', 'from_chapter': 4,
@@ -244,7 +236,7 @@ def test_book_surface_from_chapter_must_match_earliest_source_chapter():
     assert hit and 'from_chapter=4' in hit[0], errors
     # 绿：from_chapter 与最早命中章一致 → 无 ②b 错误。
     wire_ok = {
-        'protocol_version': 'stage2-book-v4',
+        'protocol_version': 'stage2-book-v7',
         'characters': {'pei_shuyuan': {
             'canonical': '表弟', 'surfaces': [
                 {'surface': '表弟', 'from_chapter': 1, 'source_refs': ['e01_01']},

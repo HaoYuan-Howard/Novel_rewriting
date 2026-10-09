@@ -651,28 +651,33 @@ def test_r2_version_constants():
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
-    assert STR06_RC_VERSION == 'str06-rc17'          # rc17 CS-H H3 称谓面＋H4 associate v3；rc16 事实锁引用（CS-F2）
+    assert STR06_RC_VERSION == 'str06-rc22'          # 创作材料：可选细节与系列前情
     assert 'str06-rc10' in STR06_RC_LABELS
-    assert RENDERER_VERSION == 'str06-render-v10'    # CS-F2：称谓投影（v9：RC-24 拍末结果作用域）
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v8'
+    assert RENDERER_VERSION == 'str06-render-v11'
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v9'
     for rel in ('stage4/design/body_design.json',
                 'stage4/design/presentation_graph.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc14', rel  # rc13 D5 统一
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc22', rel
     # rc17（CS-H H3）：IR 因显示面分表（display_fallback）、必保揭名
     # （requires_released）与拍级释放（release_introductions）再升版。
-    assert STR06_ARTIFACT_RC_VERSIONS['stage4/ir/writer_book_ir.json'] == 'str06-rc17'
+    # rc18（CS-S 1b 补升）：IR 经 VerificationIR.obligations 内嵌 ObligationAnchor，
+    # visibility 删除使 IR 形状变化——模型字面量与产物表同批钉 rc18（I-13）。
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/ir/writer_book_ir.json'] == 'str06-rc22'
+    from contracts.schema.book_ir import WriterBookIR
+    assert WriterBookIR.model_fields['contract_version'].default == 'str06-rc22'
     # rc17（CS-H H3，RC-61）：BODY_VALIDATOR v2——必保揭名必现字面进章级机械校验。
     assert STR06_ARTIFACT_RC_VERSIONS['stage5/acceptance/body/ch{nn}.json'] \
         == 'str06-rc17'
     # rc16（CS-F2）：Binding 增 fact_bindings 而升版；LLM 面 Design wire 升 v8
     # （kf 句柄不再是状态键）。旧 rc12 Binding 按字面量拒读，不迁移（I-13）。
-    # rc17（CS-H H3，RC-63）：BriefFactLock 增 subjects 再升版。
+    # rc17（CS-H H3，RC-63）：BriefFactLock 增 subjects 再升版；
+    # rc18（CS-S 1b）：ObligationAnchor.visibility 删——binding 再升版。
     from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
     from contracts.schema.grounding import SemanticBinding
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/grounding/semantic_binding.json'] \
-        == 'str06-rc17'
-    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v8'
-    assert SemanticBinding.model_fields['contract_version'].default == 'str06-rc17'
+        == 'str06-rc22'
+    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v10'
+    assert SemanticBinding.model_fields['contract_version'].default == 'str06-rc22'
 
 
 # ═════════════════ 九、Design wire v2（生产侧同步） ═════════════════
@@ -685,7 +690,7 @@ def _wire_v2() -> dict:
         'world_rules': ['术法须以寿命为代价'],
         'initial_state': [
             {'domain': 'world', 'subjects': [], 'holder': None,
-             'key': 'light', 'op': 'set', 'modality': 'actual', 'value': '烛火未点'}],
+             'key': 'possession', 'op': 'set', 'modality': 'actual', 'value': '烛火未点'}],
         'scenes': [
             {'state_reads': [],
              'driver': {'focal_actor': 'yun', 'immediate_want': '安度新婚',
@@ -702,7 +707,7 @@ def _wire_v2() -> dict:
                                'subject': 'fu_jun', 'text': '再不隐瞒'}]}],
              'delivery': {'pov': 'yun', 'voice': '冷峻', 'avoid': []}},
             {'state_reads': [
-                {'domain': 'world', 'subjects': [], 'key': 'light', 'at': 1}],
+                {'domain': 'world', 'subjects': [], 'key': 'possession', 'at': 1}],
              'driver': {'focal_actor': 'yun', 'immediate_want': '求证',
                         'opposition': '无凭据', 'turn': '发现玉佩'},
              'realization_brief': '重心在玉佩的发现；在字面露出时收束。',
@@ -710,7 +715,7 @@ def _wire_v2() -> dict:
                  {'event': '灯下翻检', 'participants': ['yun'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'world', 'subjects': [], 'op': 'set', 'modality': 'actual', 'scope': 'book',
-                       'key': 'light', 'value': '烛火亮起'}],
+                       'key': 'possession', 'value': '烛火亮起'}],
                   'delivery_hint': '',
                   'threads': [{'op': 'advance', 'ref': 't1', 'progress': '查到玉佩来历'}]},
                  {'event': '玉佩收线', 'participants': ['yun', 'fu_jun'],

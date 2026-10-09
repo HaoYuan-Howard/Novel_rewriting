@@ -71,13 +71,14 @@ _hard('source_chapter_blueprint', 'stage2',
 _hard('source_loop_lifecycle', 'stage2',
       'loops 只许 open/close：loop 一次性 open、close 必带 resolution、问题文本不可改写', 'R-2.11')
 _hard('source_proposition_closure', 'stage2',
-      '命题引用闭合：同章重抄与本章登记一致；跨章同义由 associate 声明，'
-      '正式 ID 可解析且统一采用最早建立的代表文本；同维状态配维度句柄'
-      '（键不同但同维才配，规范键按地址传播整类）', 'R-2.12')
-_hard('source_effect_disclosure', 'stage2',
-      'effect 可见性形状：必填 on_page/concealed；concealed 必声明已知者并带命题锚', 'R-2.13')
+      '命题引用闭合：同章重抄与本章登记一致；跨章同一性优先由 know.fact 引用'
+      '（f{nn} 词表）构造成立，残余近义漂移由 associate 候选制窄判定声明，'
+      '正式 ID 可解析且统一采用最早建立的代表文本；不再有同维状态配对面'
+      '（change 键入 CHANGE_KEYS 闭集，键即 canonical）', 'R-2.12')
 _hard('source_registered_key_scope', 'stage2',
-      '登记键闭集与作用域：表内键作用域由 compiler 绑定（scene/residence/身体状态键）；退役位置键拒识', 'R-2.14')
+      '变化键闭集与作用域：change 键入 CHANGE_KEYS 闭集，表外键（含退役位置键）'
+      '一律拒；作用域读时按登记表派生（scene_location＝scene，由拍级字段合成；'
+      '其余键＝book）', 'R-2.14')
 _hard('source_fold_consistent', 'stage2',
       'source fold 事件与 Blueprint canonical 一致', 'R-2.4')
 _hard('names_structure_compile', 'stage2',
@@ -87,12 +88,10 @@ _hard('names_coverage', 'stage2',
 _unver('source_semantics_unver', 'stage2',
        '源语义（命题同一性、归因、因果、揭示）未经语义审阅，保持未评披露', 'R-3.3')
 _metric('source_fold_events', 'stage2', 'fold 事件计数与章分布读数', 'R-2.7')
-_metric('source_fold_concealed_unrevealed', 'stage2',
-        '书末仍未向读者确认的 concealed 命题（只读报告，不阻断）', 'R-2.15')
 _metric('source_fold_empty_transition_ratio', 'stage2',
         '每章空转移拍比例（三类转移全空的拍所占比例；D7 连续性读数）', 'R-2.16')
 _metric('source_fold_knowledge', 'stage2',
-        '知情 fold 读数（按命题＋持有者＋模式；读者确认时点）', 'R-2.17')
+        '知情 fold 读数（按命题＋持有者＋模式折叠；度量不是门）', 'R-2.17')
 # R10a a1（收口批登记）：引文证据与事件时态的源侧硬闸（C2/C4）。
 _hard('source_basis_quote_literal', 'stage2',
       'basis 引文定位：quote 逐字存在于所引句段且句段属条目自身 source_refs'
@@ -169,20 +168,31 @@ _hard('source_evidence_conflict_routing', 'stage4',
 _hard('design_lock_acceptance', 'stage4',
       'Brief 锁定项与 Design 锁规则：kp 命题登记＋知情锁唯一映射＋kf 事实锁；'
       'kp 键持有者须有锁且模式被授权（known 只能来自 known 锁）、读者确认须有 '
-      'reader known 锁；kf 事实锁在已选状态上用 lock 标注（stage4-design-v8）：'
+      'reader known 锁；kf 事实锁在已选状态上用 lock 标注（stage4-design-v9）：'
       '时态锁标在同 modality 的 set、值未知锁标在 op=unknown、原文未回答锁是禁区不承载状态、'
       '一锁一承载且承载拍内地址唯一、映射随 Binding 发布不复制 value；必保锁兑现', 'R-5.17')
 _hard('preserve_name_literal_gate', 'stage4',
-      'Preserve 自闸（RC-64）：义务 statement／satisfaction 里的裸姓／'
-      '多义带名面（未登记别名因含裸姓成分同被查出）在 Preserve 接受循环被逐条定位，'
+      'Preserve 自闸（RC-64）：义务 statement／satisfaction／details.text 里的裸姓／'
+        '多义带名面（未登记别名因含裸姓成分同被查出）在 Preserve 接受循环被逐条定位，'
+        '同句不同登记称谓的无损投影阻断同样前置（含组合材料行），必保揭名保留；'
       '带 obligations[i] 条目路径走条目返修；同一把尺与下游材料归因共用', 'R-5.22')
 _hard('design_requires_released_gate', 'stage4',
       '必保揭名（RC-61）：requires_released 的 know 所在拍必须已释放所列称谓'
       '（同拍释放合法）；承载章正文必现该字面（Stage5 段落级修句闭合）', 'R-5.21')
 _hard('binding_series_collapse', 'stage4',
-      'Bind series 分别承载：同一 series 成员绑定不同拍（同拍即 '
-      'series_collapsed）；投影带出 series 与锁摘要；必保缺口默认归 design',
+      'Bind series 实例分别承载：同一 series 的普通实例绑定不同接受拍（同拍即 '
+      'series_collapsed）；显式 summary 不参与实例互斥，可与最后实例同拍；'
+      '投影带出 series 与锁摘要；必保缺口默认归 design',
       'R-5.18')
+_hard('binding_series_summary', 'stage4',
+      '显式 series summary 被选中时，covers 中每个实例须已承载且接受拍不晚于'
+      '概括拍；实例可重排、实例与概括同拍合法，未选概括不新增任务；目标实例'
+      '事件按概括拍进入写手章包；Design两侧拍位窄修与compile免费重验同尺',
+      'R-5.23')
+_hard('design_detail_ref_closure', 'stage4',
+      '选中可改写细节引用须在正式Brief／Binding细节闭集内；Design内部恢复面'
+      '与compile免费重验同验，未选细节不增加写作任务，文本只进导演说明',
+      'R-5.24')
 _hard('epistemic_lock_order_guard', 'stage4',
       '锁位置 Guard：kp 知情升级/读者确认不得早于授权该模式的义务承载位置'
       '（授权位＝必保义务全部承载点最早者；initial_state 与自由键不查；故事'
@@ -263,7 +273,7 @@ _metric('book_length_deviation', 'stage7',
 #
 # 一一对应（防漂移）：本表的键集合＝五个判据模块（`stage4/design.py`、
 # `grounding.py`、`compile.py`、`guard.py`、`hook_validation.py`，外加同块的
-# `hook.py`／`preflight.py`）与 `paid_requests.py` 闭集合成码（`answer_shape`／
+# `hook.py`／`hook_wire.py`／`preflight.py`）与 `paid_requests.py` 闭集合成码（`answer_shape`／
 # `patch_shape`）在源码里出现的码字面量集合。`tests/test_str06_patch_routes.py`
 # 逐码核对：判据加了码而本表没有（或反过来）当场红。
 PatchRoute = Literal['locate', 'optional', 'whole_answer', 'stop']
@@ -275,13 +285,12 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'patch_shape': 'whole_answer',               # patch 轮回答不是 {"patches":[…]}／范围外路径
     'design_protocol_literal': 'whole_answer',   # wire protocol_version 字面量不符（I-13）
     'hook_protocol_literal': 'whole_answer',     # hook wire 协议字面量不符
-    'design_wire_shape': 'whole_answer',         # v8 wire 整体 pydantic 形状失败
-    'hook_ref_shape': 'whole_answer',            # hook wire 位置引用形状失败
+    'design_wire_shape': 'whole_answer',         # v9 wire 整体 pydantic 形状失败
     'hook_wire_key_whitelist': 'whole_answer',   # hook wire 顶层未知字段（协议外键）
     'book_design_construct': 'whole_answer',     # canonical BodyDesign 组装失败（形状面）
     'hook_construct': 'whole_answer',            # canonical HookDesign 组装失败（形状面）
 
-    # ── Design wire 定位面（判据在判定处带 v8 wire 路径） ─────────────────────
+    # ── Design wire 定位面（判据在判定处带 v9 wire 路径） ─────────────────────
     'design_wire_expand': 'locate',
     'design_expression_ref': 'locate',
     'design_unknown_char': 'locate',
@@ -300,7 +309,7 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     # `design_kp_key_closed` 有两个发射面：`design.py` 的 delta 行（locate，
     # 走 delta_locate）与 `preflight.py` 的 IR 输入键扫描（compile 面，跨拍
     # 汇总无逐键 wire 行坐标）。同一码两面的路由按**能定位的那一面**登记——
-    # delta 行面是生产链主路径（v8 wire 恒传入 brief）；编译面由 compile 的
+    # delta 行面是生产链主路径（v9 wire 恒传入 brief）；编译面由 compile 的
     # 停止规则收口。详见 tests/test_str06_patch_routes.py 的双面说明。
     'design_kp_key_closed': 'locate',
     'design_kp_mode_authority': 'locate',
@@ -322,6 +331,13 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'material_name_leak': 'stop',             # 材料归因回派（route_owner_issue）
     # CS-H H3（RC-64）：Preserve 自闸——义务文本里的裸姓／未登记别名。
     'preserve_name_literal': 'locate',        # obligations[i] 条目返修（最小可替换单元）
+    'preserve_name_projection': 'locate',     # 同句称谓投影阻断，义务/细节条目窄修
+    'preserve_event_evidence': 'locate',      # 完整事件证据缺口，保留义务条目定位
+    'preserve_detail_shape': 'locate',        # 可改写细节形状；只修出错条目
+    'preserve_detail_anchor': 'locate',       # 细节须引用源投影视图的正式锚点
+    'design_detail_ref': 'locate',            # Design拍内details定位；compile无路径按停止规则收口
+    'preserve_detail_duplicate': 'locate',    # 重复细节仅修该条目
+    'series_summary_early': 'locate',         # 显式回顾早于覆盖实例；两侧承载拍窄修
     # CS-H H3（RC-60「投影后的残余归属」）：Design 原文闸先投影再查的残余三态。
     'design_unreleased_reference': 'locate',  # 已绑定称谓但该位置无显示面：补释放／挪承载位／改指称
     'design_projection_lossy': 'locate',      # 无损性守卫触发：不可投影残余归 Design
@@ -330,9 +346,12 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
 
     # ── 可选目标闭集（RC-58：责任位置须由模型决定） ───────────────────────────
     'design_carrier_missing': 'optional',    # 必保义务漏标 real：候选拍闭集里选承载位
-    'series_collapsed': 'optional',          # series 成员接受拍互斥：闭集里改选承载位
+    'series_collapsed': 'optional',          # series 普通实例接受拍互斥：闭集里改选承载位
+    'series_summary_unbound': 'optional',    # 被回顾实例未承载；在现有拍闭集选择
 
     # ── HookDesign（CS-F1 起错误在判定处带 wire 路径，同一定位器） ────────────
+    'hook_wire_shape': 'locate',
+    'hook_fact_ref': 'locate',
     'hook_concealed_char': 'locate',
     'hook_pov_char': 'locate',
     'hook_material_ref': 'locate',
@@ -341,11 +360,16 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'hook_hidden_presentation': 'locate',
     'hook_presentation_leak': 'locate',
     'hook_forbidden_address': 'locate',
+    'hook_forbidden_ref': 'locate',
+    'hook_forbidden_unestablished': 'locate',
     'hook_forbidden_conflict': 'locate',
     'hook_forbidden_leak': 'locate',
     'hook_opening_address': 'locate',
     'hook_opening_ref': 'locate',
     'hook_opening_unestablished': 'locate',
+    'hook_opening_stale': 'locate',
+    'hook_opening_modality': 'locate',
+    'hook_opening_holder': 'locate',
     'hook_opening_timing': 'locate',
     'hook_opening_horizon': 'locate',
     'hook_opening_forbidden': 'locate',

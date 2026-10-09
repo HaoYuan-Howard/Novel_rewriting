@@ -25,11 +25,15 @@ from contracts.schema.observation import (
     BookObservation, ChapterObservation, NamesObservation,
 )
 from novel.stages.stage2.associate import (
-    AssociationSpace, BeatHandle, DimensionHandle, LoopHandle, PropositionHandle,
-    SceneHandle, StateHandle, associate_observation_prompt, associate_patch_locate,
-    book_state_handle, chapter_state_handle, compile_associate_observation,
-    project_association_space, serialize_target, state_dimension_address,
-    target_label,
+    AssociationCandidates, AssociationSpace, BeatHandle, CauseCandidate,
+    LoopCandidate, LoopHandle,
+    PropositionCandidate, PropositionHandle, SceneCandidate, SceneHandle,
+    associate_candidates_prompt, associate_patch_locate,
+    associate_observation_issues, associate_unresolved_issues,
+    compile_associate_observation,
+    compile_cross_cause, cross_cause_prompt, near_synonym_pair,
+    project_association_space, project_cause_candidates,
+    project_identity_candidates,
 )
 from novel.stages.stage2.book import (
     book_observation_prompt, book_patch_locate, character_core_view,
@@ -38,15 +42,18 @@ from novel.stages.stage2.book import (
 from novel.stages.stage2.chapters import (
     chapter_observation_prompt, chapter_patch_locate, chapter_prior_text,
     compile_chapter_observation, chapter_loop_issues,
+    chapter_revision_scope_issues,
 )
 from novel.stages.stage2.compile import (
-    CompileOutcome, CONFIRMING_MODES, FoldResult, compile_source_truth,
+    CompileOutcome, FoldResult, compile_source_truth, inspect_identity_associations,
     evidence_metrics, first_appearance_anchors, first_appearance_issues,
     initial_snapshot, source_fold,
 )
 from novel.stages.stage2.names import (
-    NAMES_INPUT_VERSION, normalize_name_observations, validate_name_resolutions,
-    ProbeFinding, compile_name_structure, merge_name_structure, names_evidence_view,
+    NAMES_INPUT_VERSION, NameVariantCandidate, normalize_name_observations,
+    validate_name_resolutions, ProbeFinding, compile_name_structure,
+    compile_name_variants, derive_surface_forms, merge_name_structure,
+    name_variant_candidates, name_variants_prompt, names_evidence_view,
     names_patch_locate, surname_construction_probe,
 )
 from novel.stages.stage2.resolver import (
@@ -55,25 +62,31 @@ from novel.stages.stage2.resolver import (
 from novel.stages.stage2.slim import expand_chapter_wire, slim_chapter_wire
 
 __all__ = [
-    'AnchorHit', 'AssociationSpace', 'AssociateObservation', 'BeatHandle',
-    'BookObservation', 'ChapterObservation', 'CompileOutcome',
-    'CONFIRMING_MODES', 'DimensionHandle', 'EvidenceResolver', 'FoldResult',
-    'LoopHandle',
-    'NAMES_INPUT_VERSION', 'NamesObservation', 'ProbeFinding', 'PropositionHandle', 'ResolverIssue',
+    'chapter_revision_scope_issues',
+    'AnchorHit', 'AssociationCandidates', 'AssociationSpace', 'AssociateObservation',
+    'BeatHandle', 'BookObservation', 'CauseCandidate', 'ChapterObservation',
+    'CompileOutcome', 'EvidenceResolver',
+    'FoldResult', 'LoopCandidate', 'NameVariantCandidate', 'LoopHandle',
+    'NAMES_INPUT_VERSION', 'NamesObservation', 'ProbeFinding', 'PropositionCandidate',
+    'PropositionHandle', 'ResolverIssue', 'SceneCandidate', 'SceneHandle',
     'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_CHAPTERS_WIRE_PROTOCOL',
-    'STAGE2_OBSERVATION_PROTOCOL', 'SceneHandle',
-    'StateHandle', 'expand_chapter_wire', 'first_appearance_anchors',
+    'STAGE2_OBSERVATION_PROTOCOL',
+    'expand_chapter_wire', 'first_appearance_anchors',
     'first_appearance_issues', 'slim_chapter_wire',
-    'associate_observation_prompt', 'associate_patch_locate', 'book_observation_prompt',
-    'book_patch_locate', 'book_state_handle', 'chapter_observation_prompt', 'chapter_prior_text',
-    'chapter_state_handle', 'character_core_view',
-    'compile_associate_observation',
+    'associate_candidates_prompt', 'associate_patch_locate', 'book_observation_prompt',
+    'associate_observation_issues', 'associate_unresolved_issues',
+    'book_patch_locate', 'chapter_observation_prompt', 'chapter_prior_text',
+    'character_core_view',
+    'compile_associate_observation', 'compile_cross_cause',
     'chapter_patch_locate', 'compile_book_observation', 'compile_chapter_observation', 'chapter_loop_issues',
-    'compile_name_structure', 'compile_source_truth', 'evidence_metrics',
+    'compile_name_structure', 'compile_source_truth', 'inspect_identity_associations', 'evidence_metrics',
     'normalize_name_observations', 'validate_name_resolutions',
-    'initial_snapshot',
-    'merge_name_structure', 'names_evidence_view', 'names_patch_locate',
-    'project_association_space',
-    'serialize_target', 'state_dimension_address',
-    'source_fold', 'surname_construction_probe', 'target_label',
+    'initial_snapshot', 'near_synonym_pair',
+    'compile_name_variants', 'derive_surface_forms', 'merge_name_structure',
+    'name_variant_candidates', 'name_variants_prompt',
+    'names_evidence_view', 'names_patch_locate',
+    'project_association_space', 'project_cause_candidates',
+    'project_identity_candidates',
+    'source_fold', 'surname_construction_probe',
+    'cross_cause_prompt',
 ]

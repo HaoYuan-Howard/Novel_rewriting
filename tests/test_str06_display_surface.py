@@ -60,8 +60,8 @@ def test_appellation_fallback_prefers_earliest_registered_pure_surface():
         'surface': '娘子', 'from_chapter': 1, 'until_chapter': None,
         'source_refs': ['e01_01']})
     data['name_structure']['people']['yun_niang']['surface_forms']['娘子'] = None
-    from contracts.schema.source import CharactersArtifactV4
-    amended = CharactersArtifactV4.model_validate(data)
+    from contracts.schema.source import CharactersArtifactV6
+    amended = CharactersArtifactV6.model_validate(data)
     assert appellation_fallback('yun_niang', amended.core_view().characters['yun_niang'],
                                 amended.name_structure) == '娘子'
     assert appellation_fallbacks(amended.core_view(), amended.name_structure) == {
@@ -216,6 +216,7 @@ def test_hook_concealed_characters_do_not_fall_back_but_others_do():
     from novel.stages.stage4.design import assemble_body_design
     from novel.stages.stage4.hook import assemble_hook_design, publish_graph
     from novel.stages.stage4.hook_context import compile_hook_context
+    from tests.factories import hook_wire_v2
     from tests.str06_expression_inputs import sample_narration, sample_requirements
     from tests.test_str06_hook import _body_wire, _hook_wire
     chars = _characters()
@@ -228,8 +229,8 @@ def test_hook_concealed_characters_do_not_fall_back_but_others_do():
 
     def build(concealed):
         hook, errors = assemble_hook_design(
-            _hook_wire(concealed=concealed, surface_releases=[
-                {'char_id': 'yun_niang', 'surfaces': ['苏芸娘']}]),
+            hook_wire_v2(_hook_wire(concealed=concealed, surface_releases=[
+                {'char_id': 'yun_niang', 'surfaces': ['苏芸娘']}])),
             body=body, known_char_ids=known, name_projection=chars.name_projection(),
             name_structure=chars.name_structure)
         assert hook is not None and not errors, errors

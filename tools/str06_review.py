@@ -22,6 +22,7 @@ from novel.stages.chain import (
     ChainContext, ExecutionProfile, NODE_RUNNERS, SYS, BODY_WRITER_SYSTEM, HOOK_WRITER_SYSTEM,
     _chapter_evidence, build_evidence, chapter_acceptance, derive_total_length_budget,
     load_stage1_chapters, str06_chat_request, freeze_execution_profile,
+    prepare_chapter_request,
 )
 from novel.stages.stage2 import (
     character_core_view, first_appearance_anchors, chapter_observation_prompt,
@@ -31,7 +32,7 @@ from novel.stages.common import (
     render_chapter_packet, render_hook_context, project_chapter_packet,
     validate_writer_materials, validate_hook_materials, material_identities,
 )
-from novel.stages.revisions import preview_owner_patch, validate_prose_wire
+from novel.stages.revisions import baseline_wire, preview_owner_patch, validate_prose_wire
 from novel.stages.review import dry_run_patch, character_literals
 from contracts.schema.hook import HookConstraints
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG
@@ -53,7 +54,7 @@ class _ReadOnlyRepository(Str06Repository):
     write_evidence_bytes = write
 
 
-def request_preview(repository, owner, source, profile):
+def request_preview(repository, owner, source, profile, *, upstream_wires=None):
     """捕获生产请求面；逐章入口绕过并发资源占用，只调用同一接受闸。"""
     budget = derive_total_length_budget(source.chapters)
     constraints = HookConstraints(target_chars=STR06_RUNTIME_CONFIG.hook_target_chars,
@@ -66,17 +67,28 @@ def request_preview(repository, owner, source, profile):
         if errors:
             raise ValueError(errors)
         local = _chapter_evidence(evidence, n)
-        prompt = chapter_observation_prompt(chapter=n, book=book, chapters=source.chapters, evidence=local)
-        validate = lambda w: chapter_acceptance(w, chapter=n, evidence_ids=frozenset(local),
-                                               character_slugs=frozenset(book.characters),
-                                               anchors=first_appearance_anchors(core))[1]
+        # 闭集须与生产同形（段 id→{chapter,text} 映射）：只传 id 的合成闭集
+        # 无文本可查，wire 的 basis 引文派生会全数误报 unknown_segment（2026-10-07
+        # ch04 收口实证），预检就此失去判别力。
+        prompt, acceptance = prepare_chapter_request(
+            repository, no=n, book=book, chapters=source.chapters, chapter_evidence=local,
+            anchors=first_appearance_anchors(core), fact_ids=frozenset(f.fact_id for f in book.facts))
+        validate = lambda w: acceptance(w)[1]
         capture = _Capture(prompt, validate, SYS, True, 0.3)
     elif owner.startswith('body_ch'):
         packet = project_chapter_packet(repository.read_model('stage4/ir/writer_book_ir.json'), int(owner[7:]))
         validate = lambda w: validate_prose_wire(w, chapter_prose_validator(packet))
         capture = _Capture(render_chapter_packet(packet), validate, BODY_WRITER_SYSTEM, False, 0.7)
     else:
-        def ask(_owner, prompt, validate):
+        def ask(_owner, prompt, validate, **_kwargs):
+            if _owner != owner:
+                wire = (upstream_wires or {}).get(_owner)
+                if wire is None:
+                    raise ValueError(f'{owner} 预检须显式提供本轮前置 {_owner} 候选')
+                errors = validate(wire)
+                if errors:
+                    raise ValueError(f'前置 {_owner} 候选未通过：{errors}')
+                return wire, None
             raise _Capture(prompt, validate, SYS, True, 0.3)
         def ask_text(_owner, prompt, _validate=None):
             context = repository.read_model('stage4/context/hook/hook.json')
@@ -149,8 +161,17 @@ def main(argv=None):
     patch.add_argument('--owner', required=True)
     patch.add_argument('--candidate', type=Path, required=True)
     patch.add_argument('--baseline-root', type=Path)
+    patch.add_argument('--baseline-request-sha256', help='显式已购基线；升版后按当前完整接受闸预检')
+    patch.add_argument('--upstream-associate-candidate', type=Path,
+                       help='cross_cause 预检的本轮已验身份候选；不采用旧盘面冒充')
     patch.add_argument('--reasoning-effort', choices=('low', 'high', 'max'), default=None)
     patch.add_argument('--request-profile', help='与被审阅请求相同的无密钥配置JSON；不授予新购权限')
+    upgrade = sub.add_parser('upgrade-hook', help='核验已购 v1 并无损换算 v2，完整免费预检')
+    upgrade.add_argument('--baseline-request-sha256', required=True)
+    upgrade.add_argument('--reasoning-effort', choices=('low', 'high', 'max'), default=None)
+    upgrade.add_argument('--request-profile')
+    upgrade.set_defaults(owner='hook_design', baseline_root=None,
+                         upstream_associate_candidate=None)
     args = parser.parse_args(argv)
     if not args.base:
         parser.error('NOVEL_OUTPUT／--base 未提供：没查')
@@ -178,20 +199,51 @@ def main(argv=None):
         request_profile = _request_profile_of(args, None)
         profile = freeze_execution_profile(cfg=load_config(), reasoning_effort=args.reasoning_effort or 'high',
             base=args.base, sid=root.name, request_profile=request_profile)
-        request, validate = request_preview(repo, args.owner, source, profile)
+        upstream = ({'associate': repo.read_external(args.upstream_associate_candidate)}
+                    if args.upstream_associate_candidate else {})
+        request, validate = request_preview(repo, args.owner, source, profile, upstream_wires=upstream)
         identity = digest({'owner': args.owner, 'provider': profile.provider, 'request': request.cache_payload()})
-        baseline = purchased_baseline((args.baseline_root or root).resolve(), args.owner, identity)
+        baseline_identity = args.baseline_request_sha256 or identity
+        baseline = purchased_baseline((args.baseline_root or root).resolve(), args.owner, baseline_identity)
         constraints = HookConstraints(target_chars=STR06_RUNTIME_CONFIG.hook_target_chars,
                                       hard_max_chars=STR06_RUNTIME_CONFIG.hook_hard_max_chars)
-        result = preview_owner_patch(owner=args.owner, identity=identity,
-            candidate=repo.read_external(args.candidate), baseline=baseline, validate=validate,
+        if args.command == 'upgrade-hook':
+            from novel.stages.stage4 import upgrade_purchased_hook_wire
+            candidate = upgrade_purchased_hook_wire(
+                baseline_wire(args.owner, baseline['content']),
+                repo.read_model('stage4/design/body_design.json'))
+        else:
+            candidate = repo.read_external(args.candidate)
+        result = preview_owner_patch(owner=args.owner, identity=baseline_identity,
+            candidate=candidate, baseline=baseline, validate=validate,
             character_literals=character_literals(repo),
             dry_run=lambda w: dry_run_patch(repo, args.owner, w, evidence=build_evidence(source.chapters, source.hook_copy),
                 budget=derive_total_length_budget(source.chapters), hook_constraints=constraints, chapter_count=len(source.chapters),
-                source_texts=tuple(c['text'] for c in source.chapters), book_title=paths.title_of(root)))
+                source_texts=tuple(c['text'] for c in source.chapters), book_title=paths.title_of(root),
+                associate_candidate=upstream.get('associate')))
+        result['applies_to_request_sha256'] = identity
+        if args.command == 'upgrade-hook':
+            result['candidate'] = candidate
+            result['patch_note'] = {
+                'base_response_identity': baseline_identity,
+                'applies_to_request_sha256': identity,
+                'reason': '用户批准 Hook v2：已购 v1 的位置与地址无损换算为目录引用，按现役完整判据免费复验'}
+            result['new_paid_calls'] = 0
     text = json.dumps(result, ensure_ascii=False, indent=2)
     if args.save:
         Str06Repository(root).write_text(f'runtime/review/{args.command}.json', text)
+        if args.command == 'upgrade-hook':
+            downstream = result['downstream']
+            if result['owner_errors'] or downstream.get('status') != 'ran' or downstream.get('errors'):
+                raise ValueError('Hook 换算预检未通过，保留报告但不导出采用材料')
+            for name, payload in (('hook_design_wire', result['candidate']),
+                                  ('hook_design_patch_note', result['patch_note'])):
+                Str06Repository(root).write_text(f'runtime/review/hook_v2_upgrade/{name}.json',
+                                                json.dumps(payload, ensure_ascii=False, indent=2))
+            print(json.dumps({'owner_errors': [], 'downstream': downstream,
+                              'wire_dir': str(root / 'runtime/review/hook_v2_upgrade'),
+                              'applies_to_request_sha256': identity, 'new_paid_calls': 0},
+                             ensure_ascii=False, indent=2))
     else:
         print(text)
     return 0

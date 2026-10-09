@@ -5,12 +5,18 @@ from pydantic import ValidationError
 
 from contracts.schema.grounding import OutputConstraints
 from contracts.schema.hook import HookConstraints
-from contracts.schema.observation import BookObservation, NamesObservation, STAGE2_NAMES_PROTOCOL
+from contracts.schema.observation import (
+    AssociateObservation, NamesObservation, STAGE2_NAMES_PROTOCOL,
+)
+from contracts.schema.source import SourceNameResolution
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG, STAGE4_PRESERVE_POLICY_VERSION
 from novel.stages.stage2 import (
-    character_core_view, compile_associate_observation, compile_chapter_observation,
-    compile_name_structure, compile_source_truth, project_association_space,
-    normalize_name_observations, validate_name_resolutions,
+    associate_observation_issues, character_core_view, compile_book_observation,
+    compile_chapter_observation, compile_cross_cause, compile_name_structure,
+    compile_name_variants, compile_source_truth, inspect_identity_associations,
+    name_variant_candidates,
+    normalize_name_observations, project_association_space, project_cause_candidates,
+    validate_name_resolutions,
 )
 from novel.stages.stage4 import (
     assemble_preserve, assemble_hook_design,
@@ -28,6 +34,7 @@ from novel.stages.common import (
     chapter_identities, project_chapter_packet, validate_writer_materials, validate_hook_materials,
     material_identities,
 )
+from novel.stages.stage4 import preserve_name_issues
 
 
 def character_literals(repository) -> dict[str, tuple[str, ...]]:
@@ -43,11 +50,17 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                   hook_constraints: HookConstraints, chapter_count: int,
                   source_texts: tuple[str, ...] | None = None, book_title: str = '',
                   length_band: tuple[float, float] = (
-                      STR06_RUNTIME_CONFIG.length_band_low, STR06_RUNTIME_CONFIG.length_band_high)) -> dict:
+                      STR06_RUNTIME_CONFIG.length_band_low, STR06_RUNTIME_CONFIG.length_band_high),
+                  associate_candidate: dict | None = None) -> dict:
     """最近确定性入口的真实干跑；候选正文的拟定回执不落盘、不授予接受状态。"""
     try:
-        if owner in {'book', 'names', 'associate'} or owner.startswith('ch'):
-            book = BookObservation.model_validate(candidate) if owner == 'book' else repository.read_model('stage2/observations/book.json')
+        if owner in {'book', 'names', 'name_variants', 'associate', 'cross_cause'} or owner.startswith('ch'):
+            if owner == 'book':
+                book, errors = compile_book_observation(candidate, evidence=evidence)
+                if errors:
+                    return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
+            else:
+                book = repository.read_model('stage2/observations/book.json')
             core, errors = character_core_view(book, evidence=evidence)
             if errors:
                 return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
@@ -55,9 +68,10 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
             for n in range(1, chapter_count + 1):
                 if owner == f'ch{n:02d}':
                     chapters[n], errors = compile_chapter_observation(
-                        candidate, chapter=n, evidence_ids=[k for k, v in evidence.items()
-                                                          if v['chapter'] == n or n == 1 and v['chapter'] == 0],
-                        character_slugs=book.characters)
+                        candidate, chapter=n, evidence_ids={k: v for k, v in evidence.items()
+                                                           if v['chapter'] == n or n == 1 and v['chapter'] == 0},
+                        character_slugs=book.characters,
+                        fact_ids=(fact.fact_id for fact in book.facts))
                     if errors:
                         return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
                 else:
@@ -66,19 +80,61 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                 structure, errors = compile_name_structure(candidate, core, '\n'.join(v['text'] for v in evidence.values()), evidence=evidence)
                 if errors:
                     return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
+                # 主结构 wire 已不携带变体判定：保留已购判定，再按当前候选完整
+                # 复验；新候选缺判定不能默认 not_name，缺正式上游由 not_run 报告。
+                current_names = repository.read_model('stage2/observations/names.json')
+                structure = structure.model_copy(update={
+                    'resolutions': current_names.structure.resolutions})
+                names = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL, structure=structure)
+            elif owner == 'name_variants':
+                current_names = repository.read_model('stage2/observations/names.json')
+                structure = current_names.structure
+                derived, located = compile_name_variants(
+                    candidate, name_variant_candidates(structure, core, evidence),
+                    evidence=evidence, characters=core)
+                if located:
+                    return {'node': 'str06.stage2.compile', 'status': 'ran',
+                            'errors': [message for _path, message in located]}
+                assert derived is not None
+                structure = structure.model_copy(update={'resolutions': tuple(
+                    SourceNameResolution.model_validate(item) for item in derived)})
                 names = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL, structure=structure)
             else:
                 names = repository.read_model('stage2/observations/names.json')
-            if owner == 'associate':
+            if owner in {'names', 'name_variants', 'cross_cause'}:
                 errors = validate_name_resolutions(names.structure, core, evidence=evidence)
-                errors.extend(f'名称同一性未决：{r.literal}' for r in names.structure.resolutions
-                              if r.status == 'unresolved')
                 if errors:
                     return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
-                book, chapters = normalize_name_observations(book, chapters, names.structure)
-                associate, errors = compile_associate_observation(candidate, project_association_space(book, chapters))
+            if owner == 'associate':
+                # owner patch 的主调用原 wire 只有身份答案，因果窄任务尚未执行。
+                # 只返回完整身份诊断，不把未购买/未组装的 cause 当缺项，也不
+                # 暗示最终 canonical 已通过；相位由调用 owner 决定，不猜字段。
+                associate = AssociateObservation.model_validate(candidate)
+                errors, undecided = inspect_identity_associations(
+                    book=book, chapters=chapters, names=names, associate=associate,
+                    evidence=evidence, source_texts=source_texts)
+                return {'node': 'str06.stage2.compile', 'status': 'ran',
+                        'association_phase': 'identity', 'final_status': 'not_run',
+                        'errors': errors, 'undecided': undecided}
+            elif owner == 'cross_cause':
+                current_associate = (AssociateObservation.model_validate(associate_candidate)
+                                     if associate_candidate is not None else
+                                     repository.read_model('stage2/observations/associate.json'))
+                identity = current_associate.model_copy(update={'cross_chapter_cause': ()})
+                try:
+                    book, chapters = normalize_name_observations(book, chapters, names.structure)
+                except ValueError as exc:
+                    return {'node': 'str06.stage2.compile', 'status': 'ran',
+                            'errors': [f'名称局部归一未闭合：{exc}']}
+                space = project_association_space(book, chapters)
+                errors = associate_observation_issues(
+                    identity, space, book, chapters, phase='identity')
+                if not errors:
+                    causes, errors = compile_cross_cause(
+                        candidate, project_cause_candidates(space, chapters, book, identity))
                 if errors:
                     return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
+                associate = identity.model_copy(update={'cross_chapter_cause': causes})
             else:
                 associate = repository.read_model('stage2/observations/associate.json')
             result = compile_source_truth(book=book, chapters=chapters, names=names,
@@ -89,6 +145,24 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         if owner == 'naming' or owner == 'hook_writer' or owner.startswith('body_ch'):
             return _delivery_preview(repository, owner, candidate, chars)
         projection = chars.name_projection()
+        if owner == 'preserve':
+            blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+            checkpoint, errors = assemble_preserve(
+                candidate, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,
+                characters=chars.core_view(), blueprint=blueprint,
+                provider='preview', model='preview', request_sha256='0' * 64)
+            errors = list(errors) + preserve_name_issues(checkpoint, chars, blueprint)
+            conflicts = candidate.get('evidence_conflicts', []) if isinstance(candidate, dict) else []
+            if checkpoint is not None and not errors:
+                project_brief(checkpoint, chars.core_view(), blueprint,
+                              structure=chars.name_structure)
+            # 新候选的义务集合与身份可能变化，旧 Binding 不得 model_copy 冒充
+            # 重新承载；接受 Preserve 后由正式 Design 恢复入口重建。
+            return {'node': 'str06.stage4.preserve', 'status': 'ran', 'errors': errors,
+                    'evidence_conflicts': conflicts,
+                    'publishable': checkpoint is not None and not errors and not conflicts,
+                    'downstream': {'node': 'str06.stage4.body_design', 'status': 'not_run',
+                                   'reason': '须依据新 Brief 重新验证正式 Design 候选'}}
         checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
         errors = []
         # Brief 是确定性派生；免费预览从正式 checkpoint 重建，旧 Brief 缺认知
@@ -103,18 +177,7 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                                    length_band=length_band, book_title=book_title)
         binding = repository.read_model('stage4/grounding/semantic_binding.json')
         body = repository.read_model('stage4/design/body_design.json')
-        graph = repository.read_model('stage4/design/presentation_graph.json')
-        if owner == 'preserve':
-            checkpoint, errors = assemble_preserve(
-                candidate, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,
-                characters=chars.core_view(), blueprint=repository.read_model('stage2/blueprints/chapter_blueprints.json'),
-                provider='preview', model='preview', request_sha256='0' * 64)
-            if checkpoint is not None:
-                brief, _ = project_brief(checkpoint, chars.core_view(),
-                                          repository.read_model('stage2/blueprints/chapter_blueprints.json'),
-                                          structure=chars.name_structure)
-                binding = binding.model_copy(update={'obligations': checkpoint.obligations})
-        elif owner == 'hook_design':
+        if owner == 'hook_design':
             hook, errors = assemble_hook_design(candidate, body=body, known_char_ids=set(chars.characters),
                                                 name_projection=projection, name_structure=chars.name_structure)
             if hook is not None:

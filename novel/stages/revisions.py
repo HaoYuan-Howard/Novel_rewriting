@@ -135,6 +135,21 @@ def baseline_wire(owner: str, content: str) -> Any:
     return json.loads(content)
 
 
+def owner_patch_identity(owner: str, note: dict, current_identity: str) -> tuple[str, str]:
+    """显式补丁双身份：已购基线与当前应用请求分别绑定，禁止隐式跨身份。"""
+    baseline = note.get('base_response_identity')
+    reason = note.get('reason')
+    if not isinstance(baseline, str) or re.fullmatch(r'[0-9a-f]{64}', baseline) is None:
+        raise revision_error(owner, 'owner patch 必须给出已购基线请求摘要')
+    applies = note.get('applies_to_request_sha256', baseline)
+    if applies != current_identity:
+        raise revision_error(owner, f'{owner} owner patch 应用身份与当前请求不一致，'
+                             f'登记={applies}，当前={current_identity}，拒绝采用')
+    if not isinstance(reason, str) or not reason.strip():
+        raise revision_error(owner, 'owner patch 必须登记非空修订理由')
+    return baseline, reason
+
+
 def preview_owner_patch(*, owner: str, identity: str, candidate: Any,
                         baseline: dict, validate: Callable, dry_run: Callable,
                         character_literals: dict[str, tuple[str, ...]] | None = None) -> dict:
@@ -208,14 +223,15 @@ def stage_revision(repository, *, owner: str, identity: str, baseline: dict,
         candidate_sha256=candidate_sha, evidence_rel=evidence_rel,
         diff_sha256=preview['diff_sha256'], reason=reason, sequence=sequence,
         product_rel=product_rel, before_product_sha256=before_product_sha,
-        # V2：owner_patch／resample 的应用身份即基线身份；carried_forward 显式给
-        # 当前请求身份（免费沿用的采用凭证，RC-54/56）。
+        # V2：默认同基线；rc22 的显式 owner_patch 与 carried_forward 可分别
+        # 绑定当前请求身份，不能在幂等复用时丢失这项绑定。
         applies_to_request_sha256=applies_to_request_sha256 or identity,
         status='staged', created_at=int(time.time()))
     rel = f'runtime/revisions/active/{owner}.json'
     previous = verified_previous_revision(repository, owner)
     if previous is not None:
         if (previous.kind == kind and previous.baseline_request_sha256 == identity
+                and previous.applies_to_request_sha256 == record.applies_to_request_sha256
                 and previous.sequence == sequence and previous.candidate_sha256 == candidate_sha
                 and previous.diff_sha256 == record.diff_sha256):
             replay = previous.model_copy(update={'status': 'staged',
@@ -295,7 +311,7 @@ def registered_owner_patch(repository, owner: str, identity: str) -> bool:
     """
     record = _revision_record(repository, owner, f'runtime/revisions/active/{owner}.json')
     return (record is not None and record.kind == 'owner_patch'
-            and record.baseline_request_sha256 == identity)
+            and identity in (record.applies_to_request_sha256, record.baseline_request_sha256))
 
 
 def adopted_patch(repository, owner: str, identity: str, validate: Callable):
@@ -304,7 +320,8 @@ def adopted_patch(repository, owner: str, identity: str, validate: Callable):
     record = _revision_record(repository, owner, rel)
     if record is None:
         return None
-    if record.kind != 'owner_patch' or record.baseline_request_sha256 != identity:
+    if (record.kind != 'owner_patch'
+            or identity not in (record.applies_to_request_sha256, record.baseline_request_sha256)):
         return None
     if record.product_rel != owner_product_rel(owner) or record.node != semantic_owner_unit(owner)[0]:
         raise revision_error(owner, '补丁所属节点或产物登记损坏')
@@ -312,13 +329,19 @@ def adopted_patch(repository, owner: str, identity: str, validate: Callable):
     raw = repository.path(record.evidence_rel).read_bytes()
     if hashlib.sha256(raw).hexdigest() != record.candidate_sha256:
         raise revision_error(owner, '补丁原字节证据损坏')
-    baseline = purchased_baseline(Path(record.baseline_source_root), owner, identity)
+    baseline = purchased_baseline(Path(record.baseline_source_root), owner,
+                                  record.baseline_request_sha256)
     if baseline['response_sha256'] != record.baseline_response_sha256:
         raise revision_error(owner, '补丁已购基线响应漂移')
     data = repository.read_external(repository.path(record.evidence_rel))
     errors = validate(data)
     if errors:
         raise revision_error(owner, f'已登记补丁在当前校验下不通过：{errors}')
+    if record.applies_to_request_sha256 != identity:
+        # 回派关闭后恢复普通基线请求：该身份仍是同一已购基线，不能用原稿
+        # 覆盖完整验收过的补丁。只允许这一对已绑定身份，不接受任意新输入。
+        repository.write(f'runtime/revisions/history/{owner}/{digest(record.model_dump())}.json', record)
+        record = record.model_copy(update={'applies_to_request_sha256': identity})
     repository.write(rel, record.model_copy(update={'status': 'staged'}))
     return data, record, baseline
 
@@ -328,7 +351,7 @@ def _sealed_revision_product_sha(repository, record) -> str | None:
     for _path, bundle in reversed(sealed_commit_bundles(repository.root)):
         if (bundle.node != record.node or bundle.created_at < record.created_at
                 or not any(ref.owner == record.owner
-                           and ref.request_sha256 == record.baseline_request_sha256
+                           and ref.request_sha256 == record.applies_to_request_sha256
                            and (ref.patch or {}).get('candidate_sha256') == record.candidate_sha256
                            for ref in bundle.adoptions)):
             continue
@@ -351,11 +374,12 @@ def _verify_current_product(repository, record) -> None:
     raise revision_error(record.owner, '修订后正式产物再次变化，拒绝用补丁自动覆盖')
 
 
-def activate_node_revisions(repository, node: str) -> None:
+def activate_node_revisions(repository, node: str, *, owners: tuple[str, ...] | None = None) -> None:
     directory = repository.root / 'runtime/revisions/active'
     for path in sorted(directory.glob('*.json')):
         record = owner_revision_record_of_payload(repository.read_external(path))
-        if record.node != node or record.status != 'staged':
+        if (record.node != node or record.status != 'staged'
+                or (owners is not None and record.owner not in owners)):
             continue
         if repository.file_sha256(repository.path(record.evidence_rel)) != record.candidate_sha256:
             raise revision_error(record.owner, '修订证据摘要不符，不能激活恢复级联')

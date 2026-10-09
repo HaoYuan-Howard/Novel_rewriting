@@ -63,17 +63,20 @@ def test_rc18_close_before_local_open_rejected_and_located(same_beat):
     wire = _chapter_v3(wires['ch01'], 1)
     opened = deepcopy(wire['beats'][0]['loops'][0])
     closed = deepcopy(wires['ch02']['beats'][0]['loops'][0])
+    # v8 起两拍需要两个不同的 start：给章 1 的闭集补一段合成段。
+    evidence = {**build_evidence(_chapters()),
+                'e01_02': {'chapter': 1, 'text': '芸娘回房歇下。'}}
     if same_beat:
         wire['beats'][0]['loops'] = [closed, opened]
     else:
         later = deepcopy(wire['beats'][0])
         later.pop('new_scene', None)
-        later.pop('state', None)
+        later.pop('change', None)
         later.pop('know', None)
+        later['start'] = 'e01_02'
         wire['beats'][0]['loops'] = [closed]
         wire['beats'].append(later)
     original = deepcopy(wire)
-    evidence = build_evidence(_chapters())
     observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
     assert observation is None and errors
     issue, = errors
@@ -291,20 +294,29 @@ def test_rc20_real_associate_issues_shrink_and_replay_free(tmp_path):
     wires['ch02']['beats'][0]['loops'].append(
         {'ref': 'q_other', 'op': 'close', 'resolution': '旧约在今晚兑现。'})
     a = wires['associate']['loop_pairing'][0]
-    b = {'open': 'ch01.q_other', 'close': 'ch02.q_other'}
+    # v4：两组 open×close ⇒ 四个 loop 候选，逐候选恰答一次（错配判 distinct）。
+    full = [a, {'open': 'ch01.q_other', 'close': 'ch02.q_other', 'verdict': 'pair'},
+            {'open': 'ch01.q_yu', 'close': 'ch02.q_other', 'verdict': 'distinct'},
+            {'open': 'ch01.q_other', 'close': 'ch02.q_yu', 'verdict': 'distinct'}]
     candidates = []
-    for pairs in ([], [a], [a, b]):
+    for pairs in ([], [a], full):
         candidate = deepcopy(wires['associate'])
         candidate['loop_pairing'] = pairs
         candidates.append(candidate)
+    # 第 4 通＝因果窄调用（两组 loop 配对同拍，去重后恰一候选，默认否决）。
+    cross_cause = {'protocol_version': 'stage2-cross-cause-v1',
+                   'causes': [{'from_beat': 'ch01.b1', 'to_beat': 'ch02.b1',
+                               'kind': 'none'}]}
     _, repo, session, _, ctx = _prepared(tmp_path, wires=wires, before_associate=True)
-    transport = _ScriptedTransport([json.dumps(w) for w in candidates])
+    transport = _ScriptedTransport([json.dumps(w) for w in candidates]
+                                   + [json.dumps(cross_cause)])
     session.transport = transport
     run_node('str06.stage2.associate', ctx)
-    assert len(repo.read_model('stage2/observations/associate.json').loop_pairing) == 2
-    assert len(transport.calls) == 3
+    saved = repo.read_model('stage2/observations/associate.json').loop_pairing
+    assert sum(1 for row in saved if row.verdict == 'pair') == 2
+    assert len(transport.calls) == 4
     run_node('str06.stage2.associate', ctx)
-    assert len(transport.calls) == 3
+    assert len(transport.calls) == 4
     run_node('str06.stage2.compile', ctx)
     assert len(repo.read_model('stage2/blueprints/chapter_blueprints.json').chapters) == 2
 
@@ -461,7 +473,7 @@ def test_rc19_legacy_wrong_owner_correction_keeps_history_and_cost(tmp_path, cap
 
 
 @pytest.mark.parametrize('owner,expected', [
-    ('ch02', '纠正本章错误观察'), ('associate', '只能纠正本单位配对选择'),
+    ('ch02', '纠正本章错误观察'), ('associate', '只能纠正本单位逐候选判定'),
     ('design', '完整义务'), ('hook_design', '命题含义'), ('body_ch02', '写作材料')])
 def test_rc21_owner_permissions_reach_full_and_patch_requests(owner, expected):
     from novel.stages.common import semantic_revision_rules

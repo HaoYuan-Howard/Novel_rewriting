@@ -57,6 +57,7 @@ from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure
 from novel.core.validation import ValidationIssue
 from novel.stages.stage4.design_paths import design_issue
+from novel.stages.stage4.series import summary_order_violations
 from novel.stages.stage4.fact_bindings import (
     fact_binding_errors, fact_lock_carrier_errors, fact_lock_subject_errors,
 )
@@ -65,6 +66,7 @@ from novel.stages.stage4.read_closure import confirmation_closure_errors, resolv
 from novel.stages.stage4.materials import validate_design_materials
 from novel.stages.stage4.slim import (
     FactLockMark, design_fact_marks, design_placements, expand_design_wire,
+    design_wire_model, DESIGN_READ_PROTOCOLS,
     knowledge_change_index,
 )
 
@@ -357,10 +359,10 @@ def _wire_model_errors(exc: Exception) -> list[str]:
 
 
 def _wire_shape_issues(exc: Exception, prefix: str) -> list:
-    """v8 瘦 wire 的 pydantic 错误：位置 `loc` 本身就是 wire 路径（局部修订的编辑范围）。
+    """v9 瘦 wire 的 pydantic 错误：位置 `loc` 本身就是 wire 路径（局部修订的编辑范围）。
 
     与 `_wire_model_errors` 同一套去噪（子项已报错的容器级 too_short 不单列），文案一致，
-    只是每条问题多带规则码与路径。仅用于直接校验 v8 wire 的那一次——中间 v5 形状的
+    只是每条问题多带规则码与路径。仅用于直接校验 v9 wire 的那一次——中间 v5 形状的
     错误位置不是 wire 路径，仍走 `_wire_model_errors`。
     """
     entries = [(tuple(err.get('loc') or ()), str(err.get('type') or ''), err.get('msg'))
@@ -399,7 +401,7 @@ def _check_expression_refs(body: BodyDesign, expression_requirements,
                            errors: list[str], *, locatable: bool = False) -> None:
     """a4：拍的 expression_refs 闭集——只能引用 Brief.expression 的 ex_id，
     narration 是书级机制不上拍（正向表达任务落具体拍；书级表达只写机制）。
-    `locatable`＝输入是 v8 wire：按画面序下标给出 `ex` 的 wire 路径。"""
+    `locatable`＝输入是 v9 wire：按画面序下标给出 `ex` 的 wire 路径。"""
     kinds = {item.ex_id: item.kind for item in expression_requirements}
     for scene_i, scene in enumerate(body.scenes):
         for beat_j, beat in enumerate(scene.beats):
@@ -416,6 +418,28 @@ def _check_expression_refs(body: BodyDesign, expression_requirements,
                         f'{scene.scene_id}#{beat.beat_id} 的 expression_refs 引用'
                         f'narration（{ex_id}）——书级表达只写机制，不上具体拍',
                         code='design_expression_ref', location=(*where, ex_id), paths=paths))
+
+
+def _check_detail_refs(body: BodyDesign, brief: ReconstructionBrief | None,
+                       errors: list[str], *, locatable: bool) -> None:
+    """canonical 细节引用也须来自正式 Brief；内部 v5／恢复面不能绕过闭集。"""
+    known = {detail.detail_id for requirement in brief.requirements
+             for detail in requirement.details} if brief is not None else set()
+    for scene_i, scene in enumerate(body.scenes):
+        for beat_i, beat in enumerate(scene.beats):
+            seen: set[str] = set()
+            for detail_id in beat.detail_refs:
+                duplicate = detail_id in seen
+                seen.add(detail_id)
+                if detail_id in known and not duplicate:
+                    continue
+                where = ('scenes', scene_i, 'beats', beat_i, 'details')
+                errors.append(design_issue(
+                    (f'{scene.scene_id}#{beat.beat_id} 重复引用细节 {detail_id}'
+                     if duplicate else f'{scene.scene_id}#{beat.beat_id} 的细节引用 '
+                     f'{detail_id} 不在正式 Brief 细节闭集内'), code='design_detail_ref',
+                    location=('detail_ref', scene.scene_id, beat.beat_id, detail_id),
+                    paths=(where,) if locatable else ()))
 
 
 _TEMPORAL_LOCKS = ('planned', 'expected', 'conditional')
@@ -480,13 +504,13 @@ def _check_fact_marks(marks: tuple[FactLockMark, ...], fact_locks: Mapping[str, 
 
 
 def _check_requires_released(body: BodyDesign, obligations: Mapping[str, Any],
-                             errors: list[str], *, v8_wire: dict | None = None) -> None:
+                             errors: list[str], *, v9_wire: dict | None = None) -> None:
     """必保揭名闸（CS-H H3，RC-61）：带 `requires_released` 的 know 所在拍
     必须**已释放**所列称谓——含本拍释放（本拍正式介绍之后同拍可用），拍前不可用。
 
     违例带 know 行 wire 路径（locate：挪 know 拍位或提前释放）；这类称谓不投影
     （释放即字面送达）。离线 v5 输入没有 know 行身份（与事实锁候选同尺），本闸
-    只在现役 v8 wire 上运行。
+    只在现役 v9 wire 上运行。
     """
     required = {ref: change.requires_released
                 for ref, (_ob, change) in knowledge_change_index(obligations).items()
@@ -495,7 +519,7 @@ def _check_requires_released(body: BodyDesign, obligations: Mapping[str, Any],
         return
     from novel.stages.common import ReleasePrefixes
     prefixes = ReleasePrefixes(body)
-    scenes = v8_wire.get('scenes') if isinstance(v8_wire, dict) else None
+    scenes = v9_wire.get('scenes') if isinstance(v9_wire, dict) else None
     for scene_i, scene in enumerate(body.scenes):
         for beat_i, beat in enumerate(scene.beats):
             rows = (scenes[scene_i]['beats'][beat_i].get('know')
@@ -517,7 +541,40 @@ def _check_requires_released(body: BodyDesign, obligations: Mapping[str, Any],
                         '拍前不可用）；挪 know 拍位到释放之后，或提前释放',
                         code='design_requires_released',
                         location=('requires_released', row['ref'], tuple(missing)),
-                        paths=(where,) if v8_wire is not None else ()))
+                        paths=(where,) if v9_wire is not None else ()))
+
+
+def _check_series_summary_order(
+    obligations: Mapping[str, Any], real_sites: Mapping[str, list[tuple[int, int]]],
+    errors: list[str],
+) -> None:
+    """显式 covers 仅约束目标概括位置，实例间顺序与原文章场对应仍可重设计。
+
+    接受拍与 Binding 派生同尺：每条义务最后一次 real 标注。问题同时带概括
+    与实例的真实 wire 拍路径，允许 owner 改任一侧，不退整份重生。
+    """
+    ob_of = {req.core_id: ob for ob, req in obligations.items()}
+    covers = {ob: tuple(ob_of[core] for core in req.summarizes_cores)
+              for ob, req in obligations.items() if req.summarizes_cores}
+    accepted = {ob: sites[-1] for ob, sites in real_sites.items() if sites}
+    for violation in summary_order_violations(covers, accepted):
+        paths = tuple(('scenes', scene, 'beats', beat)
+                      for ob in (violation.summary, violation.instance)
+                      if (site := accepted.get(ob)) is not None
+                      for scene, beat in (site,)) if violation.reason == 'early' else ()
+        reason = ('未承载' if violation.reason == 'unbound' else '晚于概括接受拍')
+        if violation.reason == 'unbound':
+            code = 'series_summary_unbound'
+        else:
+            code = 'series_summary_early'
+        errors.append(design_issue(
+            f'系列概括 {violation.summary} 所覆盖的实例 {violation.instance} {reason}；'
+            '概括只能回顾已安排实例，允许同拍完成，不按原文顺序限制重设计',
+            code=code,
+            location=('series_summary', violation.summary, violation.instance,
+                      violation.reason), paths=paths,
+            context={'summary': violation.summary, 'instance': violation.instance,
+                     'reason': violation.reason}))
 
 
 def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
@@ -536,7 +593,7 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
       原文未回答锁是禁区、不承载状态；kf 句柄作状态键一律拒；
     · 必保义务的知情/时态锁须被对应键/标注兑现（knowledge_changes/realize_locks）。
     位置顺序（知情升级/确认不早于授权承载位）归 a5 的 compile Guard，不在此。
-    `marks` 来自 v8 wire（`design_fact_marks`）；无 wire 的直接 v5 输入没有标注通道，
+    `marks` 来自 v9 wire（`design_fact_marks`）；无 wire 的直接 v5 输入没有标注通道，
     必保事实锁因此恒未兑现——v5 只是内部中间形状，生产链不直接收它。
     """
     propositions = {p.kp_id: p for p in brief.propositions}
@@ -555,7 +612,7 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                 for delta_i, delta in enumerate(beat.target_delta))
 
     def _delta_paths(site: tuple[int, int, int] | None) -> tuple[tuple[str | int, ...], ...]:
-        """canonical 增量下标 → 可编辑 wire 路径（生产 v8 输入由调用方定位器给）。"""
+        """canonical 增量下标 → 可编辑 wire 路径（生产 v9 输入由调用方定位器给）。"""
         if site is not None and delta_locate is not None:
             path = delta_locate(*site)
             if path is not None:
@@ -591,7 +648,7 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
         elif key.startswith('kf_'):
             errors.append(design_issue(
                 f'{where} 的状态键 {key} 是事实锁句柄：kf 句柄不是状态键，'
-                '事实锁在已选状态上用 lock 标注（stage4-design-v8）',
+                '事实锁在已选状态上用 lock 标注（stage4-design-v9）',
                 code='design_kf_state_key',
                 location=(where, key),
                 paths=_delta_paths(site)))
@@ -669,7 +726,7 @@ def inspect_body_design(
     obligations: Mapping[str, Any] | None = None,
     characters: 'CharactersCore | None' = None,
 ) -> tuple[BodyDesign | None, list[str]]:
-    """Design wire（stage4-design-v5／v8）→ canonical BodyDesign。
+    """Design wire（stage4-design-v5／v9）→ canonical BodyDesign。
 
     纯函数：不落盘、不调 LLM、不改输入 wire（deepcopy 后组装）。**一次校验、
     合并报告**（R8b）：wire 形状由 pydantic 模型族一次判，逐字段错误按位置
@@ -681,24 +738,24 @@ def inspect_body_design(
     expression_refs 闭集，`_check_lock_acceptance`）；生产链
     （`chain.run_body_design`）恒传入——缺省 None 仅供不持 Brief 的离线
     工具，跳过的是锁面，不是全书校验。
-    CS-3（2026-10-03）：wire 按协议字面量路由——瘦面（stage4-design-v8）
+    CS-3（2026-10-03）：wire 按协议字面量路由——瘦面（stage4-design-v9）
     先经 `expand_design_wire` 派生成 v5 形状再进同一管道（obligations＝
     ob 编号→需求映射，v6 必传：real 标注闭集与知情行展开依赖它）；另加
     必保义务的 real 标注覆盖闸（未标注的 must 需求当场拦下——承载位是
     v6 的新语义面，漏标即缺承载）。
     """
     from contracts.schema.design import (
-        DesignWireV5, DesignWireV8, STAGE4_DESIGN_WIRE_PROTOCOL,
+        DesignWireV5, DesignWireV9, STAGE4_DESIGN_WIRE_PROTOCOL,
     )
 
     errors: list[str] = []
     coverage_errors: list[str] = []
     marks: tuple[FactLockMark, ...] = ()
     real_sites: dict[str, list[tuple[int, int]]] = {}
-    # 只有直接来自 v8 wire 的候选，下标才是 wire 路径（局部修订的编辑范围）；
+    # 只有直接来自 v9 wire 的候选，下标才是 wire 路径（局部修订的编辑范围）；
     # 直接给 v5 中间形状的离线输入没有对应的可编辑 wire，问题不带路径。
-    locatable = wire.get('protocol_version') == STAGE4_DESIGN_WIRE_PROTOCOL
-    v8_wire = wire
+    locatable = wire.get('protocol_version') in DESIGN_READ_PROTOCOLS
+    v9_wire = wire
     if locatable:
         try:
             expanded, expand_issues = expand_design_wire(
@@ -711,9 +768,9 @@ def inspect_body_design(
                                        paths=(tuple(path),) if path else ())
                           for path, message in expand_issues]
         assert expanded is not None
-        # 标注与承载位只在 v8 wire 上存在（不进中间 v5 形状与 BodyDesign）；
+        # 标注与承载位只在 v9 wire 上存在（不进中间 v5 形状与 BodyDesign）；
         # expand 已通过同一份模型校验。
-        wire_model = DesignWireV8.model_validate(wire)
+        wire_model = design_wire_model(wire, brief)
         marks = design_fact_marks(wire_model)
         real_sites = design_placements(wire_model)
         if obligations is not None:
@@ -790,7 +847,7 @@ def inspect_body_design(
     errors.extend(coverage_errors)
 
     def issue(message: str, code: str, location: tuple, *paths: tuple):
-        """带规则码与可编辑 wire 路径的问题；非 v8 候选没有可局部修订的位置。"""
+        """带规则码与可编辑 wire 路径的问题；非 v9 候选没有可局部修订的位置。"""
         return design_issue(message, code=code, location=location,
                             paths=paths if locatable else ())
 
@@ -801,7 +858,7 @@ def inspect_body_design(
     def delta_path(scene_i: int, beat_j: int, delta_i: int):
         """canonical 拍增量序 → 产生它的 wire 行：state 行在前、know 行在后（展开顺序）。"""
         try:
-            rows = v8_wire['scenes'][scene_i]['beats'][beat_j].get('state') or []
+            rows = v9_wire['scenes'][scene_i]['beats'][beat_j].get('state') or []
         except (KeyError, IndexError, TypeError):
             return None
         if delta_i < len(rows):
@@ -809,7 +866,7 @@ def inspect_body_design(
         return ('scenes', scene_i, 'beats', beat_j, 'know')
 
     def listed(key: str) -> list:
-        value = v8_wire.get(key) if isinstance(v8_wire, dict) else None
+        value = v9_wire.get(key) if isinstance(v9_wire, dict) else None
         return value if isinstance(value, list) else []
 
     def site_path(site: tuple):
@@ -929,17 +986,18 @@ def inspect_body_design(
                         f'（{scene.scene_id}#{beat.beat_id} 的 {thread.ref}）',
                         'design_unknown_char', where, where))
     _check_expression_refs(body, expression_requirements, errors, locatable=locatable)
+    _check_detail_refs(body, brief, errors, locatable=locatable)
     # 读取/确认闭合（CS-F1 局部修订收口）：违例在判定处带结构化位置，这里映射
     # 成可编辑 wire 路径——初始行（initial_state[k]）或该拍内第 m 个带 confirms
-    # 的 know 行（canonical 与 v8 wire 同序派发，实际行号按 wire 侧取）。
-    # 非 v8 输入没有可编辑 wire：同一份报告、无路径，退整份返修。
+    # 的 know 行（canonical 与 v9 wire 同序派发，实际行号按 wire 侧取）。
+    # 非 v9 输入没有可编辑 wire：同一份报告、无路径，退整份返修。
     for violation in confirmation_closure_errors(body):
         paths: tuple[tuple, ...] = ()
         if locatable:
             if violation.initial is not None:
                 paths = (('initial_state', violation.initial),)
             else:
-                know = (v8_wire['scenes'][violation.scene]['beats'][violation.beat]
+                know = (v9_wire['scenes'][violation.scene]['beats'][violation.beat]
                         .get('know') or [])
                 confirm_rows = [i for i, row in enumerate(know)
                                 if isinstance(row, dict) and row.get('confirms') is not None]
@@ -955,7 +1013,9 @@ def inspect_body_design(
     if obligations is not None:
         _check_requires_released(
             body, obligations, errors,
-            v8_wire=v8_wire if locatable else None)
+            v9_wire=v9_wire if locatable else None)
+        if locatable:
+            _check_series_summary_order(obligations, real_sites, errors)
     for err in resolve_design_reads(body).errors:
         errors.append(issue(err.message, err.code,
                             (body.scenes[err.scene].scene_id, err.read),

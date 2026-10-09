@@ -117,7 +117,8 @@ def test_first_zero_hit_dry_run_previews_auto_acceptance_without_writing(work):
 
     「零 removed、零 warning、clean == source」曾是纯数字番外盲区的形状，
     人工闸是那道防线的最后兜底；闸退役后该语义盲区转为 Q-13 交付披露，
-    不再挡链——s0_correctness 保持 unver 随报告披露。
+    不再挡链——s0_correctness 已随 2026-10-08 裁决删除，零剔除的 stage0
+    复检不再带任何 unver（全部 hard/info 判据确定性可判，badge 不再恒 AMBER）。
     """
     source = _source(work, 'FQ_dry_auto_102.txt', 'enc_utf8_sig')
     output = work / 'Output'
@@ -137,7 +138,8 @@ def test_first_zero_hit_dry_run_previews_auto_acceptance_without_writing(work):
     assert written.report.admission.by == preview.report.admission.by
     assert written_check is not None
     assert _line(written_check, 's0_approval').status == 'ok'
-    assert _line(written_check, 's0_correctness').status == 'unver'
+    assert all(line.status != 'unver' for line in written_check.rules), \
+        '零剔除的 stage0 复检不应再有 unver（历史缺陷：s0_correctness 恒 unver）'
 
 
 def test_first_nonzero_hit_dry_run_previews_auto_acceptance_without_writing(work):

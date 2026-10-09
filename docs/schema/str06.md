@@ -11,7 +11,7 @@
 Stage7 交付、页面刷新与服务重启读回一致的 fake 全链钉在
 `tests/test_str06_product_entry.py::test_service_full_chain_real_subprocess_and_restart_readback`
 （fake transport 经 `sitecustomize` 注入子进程，`real_code_version` 过 run_step
-代码身份闸；12 次付费、10 个付费节点——CS-3 bind 退役后现数、`--check-only` 追跑零新购、二次
+代码身份闸；12 次付费、10 个付费节点——CS-3 bind 退役后现数（CS-S Phase 2 起另按候选条件发 associate 节点内 cross_cause 窄调用）、`--check-only` 追跑零新购、二次
 `agent.start` 零派发）；旧联合抽取引擎 `novel/stages/stage2/source.py` 整包删除
 （反例迁至五 owner 引擎，`tests/test_str06_source.py`／`tests/hard_cases.py`
 换轨）；`_llm_client`／`create_legacy_client`／`default_legacy_backend`（执行期
@@ -104,13 +104,13 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 
 ### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
 
-现役版式为 `str06-rc12`（全表统一；R10a 收口冻结身份
+现役版式为 `str06-rc22`（2026-10-09 独立事件锚点批：Preserve v5/policy 8、Design wire v9、可选细节与系列前情；Stage2 仍为 rc20；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
 `7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个（CS-3 bind
 退役后 13），运行配置未变。
 book 观察 `stage2-book-v3`、chapters 独立 `stage2-chapters-v2`（names 保持
 `stage2-observation-v1`、associate 保持 v2，输入投影变经 RC 表换身份）；
-Preserve `stage4-preserve-v2`＋policy 5、Design `stage4-design-v5`；
-hook-design 字面不变。写作层 renderer／写手协议 v6 不在本批（R10b 升 v7）。
+Preserve 当前 `stage4-preserve-v5`＋policy 8、Design 内部展开 `stage4-design-v5`；
+hook-design 字面不变。当前正文 renderer v11／写手协议 v9（可选细节与前情送达；历史 R10b 升 v7）。
 
 **章观察瘦 wire（CS-2 第一步，2026-10-03）**：`str06.stage2.chapters` 的
 LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模型：
@@ -121,20 +121,31 @@ LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模
 r10b 实证：wire 体积降至 56%，`expand(slim(现产物)) == 现产物` 11/11 章
 （模本地句柄重命名）；basis 逐字证据、闭集闸、D2 引文归一判据不放宽。
 
-**证据寻址改版（RC-26～29，2026-10-04，rc15）**：cs_golden 三书全部停在
-`str06.stage2.chapters`，根因是证据切分只在「。」后切——对白收尾「」」落到下一段、
-问号叹号收尾的多个自然段并成一段，段号标签悬在上一段文字下方；模型系统性把
-引文挂到偏大的段号上（61 份被拒回答 52 份只因段号），返修在「地址错／不在 src」
-间来回。改为：① 证据段＝一个非空自然段，请求一段一行（`build_evidence`、
-`render_evidence_block`）；② book／chapters 的 wire basis 只给引文
-（`stage2-book-v5`／`stage2-chapters-v5`），所在段由 Resolver 在条目证据范围内定位
-（I-21）；③ src 数组元素可为区间；④ 条目返修轮收到整份回答按整份验收。携带段号
-的 canonical 换字面量（book v4／chapters v4／names v3，形状不变），三类观察、
-Characters、Blueprint 升 rc15，旧根按契约表漂移拒读。规格 `docs/specs/repair_convergence.feature`
-RC-26～29，反例 `tests/test_stage2_evidence_addressing.py`。
+**证据寻址改版（RC-26～29，2026-10-04，rc15；2026-10-07 basis 指针化＋二次收口）**：
+cs_golden 三书全部停在 `str06.stage2.chapters`，根因是证据切分只在「。」后切——
+对白收尾「」」落到下一段、问号叹号收尾的多个自然段并成一段，段号标签悬在上一段
+文字下方；模型系统性把引文挂到偏大的段号上（61 份被拒回答 52 份只因段号），返修在
+「地址错／不在 src」间来回。改为：① 证据段＝一个非空自然段，请求一段一行
+（`build_evidence`、`render_evidence_block`）；② src 数组元素可为区间；③ 条目返修轮
+收到整份回答按整份验收。RC-27 先把段号交给代码（wire 只给引文）；2026-10-07
+用户裁决「模型只选段、代码切原文」完成另一半——book／chapters 的 wire 只给
+**段 id**，引文＝段全文由 compiler 派生（`resolver.basis_quote`），转写失败类
+错误构造上消失；names 同批新增独立 wire 面（canonical 三者 v4/v4/v3 不变，旧盘面
+照读）。**同日二次收口（用户四项裁决，flash/low 首跑实证 ch01/ch07 各因 state 漏
+basis 字段整份返修后）**：① wire 词汇改 `evidence_refs`（与 canonical 的 basis
+分层）——book/chapters wire 升 v7、names wire 升 v5；② `scene_location` 上移
+`SlimBeat` 拍级字段（compiler 合成登记键 world 效应、证据面＝本拍 src 全体，
+state 里出现即拒——单一通路）；③ wire 形状失败按 pydantic 路径条目级窄修
+（`wire_shape_issues`：`beats[i].state[j]`／`initial_state[i]` 一类缺字段窄修该
+条目，级联派生错误同根因只报最深一条，仅顶层结构／协议字面量失败退整份）；
+④ 已核实的 ②既有事实——op/modality/scope/disclosure/proposition 默认、target
+地址串、命题句柄、knowledge 缺省均已是 compiler-owned（瘦 wire 本就如此，verbose
+null 四元组只存在于 canonical）。规格 `docs/specs/repair_convergence.feature`
+RC-26～29，反例 `tests/test_stage2_evidence_addressing.py`、
+`tests/test_str06_chapter_slim.py`。
 
 **设计瘦 wire（CS-3 审阅修复，2026-10-03；事实锁引用升 v8，2026-10-04）**：LLM 输出为
-`stage4-design-v8`（`contracts/schema/design.py::DesignWireV8`）。`real` 保留
+`stage4-design-v10`（`contracts/schema/design.py::DesignWireV10`）。`real` 保留
 义务接受拍/支撑拍；Brief 每条 requirement 的 `knowledge_changes` 从正式
 anchor 派生，完整保留每次变化的盲身份、holder、kp、mode。代码按盲身份排序
 派发 `obNN.kNN` 短引用，模型在对应义务 real 拍的 `know:[{ref}]` 声明实际
@@ -163,11 +174,37 @@ Design 接受判据携带所有同址条目的 wire 路径，Binding 派生与�
 升 rc16，旧 rc15 候选根按契约表漂移关闭式拒收（`init_or_resume_candidate_workflow`），原根留作冻结失败证据，
 续跑用新根并经历史采用按请求身份复用已购响应。
 
-Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14；
-其它产物版本不变。旧 rc12/rc13 仅做登记的无损读取迁移，地址、读取、Hook
-引用与 IR 状态容器一起闭合。已经丢失逐义务模式的 Brief 免费重放 preserve
-重建；丢失 confirms 的 rc13 Design 须免费 owner patch 补 v7 know/confirms，
-复编译后恢复下游。旧 seal 字节不改写；迁移删除条件见 REQUIREMENTS。
+历史 R10 收口把 Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14。
+rc21 质量批后只保留未变化 ExecutionPlan 的 rc12/rc13→rc14 登记无损适配；六类质量产物
+（checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR）均显式 rc22，
+旧版或缺版本关闭式拒读，不能把缺省空细节／空概括当成历史判断证据。checkpoint 本次增
+contract_version；policy 升 6，请求输入变更会换身份。旧根与已购响应保持原字节，
+需从上游正式输入在新契约根重建；付费／外发仍由用户显式授权，迁移删除条件见 REQUIREMENTS。
+
+**创作材料交接（2026-10-09，用户批准方向；R-5.23／R-5.24）**：
+
+Preserve 以单一时点可核对的原子事实写 satisfaction，必要动机、铺垫与后果仍是保存条件；
+主题／情绪解释不能代替页面条件。可选 details 用源投影 anchor＋可改写文本，compiler
+生成 dt 盲身份，Brief 删除源坐标。Design 的拍上可用 details:[obNN.dNN] 引用；选中
+文本仅进该拍 creative_guidance，允许改写或省略，没有细节也可完成设计。来源身份和
+引文只审计，不增添锁或付费节点。
+
+series.summaries 显式给 member/covers，Brief 派生 summarizes_cores；Binding.series
+从 checkpoint 同次发布。概括已采用才要求其所覆盖实例已采用且不晚于概括，允许实例
+重排与最后实例同拍概括。compiler 按目标接受拍构造 PriorSeriesEvent（目标章号、
+目标事件及审计拍引用），只在概括拍的 must_respect 送达，不能让写手自行编造过往例子。
+原文同场与顺序只作审阅读数；世界事实成立、人物知情、读者披露仍分层，participants
+不推导知情，引文不推导说话人。全书表达机制逐场默认送达，拍上 ex 引用只说明重点。
+
+新闭集／时序闸均在 Design 接受循环有拍级窄修，同码同位置 compile 回声只在候选预检
+消重；正式免费重编译仍拒绝坏引用／过早概括，且不会以裸 KeyError 中断。
+
+上游细节文本变更会改变盲身份和短引用排序，因此已购候选的窄复核定位不仅取 real／
+支撑拍，还取 know／所选 details 的消费拍（含未 real 的义务）。当前候选不可构造时
+仍由已购 wire 的引用与旧／新对齐键定位；series 的成员／机制／概括覆盖范围纯投影进
+相关成员差异。不静默沿用已改变含义的短引用，复核只发送受影响拍及其当前材料闭包。
+细节字段的修复单位是完整拍，允许删除可选 details；整拍与字段目标不得重叠。
+源锚点对齐键只作审计，窄请求的复核原因使用旧／当前 ob 编号，不发送源拍或句段。
 
 关键语义交接的契约面（判据见 BACKEND_CONTRACT R-2.18/19、R-5.15～R-5.20）：
 
@@ -177,21 +214,40 @@ Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14�
   事实成立、角色知情与读者揭示仍留在原拍。未配对的独立命题不自动合并；
   缺文本、无配对的悬空引用与未来引用继续未决。观察协议与产物形状不变，
   已购相同请求可经 `--check-only` 免费重验；机械通过不证明关联语义正确。
-- **证据（a1）**：Stage2 canonical basis 是 `EvidenceQuote{segment, quote}`——quote
-  存在于该段且该段属条目自身 source_refs（Resolver `verify_quote`，不模糊匹配）；
-  RC-27 起 book／chapters 的 wire 只给引文，段号由 Resolver `locate_quote` 在条目
-  证据范围内定位后写入；`Effect.modality` 闭集必填。Blueprint v15 派生证据窗口
+- **证据（a1）**：Stage2 canonical basis 是 `EvidenceQuote{segment, quote}`——该段
+  属条目自身 source_refs 且 quote 是段全文（compiler 派生；canonical 直通面仍按
+  `verify_quote` 逐字复验，不模糊匹配）；2026-10-07 起三方 wire（book v7→v8／
+  chapters v7→v8／names v5）的 `evidence_refs` 只给段 id，引文由 `resolver.basis_quote`
+  按段全文切出；`Effect.modality` 闭集必填。CS-S 1a（2026-10-07）：book／chapters
+  wire 升 v8——chapters wire 每拍只写单段 `start`（拍覆盖区间由代码派生：
+  `[start, 下一拍 start−1]`、末拍到章末、start 数值严格递增、首拍只允许跳过前导
+  e00 引子段），`who`→`on_stage`，SlimEffect 删 `scope`／`hidden`／`prop`
+  （404 效应实证 0 命中）；book wire 删 `InitialFactWire.knowledge`（初始知情
+  改由 Phase 2 的 facts `known_at_start` 承载）。Blueprint v15 派生证据窗口
   （被引段全文＋同章前后各一句、重叠机械合并）；Preserve 输入从整份 JSON 倾倒
   改为 `project_preserve_view` 确定性渲染（R10-0.3 实证 29.9k token/轮）。
-- **锚定与 series（a2）**：义务以 `anchors` 引用投影句柄（`b拍.e|c|l`／`s0_*`／
+- **锚定与 series（a2，rc22）**：义务以 `anchors` 引用投影句柄（`b拍.v1|e|c|l`／`s0_*`／
   `wc_*`，≥1），lineage 由 compiler 派生；锚点类型化拷贝源原子（持有者、mode、
   命题、modality、可见性、逐字引文）。顶层 `series` 登记同一机制的离散兑现
   时点（members≥2 闭集互斥、mechanism 属源表达）——不为满足阶段规则合并。
+  `bNN_MM.v1` 是独立事件：compiler 从正式 `beat.event` 和该拍 `source_refs`
+  对应的 `Blueprint.evidence` 确定性复制 `event_statement/event_evidence`；
+  证据指针与窗口必须完整，邻句仅供上下文，不改称逐字支持引文。事件 lineage
+  的人物来自 participants。三类转移全空的事件也可成为义务或细节来源；不补造
+  effect/cognition，不生成状态、知情、时态锁。锁仍只消费各自原子。
+  Brief 只投影义务条件与细节文本，Design 继续以 real/details 选择承载，IR
+  保留事件证据供审计，写手只收到已选文本。renderer v11/写手 v9 不变。
+  checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR
+  同批 rc22；v4/rc21 拒读，不补字段或自动改版本。源 schema 和节点集合不变。
 - **证据冲突回派（a3）**：Preserve 报 `evidence_conflicts` 时 checkpoint 不
   发布，按锚点句柄回派 Stage2 语义 owner（拍句柄→逐章 chNN／书级→book；
-  不可解析即停）。三分支：修订（发布新 SourceTruth、按材料变化恢复）／保留
+  不可解析即停）。v4/policy 7 的冲突地址扩展为现有原子或真实拍（允许三类转移全空）；句段仍须属于该拍 source_refs。拍级地址不进入义务/details 锚点闭集。chapters 按所报拍局部修订，其他拍与章保留；不增加字段、节点或付费轮次。三分支：修订（发布新 SourceTruth、按材料变化恢复）／保留
   解释（处理结果作为同一 Preserve 任务 revise_self 的恢复输入，仍分歧即停止
   不二次回派）／未决（保持阻塞，不自动标源文未知）。同指纹重现无进展停。
+  同答涉及多个可回派 owner 时，按 owner 合并条目并全部登记后再回跳最早节点；
+  同一 book owner 的不同锚点不相互覆盖。章修订上一版只验封与新鲜度，不作为
+  另一章的输入边；多章修订后统一重编译、复验 Preserve，不逐章重购下游。
+  resolved 的处理说明保持相同请求材料；清账不能改变已验身份导致重购。
 - **锁定项与 Design v5（a4）**：Brief 由 anchors 与 canonical loops 确定性
   派生 kp 命题登记、知情锁（唯一映射 learns/confirms→known、suspects→
   suspected、hears_claim→heard、believes→believes；asserts 转公开声称标记）、
@@ -260,7 +316,7 @@ Binding 不维护第二份初始态。
 | str06.stage2.book | 是 | 书 | 全书原文（含 e00 引子句段）与证据句段清单 | 人物候选（可读 slug、称谓及证据）、初态、世界约束 |
 | str06.stage2.chapters | 是 | 章（并行） | 本章句段、第 1..k-1 章原文、书级人物表、抽取协议 | 有序事件及事实/认知/悬念转移、场景边界、时间模式、证据；只含章内局部句柄 |
 | str06.stage2.names | 是 | 书 | 书级人物表与全文 | 名称结构（家族、名、化名、称谓构词） |
-| str06.stage2.associate | 是 | 书 | book 与 chapters 观察的句柄及最小文本 | 同一命题、同一状态维度、悬念开合配对、跨章因果、跨章续场；只选已给句柄 |
+| str06.stage2.associate | 是 | 书 | book 与 chapters 观察的候选及最小文本（候选由代码给出） | 同一命题、悬念开合配对、跨章因果、跨章续场；逐候选恰答一次，只选已给候选 |
 | str06.stage2.compile | 否 | 书 | 以上四份 | 解析证据、生成 ID、执行关联，以同一提交记录发布 Characters＋Blueprint；源 fold 读数 |
 
 1. **编号归 compiler**：拍号、状态与约束编号、命题/loop/场景 ID、章序、offset、hash
@@ -278,8 +334,8 @@ Binding 不维护第二份初始态。
 5. **发布（D9）**：compile 是 Characters＋Blueprint 两份真源的唯一 writer；下游只读
    canonical；`stage2/compiled/book_extraction.json` 派生输入退役，Stage4 的人物 core
    由 Characters 投影。
-6. **读数**：源 fold 只消费 canonical transitions；未揭示 concealed、空转移拍比例等
-   读数保留（度量，不是门，`R-2.17`）。
+6. **读数**：源 fold 只消费 canonical transitions；知情时间线、空转移拍比例等
+   读数保留（度量，不是门，`R-2.17`；`concealed` 效应与其未揭示读数已随 CS-S 1b 删除）。
 
 现役 v14 契约（保留拍三类转移 effects/cognition/loops、场景边界、`temporal_mode`，并增加源表达，见
 `contracts/schema/source.py` 与 `R-2.3`/`R-2.12`）是五节点重建的起点。B2 前半已落地：
@@ -290,6 +346,15 @@ Resolver
 （`novel/stages/stage2/resolver.py`）与节点/产物注册（RC6；associate 观察形状
 R1 升 rc9、H4 升 rc17）；associate／compile
 的引擎与 Stage4 改读 canonical 已随 B2 第三步闭合。
+
+**CS-S 观察面收敛路线（2026-10-07；2026-10-08 收官）**：Stage2 观察面按 Phase
+收敛——wire v8（`start`／`on_stage`、区间代码派生）→ L1／L2 死字段清除（rc18）→
+names A＋B＋C（候选先行的条件窄调用＋构词模板 compiler 派生）→ facts 词表＋
+know.fact 引用＋associate 条目级窄 resolver（rc19，Phase 2）→ ✅ closed change
+keys＋拍级 access＋reader 派生＋`ev→event`／`state→change` 改名（rc20，Phase 3
+已落地——`CHANGE_KEYS` 27 键闭集、associate v5 维度面消失、wire 禁 reader）。
+观察层是抽取／消歧／编译输入，不是第三套 canonical（S2-8～10 与批次进度见
+`docs/REQUIREMENTS.md` 的 CS-S 节；裁决见 `docs/DECISIONS.md` 2026-10-07/08 行）。
 
 ## Stage4：把章依赖编译完整（目标）
 
@@ -570,7 +635,7 @@ CLI 的 medium 移除；整书上限从持久准入账派生传入付费边界�
 | ProviderAttempt | 一次实际外发：冻结配置、准确请求、原响应、成本 | `contracts/schema/workflow.py::WorkUnitAttempt`，每轮至多 4 次（`contracts/invariants.py::WORK_UNIT_MAX_DELIVERY_ATTEMPTS`） |
 | AcceptanceRecord | 解析、救回、引用解析、编译、机械验证分项结果；语义恒 `unver`；`accepted` 只表示“通过 owner 完整验收、可发布”，被拒或被回派上游的回答记 false 并带问题，是否被采用只看 CommitBundle（见 `docs/schema/work_units.md` 接受记录与发布语义） | 取代候选根的 validation 记录 |
 | CommitBundle | 输入清单、采用证据、输出摘要与 seal | 新增；采用状态从 seal 派生 |
-| OwnerRevisionRecord（V2） | owner_patch／resample／**carried_forward** 三类修订凭证；V2 增必填 `applies_to_request_sha256`（记录应用到的请求身份），v1 经 `owner_revision_record_of_payload` 集中迁移（删除条件见 REQUIREMENTS 兼容层表）。carried_forward＝免费沿用的采用凭证：`baseline_*` 是候选生成时的原请求/响应，落 `runtime/revisions/carried/<owner>/<身份>.json`，成本链 ledger-row 指向原 attempt | `contracts/schema/workflow.py`；原 `runtime/adopt_*` 的迁移面上浮 |
+| OwnerRevisionRecord（V2） | owner_patch／resample／**carried_forward** 三类修订凭证；V2 增必填 `applies_to_request_sha256`（记录应用到的请求身份），v1 经 `owner_revision_record_of_payload` 集中迁移（删除条件见 REQUIREMENTS 兼容层表）。rc22 的显式跨身份 owner patch 分别绑定真实已购 baseline 与当前应用请求，必须按当前完整接受闸复验，旧响应和成本不改。恢复只接受这对已绑定身份，任意新输入不得借道；清账恢复普通基线请求仍采用补丁，防止原稿覆盖。carried_forward＝免费沿用的采用凭证：`baseline_*` 是候选生成时的原请求/响应，落 `runtime/revisions/carried/<owner>/<身份>.json`，成本链 ledger-row 指向原 attempt | `contracts/schema/workflow.py`；原 `runtime/adopt_*` 的迁移面上浮 |
 | 候选登记 | 该单元全部已购候选（含补丁链合并）的索引：wire 原字节摘要、生成请求身份、采用引用链、上游版本摘要、最近一次预检摘要；**可由工作单元账与响应 blob 重建**，不是第二本账 | `runtime/candidates/<owner>.json`（CS-H H1b，RC-52） |
 
 - 原响应按 attempt 存储并被 attempt 引用，**空回答不再占据请求身份**。候选根现有
@@ -673,7 +738,7 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 
 | 模块 | 承载 | 关键不变量（构造期表达） |
 |---|---|---|
-| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v4）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
+| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v6）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
 | `contracts/schema/grounding.py` | `SourceObligation` / `PreserveCheckpoint` / `ReconstructionBrief` / `IdentityProjection` / `OutputConstraints` / `SemanticBinding` | 必保义务必有非空 `satisfaction`；checkpoint 无 Design/Bind 字段；Brief 无源章/源拍/叙述顺序/证据定位字段；Binding 是完整 snapshot |
 | `contracts/schema/design.py` | `BodyDesign`（rc11：narration、expression_decisions、可定位 entry；保留拍上线程、world_rules）／`PresentationGraph(BodyDesign)+hook` | source-blind；章号连续 1..N、场景全覆盖；POV 服从正文人称许可；表达决定恰好覆盖；entry 锚满足分支条件；hook 引用与线程生命周期闭合 |
 | `contracts/schema/hook.py` | `HookDesign`／`HookContext`／`HookReceipt`／`HookConstraints` | 起笔事实只引用已建立目标事实；first 恰一人且非 narrator；回执 semantic 恒 unverified |
@@ -734,7 +799,7 @@ Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契约与�
 提交顺序：原响应耐久保存 → 编译与检查 → 选定候选 → 原子写正文 → 原子写章回执；
 各章经共享总槽并发执行，恢复按有效提交集合补缺。
 
-### Hook 的正式选择与确定性投影（现役；B3 代码归位 Stage4，语义不变）
+### Hook 的正式选择与确定性投影（现役；Hook wire v2）
 
 Hook 是同一目标故事的另一种呈现。设计负责材料及顺序、起笔、时间跳转、披露和收束；
 Writer 负责句法、措辞、对白、局部动作、节奏、意象和语气。`PresentationGraph(BodyDesign)+hook`
@@ -747,6 +812,28 @@ HookContext 包含 POV、按 audience 分组的起笔事实、材料投影、禁
 渲染保留 domain/holder/knowledge_mode 认知维度。Hook Writer 机械验非空、长度、编码、
 包装行与 withheld 字面泄漏；超长同 Context 有限重写（再 2 次，attempt 进请求身份）；
 回执 semantic 恒 unverified。
+
+2026-10-09 Hook 模型协议升为 `stage4-hook-design-v2`，canonical HookDesign 与 rc22
+产物形状不变。输入 `stage4-hook-input-v2` 从正式 BodyDesign 投影完整故事决策材料和
+事实目录；`fact_ref` 由 compiler 根据（建立位置、地址）计算，目录保留 op/value/
+modality/knowledge_mode/scope，不是第二份事实真源。模型只选：opening_facts 的
+`{fact_ref,audience}`、materials 的 `{beat_ref,withheld:[fact_ref],presentation}`，以及
+forbidden_reveals 的 `{kind:fact,fact_ref}`／`{kind:event,beat_ref}`；后者两分支不混用。
+材料 withheld 必须属于该拍；起笔与事实禁区只能指向唯一 set。目录闭集与完整分支 schema
+进入初答请求及窄返修合法取值；模型不拼状态地址，也不生成短引用。
+
+一次建立以（位置、地址）定位；后续同地址更新不等于同一次揭示，不由代码猜两个值的
+语义等价。world/pov 事实必须早于**呈现序第一材料**的故事位置，且在该起点前仍有效；
+book 底值与 scene 覆盖按显式 scope 重放，unknown/unset、值/时态/知情模式变化与场末
+过期均不得当成有效旧事实。world 不得把 planned/expected/conditional 当作已发生，POV
+知情 holder 必须是视角人物；非知情事实的 POV 可知性仍由语义选择负责，不机械推断。
+reader 可以使用材料视界（最大故事位置）以内的事实；视界与冷开起点分开。起笔事实不得
+与某材料的**同一次增量**或某禁区的**同一次建立**重叠。Context 保留尚未发生的时态措辞。
+
+生产、Context 重建、窄改合并及已购免费恢复共用 `validate_hook_payload`。未发布 graph
+的失败书也可从正式 BodyDesign 和候选 Hook 执行完整下游只读预检。v1 不在生产路径隐式
+解码；已购恢复仅经登记的 `upgrade_purchased_hook_wire` 无损换算，先核原请求/响应/成本，
+再绑定当前请求身份并经完整接受闸，不修改历史首过结果或成本。
 
 ### NameMap v5 与接受／交付文本分离（现役）
 
@@ -859,9 +946,13 @@ F-1/F-2/F-3），再做 D10 两本 golden（先修 `tests/golden.py` 的退役 r
 
 ### 名称同一性与材料返修（CS-R）
 
-names wire 使用 `stage2-names-v3`（rc15 段号按自然段寻址），显式提供 `resolutions`。每条包含 literal、
-status（same／unresolved）、char_id、surface、basis 和 reason。same 指向已登记
-人物称谓；unresolved 的两个指向字段必须为 null。basis 保留源句字面。
+【CS-S 1c 起的现役形态】names 结构 wire 为 `stage2-names-v6`（无 `surface_forms`、无
+`resolutions`）；变体同一性判定改由节点内窄调用 `name_variants`（wire
+`stage2-name-variants-v1`）逐候选给出。落盘的 `resolutions` 每条仍包含 literal、
+status（same／unresolved／not_name）、char_id、surface、basis 和 reason。same 指向已登记
+人物称谓（且只能是候选的近似锚人物）；unresolved／not_name 的两个指向字段必须为 null。
+basis 保留源句字面。以下为 CS-R 当时的 v3 记述，保留作历史背景：names wire 使用
+`stage2-names-v3`（rc15 段号按自然段寻址），显式提供 `resolutions`。
 名称观察与 Characters 的信封为 v2：旧版本不能补空 resolutions，须由 names
 按新协议重建后通过 compile 重建双真源。原观察不改；关联投影和 canonical
 语义文本按有证明的局部句段归一，重复编译幂等。未决时不购买关联、不发布双真源。
@@ -874,15 +965,28 @@ Preserve 同时收到正式归一文本、原句及名称同一性依据，不�
 
 ### 语义输入投影（CS-I）
 
+- Stage2 悬念按一个可回答的问题抽取；同主题下的接受安排、具体行动成败和去留分别
+  记录，不另建重复概括的复合问题。跨章关联候选除 question／resolution 外，逐字投影
+  两端所在拍的 event，帮助窄 resolver 区分问题；不加入整章、前章产物或新语义。
+  pair 行一对一，distinct 只否决该候选对，不否决端点与其他候选配对。复合问题、
+  缺失收束或把普通事件当答案由 chapters owner patch 修订；associate 只修关联答案。
+  这些抽取要求是语义要求，未新增自动语义硬闸。正式 schema 不变，材料变化进入请求身份。
 - 名称观察输入`stage2-names-input-v2`只发送一次完整evidence与书级观察，不再重复拼全文；evidence 是按阅读序排列的 `{segment,chapter,text}` 数组（v1 以段号为键，请求 JSON 键排序会把一章第 100 段排到第 11 段之前，RC-26 追加）。
   原文引用、Hook和所有章证据完整保留。
 - Preserve输入`stage4-preserve-input-v2`补齐转移op／scope／known_by、认知命题引用、
   悬念操作／问题／解决、时序模式、场景边界和因果边。相同拍内相同证据段与逐字quote合并展示，
   保留全部锚点；初始状态只发一次。必要语义不能为降低字符数删除。
-- Design输入`stage4-design-input-v1`由`project_design_input`确定性投影：Brief义务以ob键编址，
-  requires与knowledge ref复用同一映射；去除可推导ID和审计摘要，保留完整satisfaction、locks、
-  propositions、facts、world约束与表达选择。动态schema将等价know分支按mode分组，仍验证每个ref。
-  producer和compiler使用相同映射，旧canonical Brief不能作为新wire模板。
+- Design输入`stage4-design-input-v2`由`project_design_input`确定性投影：Brief义务以ob键编址，
+  requires与knowledge ref复用同一映射；保留全部原子条件与分母。义务不是叙事拍，一拍可同时兑现
+  多个条件；series 实例、先疑后知和不同因果时点仍须分拍，不设拍数目标。
+  空集合与null省略，缺省只表示原字段为空；false与空satisfaction保留。知情授权由各义务完整
+  knowledge_changes三元组的并集，加knowledge_locks中的额外授权组成；不同变化实例不合并，
+  requires_released、动机、因果和完整满足条件保留。propositions/fact_locks用kp/kf八位前缀短引用为键，
+  按完整Brief的盲身份稳定前缀派发（闭集检查唯一，碰撞显式拒绝）；`design_reference_aliases`与v10 compiler共用映射，只有类型化
+  引用字段展开，语义文本不替换。canonical Brief、BodyDesign与Binding继续使用完整身份，
+  没有新领域真相源。动态schema闭集仍完整；输入版本和内容参与请求身份。
+  已购v9只经`design_wire_model`集中解码，原响应和付费摘要不改；窄复核保留v1输入切片与原v9
+  引用语法，新整份生成只用v10/v2。删除条件见REQUIREMENTS，旧canonical Brief不是wire模板。
 
 这些版本只描述语义输入，不能当正式artifact版本；输入变化自然进入请求身份。
 

@@ -12,7 +12,8 @@ test_core.py —— `novel/core/` 里那些**确定性算子**。
 全局证据槽 `evidence.py` 整模块，以及 `text.py` 的旧链探针
 （`locate_norm`／`split_by_speech_tag`／`min_hamming`／`render_book`／
 `TERMINAL_PUNCT` 等）随旧链退役整批删除，其用例同批移除；
-`content_equivalent_slice` 的现役用例见 `test_str06_quote_canon.py`。）
+2026-10-07 basis 指针化（模型只选段、代码切原文）批：`content_equivalent_slice`／
+`norm_index` 随标点宽度回取面退役整批删除，其用例同批移除。）
 """
 from __future__ import annotations
 

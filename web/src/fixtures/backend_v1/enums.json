@@ -266,6 +266,16 @@
   3,
   4
  ],
+ "narrow_owner_units": {
+  "name_variants": [
+   "str06.stage2.names",
+   "book:name_variants"
+  ],
+  "cross_cause": [
+   "str06.stage2.associate",
+   "book:cross_cause"
+  ]
+ },
  "stages": [
   "stage0",
   "stage1",

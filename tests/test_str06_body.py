@@ -163,6 +163,143 @@ def test_same_scene_requires_interleave_is_legal_cross_scene_inversion_is_not():
     assert any('必须不晚于' in e and '跨场' in e for e in errors_bad), errors_bad
 
 
+def _series_binding(body, placements, *, optional_instance=False):
+    """两个离散实例与一次显式 covers；沿真实 Binding compiler 派生接受拍。"""
+    from contracts.schema.grounding import (
+        ObligationSeries, PreserveCheckpoint, SeriesSummary, SourceLineage,
+        SourceObligation,
+    )
+    from contracts.schema.policy import PreserveKind
+    obligations = tuple(SourceObligation(
+        obligation_id=f'ob{index:02d}', kind=PreserveKind.EVENT_CORE,
+        statement=statement, anchors=anchor_stub(),
+        lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('yun_niang',)),
+        must_preserve=not (optional_instance and index == 2), satisfaction=statement)
+        for index, statement in enumerate(('婚礼实例', '旧约实例', '回顾两次经历'), 1))
+    checkpoint = PreserveCheckpoint(
+        checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256=H64,
+        blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
+        obligations=obligations, checkpoint_sha256=H64,
+        series=(ObligationSeries(
+            members=('ob01', 'ob02', 'ob03'),
+            summaries=(SeriesSummary(member='ob03', covers=('ob01', 'ob02')),)),))
+    binding, errors = derive_semantic_binding(placements, body, checkpoint)
+    assert binding is not None and not errors, errors
+    return binding
+
+
+def _series_ir(body, binding):
+    plan, errors = compile_execution_plan(body, binding)
+    assert plan is not None and not errors, errors
+    chars = _characters()
+    return compile_writer_book_ir(
+        graph=body, plan=plan, binding=binding, total_budget=2000,
+        length_band=(0.6, 1.3), projection=chars.name_projection(),
+        structure=chars.name_structure)
+
+
+def test_summary_packet_carries_target_instances_and_only_summary_gets_the_recall():
+    """章包闭环：普通实例不新增任务，概括章得到目标已写实例，禁止编补前史。"""
+    from novel.stages.common import build_writer_packet
+    body = _green_design()
+    binding = _series_binding(body, {
+        'ob01': [(0, 0)], 'ob02': [(0, 1)], 'ob03': [(1, 0)]})
+    ir = _series_ir(body, binding)
+    assert ir.chapter(1).scenes[0].verification_ir.prior_series_events == ()
+    events = ir.chapter(2).scenes[0].verification_ir.prior_series_events
+    assert [(e.summary_beat_ref, e.beat_ref, e.chapter_ordinal, e.event) for e in events] == [
+        ('sc02#b01', 'sc01#b01', 1, body.scenes[0].beats[0].event),
+        ('sc02#b01', 'sc01#b02', 1, body.scenes[0].beats[1].event)]
+    first = build_writer_packet(project_chapter_packet(ir, 1))
+    summary = build_writer_packet(project_chapter_packet(ir, 2))
+    assert not any('概括系列' in line for line in first.must_respect)
+    recall = [line for line in summary.must_respect if '概括系列' in line]
+    assert len(recall) == 2
+    assert all('第1章' in line and '不另编人物或前史' in line for line in recall)
+    assert body.scenes[0].beats[0].event in recall[0]
+    assert body.scenes[0].beats[1].event in recall[1]
+    prompt = render_chapter_packet(project_chapter_packet(ir, 2))
+    assert 'sc01#b01' not in prompt and 'sc02#b01' not in prompt
+
+
+def test_series_compile_rejects_early_summary_but_accepts_same_beat_and_reordered_instances():
+    """只查显式 covers：概括不能早回顾；同拍概括与实例间自由重排均合法。"""
+    body = _green_design()
+    early = _series_binding(body, {
+        'ob01': [(0, 0)], 'ob02': [(1, 0)], 'ob03': [(0, 1)]})
+    plan, errors = compile_execution_plan(body, early)
+    assert plan is None
+    assert [(e.code, e.context['instance']) for e in errors
+            if getattr(e, 'code', '') == 'series_summary_early'] == [
+                ('series_summary_early', 'ob02')]
+    # covers 列表不是目标阅读序：两个实例在目标故事中交换顺序仍合法。
+    reordered = _series_binding(body, {
+        'ob01': [(0, 1)], 'ob02': [(0, 0)], 'ob03': [(1, 0)]})
+    ir = _series_ir(body, reordered)
+    assert [e.beat_ref for e in ir.chapter(2).scenes[0].verification_ir.prior_series_events] == [
+        'sc01#b01', 'sc01#b02']
+    same = _series_binding(body, {
+        'ob01': [(0, 0)], 'ob02': [(0, 1)], 'ob03': [(0, 1)]})
+    same_ir = _series_ir(body, same)
+    events = same_ir.chapter(1).scenes[0].verification_ir.prior_series_events
+    assert any(e.beat_ref == e.summary_beat_ref for e in events)
+    assert '与本拍一起完成' in render_chapter_packet(project_chapter_packet(same_ir, 1))
+    assert same_ir.chapter(2).scenes[0].verification_ir.prior_series_events == ()
+
+
+def test_series_compile_rejects_selected_summary_without_covered_optional_instance():
+    """compile 免费重验闭合显式 covers，而非只看 must_preserve 分母。"""
+    body = _green_design()
+    binding = _series_binding(body, {
+        'ob01': [(0, 0)], 'ob03': [(1, 0)]}, optional_instance=True)
+    plan, errors = compile_execution_plan(body, binding)
+    assert plan is None
+    assert [(e.code, e.context['instance']) for e in errors] == [
+        ('series_summary_unbound', 'ob02')]
+
+
+def test_free_compile_rejects_repeated_canonical_detail_refs_without_deduplicating():
+    """正式当前schema可构造坏稿，免费compile须typed拒绝，不能重复送导演提示。"""
+    from contracts.schema.grounding import SourceDetail
+    body = _green_design()
+    binding = _series_binding(body, {
+        'ob01': [(0, 0)], 'ob02': [(0, 1)], 'ob03': [(1, 0)]})
+    first = binding.obligations[0]
+    detail = SourceDetail(detail_id='dt_' + '1' * 16, anchor=first.anchors[0],
+                          text='临窗摆着一盏茶')
+    binding = type(binding).model_validate(binding.model_copy(update={
+        'obligations': (first.model_copy(update={'details': (detail,)}),
+                        *binding.obligations[1:])}).model_dump(mode='json'))
+    scene = body.scenes[0]
+    beat = scene.beats[0].model_copy(update={'detail_refs': (detail.detail_id, detail.detail_id)})
+    repeated = type(body).model_validate(body.model_copy(update={
+        'scenes': (scene.model_copy(update={'beats': (beat, *scene.beats[1:])}),
+                   *body.scenes[1:])}).model_dump(mode='json'))
+    plan, errors = compile_execution_plan(repeated, binding)
+    assert plan is None
+    assert [(e.code, e.owner, e.location) for e in errors] == [
+        ('design_detail_ref', 'compile', ('detail_ref', 'sc01', 'b01', detail.detail_id))]
+    assert '重复引用' in errors[0]
+    assert repeated.scenes[0].beats[0].detail_refs == (detail.detail_id, detail.detail_id)
+
+
+def test_series_recall_changes_summary_packet_and_leaves_unrelated_future_packet_unchanged():
+    """前情事件是显式消费：改变实例换实例与概括章身份，不波及其它章。"""
+    body = _green_design()
+    binding = _series_binding(body, {
+        'ob01': [(0, 0)], 'ob02': [(0, 1)], 'ob03': [(0, 2)]})
+    original = _series_ir(body, binding)
+    scene = body.scenes[0]
+    changed = scene.beats[0].model_copy(update={'event': '婚礼临窗举行'})
+    updated_scene = scene.model_copy(update={'beats': (changed, *scene.beats[1:])})
+    updated_body = body.model_copy(update={'scenes': (updated_scene, *body.scenes[1:])})
+    updated = _series_ir(updated_body, binding)
+    assert chapter_identities(project_chapter_packet(original, 1)).writer_view_sha256 != \
+        chapter_identities(project_chapter_packet(updated, 1)).writer_view_sha256
+    assert chapter_identities(project_chapter_packet(original, 2)).writer_view_sha256 == \
+        chapter_identities(project_chapter_packet(updated, 2)).writer_view_sha256
+
+
 # ───────────────────────── 章预算确定性分配 ─────────────────────────
 
 def test_chapter_budgets_sum_to_total_and_are_deterministic():
@@ -389,6 +526,103 @@ def test_write_chapter_first_pass_and_rewrite_identity():
     assert fake.prompts[1].startswith(fake.prompts[0].rstrip('\n'))
 
 
+def _withheld_patch_packet():
+    """只含本测试专名许可的章包；不改变篇幅判据来接受实际违规稿。"""
+    packet = _packet_kw()['packet']
+    return packet.model_copy(update={'chapter': packet.chapter.model_copy(update={
+        'withheld_literals': ('未名',), 'released_surfaces': ('夫君',),
+        'requires_released': (),
+    })})
+
+
+def _withheld_patch_draft():
+    return '\n'.join((
+        '远处没有进请求的开场。', '近旁烛火烧得很稳。', '她把旧约问得清楚。',
+        '未名把回答低低说完。未名又掩上门。', '她没有追问。',
+        '屋里只剩风声。', '远处没有进请求的收束。'))
+
+
+def test_withheld_diagnostic_binds_original_offsets_and_locates_each_affected_line():
+    from novel.core.validation import ValidationIssue
+    from novel.stages.stage5.body import _withheld_repair_lines
+    prose = ' \n\n未名低声答。\n夫君不多说。\n未名关上门。\n '
+    errors = validate_chapter_prose(
+        prose, withheld_literals=('未名',), released_surfaces=('夫君',),
+        target_chars=20, band_low=0, band_high=100)
+    assert len(errors) == 2 and all(isinstance(e, ValidationIssue) for e in errors)
+    assert [e.context for e in errors] == [
+        {'literal': '未名', 'start': prose.index('未名'), 'end': prose.index('未名') + 2},
+        {'literal': '未名', 'start': prose.rindex('未名'), 'end': prose.rindex('未名') + 2},
+    ]
+    assert _withheld_repair_lines(prose, errors) == (2, 4)
+
+
+def test_pure_withheld_literal_repairs_only_the_affected_paragraph_and_uses_full_base_identity():
+    import json
+    from novel.stages.common import BODY_PARAGRAPH_REPAIR_SYSTEM
+    packet, draft = _withheld_patch_packet(), _withheld_patch_draft()
+    fixed = draft.split('\n')[3].replace('未名', '夫君')
+    patch = json.dumps({'paragraphs': [{'index': 3, 'text': fixed}]}, ensure_ascii=False)
+    fake = _FakeAnswers([_answered(draft), _answered(patch, identity='patch-id')])
+    outcome = write_chapter(packet=packet, ask=fake)
+    assert outcome.prose == draft.replace('未名', '夫君')
+    assert outcome.request_identity == 'patch-id' and len(outcome.attempts) == 2
+    prompt = fake.prompts[1]
+    assert fake.systems[1] == BODY_PARAGRAPH_REPAIR_SYSTEM
+    assert '允许替换的行号：[3]' in prompt and '3（可编辑）' in prompt
+    assert '2（只读邻段）' in prompt and '4（只读邻段）' in prompt
+    assert '远处没有进请求' not in prompt and '本章交付要求' not in prompt
+    assert '本章合法已释放称谓：["夫君"]' in prompt
+    assert sha256_text(draft) in prompt
+    assert fake.validators[1](patch) == [], '付费接受器检查合并后的完整稿'
+
+    # 切片外只改一句，窄输入正文仍相同，但完整基底变化必须换请求身份。
+    other = draft.replace('远处没有进请求的开场。', '另一处没有进请求的开场。')
+    second = _FakeAnswers([_answered(other), _answered(patch)])
+    write_chapter(packet=packet, ask=second)
+    assert other.split('\n')[0] not in second.prompts[1]
+    assert sha256_text(other) in second.prompts[1] and second.prompts[1] != prompt
+
+
+@pytest.mark.parametrize('bad_patch', [
+    '{"paragraphs":[{"index":2,"text":"改动只读邻段。"}]}',
+    '{"paragraphs":[{"index":99,"text":"越界。"}]}',
+    '{"paragraphs":[{"index":3,"text":"甲"},{"index":3,"text":"乙"}]}',
+    '{"paragraphs":[{"index":true,"text":"甲"}]}',
+    '{"paragraphs":[{"index":3,"text":"甲\\n新增段落"}]}',
+    '{"paragraphs":[{"index":3,"text":"甲","extra":1}]}',
+    '{"paragraphs":[{"index":3,"index":2,"text":"甲"}]}',
+    '正文整稿，不能当作段落补丁。',
+])
+def test_bad_withheld_patch_keeps_the_same_narrow_arm_and_does_not_edit_other_lines(bad_patch):
+    import json
+    from novel.stages.common import BODY_PARAGRAPH_REPAIR_SYSTEM
+    draft = _withheld_patch_draft()
+    fixed = draft.split('\n')[3].replace('未名', '夫君')
+    good_patch = json.dumps({'paragraphs': [{'index': 3, 'text': fixed}]}, ensure_ascii=False)
+    fake = _FakeAnswers([_answered(draft), _answered(bad_patch), _answered(good_patch)])
+    outcome = write_chapter(packet=_withheld_patch_packet(), ask=fake)
+    assert outcome.prose == draft.replace('未名', '夫君')
+    assert len(outcome.attempts) == 3 and outcome.attempts[1].errors[0].startswith('[paragraph_patch]')
+    assert fake.validators[1](bad_patch)[0].startswith('[paragraph_patch]')
+    assert fake.systems[1:] == [BODY_PARAGRAPH_REPAIR_SYSTEM] * 2
+    assert all('允许替换的行号：[3]' in prompt and sha256_text(draft) in prompt
+               and '远处没有进请求' not in prompt for prompt in fake.prompts[1:])
+    assert fake.prompts[1] != fake.prompts[2], '补丁格式失败进入下一轮请求身份'
+
+
+def test_mixed_withheld_and_length_failure_keeps_the_existing_whole_chapter_rewrite():
+    draft = _withheld_patch_draft() * 3
+    good = _withheld_patch_draft().replace('未名', '夫君')
+    fake = _FakeAnswers([_answered(draft), _answered(good)])
+    outcome = write_chapter(packet=_withheld_patch_packet(), ask=fake)
+    assert outcome.prose == good
+    assert any(e.startswith('[length_band]') for e in outcome.attempts[0].errors)
+    assert any(e.startswith('[withheld_literals]') for e in outcome.attempts[0].errors)
+    assert fake.systems[1] is None and '【重写要求】' in fake.prompts[1]
+    assert draft in fake.prompts[1]
+
+
 def test_write_chapter_selects_min_deviation_late_tie_and_blocks():
     # 硬失败不能成为候选：全部 attempts 带专名泄漏 → 无合法候选
     kw = _packet_kw()
@@ -523,10 +757,12 @@ class _RoutingTransport:
         if '【本章交付要求】' in user:
             # v5 分区渲染：章目的在「导演说明」分区（「本章目的（第N章）：…」）
             return 'body_ch01' if '本章目的（第1章）' in user else 'body_ch02'
-        if '人物账、初始状态与世界约束' in user:
+        if '人物账、初始状态、世界约束与书级命题词表' in user:
             return 'book'
-        if '跨章关联' in user:
+        if '条目级关联判定' in user:
             return 'associate'
+        if '跨章因果判定' in user:
+            return 'cross_cause'
         if '拆成有序 beats' in user:
             # 章正文标记（【第 N 章正文】）的最后一次出现即当前章：前文原文块用
             # 〔第N章〕方头括号，不会与章正文标记混淆。

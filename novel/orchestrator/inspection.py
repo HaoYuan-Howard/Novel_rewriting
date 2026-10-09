@@ -99,6 +99,12 @@ def capture_operator_snapshot(
     """
     base_path = Path(base).resolve()
     novel_dir = paths.resolve_novel_dir(base_path, sid).resolve()
+    # ⚠ 调用侧的 sid 有两种可定位形态：per-novel 目录名（`书名_123`）与
+    #   ``derive_source_meta`` 的 source_id（`123`），``find_novel_dir`` 都接受。
+    #   但快照内的身份形态只有一种——与 ``overview_at`` 的 sid 同源，从已解析
+    #   的目录名派生（I-16：sid 的权威源是书目录名，不在快照入口收口会让
+    #   ``OperatorNextDecision`` 的 sid==overview.sid 校验在目录名形态下必崩）。
+    sid = paths.derive_source_meta(novel_dir.name)[0]
     code = code or prov.code_version()
     before = read_surface_seal(base_path, sid, code=code)
     overview = overview_at(novel_dir, code)

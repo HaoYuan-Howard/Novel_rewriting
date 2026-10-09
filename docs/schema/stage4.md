@@ -55,7 +55,7 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `chapter_plan_shape` | hard | 目标章数等于源章数、章序 1..N 连续非空；允许跨章重构 |
 | `length_budget_conserved` | hard | 章预算 largest-remainder 分配、总和守恒 |
 | `preserve_compile` | hard | Preserve checkpoint 编译闭合 |
-| `preserve_name_literal_gate` | hard | CS-H H3（RC-64）Preserve 自闸：义务文本里的裸姓／未登记别名带 `obligations[i]` 路径条目返修（与下游归因同一把尺） |
+| `preserve_name_literal_gate` | hard | Preserve 自闸：statement／satisfaction／details[].text 的不可投影姓名带义务或细节条目路径窄修，与下游归因同一把尺 |
 | `binding_mechanical` | hard | CS-3：binding 派生错误并入 body_design 的 ask 同节点修订轮（≤2）；real 覆盖闸漏标即拦；耗尽/无进展 fail-fast |
 | `hook_design_mechanical` | hard | Hook 设计机械校验＋graph 唯一发布 |
 | `design_semantics_unver` | unver | 目标故事与导演说明的语义质量未评 |
@@ -72,14 +72,16 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `guard_m7_read_projection` | hard | M7 声明读取已解析并进入 IR（入场值进 entry 视图、拍级值挂对应拍） |
 | `guard_m8_thread_lifecycle` | hard | M8 线程生命周期合法且按 Design 投影进 IR（thread_ops／open_threads） |
 | `chapter_closure_read_resolution` | hard | 章闭包：已声明状态读取在定位点闭合（先读旧值后写新值；unknown/unset/未建立分开） |
-| `preserve_anchor_closure` | hard | R10a a2：义务 anchors 在投影句柄闭集（≥1）、lineage 由 compiler 派生、series 成员闭集互斥、evidence_conflicts 引用闭合 |
+| `preserve_anchor_closure` | hard | 义务 anchors 与可选 details.anchor 在源投影闭集，lineage／detail_id 由 compiler 派生；series 与 summaries/covers 同组闭集；evidence_conflicts 引用闭合 |
 | `source_evidence_conflict_routing` | hard | R10a a3：源证据冲突按锚点句柄回派 Stage2 owner（拍句柄→逐章、书级→book、不可解析即停）；三分支恢复＝修订／保留解释（revise_self 恢复输入）／未决停止；同指纹不二次回派 |
 | `design_lock_acceptance` | hard | R10a a4：Brief 锁定项（kp 命题登记＋知情锁唯一映射＋kf 事实锁）与 Design v5 锁规则——kp 键持有者须有锁且模式被授权（known 只能来自 known 锁）、读者确认须有 reader known 锁、kf 时态锁按锁 modality 承载、值未知/原文未回答不得 set、必保锁兑现 |
 | `design_requires_released_gate` | hard | CS-H H3（RC-61）必保揭名：三项类型化信号合取派生 `requires_released` 随 Brief 认知变化携带；该 know 所在拍必须已释放所列称谓（同拍合法），违例带 know 行路径可窄修 |
-| `binding_series_collapse` | hard | 同一 series 成员接受拍不同（同拍即 series_collapsed，design 修订轮）；锁摘要经 design 义务清单送达；必保漏标由 real 覆盖闸拦 |
+| `binding_series_collapse` | hard | 同一 series 的离散实例接受拍不同；显式 summary 不计作实例，可与最后实例同拍；必保漏标由 real 覆盖闸拦 |
+| `binding_series_summary` | hard | 已采用 summary 覆盖的实例须已采用且不晚于概括；可重排实例、同拍概括。目标实例前情在概括拍送达，早于／未承载均有 Design 窄修与免费重编译 |
+| `design_detail_ref_closure` | hard | 拍上细节只从正式 Brief 闭集引用；选中提示只进 creative_guidance，不选合法；悬空引用 typed 拒绝，可窄修并免费重验 |
 | `epistemic_lock_order_guard` | hard | R10a a5：kp 知情升级/读者确认不得早于授权该模式的义务承载位置（授权位＝必保义务全部承载点最早者；initial_state 与自由键不查；故事发生顺序不查，P5）；违例按 epistemic_lock_order 回派 body_design |
 | `answer_reuse_four_conditions` | hard | R10a §二.4：已购回答复用四条件——模型输入未变→复用；验收条件变化→免费机械复验；实际写作材料变化→按请求身份判断新回答；仅审计/展示变化→不触发付费重写 |
 | `writer_packet_background_narrowing` | hard | R10b §R10b.3：背景投影规则——写手面背景只投书级初态立足点＋建立之后仍被消费的当前状态（消费者＝声明读取/读者确认目标/Hook 地址/锁键）；unset/unknown 不作背景；补齐面（依赖边生成）保持全量 |
 
-当前注册表共 **31 条**：**29 hard、1 metric、1 unver**（R10a 收口新增 6 hard；R10b 新增 1 hard：背景投影规则）。唯一注册表为
+当前注册表共 **33 条**：**31 hard、1 metric、1 unver**（rc21 新增系列概括与细节引用闭集两条 hard）。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。

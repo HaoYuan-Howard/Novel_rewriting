@@ -37,39 +37,6 @@ def norm(s: str | None) -> str:
     return _NON_CONTENT.sub('', s or '')
 
 
-def norm_index(text: str | None) -> tuple[str, list[int]]:
-    """`(归一串, 归一下标 → 原文下标)`。**回映到原文字节的唯一入口。**
-
-    `content_equivalent_slice` 经它回映——两处各建一份索引就是同一把尺子的
-    第二个落点，而它们比的是**同一段正文**（判据 14）。
-    """
-    t = text or ''
-    idx = [i for i, ch in enumerate(t) if not _NON_CONTENT.match(ch)]
-    return ''.join(t[i] for i in idx), idx
-
-
-def content_equivalent_slice(needle: str, body: str) -> str | None:
-    """唯一匹配时，把仅标点／空白不同的引文回取成正文原字节。
-
-    用 `norm()` 尺把标点宽度（半角/全角逗号、问号、引号体）一并归一：
-    源文半角、模型抄成全角时仍是同一内容。相同内容在正文出现两次时拒绝猜
-    位置；返回值仍是 `body` 的真实连续子串（经 `norm_index` 回映，不重排
-    一个字节），后续引用不需要「近似证据」语义。
-    """
-    hay, index = norm_index(body)
-    k = norm(needle)
-    if not k:
-        return None
-    start = hay.find(k)
-    if start < 0 or hay.find(k, start + 1) >= 0:
-        return None
-    end = start + len(k) - 1
-    if end >= len(index):
-        return None
-    recovered = body[index[start]:index[end] + 1]
-    return recovered if norm(recovered) == k else None
-
-
 #: kp 句柄形状（Brief.propositions 登记的 16 位哈希；R10b「锁以内容送达」）。
 _KP_HANDLE = re.compile(r'kp_[0-9a-f]{16}')
 

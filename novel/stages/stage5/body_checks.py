@@ -25,6 +25,7 @@ import re
 from typing import Callable
 
 from novel.core.text import count_non_whitespace_chars
+from novel.core.validation import ValidationIssue
 from novel.stages.common import (
     ChapterWriterPacket, claim_spans, uncovered_occurrences,
 )
@@ -67,7 +68,8 @@ def validate_chapter_prose(
     即拒（违例走段落级修句，不是披露面）。
     """
     errors: list[str] = []
-    body = (text or '').strip()
+    raw = text or ''
+    body = raw.strip()
     if not body:
         return ['[non_empty] 章正文为空']
     if '\ufffd' in body or _CONTROL.search(body):
@@ -77,9 +79,16 @@ def validate_chapter_prose(
             or any(marker in body for marker in scene_markers)):
         errors.append('[no_wrapper] 存在围栏、章号标题或场景标记（章号由系统添加）')
     claimed = claim_spans(body, tuple(released_surfaces))
+    # 诊断字符位置绑定原稿，不绑定 strip 后的临时视图；窄修据此
+    # 定位段落，控制器不再从中文文案反解析字面或位置。
+    offset = len(raw) - len(raw.lstrip())
     for claim in uncovered_occurrences(body, withheld_literals, claimed):
-        errors.append(f'[withheld_literals] 出现未释放的专名字面 {claim.literal!r}'
-                      f'（位置 {claim.start}）')
+        start, end = offset + claim.start, offset + claim.end
+        errors.append(ValidationIssue(
+            f'[withheld_literals] 出现未释放的专名字面 {claim.literal!r}'
+            f'（位置 {claim.start}）', code='withheld_literals',
+            location=('prose', start, end), owner='body',
+            context={'literal': claim.literal, 'start': start, 'end': end}))
     for literal in required_literals:
         if literal not in body:
             errors.append(f'[required_literals] 必保揭名的称谓字面 {literal!r} 未在正文出现'

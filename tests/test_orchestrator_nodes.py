@@ -427,11 +427,19 @@ def test_executor_egress_must_be_explicit_and_direct_llm_nodes_may_carry_it():
 @pytest.mark.parametrize(('node', 'flags'), UNMIGRATED_EXECUTOR_FLAG_CASES)
 def test_profiled_nodes_refuse_every_unmigrated_single_flag(node, flags):
     """节点已接 agent 不等于它的所有诊断、恢复或人工跑法也已迁移。"""
-    with pytest.raises(UnsupportedRunMode, match='尚未迁移 flag 组合'):
+    with pytest.raises(UnsupportedRunMode, match='不是已登记的付费跑法'):
         N.build_steps(
             node, SID, flags, base=BASE,
             executor_backend=EXECUTOR_BACKEND,
         )
+
+
+def test_check_only_flag_combo_names_the_free_recheck_invocation():
+    """--check-only 误配 executor 时，提示给出对症的免费复检跑法。"""
+    with pytest.raises(UnsupportedRunMode,
+                       match='--check-only 是免费复检，去掉 --executor-backend'):
+        N.build_steps('str06.stage2.book', SID, ['--check-only'], base=BASE,
+                      executor_backend=EXECUTOR_BACKEND)
 
 
 def test_executor_profile_refuses_unmigrated_nodes_and_unknown_capability_pairs():

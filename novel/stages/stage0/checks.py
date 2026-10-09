@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-'''stage0 的十三条判据实现。纯检查不改任何产物。'''
+'''stage0 的十二条判据实现。纯检查不改任何产物。'''
 from __future__ import annotations
 
 import os
@@ -281,12 +281,9 @@ def check(
             )] if report.normalized_source_sha1 != source.normalized_source_sha1 else [],
             scanned='原始小说 1 份 · 40 位归一化内容指纹',
         ))
-
-    out.append(unverifiable(
-        's0_correctness',
-        '结构规则只能定位疑似非正文；剔除内容在语义上是否真是番外/后记必须由人阅读确认',
-        scanned=f'{len(report.removed)} 个剔除段待人工语义确认',
-    ))
+    # R-0.7 的 `s0_correctness`（剔除段语义确认）已删除：人工确认面随
+    # 2026-09-15 全自动裁决退役，剔除决策由机械判据确定性处理；保留一条
+    # 永 unver 的规则会让 stage0 复检恒 AMBER（详见 contracts/judges/stage0.py）。
     return out
 
 

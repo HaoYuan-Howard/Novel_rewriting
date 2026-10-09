@@ -3,7 +3,7 @@ compile 链发布映射并被下游消费（fake transport，零付费）。
 
 验证面（单元反例在 `test_str06_a4_design_locks.py` 的 CS-F2 一节）：
 · Preserve 义务锚定「预计」效应 → Brief 事实锁及必保兑现分母；
-· body_design 用 v8 `lock` 标注已选状态 → BodyDesign 与 SemanticBinding 同组发布，
+· body_design 用 v10 短 `lock` 标注已选状态 → BodyDesign 与 SemanticBinding 同组发布，
   Binding 只存锁→拍→地址、不复制 value，BodyDesign 里没有 kf 状态键；
 · 下游 compile 真实消费：WriterBookIR 的写手材料带「预计，尚未发生」措辞、不含 kf 句柄，
   packet_metrics 计入锁承载；
@@ -24,6 +24,7 @@ from tests.test_str06_body import _chapters, _make_session
 from tests.test_str06_hook import _full_chain_wires
 
 KF_PLAN = _lock_id('kf_', 'b01_01.e2')
+KF_PLAN_WIRE = KF_PLAN[:11]  # v10 请求：kf_＋八位；canonical 锁身份保持完整。
 
 
 def _wires(*, marked: bool = True, unknown: bool = False) -> dict:
@@ -31,11 +32,11 @@ def _wires(*, marked: bool = True, unknown: bool = False) -> dict:
     wires = deepcopy(_full_chain_wires())
     wires['ch01']['beats'][0]['effects'] = (
         *wires['ch01']['beats'][0]['effects'],
-        {'target': {'kind': 'world'}, 'key': 'return_time',
+        # CS-S 1b：effect 无 scope／proposition／disclosure——时态锁由
+        # modality 派生（expected／unknown 本就独立于命题锚）。
+        {'target': {'kind': 'world'}, 'key': 'agreement',
          'op': 'unknown' if unknown else 'set', 'value': None if unknown else '约半月',
-         'scope': 'book', 'modality': 'actual' if unknown else 'expected',
-         'proposition': {'ref': 'p_return', 'statement': '夫君约半月后归家'},
-         'disclosure': {'visibility': 'on_page'},
+         'modality': 'actual' if unknown else 'expected',
          'basis': ({'segment': 'e01_01', 'quote': '苏芸娘嫁入陆家'},)})
     wires['preserve']['obligations'].append({
         'kind': 'event_core', 'statement': '夫君归期未知' if unknown else '夫君约定归期（预计，尚未发生）',
@@ -44,10 +45,10 @@ def _wires(*, marked: bool = True, unknown: bool = False) -> dict:
         'requires': []})
     beat = wires['design']['scenes'][0]['beats'][2]         # sc01#b03 '芸娘立誓查清'
     beat['real'] = ['ob02']
-    beat['state'].append({'at': 'world', 'key': 'return_time',
+    beat['state'].append({'at': 'world', 'key': 'agreement',
                           **({'op': 'unknown'} if unknown else
                              {'val': '约半月后归家', 'modality': 'expected'}),
-                          **({'lock': KF_PLAN} if marked else {})})
+                          **({'lock': KF_PLAN_WIRE} if marked else {})})
     return wires
 
 
@@ -80,12 +81,12 @@ def test_body_design_publishes_binding_with_lock_mapping_and_no_kf_state_key(tmp
     repo = ctx.repository
     body = repo.read_model('stage4/design/body_design.json')
     binding = repo.read_model('stage4/grounding/semantic_binding.json')
-    assert binding.contract_version == 'str06-rc17'
+    assert binding.contract_version == 'str06-rc22'
     [mapping] = binding.fact_bindings
     assert (mapping.kf_id, mapping.beat_ref) == (KF_PLAN, 'sc01#b03')
-    assert (mapping.address.domain.value, mapping.address.key) == ('world', 'return_time')
+    assert (mapping.address.domain.value, mapping.address.key) == ('world', 'agreement')
     carrier = body.beat('sc01', 'b03').target_delta[-1]
-    assert (carrier.key, carrier.value, carrier.modality) == ('return_time', '约半月后归家',
+    assert (carrier.key, carrier.value, carrier.modality) == ('agreement', '约半月后归家',
                                                               'expected')
     assert not any(d.key.startswith('kf_') for s in body.scenes for b in s.beats
                    for d in b.target_delta), 'BodyDesign 只持有一份目标事实'
@@ -137,7 +138,7 @@ def test_ambiguous_fact_lock_is_rejected_by_full_candidate_paid_entry_and_free_p
     from novel.stages.stage4 import design_obligation_index, inspect_design_candidate, project_brief
     wires = _wires(unknown=unknown)
     wires['design']['scenes'][0]['beats'][2]['state'].append(
-        {'at': 'world', 'key': 'return_time', 'val': '已经归家', 'modality': 'actual'})
+        {'at': 'world', 'key': 'agreement', 'val': '已经归家', 'modality': 'actual'})
     before = deepcopy(wires['design'])
     ctx, transport = _prepare(tmp_path, wires)
     repo = ctx.repository
@@ -178,7 +179,7 @@ def test_ambiguous_fact_lock_is_rejected_by_full_candidate_paid_entry_and_free_p
 def _move_lock_before_obligation(wire):
     """只移动有锁状态，不移动 ob02 的 real：早拍确有事实，但未声明承载义务。"""
     state = wire['scenes'][0]['beats'][2]['state'].pop()
-    assert state['lock'] == KF_PLAN
+    assert state['lock'] == KF_PLAN_WIRE
     wire['scenes'][0]['beats'][0]['state'].append(state)
 
 
@@ -323,9 +324,9 @@ def test_restarted_free_compile_rejects_misplaced_canonical_lock_then_recovers(t
     binding = repo.read_model('stage4/grounding/semantic_binding.json')
     scenes = list(body.scenes)
     beats = list(scenes[0].beats)
-    [carrier] = [d for d in beats[2].target_delta if d.key == 'return_time']
+    [carrier] = [d for d in beats[2].target_delta if d.key == 'agreement']
     beats[2] = beats[2].model_copy(update={
-        'target_delta': tuple(d for d in beats[2].target_delta if d.key != 'return_time')})
+        'target_delta': tuple(d for d in beats[2].target_delta if d.key != 'agreement')})
     beats[0] = beats[0].model_copy(update={'target_delta': (*beats[0].target_delta, carrier)})
     scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})
     moved_body = body.model_copy(update={'scenes': tuple(scenes)})

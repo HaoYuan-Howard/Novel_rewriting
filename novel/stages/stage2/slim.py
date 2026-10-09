@@ -1,48 +1,159 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """slim —— 章观察瘦 wire 的确定性适配层（CS-2 第一步，2026-10-03；RC-27/28
-升 stage2-chapters-v5，2026-10-04）。
+升 v5，2026-10-04；2026-10-07 basis 指针化升 v6；同日二次收口升 v7——
+wire/canonical 词汇分层：evidence_refs 只给段 id，scene_location 上移拍级；
+CS-S 1a 升 v8——`src`→`start` 单段＋区间代码派生、`who`→`on_stage`、
+SlimEffect 删 `scope`/`hidden`/`prop`；CS-S Phase 2 升 v9——know 增 `fact`
+书级词表引用（与 `what` 恰写其一；fact 直通 f{nn} 引用，文本由 compile 从
+词表回填——转写漂移在构造上消失）；CS-S Phase 3 升 v10——字段改名
+`ev`→`event`、`state`→`change`＋增 `access`（获知通道：witnessed 默认不写、
+narrated 变体直陈时显式标注——reader 派生的输入）＋change 键入
+`CHANGE_KEYS` 闭集＋know.who 禁 reader（读者知情由 compile 派生）。
 
 【职责】LLM 面与 canonical 面之间的唯一转换：`expand_chapter_wire` 把瘦 wire
 派生成 canonical（`STAGE2_CHAPTERS_PROTOCOL`）形状的 dict，`slim_chapter_wire`
-是它的逆（迁移与回归用：expand(slim(现产物)) 再经引文定位 == 现产物）。纯函数、
+是它的逆（迁移与回归用：expand(slim(现产物)) 再经段派生 == 现产物）。纯函数、
 不改输入（I-24）、不落盘——落盘仍是 `ChapterObservation`，下游消费者不变。
-basis 在 wire 上只是逐字引文：expand 产出 ``{'segment': None, 'quote': 引文}``，
-所在段由 chapters 管道的 Resolver 定位步填入（RC-27；本模块不看原文）。
+evidence_refs 在 wire 上只是段 id（2026-10-07 裁决：模型只选段、代码切原文）：
+expand 产出 ``{'segment': id, 'quote': None}``，引文由 chapters 管道的
+Resolver 派生步按段全文填入（本模块不看原文）。拍级 `scene_location` 由
+expand 合成登记键 world 效应（首条），证据面＝本拍派生区间全体；change 里出现
+scene_location 即拒（防双路径，S-04）。
+
+【区间派生（v8 起）】拍覆盖段不再由模型写区间/数组，由代码从各拍 `start`
+派生：`[start, 下一拍 start−1]`、末拍到章末。派生规则全部机械可判：start
+按段号**数值**严格递增（≥100 段的章不按字典序）、属本章证据闭集、首拍必须
+是章首段（第 1 章允许跳过前导 e00 段——引子弃权）。今日两本 383 拍实证
+同章连续、0 非连续，旧 wire 数据无表达损失；RC-28 的区间语法（`..`／数组）
+随 v8 关闭。
 
 【瘦在哪（r10b 全产物实证，132 拍／85 效应／60 认知）】
   • 默认值派生：scene_boundary 112/132 continue、temporal_mode 121/132 single、
     op 83/85 set、modality 78/85 actual、disclosure 85/85 on_page、表外键
-    scope 只 2 条 scene——模型只写例外；
+    scope 只 2 条 scene（v8 起表外一律 book、不再进 wire）、hidden/prop
+    0 命中（死字段）——模型只写例外；
   • target 四元组 → 地址串（73 character／7 relation／5 world）；
   • 命题句柄（ref）由代码按文本归并派发：60 条 cognition 里 59 条首现、
     1 条重引——「同一句柄两种文本」「重抄不一致」这类失败点结构性消失
     （D1 的章内面），跨章配对仍走 associate＋CS-1 的归一全等闸；
-  • src 支持同前缀连续区间（多段引用绝大多数是连续区间），数组元素同样
-    可以是区间（RC-28：语法对组合闭合——提示词教的两种写法自然会混用）。
+  • src 区间（RC-28）→ v8 起收敛为单段 start（区间由本模块派生）。
 
 【不变量】basis 逐字证据（R10a a1）、loops 句柄（D8 跨章配对）、人物/认知
-闭集闸、引文归一回取（D2）全部保持——瘦的只是「模型抄写机械字段」的负担，
-语义判据一条不放宽。适配集中在本模块（S-03）；删除条件＝下游消费迁移完成、
-canonical 自身瘦身升版（届时本模块与 canonical 直通读一并退役）。
+闭集闸、引文＝段全文派生（2026-10-07）全部保持——瘦的只是「模型抄写机械
+字段」的负担，语义判据一条不放宽。适配集中在本模块（S-03）；删除条件＝
+下游消费迁移完成、canonical 自身瘦身升版（届时本模块与 canonical 直通读
+一并退役）。
 """
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Iterable
 
 from contracts.schema.observation import (
     STAGE2_CHAPTERS_PROTOCOL, STAGE2_CHAPTERS_WIRE_PROTOCOL, ChapterObservationWire,
+    is_fact_ref,
 )
-from contracts.schema.source import REGISTERED_STATE_KEYS
 from novel.core.text import norm
 
 #: 代码派发的章内命题本地句柄：k01..（OBSERVATION_HANDLE_PATTERN 内）。
 _PROP_SEQUENCE = 'k{:02d}'
 
-#: src 区间形状：同前缀 e{章}_{段}，两端段号递增。
-_SRC_RANGE = re.compile(r'^(e(\d+)_(\d+))\.\.(e(\d+)_(\d+))$')
-_SRC_ID = re.compile(r'^e\d+_\d+$')
+#: canonical 效应的现役字段集（逆映射的可表达面；多出的字段一律拒绝）。
+_CANONICAL_EFFECT_FIELDS = frozenset({'target', 'key', 'op', 'modality', 'value', 'basis'})
+
+#: 段 id 的数值序键：`e{章}_{段}` → (章序, 段序)——≥100 段的章不按字典序。
+_SEGMENT_ID = re.compile(r'^e(\d+)_(\d+)$')
+
+
+def segment_sort_key(ref: str) -> tuple[int, int]:
+    """段 id → 数值序键（区间派生的唯一比较实现；形状非法即抛）。"""
+    m = _SEGMENT_ID.fullmatch(ref)
+    if m is None:
+        raise ValueError(f'证据段 id 形状非法：{ref!r}')
+    return int(m.group(1)), int(m.group(2))
+
+
+def ordered_segment_sequence(evidence_ids: Any) -> tuple[str, ...]:
+    """本章证据闭集 → 阅读序段序列（数值排序；闭集成员唯一）。
+
+    调用方给什么形态的闭集（Mapping 段表或 id 可迭代）都派生出同一序列——
+    expand 的区间派生只信这份序列（I-16：闭集是唯一权威）。
+    """
+    refs = list(evidence_ids.keys() if isinstance(evidence_ids, dict)
+                else evidence_ids)
+    if len(set(refs)) != len(refs):
+        raise ValueError('本章证据闭集含重复段 id')
+    return tuple(sorted(refs, key=segment_sort_key))
+
+
+def chapter_segment_sequence(evidence_ids: Any, chapter: int | None) -> tuple[str, ...]:
+    """闭集 → **本章**的阅读序段序列（v8 区间派生的唯一输入）。
+
+    区间纪律不依赖调用方闭集的宽窄：全书闭集与章内闭集给同一章派生出同一
+    序列——只收段号章前缀等于本章的段（第 1 章另收 e00 引子段；章序按数值
+    解析，≥100 章不按字典序）。`chapter` 为 None 时不过滤（无从判定归属）。
+    """
+    sequence = ordered_segment_sequence(evidence_ids)
+    if chapter is None:
+        return sequence
+    allowed = {0, chapter} if chapter == 1 else {chapter}
+    return tuple(ref for ref in sequence if segment_sort_key(ref)[0] in allowed)
+
+
+def derive_beat_intervals(
+        starts: Iterable[str], sequence: Iterable[str], *, chapter: int | None = None,
+) -> tuple[list[list[str]] | None, list[tuple[tuple[int, ...], str]]]:
+    """各拍 `start`（阅读序）→ 每拍的覆盖段区间＋条目级 issue。
+
+    规则（CS-S 1a，全部机械可判）：
+      • start 必须在闭集序列内（不在即 issue——未知段另由闭集核对兜底）；
+      • start 按序列位置严格递增（序列已数值排序，天然满足「≥100 段不按
+        字典序」；倒序/重复即 issue）；
+      • 首拍必须是章首段；第 1 章允许跳过前导 e00（`e00_*`，引子弃权）段
+        ——被跳过的前缀必须全部是 e00 段；
+      • 每拍区间＝`[start, 下一拍 start−1]`（按序列切片），末拍到章末——
+        序列上不再有未覆盖段，也不存在两拍共引一段（构造保证）。
+    issue 带 wire 拍路径（`('beats', index)`）；任一 issue 即返回 None。
+    """
+    seq = list(sequence)
+    position = {ref: index for index, ref in enumerate(seq)}
+    issues: list[tuple[tuple[int, ...], str]] = []
+    where_ch = chapter if chapter is not None else '?'
+    indices: list[int] = []
+    for index, start in enumerate(starts):
+        where = f'第{where_ch}章拍{index + 1}'
+        if start not in position:
+            issues.append((('beats', index), (
+                f'{where} start {start!r} 不在本章证据闭集内——start 必须逐字取自'
+                '本章证据段清单（e00 引子段仅第 1 章可见）'))
+            )
+            continue
+        pos = position[start]
+        if indices and pos <= indices[-1]:
+            issues.append((('beats', index), (
+                f'{where} start {start!r} 未按段号数值严格递增（前拍 start 为'
+                f' {seq[indices[-1]]!r}）——每拍只写起始段，覆盖区间由程序派生'))
+            )
+            continue
+        indices.append(pos)
+    if issues:
+        return None, issues
+    if not indices:
+        return [], []
+    # 首拍位置：章首段，或（仅第 1 章）前导 e00 段之后的第一个非 e00 段。
+    first = indices[0]
+    skipped = seq[:first]
+    if skipped and any(int(_SEGMENT_ID.fullmatch(ref).group(1)) != 0  # type: ignore[union-attr]
+                       for ref in skipped):
+        issues.append((('beats', 0), (
+            f'第{where_ch}章拍1 start {seq[first]!r} 跳过了非引子段 {skipped[:3]}…'
+            '——首拍必须是本章第一段（仅第 1 章允许跳过开头的 e00 引子段）'))
+        )
+        return None, issues
+    intervals = [seq[indices[i]:indices[i + 1]] if i + 1 < len(indices)
+                 else seq[indices[i]:] for i in range(len(indices))]
+    return intervals, []
 
 
 def _address_of(target: dict) -> str:
@@ -62,39 +173,14 @@ def _target_of(address: str, where: str) -> tuple[dict | None, str | None]:
     if '+' in address:
         subject, _, object_ = address.partition('+')
         if not subject or not object_ or '+' in object_ or subject == object_:
-            return None, (f'{where} state 的 at 地址非法：{address!r}'
+            return None, (f'{where} change 的 at 地址非法：{address!r}'
                           '（关系须是 "subject+object"，两端非空、不自环、只一个 +）')
         return ({'kind': 'relation', 'char_id': None,
                  'subject': subject, 'object': object_}, None)
     if not address:
-        return None, f'{where} state 的 at 地址为空'
+        return None, f'{where} change 的 at 地址为空'
     return {'kind': 'character', 'char_id': address,
             'subject': None, 'object': None}, None
-
-
-def _expand_src_item(item: str, where: str) -> tuple[list[str] | None, str | None]:
-    """src 的一个元素（单 id／同前缀连续区间）→ (段 id 列表, 错误)。"""
-    if '..' not in item:
-        return [item], None
-    m = _SRC_RANGE.fullmatch(item)
-    if m is None or m.group(2) != m.group(5) or int(m.group(3)) > int(m.group(6)):
-        return None, (f'{where} src 区间非法：{item!r}'
-                      '（须同章前缀且起段号 ≤ 止段号，如 e01_02..e01_05）')
-    prefix = m.group(1).rsplit('_', 1)[0] + '_'
-    start, end = int(m.group(3)), int(m.group(6))
-    return [f'{prefix}{n:02d}' for n in range(start, end + 1)], None
-
-
-def _expand_src(src: str | tuple[str, ...], where: str) -> tuple[list[str] | None, str | None]:
-    """src（单 id／区间，或二者混合的数组，RC-28）→ (保序去重的段 id 列表, 错误)。"""
-    items = [src] if isinstance(src, str) else list(src)
-    refs: list[str] = []
-    for item in items:
-        expanded, error = _expand_src_item(item, where)
-        if error is not None:
-            return None, error
-        refs.extend(ref for ref in expanded or () if ref not in refs)
-    return refs or None, None
 
 
 class _PropRegistry:
@@ -102,7 +188,7 @@ class _PropRegistry:
 
     与 CS-1 的 D1 配对判定同一把尺（norm()）：标点宽度不同的重引归并同一
     句柄，norm 后不同即另一条命题——不模糊合并、不替模型选边（I-20）。
-    派发顺序＝拍序、拍内 state 先于 know（与 rc12 章内纪律的遍历序一致，
+    派发顺序＝拍序、拍内 change 先于 know（与 rc12 章内纪律的遍历序一致，
     expand/slim/`_chapter_handle_discipline` 三处同一顺序，判据 25）。
     """
 
@@ -124,69 +210,88 @@ class _PropRegistry:
 
 def expand_chapter_wire(
     wire: Any, *, chapter: int | None = None,
+    sequence: Iterable[str] | None = None,
 ) -> tuple[dict | None, list[tuple[tuple[str | int, ...], str]]]:
-    """瘦 wire（v5）→ canonical 形状 dict（`STAGE2_CHAPTERS_PROTOCOL`）＋条目级 issue。
+    """瘦 wire（v8）→ canonical 形状 dict（`STAGE2_CHAPTERS_PROTOCOL`）＋条目级 issue。
 
-    纯派生（I-15）：默认值回填、地址串展开、src 区间枚举、命题句柄派发；
-    返回的 dict 交给 `compile_chapter_observation` 的既有管道（引文归一／
-    机械闸／协议校验）——本函数不做语义判定，只做可机械推导的字段。issue
-    带 wire 的 JSON 路径（条目级返修面，CS-patch）。
+    纯派生（I-15）：start 区间派生、默认值回填、地址串展开、命题句柄派发、
+    拍级 scene_location 合成登记键效应；返回的 dict 交给
+    `compile_chapter_observation` 的既有管道（段派生／机械闸／协议校验）——
+    本函数不做语义判定，只做可机械推导的字段。`sequence` 是本章证据闭集的
+    阅读序段序列（`ordered_segment_sequence`）；缺省时退化为各拍 start 自身
+    （无法派生区间——仅供不关心区间的最小样例，生产路径必须给序列）。
+    issue 带 wire 的 JSON 路径（条目级返修面，CS-patch；wire 协议形状失败由
+    调用方按 pydantic 路径定位）。
     """
     model = ChapterObservationWire.model_validate(wire)
-    issues: list[tuple[tuple[str | int, ...], str]] = []
+    starts = [beat.start for beat in model.beats]
+    if sequence is None:
+        intervals = [[start] for start in starts]
+        interval_issues: list[tuple[tuple[int, ...], str]] = []
+    else:
+        intervals, interval_issues = derive_beat_intervals(
+            starts, sequence, chapter=chapter)
+    issues: list[tuple[tuple[str | int, ...], str]] = list(interval_issues)
     props = _PropRegistry()
     beats_out: list[dict] = []
     for index, beat in enumerate(model.beats):
         where = f'第{chapter if chapter is not None else "?"}章拍{index + 1}'
-        refs, src_error = _expand_src(beat.src, where)
-        if src_error is not None:
-            issues.append((('beats', index), src_error))
+        refs = intervals[index] if intervals is not None else [beat.start]
         effects_out: list[dict] = []
-        for j, effect in enumerate(beat.state):
+        for j, effect in enumerate(beat.change):
+            # 单一通路（S-04）：场景位置只走拍级字段——change.key 的闭集正则不含
+            # scene_location，wire 模型在 `model_validate` 就按条目拒绝（指引见
+            # `common.wire_shape_issues`），这里不会收到它。
             target, target_error = _target_of(effect.at, where)
             if target_error is not None:
-                issues.append((('beats', index, 'state', j), target_error))
+                issues.append((('beats', index, 'change', j), target_error))
                 continue
-            proposition = None
-            text = effect.hidden.what if effect.hidden is not None else effect.prop
-            if text is not None:
-                handle, first = props.resolve(text)
-                proposition = {'ref': handle, 'statement': text if first else None}
-            disclosure = ({'visibility': 'on_page', 'known_by': []}
-                          if effect.hidden is None else
-                          {'visibility': 'concealed',
-                           'known_by': list(effect.hidden.by)})
-            # 登记键的作用域由表固定（R-2.14 的派生在适配层先行；退役键的
-            # 拒识仍归 compile 的 `_normalize_registered_scopes`）。
-            scope = effect.scope or 'book'
-            registered_scope = REGISTERED_STATE_KEYS.get(effect.key)
-            if registered_scope is not None:
-                scope = registered_scope
+            # 登记键的作用域读时按表派生（R-2.14，CS-S 1b：scope 不再进 canonical）；
+            # disclosure／effect 命题锚已删——揭示链由 cognition 承载。
             effects_out.append({
                 'target': target, 'key': effect.key,
                 'op': effect.op or 'set',
                 'modality': effect.modality or 'actual',
                 'value': effect.val,
-                'scope': scope,
-                'disclosure': disclosure,
-                'proposition': proposition,
-                'basis': [{'segment': None, 'quote': quote} for quote in effect.basis],
+                'basis': [{'segment': ref, 'quote': None} for ref in effect.evidence_refs],
+            })
+        if beat.scene_location is not None:
+            # 拍级场景位置 → 登记键 world 效应（R-2.14 表固定 scene 作用域）。
+            # 证据面＝本拍派生区间全体（覆盖性证据，不猜具体句，I-21）。
+            effects_out.insert(0, {
+                'target': {'kind': 'world', 'char_id': None,
+                           'subject': None, 'object': None},
+                'key': 'scene_location', 'op': 'set',
+                'modality': 'actual', 'value': beat.scene_location,
+                'basis': [{'segment': ref, 'quote': None} for ref in refs],
             })
         cognition_out: list[dict] = []
         for j, entry in enumerate(beat.know):
-            handle, first = props.resolve(entry.what)
+            if entry.fact is not None:
+                # Phase 2：书级词表引用直通（ref=f{nn}、statement=None——文本由
+                # compile 从词表回填；跨章同一性按引用构造成立）。
+                cognition_out.append({
+                    'proposition': {'ref': entry.fact, 'statement': None},
+                    'holder': entry.who, 'mode': entry.how,
+                    'basis': [{'segment': ref, 'quote': None} for ref in entry.evidence_refs],
+                })
+                continue
+            handle, first = props.resolve(entry.what or '')
             cognition_out.append({
                 'proposition': {'ref': handle,
                                 'statement': entry.what if first else None},
                 'holder': entry.who, 'mode': entry.how,
-                'basis': [{'segment': None, 'quote': quote} for quote in entry.basis],
+                'basis': [{'segment': ref, 'quote': None} for ref in entry.evidence_refs],
             })
         beats_out.append({
-            'event': beat.ev,
-            'participants': list(beat.who),
-            'source_refs': refs if refs is not None else [str(beat.src)],
+            'event': beat.event,
+            'participants': list(beat.on_stage),
+            'source_refs': refs,
             'scene_boundary': 'new' if beat.new_scene else 'continue',
             'temporal_mode': 'iterative' if beat.iterative else 'single',
+            # Phase 3：获知通道只写例外（narrated）；witnessed 缺省由 canonical
+            # 模型默认补齐，不进派生 dict。
+            **({'access': beat.access} if beat.access != 'witnessed' else {}),
             'effects': effects_out,
             'cognition': cognition_out,
             'loops': [loop.model_dump(mode='json') for loop in beat.loops],
@@ -199,54 +304,68 @@ def expand_chapter_wire(
     }, []
 
 
-def _compact_src(refs: list[str]) -> str | list[str]:
-    """段 id 列表 → 紧凑写法：同前缀连续≥2 段折叠成区间。"""
-    parsed = []
-    for ref in refs:
-        m = _SRC_ID.fullmatch(ref)
-        if m is None:
-            return list(refs)
-        prefix, _, num = ref.rpartition('_')
-        parsed.append((prefix, int(num)))
-    if len(parsed) >= 2 and all(
-            parsed[i][0] == parsed[0][0]
-            and parsed[i][1] == parsed[i - 1][1] + 1 for i in range(1, len(parsed))):
-        return f'{parsed[0][0]}_{parsed[0][1]:02d}..{parsed[-1][0]}_{parsed[-1][1]:02d}'
-    return refs[0] if len(refs) == 1 else list(refs)
-
-
 def slim_chapter_wire(observation: dict) -> dict:
     """rc12 章观察 dict → 瘦 wire（expand 的逆；迁移与回归用）。
 
     只丢默认值与机械字段、把重引命题的 statement 经句柄表还原成文本；
     命题句柄本身不保留（expand 按文本重新派发——回归比较须按「首现序
     重标句柄」归一，见 tests/test_str06_chapter_slim.py）。loops 原样。
+    逆映射只表达现役 wire 形状：canonical 效应带 wire 不可表达的字段（1b 删掉
+    的 disclosure／proposition／scope 一类旧面）时**拒绝**而不是静默丢弃
+    （I-34——迁移面不制造语义丢失）；不按字段名点名死字段，任何多余字段同拒。
     """
     statements: dict[str, str] = {}
     for beat in observation.get('beats') or []:
-        for transfer in (beat.get('effects') or []) + (beat.get('cognition') or []):
+        for transfer in beat.get('cognition') or []:
             prop = transfer.get('proposition') or None
             if prop and prop.get('statement'):
                 statements[prop['ref']] = prop['statement']
 
-    def _prop_text(prop: dict | None) -> str | None:
-        if not prop:
-            return None
-        return prop.get('statement') or statements.get(prop.get('ref'))
-
     beats_out = []
     for beat in observation.get('beats') or []:
+        refs = list(beat.get('source_refs') or ())
+        if not refs:
+            raise ValueError('拍没有可作 start 的 source_refs')
+        # 拍级 scene_location：从登记键 world 效应还原（compiler 合成的对应逆）。
+        scene_location = None
+        effects = []
+        for effect in beat.get('effects') or ():
+            extra = sorted(set(effect) - _CANONICAL_EFFECT_FIELDS)
+            if extra:
+                raise ValueError(
+                    f'canonical 效应携带 wire 不可表达的字段 {extra}：'
+                    f'{effect.get("key")}——逆映射拒绝而不是静默丢弃语义')
+            if effect.get('key') == 'scene_location':
+                # 拍级字段只能还原 compiler 合成的单条 actual/set/world 效应。
+                # 直接 canonical 面可携带其他 op/modality 或较窄的证据，不能把它们
+                # 当成默认位置后丢掉例外（或把两条位置写入静默折叠成最后一条）。
+                if (scene_location is not None
+                        or (effect.get('target') or {}).get('kind') != 'world'
+                        or effect.get('op') != 'set'
+                        or effect.get('modality') != 'actual'
+                        or not isinstance(effect.get('value'), str)
+                        or not effect['value']
+                        or [b['segment'] for b in effect.get('basis', ())] != refs):
+                    raise ValueError('canonical scene_location 效应不可表达为拍级位置字段')
+                scene_location = effect['value']
+                continue
+            effects.append(effect)
         slim_beat: dict[str, Any] = {
-            'ev': beat['event'],
-            'who': list(beat.get('participants') or ()),
-            'src': _compact_src(list(beat['source_refs'])),
+            'event': beat['event'],
+            'on_stage': list(beat.get('participants') or ()),
+            'start': refs[0],
         }
+        if scene_location is not None:
+            slim_beat['scene_location'] = scene_location
         if beat['scene_boundary'] == 'new':
             slim_beat['new_scene'] = True
         if beat['temporal_mode'] == 'iterative':
             slim_beat['iterative'] = True
-        state_out = []
-        for effect in beat.get('effects') or ():
+        if beat.get('access') == 'narrated':
+            # Phase 3：获知通道只写例外（witnessed 是缺省，不进 wire）。
+            slim_beat['access'] = 'narrated'
+        change_out = []
+        for effect in effects:
             slim_effect: dict[str, Any] = {
                 'at': _address_of(effect['target']),
                 'key': effect['key'],
@@ -257,25 +376,26 @@ def slim_chapter_wire(observation: dict) -> dict:
                 slim_effect['val'] = effect['value']
             if effect['modality'] != 'actual':
                 slim_effect['modality'] = effect['modality']
-            if (effect['scope'] != 'book'
-                    and effect['key'] not in REGISTERED_STATE_KEYS):
-                slim_effect['scope'] = effect['scope']
-            slim_effect['basis'] = [basis['quote'] for basis in effect['basis']]
-            if effect['disclosure']['visibility'] == 'concealed':
-                slim_effect['hidden'] = {
-                    'by': list(effect['disclosure']['known_by']),
-                    'what': _prop_text(effect.get('proposition')) or '',
-                }
-            elif effect.get('proposition'):
-                slim_effect['prop'] = _prop_text(effect.get('proposition'))
-            state_out.append(slim_effect)
-        know_out = [{
-            'who': entry['holder'], 'how': entry['mode'],
-            'what': _prop_text(entry.get('proposition')) or '',
-            'basis': [basis['quote'] for basis in entry['basis']],
-        } for entry in beat.get('cognition') or ()]
-        if state_out:
-            slim_beat['state'] = state_out
+            slim_effect['evidence_refs'] = [b['segment'] for b in effect['basis']]
+            change_out.append(slim_effect)
+        know_out = []
+        for entry in beat.get('cognition') or ():
+            prop = entry.get('proposition') or {}
+            ref = prop.get('ref')
+            if is_fact_ref(ref):
+                # Phase 2：书级词表引用（f{nn}）——逆映射回 fact 字段，不还原文本。
+                know_out.append({
+                    'who': entry['holder'], 'how': entry['mode'], 'fact': ref,
+                    'evidence_refs': [basis['segment'] for basis in entry['basis']],
+                })
+                continue
+            know_out.append({
+                'who': entry['holder'], 'how': entry['mode'],
+                'what': prop.get('statement') or statements.get(ref) or '',
+                'evidence_refs': [basis['segment'] for basis in entry['basis']],
+            })
+        if change_out:
+            slim_beat['change'] = change_out
         if know_out:
             slim_beat['know'] = know_out
         if beat.get('loops'):

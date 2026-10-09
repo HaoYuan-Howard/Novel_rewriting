@@ -34,20 +34,22 @@ from typing import Any, Final, Iterable
 from contracts.schema.design import BodyDesign
 from contracts.schema.grounding import (
     BriefFactLock, BriefKnowledgeChange, BriefKnowledgeLock, BriefProposition, BriefRequirement,
-    FactLockBinding, IdentityProjection, ObligationAnchor, ObligationSeries, PreserveCheckpoint,
+    BriefDetail, EventEvidence, FactLockBinding, IdentityProjection, ObligationAnchor, ObligationDetail,
+    ObligationSeries, PreserveCheckpoint, SeriesSummary, SourceDetail,
     ReconstructionBrief, SemanticBinding, SourceLineage, SourceObligation,
     BookConstraint, _lock_id,
 )
 from contracts.schema.source import (
-    BlueprintsArtifactV15, CharactersCore,
+    BlueprintsArtifactV17, CharactersCore,
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
+from contracts.schema.state import WithheldNameBinding
 from novel.core.name_materials import (
     family_form_literals, withheld_name_bindings,
 )
 from novel.core.validation import ValidationIssue
 from novel.stages.common import (
-    check_binding_covers_checkpoint, claim_spans, uncovered_occurrences,
+    check_binding_covers_checkpoint, claim_spans, project_withheld_names, uncovered_occurrences,
 )
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.fact_bindings import (
@@ -67,8 +69,9 @@ def _sha256_payload(obj: Any) -> str:
 #: 序号数组。R10a a2：义务以 anchors 引用投影句柄，lineage 退出 wire
 #: （compiler 派生）；顶层增 series／evidence_conflicts。
 _OBLIGATION_KEYS = frozenset({'kind', 'statement', 'anchors',
-                              'must_preserve', 'satisfaction', 'requires'})
-_SERIES_KEYS = frozenset({'members', 'mechanism'})
+                              'must_preserve', 'satisfaction', 'requires', 'details'})
+_SERIES_KEYS = frozenset({'members', 'mechanism', 'summaries'})
+_SUMMARY_KEYS = frozenset({'member', 'covers'})
 _CONFLICT_KEYS = frozenset({'anchor', 'segment', 'note'})
 
 
@@ -93,11 +96,12 @@ def _render_target(target: Any) -> str:
 
 
 def _anchor_index(
-    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
 ) -> dict[str, ObligationAnchor]:
     """投影句柄 → 类型化拷贝（compiler 拷贝，模型不复述；I-15/I-21）。
 
-    句柄闭集＝`s0_*`（初态）、`wc_*`（世界约束）、`b拍.eN/.cN/.lN`（拍内
+    句柄闭集＝`s0_*`（初态）、`wc_*`（世界约束）、`b拍.v1`（有正式证据的
+    事件）、`b拍.eN/.cN/.lN`（拍内
     效应/认知/悬念）。命题带正式 ID（k*，无本地句柄）；初态/约束的地址
     含 state_id／constraint_id 本体。
     """
@@ -114,17 +118,22 @@ def _anchor_index(
             quotes=tuple(b.quote for b in rule.basis))
     for chapter_bp in sorted(blueprint.chapters, key=lambda c: c.chapter):
         for beat in chapter_bp.beats:
+            handle = f'{beat.beat_id}.v1'
+            if beat.source_refs and all(blueprint.evidence.get(ref, '').strip()
+                                        for ref in beat.source_refs):
+                index[handle] = ObligationAnchor(
+                    handle=handle, source_kind='event', event_statement=beat.event,
+                    event_evidence=tuple(EventEvidence(segment=ref, window=blueprint.evidence[ref])
+                                         for ref in beat.source_refs))
             for n, effect in enumerate(beat.effects, 1):
                 handle = f'{beat.beat_id}.e{n}'
-                prop = effect.proposition
+                # CS-S 1b：effect 删 disclosure／proposition——锚点不再拷贝
+                # 可见性与命题（命题锚只在 cognition 上）。
                 index[handle] = ObligationAnchor(
                     handle=handle, source_kind='effect',
                     address=f'{_render_target(effect.target)}.{effect.key}',
                     value=effect.value, modality=effect.modality,
                     op=effect.op,
-                    visibility=effect.disclosure.visibility,
-                    proposition_ref=prop.ref if prop else None,
-                    proposition_statement=prop.statement if prop else None,
                     quotes=tuple(b.quote for b in effect.basis))
             for n, cognition in enumerate(beat.cognition, 1):
                 handle = f'{beat.beat_id}.c{n}'
@@ -144,12 +153,12 @@ def _anchor_index(
 
 def _derive_lineage(
     handles: tuple[str, ...], index: dict[str, ObligationAnchor],
-    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
 ) -> SourceLineage:
     """义务 anchors → SourceLineage（I-15/I-21：compiler 派生，wire 不再输出）。
 
     blueprint_refs＝锚点主体（拍内转移归其 beat_id；初态/约束归自身 id）；
-    character_ids＝初态 target 人物＋效应作用对象人物＋认知 holder——同一
+    character_ids＝事件 participants＋初态 target 人物＋效应作用对象人物＋人物认知 holder——同一
     既有语义（可综合多个源主体），只是来源从模型声明改为锚点解析。
     """
     blueprint_refs: list[str] = []
@@ -158,6 +167,7 @@ def _derive_lineage(
     transfers: dict[str, Any] = {}
     for chapter_bp in blueprint.chapters:
         for beat in chapter_bp.beats:
+            transfers[f'{beat.beat_id}.v1'] = beat
             for n, effect in enumerate(beat.effects, 1):
                 transfers[f'{beat.beat_id}.e{n}'] = effect
             for n, cognition in enumerate(beat.cognition, 1):
@@ -174,8 +184,13 @@ def _derive_lineage(
             transfer = initial_by_handle.get(handle)
         if transfer is None:
             continue
-        if anchor.source_kind == 'cognition':
-            character_ids.append(transfer.holder)
+        if anchor.source_kind == 'event':
+            character_ids.extend(transfer.participants)
+        elif anchor.source_kind == 'cognition':
+            # reader 是知情持有者，人物表没有它；其锁仍由 cognition anchor
+            # 派生，不能经 lineage 变成 Brief 的参演人物。
+            if transfer.holder != 'reader' and transfer.holder in characters.characters:
+                character_ids.append(transfer.holder)
         elif anchor.source_kind == 'initial_state':
             target = transfer.target
             if target.kind == 'character':
@@ -200,7 +215,7 @@ def _derive_lineage(
 
 
 def project_preserve_view(
-    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
 ) -> str:
     """R10a a2：Preserve 的源证据投影（确定性渲染，取代 Blueprint JSON 倾倒）。
 
@@ -210,21 +225,18 @@ def project_preserve_view(
     I-20/I-21 机械渲染归 compiler）。R10-0.3 实证旧形态整份 Blueprint JSON
     倾倒 29.9k token/轮——本投影只给语义判断实际需要的原子与证据。
     """
-    lines: list[str] = ['输入版本：stage4-preserve-input-v2']
+    lines: list[str] = ['输入版本：stage4-preserve-input-v3']
     cited: set[str] = set()
     if characters.initial_state:
         lines.append('【书级初始事实（故事开始前成立）】')
         for atom in characters.initial_state:
             cited.update(atom.source_refs)
-            knowledge = ''
-            if atom.knowledge is not None:
-                known = list(atom.knowledge.known_by)
-                if atom.knowledge.reader_knows:
-                    known.append('reader')
-                if known:
-                    knowledge = f'；初始已知: {",".join(known)}'
+            # CS-S 1b：初始已知后缀删（initial_state.knowledge 已删）。语义缺口
+            # 如实登记：Phase 2 的 facts `known_at_start` 只落在 fold 知情时间线读数
+            # （T-5：只读读数，不进下游 API），Stage4 的 Preserve／Brief 仍看不到
+            # 「开场前已知」——是否把它渲染进 Preserve 视图待产品裁决（REQUIREMENTS）。
             lines.append(f'[{atom.state_id}] {_render_target(atom.target)}.'
-                         f'{atom.key} = {atom.value!r}（{atom.persistence}{knowledge}）')
+                         f'{atom.key} = {atom.value!r}（{atom.persistence}）')
             for basis in atom.basis:
                 lines.append(f'  依据 {basis.segment}：「{basis.quote}」')
     if blueprint.world_constraints:
@@ -248,6 +260,12 @@ def project_preserve_view(
                          f'{beat.scene_boundary}；{beat.temporal_mode}；'
                          f'{"；".join(beat.participants) or "无人物"}；'
                          f'来源 {",".join(beat.source_refs)}）：{beat.event}')
+            if beat.source_refs and all(blueprint.evidence.get(ref, '').strip()
+                                        for ref in beat.source_refs):
+                lines.append(f'  [{beat.beat_id}.v1] 事件：{beat.event}；'
+                             f'证据指针 {",".join(beat.source_refs)}（窗口见文末）')
+            else:
+                lines.append('  事件缺少完整正式证据窗口，不提供可选事件句柄')
             bases: dict[tuple[str, str], list[str]] = {}
             for letter, transfers in (('e', beat.effects), ('c', beat.cognition),
                                       ('l', beat.loops)):
@@ -274,14 +292,8 @@ def project_preserve_view(
 def _transfer_line(kind: str, transfer: Any) -> str:
     """直接投影正式转移；锚点摘要不含完整作用域，不能充当输入真相。"""
     if kind == 'e':
-        line = (f'事实 {_render_target(transfer.target)}.{transfer.key}'
-                f' {transfer.op} {transfer.value!r}（{transfer.modality}；'
-                f'{transfer.scope}；{transfer.disclosure.visibility}；'
-                f'已知 {",".join(transfer.disclosure.known_by) or "未声明"}')
-        if transfer.proposition:
-            p = transfer.proposition
-            line += f'；命题 {p.ref}' + (f'「{p.statement}」' if p.statement is not None else '（引用）')
-        return line + '）'
+        return (f'事实 {_render_target(transfer.target)}.{transfer.key}'
+                f' {transfer.op} {transfer.value!r}（{transfer.modality}）')
     if kind == 'c':
         p = transfer.proposition
         return (f'认知 {transfer.holder} {transfer.mode} 命题 {p.ref}'
@@ -302,6 +314,8 @@ def preserve_revision_wire(checkpoint: PreserveCheckpoint) -> dict[str, Any]:
         raise ValueError('Preserve 修订投影拒绝重复 obligation_id')
     refs = [ref for o in checkpoint.obligations for ref in o.requires]
     refs.extend(ref for group in checkpoint.series for ref in group.members)
+    refs.extend(ref for group in checkpoint.series for summary in group.summaries
+                for ref in (summary.member, *summary.covers))
     if any(ref not in ordinals for ref in refs):
         raise ValueError('Preserve 修订投影拒绝闭集外义务引用')
     return {
@@ -310,10 +324,17 @@ def preserve_revision_wire(checkpoint: PreserveCheckpoint) -> dict[str, Any]:
             {'kind': o.kind.value, 'statement': o.statement,
              'anchors': [a.handle for a in o.anchors],
              'must_preserve': o.must_preserve, 'satisfaction': o.satisfaction,
-             'requires': [ordinals[ref] for ref in o.requires]}
+             'requires': [ordinals[ref] for ref in o.requires],
+             **({'details': [{'anchor': d.anchor.handle, 'text': d.text}
+                             for d in o.details]} if o.details else {})}
             for o in checkpoint.obligations],
         'series': [{'members': [ordinals[ref] for ref in group.members],
-                    'mechanism': group.mechanism} for group in checkpoint.series],
+                    'mechanism': group.mechanism,
+                    **({'summaries': [
+                        {'member': ordinals[s.member],
+                         'covers': [ordinals[ref] for ref in s.covers]}
+                        for s in group.summaries]} if group.summaries else {})}
+                   for group in checkpoint.series],
         'evidence_conflicts': [],
     }
 
@@ -345,6 +366,22 @@ def _preserve_shape_errors(wire: Any) -> list[str]:
                 requires = item.get('requires')
                 if requires is not None and not isinstance(requires, list):
                     errors.append(f'{path}.requires 必须是序号数组')
+                if 'details' in item:
+                    details = item['details']
+                    if not isinstance(details, list):
+                        errors.append(_preserve_issue(
+                            f'{path}.details 必须是细节对象数组',
+                            'preserve_detail_shape', ('detail_shape', n - 1),
+                            (('obligations', n - 1, 'details'),)))
+                    else:
+                        for di, detail in enumerate(details):
+                            try:
+                                ObligationDetail.model_validate(detail)
+                            except ValidationError as exc:
+                                errors.append(_preserve_issue(
+                                    f'{path}.details[{di + 1}] 形状错误：{exc}',
+                                    'preserve_detail_shape', ('detail_shape', n - 1, di),
+                                    (('obligations', n - 1, 'details', di),)))
             elif key == 'series':
                 members = item.get('members')
                 if members is not None and not isinstance(members, list):
@@ -352,6 +389,16 @@ def _preserve_shape_errors(wire: Any) -> list[str]:
                 mechanism = item.get('mechanism')
                 if mechanism is not None and not isinstance(mechanism, str):
                     errors.append(f'{path}.mechanism 必须是 ex_id 字符串或 null')
+                if 'summaries' in item:
+                    summaries = item['summaries']
+                    if not isinstance(summaries, list):
+                        errors.append(f'{path}.summaries 必须是对象数组')
+                    else:
+                        for si, summary in enumerate(summaries, 1):
+                            if not isinstance(summary, dict):
+                                errors.append(f'{path}.summaries[{si}] 必须是对象')
+                            elif not isinstance(summary.get('covers'), list):
+                                errors.append(f'{path}.summaries[{si}].covers 必须是序号数组')
             else:
                 for field in ('anchor', 'segment', 'note'):
                     if field in item and not isinstance(item[field], str):
@@ -362,10 +409,10 @@ def _preserve_shape_errors(wire: Any) -> list[str]:
 def assemble_preserve(
     wire: Any, *,
     policy_id: str, policy_version: int,
-    characters: CharactersCore, blueprint: BlueprintsArtifactV15,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
-    """Preserve wire（stage4-preserve-v2）→ checkpoint。
+    """Preserve wire（stage4-preserve-v5）→ checkpoint。
 
     确定性校验：协议版本、义务 anchors 在投影句柄闭集内（每条义务至少锚定
     一个原子）、requires 序号闭合无环、series 成员闭集互斥且 mechanism 属源
@@ -402,8 +449,30 @@ def assemble_preserve(
             continue
         for handle in anchors:
             if handle not in index:
-                errors.append(f'义务 {ordinal} anchors 引用未知句柄：{handle!r}'
-                              '（只能取投影视图给出的 s0_*/wc_*/b拍.e|c|l 句柄）')
+                if handle.endswith('.v1') and handle[:-3] in beat_refs:
+                    errors.append(_preserve_issue(
+                        f'义务 {ordinal} 事件 {handle} 缺少正式 source_refs 或完整证据窗口',
+                        'preserve_event_evidence', ('event_evidence', ordinal - 1, handle),
+                        (('obligations', ordinal - 1),)))
+                else:
+                    errors.append(f'义务 {ordinal} anchors 引用未知句柄：{handle!r}'
+                                  '（只能取投影视图给出的 s0_*/wc_*/b拍.v1|e|c|l 句柄）')
+        for di, detail in enumerate(item.get('details') or ()):
+            if detail['anchor'] not in index:
+                errors.append(_preserve_issue(
+                    f'义务 {ordinal} details[{di + 1}] 引用未知句柄：'
+                    f'{detail["anchor"]!r}（细节必须引用源证据投影闭集）',
+                    'preserve_detail_anchor', ('detail_anchor', ordinal - 1, di),
+                    (('obligations', ordinal - 1, 'details', di),)))
+        seen_details: set[tuple[str, str]] = set()
+        for di, detail in enumerate(item.get('details') or ()):
+            identity = (detail['anchor'], detail['text'])
+            if identity in seen_details:
+                errors.append(_preserve_issue(
+                    f'义务 {ordinal} details[{di + 1}] 与已有细节重复',
+                    'preserve_detail_duplicate', ('detail_duplicate', ordinal - 1, di),
+                    (('obligations', ordinal - 1, 'details', di),)))
+            seen_details.add(identity)
     if errors:
         return None, errors
     # ID 派发（I-21）：obligation_id 按列表序生成；requires 是 1-based 列表
@@ -450,7 +519,12 @@ def assemble_preserve(
                 anchors=tuple(index[h] for h in o.get('anchors') or ()),
                 must_preserve=o['must_preserve'],
                 satisfaction=o.get('satisfaction') or '',
-                requires=tuple(graph[oid]))
+                requires=tuple(graph[oid]),
+                details=tuple(SourceDetail(
+                    detail_id=_lock_id('dt_', _sha256_payload(
+                        [oid, d['anchor'], d['text']])),
+                    anchor=index[d['anchor']], text=d['text'])
+                    for d in o.get('details') or ()))
             for oid, o in zip(dispatched, raw))
     except (ValidationError, KeyError) as exc:
         return None, [f'义务构造失败：{exc}']
@@ -473,10 +547,30 @@ def assemble_preserve(
         if mechanism is not None and mechanism not in ex_ids:
             errors.append(f'series {n} mechanism 不在源表达 ex_id 闭集：'
                           f'{mechanism!r}')
+        summaries: list[SeriesSummary] = []
+        for si, summary in enumerate(group.get('summaries') or (), 1):
+            _reject_unknown_keys(errors, summary, _SUMMARY_KEYS, f'series {n} summary {si}')
+            member_raw = summary.get('member')
+            covers_raw = summary.get('covers') or []
+            if (not isinstance(member_raw, int) or isinstance(member_raw, bool)
+                    or not 1 <= member_raw <= len(raw)):
+                errors.append(f'series {n} summary {si} member 序号越界：{member_raw!r}')
+                continue
+            if any(not isinstance(ref, int) or isinstance(ref, bool)
+                   or not 1 <= ref <= len(raw) for ref in covers_raw):
+                errors.append(f'series {n} summary {si} covers 序号必须属于义务闭集')
+                continue
+            try:
+                summaries.append(SeriesSummary(
+                    member=dispatched[member_raw - 1],
+                    covers=tuple(dispatched[ref - 1] for ref in covers_raw)))
+            except ValidationError as exc:
+                errors.append(f'series {n} summary {si} 模型校验失败：{exc}')
         if not errors:
             try:
                 series_list.append(ObligationSeries(
-                    members=tuple(resolved_members), mechanism=mechanism))
+                    members=tuple(resolved_members), mechanism=mechanism,
+                    summaries=tuple(summaries)))
             except ValidationError as exc:
                 errors.append(f'series {n} 模型校验失败：{exc}')
     if errors:
@@ -485,14 +579,15 @@ def assemble_preserve(
     for n, conflict in enumerate(wire.get('evidence_conflicts') or (), 1):
         _reject_unknown_keys(errors, conflict, _CONFLICT_KEYS, f'evidence_conflicts {n}')
         anchor = conflict.get('anchor')
-        if anchor not in index:
+        # v4：遗漏可指向真实存在的空拍；仅扩展冲突地址，不把 event 升为义务原子。
+        if anchor not in index and anchor not in beat_refs:
             errors.append(f'evidence_conflicts {n} 引用未知锚点：{anchor!r}')
             continue
         segment = conflict.get('segment')
         if segment not in all_segments:
             errors.append(f'evidence_conflicts {n} 引用未知句段：{segment!r}')
             continue
-        beat_id = anchor.split('.', 1)[0] if '.' in anchor else None
+        beat_id = anchor.split('.', 1)[0]
         refs = beat_refs.get(beat_id) if beat_id else None
         if refs is not None and segment not in refs:
             errors.append(f'evidence_conflicts {n} 的句段 {segment!r} 不属于锚点'
@@ -616,7 +711,7 @@ def fact_lock_subjects(obligations: Iterable[SourceObligation]) -> dict[str, fro
 
 
 def _unanswered_loops(
-    blueprint: BlueprintsArtifactV15,
+    blueprint: BlueprintsArtifactV17,
 ) -> list[tuple[str, str]]:
     """canonical 里 open 而从未 close 的悬念（原文未回答锁的输入，§二.1）。
 
@@ -677,15 +772,14 @@ def _requires_released_surfaces(
 
 
 def _derive_brief_locks(
-    checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV15,
+    checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV17,
     characters: CharactersCore | None = None, structure=None,
 ) -> tuple[tuple[BriefProposition, ...], tuple[BriefKnowledgeLock, ...],
            tuple[BriefFactLock, ...], dict[str, dict[str, tuple]]]:
     """义务 anchors＋canonical loops → Brief 锁定项（a4 唯一派生点）。
 
-    · kp 命题登记：anchors 引用到的全部命题（effect 的 concealed 命题与
-      cognition 命题同注册——揭示链经同一命题 ref 闭合，D3/D5）；
-      asserts 认知转 `publicly_claimed_by`，不铸知情锁。
+    · kp 命题登记：anchors 引用到的全部命题（CS-S 1b 起 effect 不带命题锚，
+      命题面只在 cognition 上；asserts 认知转 `publicly_claimed_by`，不铸知情锁）。
     · 知情锁：cognition anchors 按唯一映射铸 {holder, kp, mode}；
       holder=public 跳过。
     · 事实锁：effect anchors——op=unknown → unknown_value（值未知，目标
@@ -710,13 +804,10 @@ def _derive_brief_locks(
             for window in entry.surfaces:
                 if window.source_refs:
                     first_appearance.setdefault(window.surface, window.source_refs[0])
+    # CS-S 1b：prop_segments 只收 cognition（effect 不再带命题锚）。
     prop_segments: dict[str, set[str]] = {}
     for chapter_bp in blueprint.chapters:
         for beat in chapter_bp.beats:
-            for effect in beat.effects:
-                if effect.proposition is not None and effect.proposition.ref:
-                    prop_segments.setdefault(effect.proposition.ref, set()).update(
-                        basis.segment for basis in effect.basis)
             for cognition in beat.cognition:
                 if cognition.proposition.ref:
                     prop_segments.setdefault(cognition.proposition.ref, set()).update(
@@ -761,15 +852,12 @@ def _derive_brief_locks(
                             'publicly_claimed_by': (*entry.publicly_claimed_by,
                                                     anchor.holder)})
             elif anchor.source_kind == 'effect':
-                kp = _register_proposition(anchor)
                 lock = _anchor_fact_lock(anchor)
                 if lock is not None:
                     facts[lock.kf_id] = lock
                     derived.append(lock.kf_id)
                     if obligation.must_preserve:
                         realize_locks.append(lock.kf_id)
-                if kp is not None:
-                    derived.append(kp)
         deduped = []
         for item in derived:
             if item not in deduped:
@@ -791,7 +879,7 @@ def _derive_brief_locks(
 
 def project_brief(
     checkpoint: PreserveCheckpoint, characters: CharactersCore,
-    blueprint: BlueprintsArtifactV15, structure=None,
+    blueprint: BlueprintsArtifactV17, structure=None,
 ) -> tuple[ReconstructionBrief, tuple[IdentityProjection, ...]]:
     """checkpoint → (Brief, IdentityProjection)。Design 的全部语义输入。
 
@@ -813,11 +901,14 @@ def project_brief(
         _derive_brief_locks(checkpoint, blueprint, characters, structure)
     series_group: dict[str, str] = {}
     series_mechanism: dict[str, str | None] = {}
+    summarizes: dict[str, tuple[str, ...]] = {}
     for group in checkpoint.series:
         token = _lock_id('sr_', '|'.join(sorted(group.members)))
         for member in group.members:
             series_group[member] = token
             series_mechanism[member] = group.mechanism
+        for summary in group.summaries:
+            summarizes[summary.member] = tuple(core_ids[ref] for ref in summary.covers)
     cores = tuple(sorted((
         BriefRequirement(
             core_id=core_ids[o.obligation_id], summary=o.statement,
@@ -828,7 +919,9 @@ def project_brief(
             knowledge_changes=derived_locks[o.obligation_id]['knowledge_changes'],
             realize_locks=derived_locks[o.obligation_id]['realize_locks'],
             series_group=series_group.get(o.obligation_id),
-            series_mechanism=series_mechanism.get(o.obligation_id))
+            series_mechanism=series_mechanism.get(o.obligation_id),
+            details=tuple(BriefDetail(detail_id=d.detail_id, text=d.text) for d in o.details),
+            summarizes_cores=summarizes.get(o.obligation_id, ()))
         for o in checkpoint.obligations), key=lambda c: c.core_id))
     brief = ReconstructionBrief(
         brief_id=f'brief_{checkpoint.checkpoint_id}',
@@ -874,14 +967,14 @@ def design_obligation_index(
 
 def _preserve_issue(message: str, code: str, location: tuple,
                    paths=()) -> ValidationIssue:
-    """Preserve 判据问题：规则码＋稳定位置＋`obligations[i]` 条目路径。"""
+    """Preserve 判据问题：规则码＋稳定位置＋义务或细节的完整条目路径。"""
     return ValidationIssue(message, code=code, location=tuple(location),
                            owner='preserve',
                            context={'wire_paths': [list(p) for p in paths]})
 
 
 def preserve_name_issues(
-    checkpoint: PreserveCheckpoint | None, chars,
+    checkpoint: PreserveCheckpoint | None, chars, blueprint=None,
 ) -> list[ValidationIssue]:
     """Preserve 自闸（CS-H H3，RC-64）：义务 statement／satisfaction 里的
     **裸姓与未登记别名**在 Preserve 自己的接受循环里被逐条定位。
@@ -894,6 +987,10 @@ def preserve_name_issues(
     不再等跨节点回派。家族构词（「陆家」一类集体指称）**不拒**：同家族人物释放后
     它是正文的合法字面，Preserve 阶段不知释放时点，拒收只会误报。
     quotes／anchors 是源文逐字证据，不在扫描面。纯函数、只读。
+
+    同一人物在同句混用不同已绑定带名称谓的无损投影阻断也提前定位；与 renderer
+    同样检查 statement＋satisfaction 的组合行。必保揭名由正式证据派生并排除，
+    未知揭名及目标拍位问题仍留给 Design，不在此模拟目标释放顺序。
     """
     structure = chars.name_structure
     if checkpoint is None or structure is None:
@@ -904,21 +1001,62 @@ def preserve_name_issues(
                         | {s for entry in projection.by_person
                            for s in entry.name_bearing_surfaces}
                         | family_forms)
-    bindable = {literal for literal, _cid, _enc in
-                withheld_name_bindings(registered, structure)}
+    bindings = tuple(WithheldNameBinding(literal=literal, char_id=cid, enclosing=enclosing)
+                     for literal, cid, enclosing in withheld_name_bindings(registered, structure))
+    bindable = {binding.literal for binding in bindings}
+    # 显示面具体字面不影响同句不同称谓的阻断判据；这里只模拟同一人物的统一面，
+    # 不决定目标释放位置、不改文本。必保揭名由正式证据信号派生，保持原字面。
+    display = {binding.char_id: f'人物<{binding.char_id}>' for binding in bindings}
+    required: dict[str, set[str]] = {}
+    if blueprint is not None:
+        _props, _knowledge, _facts, derived = _derive_brief_locks(
+            checkpoint, blueprint, chars.core_view(), structure)
+        required = {oid: {face for change in row['knowledge_changes']
+                          for face in change.requires_released}
+                    for oid, row in derived.items()}
     # 闸面＝裸姓（家族字面本身，含复姓整字）。认领面只有两类合法字面：家族构词
     # （「陆家」一类集体指称）与**唯一归属、可投影**的带名面——「陆」在「陆家」
     # 「陆兄」里被更长的合法字面认领；在「陆郎」「陆某」这类未登记别名里未被覆盖、
     # 如实报出。多义带名面（同一登记称谓属于两个人物）永不投影，**不**作认领面：
     # 它里面的裸姓同样如实报出（与下游材料归因同一把尺，RC-64）。
     gate = tuple(sorted({f.literal for f in structure.families.values()}))
-    if not gate:
-        return []
     claim_face = tuple(sorted((family_forms | bindable) - set(gate)))
     issues: list[ValidationIssue] = []
     for index, obligation in enumerate(checkpoint.obligations):
-        for field in ('statement', 'satisfaction'):
-            text = getattr(obligation, field) or ''
+        fields = [(field, getattr(obligation, field) or '', ('obligations', index))
+                  for field in ('statement', 'satisfaction')]
+        fields.extend((f'details/{detail.detail_id}', detail.text,
+                       ('obligations', index, 'details', di))
+                      for di, detail in enumerate(obligation.details))
+        # renderer 会将两字段拼成同一材料行；逐字段可投影不证明组合后也可投影。
+        portable_fields = [*fields, ('statement+satisfaction',
+                           f'{obligation.statement}（本拍验收时须兑现：{obligation.satisfaction}）',
+                           ('obligations', index))]
+        protected = required.get(obligation.obligation_id, set())
+        portable_bindings = tuple(b for b in bindings if b.literal not in protected)
+        # 离线缺 Blueprint 时无法证明 identity/reveal 的揭名要求；保持未知，
+        # 生产/预览/重放均传正式 Blueprint，不凭类别或自然语言推断揭名。
+        can_check_projection = (blueprint is not None
+                                or obligation.kind.value not in ('identity', 'reveal'))
+        blocked_literals: set[str] = set()
+        if can_check_projection:
+            for field, text, path in portable_fields:
+                _projected, _hits, blocks = project_withheld_names(
+                    text, bindings=portable_bindings, display=display)
+                literals = {block.literal for block in blocks} - blocked_literals
+                if not literals:
+                    continue
+                blocked_literals.update(literals)
+                issue = _preserve_issue(
+                    f'义务 {obligation.obligation_id} 的 {field} 同句混用同一人物的不同称谓 '
+                    f'{sorted(literals)}，无法无损投影；身份/别名映射以 Characters 为准，'
+                    '本项只写关系、行动与满足条件，统一可用指称；保留 anchors 与业务语义',
+                    'preserve_name_projection',
+                    ('preserve_name_projection', obligation.obligation_id, field), (path,))
+                issue.context.update({'obligation_id': obligation.obligation_id,
+                                      'field': field, 'literals': sorted(literals)})
+                issues.append(issue)
+        for field, text, path in fields:
             if not text:
                 continue
             claimed = claim_spans(text, claim_face)
@@ -930,7 +1068,7 @@ def preserve_name_issues(
                     '保留 anchors 与原义务语义',
                     'preserve_name_literal',
                     ('preserve_name_literal', obligation.obligation_id, field, claim.literal),
-                    (('obligations', index),))
+                    (path,))
                 issue.context.update({'obligation_id': obligation.obligation_id,
                                       'field': field, 'literal': claim.literal})
                 issues.append(issue)
@@ -939,6 +1077,8 @@ def preserve_name_issues(
 
 def _anchor_line(anchor: ObligationAnchor) -> str:
     """锚点类型化拷贝 → 切片里的人读原子行（与投影视图同一语法，不新造语义）。"""
+    if anchor.source_kind == 'event':
+        return f'事件：{anchor.event_statement}'
     if anchor.source_kind == 'cognition':
         statement = anchor.proposition_statement or ''
         return (f'认知 {anchor.holder} {anchor.mode or ""} 命题 '
@@ -959,7 +1099,7 @@ def _anchor_line(anchor: ObligationAnchor) -> str:
 
 def preserve_patch_slice(
     wire: dict[str, Any], characters: CharactersCore,
-    blueprint: BlueprintsArtifactV15, indices: Iterable[int],
+    blueprint: BlueprintsArtifactV17, indices: Iterable[int],
 ) -> dict[str, Any]:
     """Preserve 条目返修的依赖切片（RC-64）：目标义务的源原子与证据窗口。
 
@@ -974,14 +1114,20 @@ def preserve_patch_slice(
         if not 0 <= i < len(raw) or not isinstance(raw[i], dict):
             continue
         atoms = []
-        for handle in raw[i].get('anchors') or ():
+        handles = list(raw[i].get('anchors') or ())
+        details = raw[i].get('details')
+        handles.extend(d['anchor'] for d in (details if isinstance(details, list) else ())
+                       if isinstance(d, dict) and isinstance(d.get('anchor'), str))
+        for handle in dict.fromkeys(handles):
             anchor = index.get(handle)
             if anchor is None:
                 continue
             atoms.append({'handle': handle, 'line': _anchor_line(anchor),
-                          'quotes': list(anchor.quotes)})
+                          'quotes': list(anchor.quotes),
+                          **({'event_evidence': [e.model_dump() for e in anchor.event_evidence]}
+                             if anchor.source_kind == 'event' else {})})
         slices.append({'index': i, 'obligation': raw[i], 'atoms': atoms})
-    return {'input_version': 'stage4-preserve-slice-v1', 'targets': slices}
+    return {'input_version': 'stage4-preserve-slice-v2', 'targets': slices}
 
 
 def required_releases(brief: ReconstructionBrief) -> dict[tuple[str, str, str], tuple[str, ...]]:
@@ -1120,6 +1266,7 @@ def derive_semantic_binding(
             binding_id=f'bind_{checkpoint.checkpoint_id}',
             preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
             obligations=checkpoint.obligations,
+            series=checkpoint.series,
             entries=tuple(_binding_entry(e) for e in entries),
             unbound=tuple(_unbound_entry(u) for u in unbound),
             fact_bindings=tuple(fact_bindings))
@@ -1134,8 +1281,10 @@ def derive_semantic_binding(
     # CS-H H2：候选拍闭集里改选承载位——可选目标，路径由 wire 侧拍坐标给出）。
     entry_of = {e.obligation_id: e for e in binding.entries}
     for group in checkpoint.series:
+        summary_ids = {summary.member for summary in group.summaries}
         carried = [(member, entry_of[member].beat_ref)
-                   for member in group.members if member in entry_of]
+                   for member in group.members
+                   if member in entry_of and member not in summary_ids]
         by_ref: dict[str, list[str]] = {}
         for member, ref in carried:
             by_ref.setdefault(ref, []).append(member)

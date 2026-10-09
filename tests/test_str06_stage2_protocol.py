@@ -97,21 +97,32 @@ def test_retired_derived_inputs_are_refused_paths():
 # ───────────────────────── 协议显式版本化（I-13） ─────────────────────────
 
 def test_observation_artifacts_are_registered_with_independent_versions():
-    # rc15（RC-26/27 证据寻址）：携带段号的三类观察换身份；associate 只有
-    # 位置句柄、形状不变，不虚构升版。
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/book.json'] == 'str06-rc15'
+    # rc15（RC-26/27 证据寻址）：携带段号的三类观察换身份；rc18（CS-S 1b）：
+    # book／ch{nn} 观察 canonical 升 v5（死字段收口）再换身份；names 形状
+    # 不变，保持 rc15。
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/book.json'] == 'str06-rc20'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/ch{nn}.json'] == 'str06-rc20'
     for rel in ('stage2/observations/ch{nn}.json',
                 'stage2/observations/names.json'):
         assert rel in ARTIFACT_PATHS and rel in ARTIFACT_SPECS
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc15'
+    # rc18 续（CS-S 1c）：names canonical 升 v4——构词派生＋变体窄调用。
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/names.json'] == 'str06-rc18'
     # R1：associate 观察独立升版（stage2-associate-v2），形状升 rc9；三类观察
     # 冻结在 rc6（B2 身份）不动。RC 版式头随 R1 升 rc9。
     # rc17（CS-H H4，RC-65）：associate 协议升 v3（维度句柄）——同键配对按构造
     # 不可能、模型只配键不同但同维的维度；观察产物随协议换身份。
     assert ARTIFACT_SPECS['stage2/observations/associate.json']
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc17'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc20'
     # R2（语义送达）起 RC 版式头升 rc10；associate 冻结在 rc9（R1 身份）不动。
-    assert STR06_RC_VERSION == 'str06-rc17'     # rc17：CS-H H3 称谓面＋H4 associate v3
+    assert STR06_RC_VERSION == 'str06-rc22'     # 质量产物换身份；Stage2 独立维持 rc20。
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/compiled/execution_plan.json'] == 'str06-rc14'
+    for rel in ('runtime/preserve_checkpoint.json',
+                'stage4/grounding/reconstruction_brief.json',
+                'stage4/grounding/semantic_binding.json',
+                'stage4/design/body_design.json',
+                'stage4/design/presentation_graph.json',
+                'stage4/ir/writer_book_ir.json'):
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc22'
     # rc16 续（CS-F2 Hook 称谓投影）：楔子上下文随绑定表换身份，旧 rc12 拒读。
     # rc17 续（CS-H H3）：hook 上下文增 display_faces/avoid_lines。
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/context/hook/hook.json'] == 'str06-rc17'
@@ -143,7 +154,7 @@ def _book_wire() -> dict:
                 {'surface': '云娘', 'source_refs': ['e01_02']},
             ]},
         }),
-        'protocol_version': 'stage2-book-v4',
+        'protocol_version': 'stage2-book-v7',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']},
@@ -156,7 +167,7 @@ def _book_wire() -> dict:
         'initial_state': [
             {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
              'key': 'marital_status', 'value': '夫妻', 'persistence': 'stable',
-             'knowledge': None, 'source_refs': ['e00_01'], 'basis': _basis('e00_01')},
+             'source_refs': ['e00_01'], 'basis': _basis('e00_01')},
         ],
         'world_constraints': [
             {'kind': 'setting_constant', 'statement': '故事发生在古代江南',
@@ -177,9 +188,8 @@ def _beat_wire(**over) -> dict:
         'scene_boundary': 'new',
         'temporal_mode': 'single',
         'effects': [{'target': {'kind': 'character', 'char_id': 'yun_niang'},
-                     'key': 'wariness', 'op': 'set', 'value': '高', 'scope': 'book',
+                     'key': 'attitude', 'op': 'set', 'value': '高',
                      'modality': 'actual',
-                     'disclosure': {'visibility': 'on_page'},
                      'basis': _basis('e01_01')}],
         'cognition': [{'proposition': {'ref': 'p_secret',
                                        'statement': '借种之约是夫妻共同秘密'},
@@ -230,16 +240,8 @@ def test_chapter_observation_rejects_unknown_fields():
 
 
 def test_transfer_semantics_carry_over_from_v13():
-    """三类转移的形状闸逐字复用 v13 模型：可见性、悬念开闭、登记键作用域兜底。"""
-    # concealed 必须声明已知者并带命题锚（R-2.13）
-    with pytest.raises(ValidationError):
-        ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
-                                           'beats': [_beat_wire(effects=[
-                                               _concealed_effect(known_by=[])])]})
-    with pytest.raises(ValidationError):
-        ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
-                                           'beats': [_beat_wire(effects=[
-                                               _concealed_effect(proposition=None)])]})
+    """三类转移的形状闸逐字复用 v13 模型：悬念开闭；CS-S 1b 死字段（scope／
+    disclosure／proposition）在 effect 面关闭式拒收。"""
     # open 必带 question、close 必带 resolution 且不改写问题（R-2.11）
     with pytest.raises(ValidationError):
         ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
@@ -250,26 +252,25 @@ def test_transfer_semantics_carry_over_from_v13():
                                            'beats': [_beat_wire(loops=[
                                                {'ref': 'q1', 'op': 'close',
                                                 'question': '改写问题', 'resolution': '是夫君'}])]})
-    # 登记键作用域：表内键声明不符在 schema 层兜底拒（R-2.14）
-    with pytest.raises(ValidationError):
-        ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
-                                           'beats': [_beat_wire(effects=[
-                                               _effect('residence', scope='scene')])]})
+    # 死字段：scope／disclosure／proposition 携带即拒（extra_forbidden）
+    for dead in ('scope', 'disclosure', 'proposition'):
+        with pytest.raises(ValidationError):
+            ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
+                                               'beats': [_beat_wire(effects=[
+                                                   _dead_field_effect(dead)])]})
 
 
-def _effect(key: str, *, scope: str) -> dict:
-    return {'target': {'kind': 'character', 'char_id': 'fu_jun'}, 'key': key,
-            'op': 'set', 'value': '城南', 'scope': scope, 'modality': 'actual',
-            'disclosure': {'visibility': 'on_page'}, 'basis': _basis('e01_01')}
-
-
-def _concealed_effect(*, known_by=(), proposition='p_hidden') -> dict:
-    eff = {'target': {'kind': 'character', 'char_id': 'fu_jun'}, 'key': 'birthright',
-           'op': 'set', 'value': '养子', 'scope': 'book', 'modality': 'actual',
-           'disclosure': {'visibility': 'concealed', 'known_by': list(known_by)},
+def _dead_field_effect(dead: str) -> dict:
+    """CS-S 1b：已删字段的直接构造（红例素材）。"""
+    eff = {'target': {'kind': 'character', 'char_id': 'fu_jun'}, 'key': 'identity',
+           'op': 'set', 'value': '养子', 'modality': 'actual',
            'basis': _basis('e01_01')}
-    if proposition is not None:
-        eff['proposition'] = {'ref': proposition, 'statement': '夫君是养子'}
+    if dead == 'scope':
+        eff['scope'] = 'scene'
+    elif dead == 'disclosure':
+        eff['disclosure'] = {'visibility': 'on_page'}
+    else:
+        eff['proposition'] = {'ref': 'p_hidden', 'statement': '夫君是养子'}
     return eff
 
 
@@ -283,23 +284,24 @@ def test_chapter_observation_green_with_local_handles():
 # ───────────────────────── associate 只选已给句柄（D8） ─────────────────────────
 
 def test_associate_protocol_is_independently_versioned():
-    """R1：associate 独立升版（CS-H H4 起 stage2-associate-v3，RC-65 维度句柄）；
+    """R1：associate 独立升版（CS-S Phase 2 起 stage2-associate-v5——条目级
+    窄 resolver：候选由代码给出、逐候选 verdict）；三类观察协议字面量逐字不变。
     三类观察协议字面量逐字不变。
 
     旧协议字面量对 associate 关闭式拒读（I-13：无运行时转换层）——句柄含义与
     输入材料已变，旧回答不做句柄替换后继续采用（首版 PLAN.md R1，Git 2fc03832；A1.5 出自被它吸收的提案）。
     """
-    assert STAGE2_ASSOCIATE_PROTOCOL == 'stage2-associate-v3'
+    assert STAGE2_ASSOCIATE_PROTOCOL == 'stage2-associate-v5'
     assert STAGE2_OBSERVATION_PROTOCOL == 'stage2-observation-v1'
-    empty = {'same_proposition': [], 'same_state_dimension': [], 'loop_pairing': [],
+    empty = {'same_proposition': [], 'loop_pairing': [],
              'cross_chapter_cause': [], 'scene_continuation': []}
     obs = AssociateObservation.model_validate(
         {'protocol_version': STAGE2_ASSOCIATE_PROTOCOL, **empty})
     assert obs.protocol_version == STAGE2_ASSOCIATE_PROTOCOL
     with pytest.raises(ValidationError):
         AssociateObservation.model_validate(
-            {'protocol_version': 'stage2-associate-v2', **empty}), \
-        'v2 字面量（状态写入句柄配对）对 v3 关闭式拒读'
+            {'protocol_version': 'stage2-associate-v3', **empty}), \
+        'v3 字面量（整书投影配对）对 v4 关闭式拒读'
     with pytest.raises(ValidationError):
         AssociateObservation.model_validate(
             {'protocol_version': 'stage2-observation-v1', **empty}), \
@@ -309,15 +311,24 @@ def test_associate_protocol_is_independently_versioned():
 def test_associate_observation_shape_and_closed_handle_charset():
     obs = AssociateObservation.model_validate({
         'protocol_version': STAGE2_ASSOCIATE_PROTOCOL,
-        'same_proposition': [{'left': 'c01:p_secret', 'right': 'c03:p2'}],
-        'same_state_dimension': [{'left': 'c01:e1', 'right': 'c02:e3'}],
-        'loop_pairing': [{'open': 'c01:q_night', 'close': 'c03:q9'}],
+        'same_proposition': [{'left': 'c01:p_secret', 'right': 'c03:p2',
+                              'verdict': 'same'}],
+        'loop_pairing': [{'open': 'c01:q_night', 'close': 'c03:q9',
+                          'verdict': 'pair'}],
         'cross_chapter_cause': [{'from_beat': 'c01:b01', 'to_beat': 'c02:b02',
                                  'kind': 'setup_payoff'}],
-        'scene_continuation': [{'left': 'c01:sc02', 'right': 'c02:sc01'}],
+        'scene_continuation': [{'left': 'c01:sc02', 'right': 'c02:sc01',
+                                'verdict': 'continue'}],
     })
     assert obs.same_proposition[0].left == 'c01:p_secret'
     assert obs.cross_chapter_cause[0].kind == 'setup_payoff'
+    # CS-S Phase 3：same_state_dimension 已随 change 键闭集删除——v4 键关闭式拒读。
+    with pytest.raises(ValidationError):
+        AssociateObservation.model_validate({
+            'protocol_version': STAGE2_ASSOCIATE_PROTOCOL,
+            'same_state_dimension': [{'left': 'c01:e1', 'right': 'c02:e3',
+                                      'verdict': 'same'}]}), \
+        'v4 的维度配对面在 v5 关闭式拒读'
     with pytest.raises(ValidationError):
         AssociateObservation.model_validate({
             'protocol_version': STAGE2_ASSOCIATE_PROTOCOL,
@@ -331,6 +342,7 @@ def test_associate_observation_shape_and_closed_handle_charset():
         AssociateObservation.model_validate({
             'protocol_version': STAGE2_ASSOCIATE_PROTOCOL,
             'same_proposition': [{'left': 'c01:p1', 'right': 'c02:p1',
+                                  'verdict': 'same',
                                   'note': '闭集之外的字段不收'}]})
 
 
@@ -338,7 +350,7 @@ def test_associate_observation_shape_and_closed_handle_charset():
 
 def test_names_observation_wraps_name_structure():
     obs = NamesObservation.model_validate({
-        'protocol_version': 'stage2-names-v3',
+        'protocol_version': 'stage2-names-v4',
         'structure': {
             'families': {'f_lu': {'literal': '陆', 'forms': []}},
             'people': {'fu_jun': {'family_id': 'f_lu', 'given': '夫君',

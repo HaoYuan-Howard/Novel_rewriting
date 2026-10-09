@@ -227,6 +227,8 @@ class TargetBeat(StrictModel):
     # assemble——只能引用 Brief.expression 给出的 ex_id；narration 书级
     # 机制不上拍）。R10b renderer v7 把它展开成拍级表达任务。
     expression_refs: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 可改写细节的盲引用；只选择呈现材料，不增加必保义务。
+    detail_refs: tuple[str, ...] = Field(default=(), min_length=0)
     surface_introductions: tuple[SurfaceIntroduction, ...] = ()
     #: 拍上的跨章线程操作（R2.4）：open/advance/close；生命周期闭合由
     # BodyDesign 构造期校验（open 一次、操作不早于 open、close 后无操作、
@@ -357,7 +359,7 @@ class BodyDesign(StrictModel):
     （`TargetBeat.threads`，折叠走 ThreadFold）。rc7 的四个静态锚定列表
     已删除（AUD-04：无消费者；裁决 3）。
     """
-    contract_version: Literal['str06-rc14'] = 'str06-rc14'
+    contract_version: Literal['str06-rc22'] = 'str06-rc22'
     graph_id: str = Field(min_length=1)
     narration: HookPov
     expression_decisions: tuple[ExpressionDecision, ...] = Field(min_length=1)
@@ -651,6 +653,7 @@ class DesignWireBeat(StrictModel):
     delivery_hint: str = Field(default='', min_length=0)
     target_delta: tuple[TargetDelta, ...] = Field(default=(), min_length=0)
     expression_refs: tuple[str, ...] = Field(default=(), min_length=0)
+    detail_refs: tuple[str, ...] = Field(default=(), min_length=0)
     surface_introductions: tuple[SurfaceIntroduction, ...] = ()
     threads: tuple[DesignWireThread, ...] = ()
 
@@ -727,7 +730,10 @@ class DesignWireV5(StrictModel):
 #: v8（CS-F2，2026-10-04）：事实锁改为在已选状态上标注 `lock` 引用，不再把 kf 句柄
 #: 当状态键另写一条复述事实的状态（《夫君的报恩》Design 因此把锁原文连同未释放
 #: 全名抄进自己的 val）；v7 旧 wire 关闭式拒读（I-13，无隐式迁移）。
-STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v8'
+#: v9（rc21，2026-10-09）：可改写细节由短引用选择，文本来自正式 Brief。
+#: v10（2026-10-09）：请求投影 v2 省略机械空值/重复知情授权；kp/kf 改短引用。
+#: v9 已购候选显式解码仍支持沿用与窄复核，删除条件在 REQUIREMENTS 登记。
+STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v10'
 
 
 class SlimDesignState(StrictModel):
@@ -784,6 +790,8 @@ class SlimDesignBeat(StrictModel):
     real: tuple[str, ...] = Field(default=(), min_length=0)
     know: tuple[SlimKnowledgePlacement, ...] = Field(default=(), min_length=0)
     ex: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 由请求派发的细节短引用；缺省不选，选择后由 compiler 回填文本。
+    details: tuple[str, ...] = Field(default=(), min_length=0)
     state: tuple[SlimDesignState, ...] = Field(default=(), min_length=0)
     release: tuple[SurfaceIntroduction, ...] = Field(default=(), min_length=0)
     threads: tuple[DesignWireThread, ...] = Field(default=(), min_length=0)
@@ -859,8 +867,8 @@ class SlimExpressionOverride(StrictModel):
     target_statement: str = Field(min_length=1)
 
 
-class DesignWireV8(StrictModel):
-    """`stage4-design-v8` 瘦顶层（传输面，不落盘）。
+class DesignWireV9(StrictModel):
+    """`stage4-design-v9` 瘦顶层（传输面，不落盘）。
 
     派生面（expand）：narration←Brief.source_narration、expression_decisions
     ←keep-all＋overrides、world_rules←Brief.book_constraints、scene_weights
@@ -870,7 +878,7 @@ class DesignWireV8(StrictModel):
     标注 real**。
     """
 
-    protocol_version: Literal['stage4-design-v8']
+    protocol_version: Literal['stage4-design-v9']
     book_style: str = Field(min_length=1)
     character_voices: tuple[CharacterVoice, ...] = Field(default=(), min_length=0)
     expression_overrides: tuple[SlimExpressionOverride, ...] = Field(default=(), min_length=0)
@@ -879,3 +887,28 @@ class DesignWireV8(StrictModel):
     scenes: tuple[SlimDesignScene, ...] = Field(min_length=1)
     chapters: tuple[SlimDesignChapter, ...] = Field(min_length=1)
     scene_weights: tuple[float, ...] | None = None
+
+
+class SlimDesignStateV10(SlimDesignState):
+    """v10 只改引用传输：锁用 compiler 派发的短引用，不改事实语义。"""
+
+    lock: str | None = Field(default=None, pattern=r'^kf_[0-9a-f]{8}$')
+
+
+class SlimDesignBeatV10(SlimDesignBeat):
+    state: tuple[SlimDesignStateV10, ...] = Field(default=(), min_length=0)
+
+
+class SlimDesignSceneV10(SlimDesignScene):
+    beats: tuple[SlimDesignBeatV10, ...] = Field(min_length=1)
+
+
+class DesignWireV10(DesignWireV9):
+    """v10 短命题/锁引用；canonical 仍使用 Brief 的完整盲身份。
+
+    请求投影 v2 与 compiler 共用完整 Brief 的稳定前缀映射。v9 仅供已有付费
+    候选沿用/窄复核，适配集中在 stage4.slim，不再用于新整份生成。
+    """
+
+    protocol_version: Literal['stage4-design-v10']
+    scenes: tuple[SlimDesignSceneV10, ...] = Field(min_length=1)

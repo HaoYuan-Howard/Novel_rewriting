@@ -85,7 +85,7 @@ from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
 from novel import run_identity
 from novel.core.validation import ValidationIssue, validation_identity
 from contracts.invariants import (
-    NODES, OWNER_REVISION_MAX_ROUNDS, WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
+    NARROW_OWNER_UNITS, NODES, OWNER_REVISION_MAX_ROUNDS, WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
 )
 from contracts.schema import ARTIFACT_SPECS
 from contracts.schema.common import FreeProvenance, InputEdge, LlmProvenance
@@ -282,7 +282,7 @@ class PurchaseRequired(ExecutionError):
     def __init__(self, owner: str):
         super().__init__(
             f'{owner} 无同请求身份结果且未授权新调用；如需继续请同时提供 '
-            '--yes 与正文外发许可（--allow-source-export）',
+            '--yes 与正文外发许可（--allow-egress）',
             code='purchase_required', phase='authorize', node=f'str06.*.{owner}',
             context={'owner': owner})
         self.owner = owner
@@ -384,7 +384,16 @@ def semantic_owner_unit(owner: str) -> tuple[str, str]:
     `strategy` 整书单元随 str06.stage2.source 退役）。节点归属由 owner 名当场
     解析：别名表 → 节点 owner 末段 → `NODES` 的 `str06.` 命名空间，hit 不到
     就关闭式上抛，不猜一个节点记账。
+
+    节点内窄调用 owner（`name_variants`／`cross_cause`，CS-S 1c／Phase 2，T-3 不增
+    节点）归属所在节点，但**独占一个工作单元**（scope＝`book:<owner>`，登记表
+    `contracts/invariants.py::NARROW_OWNER_UNITS`）：与主调用共用单元账会让后一个
+    ask 取轮时把前一个已验收未封存的首答记成 `superseded_unadopted`，并瓜分同一份
+    内容额度。owner 字符串同时进请求身份，主／窄请求互不混用。
     """
+    narrow = NARROW_OWNER_UNITS.get(owner)
+    if narrow is not None:
+        return narrow
     match = re.fullmatch(r'ch(\d+)', owner)
     if match:
         return 'str06.stage2.chapters', f'chapter:{int(match.group(1))}'
@@ -419,6 +428,31 @@ def sealed_turn_references(root: Path) -> set[tuple[str, str]]:
             if adoption.unit_id and adoption.turn_id:
                 sealed.add((adoption.unit_id, adoption.turn_id))
     return sealed
+
+
+def reconcile_delivered_turns(root: Path, unit: 'WorkUnitBudget') -> dict[str, str]:
+    """对账已交付未采用轮：被已封存 CommitBundle 引用 → adopted；其余 →
+    rejected（superseded_unadopted：保留原回答、不返还轮次，对齐正式 client
+    的 ``continued_content_work`` 语义）。幂等；reserved／unknown 原样保留——
+    pending／unknown 不自动重购，交恢复入口对账（Q-13）。
+
+    取轮路径（``_close_unadopted``）与操作员追加入口
+    （``work_unit_grants.reconcile_delivered``）共用本实现：单元额度耗尽且存在
+    已保存回答时，追加闸要求先对账，而自动对账只在取轮路径触发——额度已尽则
+    取轮不可能，操作员显式入口解开该循环（2026-10-08 走书实证）。
+    """
+    sealed = sealed_turn_references(root)
+    outcome: dict[str, str] = {}
+    for turn in unit._read().turns:
+        if turn.state != 'delivered':
+            continue
+        if (unit.unit_id, turn.turn_id) in sealed:
+            unit.mark_adopted(turn.turn_id)
+            outcome[turn.turn_id] = 'adopted'
+        else:
+            unit.mark_rejected(turn.turn_id, reason_code='superseded_unadopted')
+            outcome[turn.turn_id] = 'rejected'
+    return outcome
 
 
 class PaidRequestSession:
@@ -778,20 +812,12 @@ class PaidRequestSession:
     def _close_unadopted(self, unit: WorkUnitBudget) -> None:
         """下一次取轮前对账已交付内容轮：采用状态从 seal 派生（B1）。
 
-        被任何已封存 CommitBundle 引用的轮 → `mark_adopted`（ledger 状态是封存
-        证据的投影，由 seal 事件翻转；bundle 是 canonical 证据，进程内窗口已删）；
-        其余 `delivered` 轮 → `mark_rejected` 关闭让位（保留原回答、不返还轮次，
-        对齐正式 client 的 `continued_content_work` 语义）。`reserved`／`unknown`
-        原样保留——pending／unknown 不自动重购，交恢复入口对账（Q-13）。
+        实现住 ``reconcile_delivered_turns``（取轮路径与操作员追加入口共用）：
+        被任何已封存 CommitBundle 引用的轮 → ``mark_adopted``（ledger 状态是
+        封存证据的投影，由 seal 事件翻转；bundle 是 canonical 证据，进程内窗口
+        已删）；其余 ``delivered`` 轮 → ``mark_rejected`` 关闭让位。
         """
-        sealed = sealed_turn_references(self.repository.root)
-        for turn in unit._read().turns:
-            if turn.state != 'delivered':
-                continue
-            if (unit.unit_id, turn.turn_id) in sealed:
-                unit.mark_adopted(turn.turn_id)
-                continue
-            unit.mark_rejected(turn.turn_id, reason_code='superseded_unadopted')
+        reconcile_delivered_turns(self.repository.root, unit)
 
     # ── ledger 行 ───────────────────────────────────────────────────────────
 
@@ -2161,9 +2187,21 @@ class CandidateRunContext:
 
     def provenance_for(self, writer_node: str, rel: str, *,
                        refs: tuple[AdoptionRef, ...] = (),
-                       claim_usage: bool = True):
-        """按 writer 节点的贵贱铸来源账：付费节点要求显式采用引用，免费节点无。"""
+                       claim_usage: bool = True,
+                       declared_free: bool = False):
+        """按 writer 节点的贵贱铸来源账：付费节点要求显式采用引用，免费节点无。
+
+        ``declared_free``（CS-S Phase 2）：付费节点**零模型参与**的确定性产物
+        ——调用方显式声明（如 associate 无候选＝零调用时的空判定面）铸
+        FreeProvenance。不声明且无引用即拒：付费节点缺引用的写盘默认按造假拦。
+        """
         spec = self._validated_node(writer_node)
+        if declared_free:
+            if refs:
+                raise ProvenanceRefused(
+                    f'{writer_node} 的产物同时声明免费与采用引用——采用引用'
+                    '只属于模型参与过的产出，二选一（I-35：fallback 显式）')
+            return self.free_provenance(rel)
         if spec.paid:
             return self.llm_provenance(rel, refs=refs, claim_usage=claim_usage,
                                        node=writer_node)

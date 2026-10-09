@@ -24,7 +24,8 @@ from contracts.invariants import (
     PIPELINE_BOOK_CONCURRENCY, PIPELINE_PROVIDER_CONCURRENCY,
 )
 from contracts.schema.observation import (
-    STAGE2_CHAPTERS_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL,
+    STAGE2_CHAPTERS_PROTOCOL, STAGE2_NAMES_PROTOCOL,
+    STAGE2_NAMES_WIRE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL,
 )
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.paid_requests import PaidRequestSession
@@ -66,7 +67,7 @@ def _book_wire() -> dict:
             'yun_niang': {'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'source_refs': ['e01_02']}]},
         }),
-        'protocol_version': 'stage2-book-v4',
+        'protocol_version': 'stage2-book-v7',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']}]},
@@ -76,7 +77,7 @@ def _book_wire() -> dict:
         'initial_state': [
             {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
              'key': 'marital_status', 'value': '夫妻', 'persistence': 'stable',
-             'knowledge': None, 'source_refs': ['e00_01'], 'basis': _basis('e00_01')},
+             'source_refs': ['e00_01'], 'basis': _basis('e00_01')},
         ],
         'world_constraints': [
             {'kind': 'setting_constant', 'statement': '故事发生在古代江南',
@@ -98,14 +99,13 @@ def _chapter_wire(*beats: dict) -> dict:
 
 
 def _names_wire() -> dict:
+    # CS-S 1c：v6 结构 wire——无 surface_forms／resolutions（构词派生＋窄调用）。
     return {
-        'protocol_version': 'stage2-names-v3', 'resolutions': [],
+        'protocol_version': STAGE2_NAMES_WIRE_PROTOCOL,
         'families': {'f_lu': {'literal': '陆', 'forms': []}},
         'people': {
-            'fu_jun': {'family_id': None, 'given': None, 'aliases': [],
-                       'surface_forms': {'夫君': None}},
-            'yun_niang': {'family_id': None, 'given': None, 'aliases': [],
-                          'surface_forms': {'云娘': None}},
+            'fu_jun': {'family_id': None, 'given': None, 'aliases': []},
+            'yun_niang': {'family_id': None, 'given': None, 'aliases': []},
         },
     }
 
@@ -142,7 +142,9 @@ def test_book_observation_refuses_unclosed_canonical_and_duplicate_surface():
     assert any('surface 重复登记' in e for e in errors), errors
 
 
-def test_book_observation_refuses_scene_scope_initial_key_and_unknown_known_by():
+def test_book_observation_refuses_scene_scope_initial_key_and_dead_knowledge():
+    """CS-S 1b：initial_state 的 knowledge 已删——wire 携带即按协议拒收
+    （初始知情由 Phase 2 的 facts known_at_start 承载）。"""
     wire = _book_wire()
     wire['initial_state'][0]['key'] = 'scene_location'
     wire['initial_state'].append(
@@ -152,7 +154,7 @@ def test_book_observation_refuses_scene_scope_initial_key_and_unknown_known_by()
          'source_refs': ['e00_01'], 'basis': _basis('e00_01')})
     _obs, errors = compile_book_observation(wire, evidence=EVIDENCE)
     assert any('场景作用域' in e and 'residence' in e for e in errors), errors
-    assert any('known_by 引用未知人物 reader' in e for e in errors), errors
+    assert any('knowledge' in e and 'Extra inputs' in e for e in errors), errors
 
 
 def test_book_observation_never_modifies_the_wire():
@@ -207,23 +209,21 @@ def test_chapter_observation_refuses_evidence_outside_this_chapter():
 
 
 def test_chapter_observation_binds_registered_key_scope_and_refuses_retired():
-    from contracts.schema.source import RETIRED_STATE_KEYS
-    assert 'whereabouts' in RETIRED_STATE_KEYS
+    from contracts.schema.source import CHANGE_KEYS
+    assert 'residence' in CHANGE_KEYS and 'whereabouts' not in CHANGE_KEYS
     wire = _chapter_wire(_beat('云娘握紧剪刀', ('e02_02',), effects=(
         {'target': {'kind': 'character', 'char_id': 'yun_niang'}, 'key': 'residence',
-         'op': 'set', 'value': '陆家', 'scope': 'scene', 'modality': 'actual',
-         'disclosure': {'visibility': 'on_page'}, 'basis': _basis('e02_02')},)))
+         'op': 'set', 'value': '陆家', 'modality': 'actual', 'basis': _basis('e02_02')},)))
     raw = json.dumps(wire, ensure_ascii=False)
     obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
-    assert errors == [] and obs.beats[0].effects[0].scope == 'book', \
-        'R-2.14：表内键作用域由 compiler 按表绑定（归一化，不整章拒）'
-    assert json.dumps(wire, ensure_ascii=False) == raw, '归一在副本上，原 wire 不改（I-24）'
+    assert errors == [] and obs is not None, \
+        'R-2.14：登记键照常编译（作用域读时按表派生，不再整章归一）'
+    assert json.dumps(wire, ensure_ascii=False) == raw, '判定在副本上，原 wire 不改（I-24）'
     wire = _chapter_wire(_beat('云娘握紧剪刀', ('e02_02',), effects=(
         {'target': {'kind': 'character', 'char_id': 'yun_niang'}, 'key': 'whereabouts',
-         'op': 'set', 'value': '床底', 'scope': 'scene', 'modality': 'actual',
-         'disclosure': {'visibility': 'on_page'}, 'basis': _basis('e02_02')},)))
+         'op': 'set', 'value': '床底', 'modality': 'actual', 'basis': _basis('e02_02')},)))
     _obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
-    assert any('whereabouts' in e and '退役' in e for e in errors), errors
+    assert any('whereabouts' in e and '变化键闭集' in e for e in errors), errors
 
 
 def test_chapter_observation_refuses_conflicting_statement_and_double_open():
@@ -272,6 +272,9 @@ def test_chapter_prior_text_and_prompt_are_request_pure():
     again = chapter_observation_prompt(chapter=2, book=book, chapters=CHAPTERS,
                                        evidence=_ch2_evidence())
     assert prompt2 == again
+    assert '每个 question 只问一个能由具体答案收束的问题' in prompt2
+    assert '某个子问题有结果不能当作复合问题的完整答案' in prompt2
+    assert '分别用不同句柄记录有证据的收束' in prompt2
     assert '【前文原文】' in prompt2 and '夫君走进门来' in prompt2
     assert '【第 2 章正文】' in prompt2 and 'e02_01' in prompt2
     assert 'fu_jun' in prompt2 and 'yun_niang' in prompt2, '人物表来自 book 观察'
@@ -344,8 +347,8 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
                 'stage2/observations/names.json'):
         artifact = repo.inspect(rel)
         assert artifact['protocol_version'] == (
-            'stage2-book-v4' if rel.endswith('/book.json')
-            else 'stage2-names-v3' if rel.endswith('/names.json')
+            'stage2-book-v7' if rel.endswith('/book.json')
+            else STAGE2_NAMES_PROTOCOL if rel.endswith('/names.json')
             else STAGE2_CHAPTERS_PROTOCOL), rel
         assert '_provenance' in artifact, rel
     assert not (repo.root / 'stage2/characters/characters.json').exists(), \
@@ -514,10 +517,14 @@ def test_missing_chapter_unit_recovery_replays_without_repurchase(tmp_path):
 
         def send(self, request: ChatRequest) -> ChatResponse:
             user = request.user
-            if '人物账、初始状态与世界约束' in user:
+            if '人物账、初始状态、世界约束与书级命题词表' in user:
                 owner = 'book'
             elif '登记全书源名称结构' in user:
                 owner = 'names'
+            elif '条目级关联判定' in user:
+                owner = 'associate'
+            elif '跨章因果判定' in user:
+                owner = 'cross_cause'
             else:
                 import re as _re
                 marks = _re.findall(r'【第 (\d+) 章正文】', user)

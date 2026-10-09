@@ -41,6 +41,16 @@ _PATTERNS: tuple[tuple[str, str, bool], ...] = (
      True),
 # kind == agent：对全文件（含注释）扫描，避免注释里残留字面量。
     ('kind == agent', r"kind\s*==\s*['\"]agent['\"]", False),
+    # CS-S 1b（2026-10-07）：Stage2 死字段收口的「不得回来」面——
+    # KnowledgeSpec／Disclosure／reader_knows／concealed_unrevealed／
+    # SlimConcealment 已从契约删除；标识符类模式去噪匹配（注释里的历史
+    # 记述不拦，新代码引用即红）。小写 disclosure／concealed 不在此闸——
+    # 楔子隐藏身份与交付防剧透是同名不同域的现役字段。
+    ('KnowledgeSpec', r'\bKnowledgeSpec\b', True),
+    ('Disclosure', r'\bDisclosure\b', True),
+    ('reader_knows', r'\breader_knows\b', True),
+    ('concealed_unrevealed', r'\bconcealed_unrevealed\b', True),
+    ('SlimConcealment', r'\bSlimConcealment\b', True),
 )
 
 

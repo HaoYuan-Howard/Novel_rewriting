@@ -11,7 +11,7 @@ from __future__ import annotations
 from contracts.schema.grounding import SemanticBinding
 from contracts.schema.policy import PreserveKind
 from contracts.schema.source import (
-    BlueprintsArtifactV15, ChapterBlueprint, CharactersCore,
+    BlueprintsArtifactV17, ChapterBlueprint, CharactersCore,
 )
 from tests.str06_facilities import v13_beat
 from novel.stages.stage4.grounding import (
@@ -34,20 +34,19 @@ def _source_pair():
                                   'until_chapter': None, 'source_refs': ['e01_01']}]}},
         initial_state=[{'state_id': 's0_01',
                         'target': {'kind': 'character', 'char_id': 'fu_jun'},
-                        'key': 'birthright', 'value': '养子', 'persistence': 'stable',
-                        'knowledge': None, 'source_refs': ['e01_01'],
+                        'key': 'identity', 'value': '养子', 'persistence': 'stable',
+                        'source_refs': ['e01_01'],
                         'basis': [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}])
-    bp = BlueprintsArtifactV15(source_expression=sample_blueprint_expression(),
+    bp = BlueprintsArtifactV17(source_expression=sample_blueprint_expression(),
         world_constraints=[], chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat(
                                  'b01_01', '开篇', participants=('fu_jun', 'yun'),
                                  effects=({'target': {'kind': 'relation',
                                                       'subject': 'fu_jun', 'object': 'yun'},
-                                           'key': 'covenant', 'op': 'set',
-                                           'value': '成立', 'scope': 'book',
+                                           'key': 'agreement', 'op': 'set',
+                                           'value': '成立',
                                            'modality': 'actual',
-                                           'disclosure': {'visibility': 'on_page'},
                                            'basis': ({'segment': 'e01_01',
                                                       'quote': '夫君藏进床底'},)},),
                                  cognition=({'proposition': {'ref': 'p_known',
@@ -62,9 +61,9 @@ def _source_pair():
 
 
 def _preserve_wire():
-    """stage4-preserve-v2 形状（R10a a2）：义务以 anchors 引用投影句柄
+    """stage4-preserve-v5 形状：义务以 anchors 引用投影句柄
     （b拍.e序/.c序/.l序、s0_*、wc_*），lineage 不再由模型输出。"""
-    return {'protocol_version': 'stage4-preserve-v2', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v5', 'obligations': [
         {'kind': 'event_core', 'statement': '借种之约成立',
          'anchors': ['b01_01.e1'],
          'must_preserve': True, 'satisfaction': '正文呈现约定被提出且被接受',
@@ -133,7 +132,7 @@ def test_assemble_preserve_rejects_dangling_and_cycles():
         provider='x', model='y', request_sha256='r' * 64)
     assert any('未知句柄' in e for e in errors)
 
-    cyclic = {'protocol_version': 'stage4-preserve-v2', 'obligations': [
+    cyclic = {'protocol_version': 'stage4-preserve-v5', 'obligations': [
         {'kind': 'event_core', 'statement': 'a',
          'anchors': ['b01_01.e1'],
          'must_preserve': False, 'satisfaction': '', 'requires': [2]},
@@ -207,17 +206,13 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
     # 已删，改按观察协议直接构造同一形状）；其文本若泄漏进身份约束，下面两条
     # 断言会红。
     observation = ChapterObservation.model_validate({
-        'protocol_version': 'stage2-chapters-v4', 'beats': [{
+        'protocol_version': 'stage2-chapters-v7', 'beats': [{
             'event': '试探', 'participants': ['fu_jun', 'yun'],
             'source_refs': ['e01_01'], 'scene_boundary': 'new',
             'temporal_mode': 'single',
             'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                          'key': 'scene_location', 'op': 'set', 'value': '床底',
-                         'scope': 'scene', 'modality': 'actual',
-                         'disclosure': {'visibility': 'concealed',
-                                        'known_by': ['fu_jun']},
-                         'proposition': {'ref': 'p_hide',
-                                         'statement': '夫君藏身床底'},
+                         'modality': 'actual',
                          'basis': [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}],
             'cognition': [{'proposition': {'ref': 'p_believe',
                                            'statement': '芸娘以为夫君已离开'},
@@ -226,14 +221,13 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
                                       'quote': '夫君藏进床底'}]}],
             'loops': []}]})
     assert observation.beats[0].cognition
-    assert observation.beats[0].effects[0].disclosure.visibility == 'concealed'
     _brief, identity = project_brief(cp, chars, bp)
     dumped = ' '.join(' '.join(i.stable_constraints) for i in identity)
     assert '床底' not in dumped and '藏身' not in dumped
     assert '以为' not in dumped and '离开' not in dumped
     # 事实层的 stable 初始事实照常进入（R10a a2 起 _source_pair 带一条初态）
     by_char = {i.char_id: i.stable_constraints for i in identity}
-    assert by_char['fu_jun'] == ('birthright=养子',)
+    assert by_char['fu_jun'] == ('identity=养子',)
     assert by_char['yun'] == ()
 
 
@@ -338,7 +332,7 @@ def test_assemble_design_green_and_refusals():
 
     # 协议版本漏带/错带即拒（I-13 无隐式迁移）
     bad = _design_wire()
-    bad['protocol_version'] = 'stage4-design-v9'
+    bad['protocol_version'] = 'stage4-design-v8'
     _, errors = assemble_body_design(bad, known_char_ids={'yun', 'fu_jun'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert any('protocol_version' in e for e in errors)
 
@@ -407,9 +401,10 @@ def test_design_rules_pin_pov_shape():
     from novel.stages.common import design_rules
     DESIGN_RULES = design_rules(known_char_ids={'yun'}, registered_surfaces={'yun': {'云娘'}})
     schema = json.loads(DESIGN_RULES.split('【wire JSON Schema（字段与分支以此为准）】\n')[1])
-    # CS-3（2026-10-03）：pov 移到 SlimDesignScene（v6 瘦面，缺省＝唯一焦点），
-    # 形状仍是单字符串闭集（anyOf 的非 null 分支带 enum，I-52 按新面重钉）。
-    pov = schema['$defs']['SlimDesignScene']['properties']['pov']
+    # 从现役 wire 的 scenes 引用取场景定义；模型类改名不应掩盖 POV 形状约束。
+    # 形状仍是单字符串闭集（anyOf 的非 null 分支带 enum，缺省＝唯一焦点）。
+    scene_ref = schema['properties']['scenes']['items']['$ref']
+    pov = schema['$defs'][scene_ref.rsplit('/', 1)[1]]['properties']['pov']
     assert pov['anyOf'][0]['enum'] == ['narrator', 'yun']
     assert schema['$defs']['SurfaceIntroduction']['allOf']
     # 同类钉（第二轮实证→CS-3 v6 重钉）：拍上事实断言的默认值必须写明——

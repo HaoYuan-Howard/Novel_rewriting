@@ -1015,6 +1015,27 @@ assert all(spec.lifecycle is not None for spec in NODES.values())
 assert all(owner in NODES for spec in NODES.values()
            for owner in spec.lifecycle.repair_owners)
 
+#: 节点内“窄调用”owner 的独立工作单元：owner → (所属节点, 工作单元 scope)。
+#: CS-S 1c／Phase 2 的窄调用（T-3：不增节点）与主调用请求身份不同、内容轮序
+#: 各自独立；若共用节点的 `book` 单元，后一个 ask 取轮时会把前一个已验收但未
+#: 封存的首答记成 `failed/superseded_unadopted`，且两者瓜分同一份 4 轮额度。
+#: 故每个窄调用 owner 独占一个单元（scope＝`book:<owner>`，节点不变）。
+#: 登记在此而不放进 ``NodeLifecycleSpec``：该元组会整体出现在 API 枚举与前端
+#: 冻结夹具里，窄调用 scope 是后端工作单元的内部拓扑，不是前端契约。
+NARROW_OWNER_UNITS: Final[dict[str, tuple[str, str]]] = {
+    'name_variants': ('str06.stage2.names', 'book:name_variants'),
+    'cross_cause': ('str06.stage2.associate', 'book:cross_cause'),
+}
+assert all(node in NODES and NODES[node].lifecycle.unit_kind == 'book'
+           and scope == f'book:{owner}'
+           for owner, (node, scope) in NARROW_OWNER_UNITS.items())
+
+
+def narrow_unit_scopes(node: str) -> tuple[str, ...]:
+    """节点登记的窄调用工作单元 scope（未登记＝空；供单元账准入校验）。"""
+    return tuple(scope for owner_node, scope in NARROW_OWNER_UNITS.values()
+                 if owner_node == node)
+
 
 def approval_work_unit(waiting_on: str) -> tuple[str, str] | None:
     """审批 blocker 到 (属主节点, scope) 的唯一投影；未知 blocker 不归属任何节点。

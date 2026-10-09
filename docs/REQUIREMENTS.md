@@ -3,190 +3,85 @@
 本文件是唯一活动计划，只保留**未完成项**与**待删除的兼容层**。完成项、验证分母与命令写进提交说明，
 复用教训进 [LESSONS.md](LESSONS.md)，裁决缘由进 [DECISIONS.md](DECISIONS.md)。
 行为依据为 [BACKEND_CONTRACT.md](BACKEND_CONTRACT.md) 与 contracts；目标架构见 [str06.md](schema/str06.md)，
-本轮规格见 [repair_convergence.md](schema/repair_convergence.md)。
+返修收敛规格见 [repair_convergence.md](schema/repair_convergence.md)。
 [返修场景](specs/repair_convergence.feature)、[计量场景](specs/cost_accounting.feature)、
 [整书场景](specs/book_acceptance.feature) 是目标行为说明；文件存在不表示已通过。
+
+**2026-10-07 重置（用户指令）**：销账 CS-F、CS-H、CS-G、CS-T 四个待办，整节移出活动账（裁决登记见 DECISIONS 同日行）。
+CS-F（Stage4 停点收敛）：F3 判官标定已封口、F4 本书正式恢复与 F5 成书对照已完成，F2 余项（v8 提示词与 `lock`
+闭集在真实模型上的表现）撤销追踪。CS-H（接受版本只发一次、首答通过、窄返修）：H0～H4 已完成，H5 验证与收口
+（四批合并后最终回归、csf4／rc15 免费重放前后对照表、真实运行）关闭——真实运行未获授权从未发起；其待用户裁决
+第 1／2 项随销账闭合（真实运行授权范围不再作为待办追踪；sc11 计划与实际不一致的付费修订选项关闭，D1 是否走
+owner patch 修订仍以 R7 行为准），第 4 项按默认保留闭合（承载章必保姓名字面与事实锁主体包含两处补强已是现役
+HARD 判据 R-7.8／R-6.7）。CS-G（R10d／B6c 整书验收，含 R10d 重复轮义务与人工阅读验收协议）与 CS-T（分节点
+思考对照，仅冻结清单草案，未创建实验目录、未发付费或正文外发请求）一并移出，未来如再启动须新立项。销账不删
+输出、不改变冻结实验身份、分母、额度或授权边界，也不撤销已登记的历史裁决、规格与兼容层删除条件。四节完整原文
+见重置前最近提交 `eae0c449` 中本文件及 `git log -- docs/REQUIREMENTS.md`。
 
 **2026-10-05 重置（用户指令）**：仅保留未完成项。重置不清账、不删输出，不改变冻结实验身份、分母、额度或既有授权。
 已移出的非待办内容——已完成批次索引、各批验证记录与证据路径、运行基线、成本与授权口径、长期义务行
 （已购证据不可当派生缓存删除、章集合与交付恢复、可信 owner 修订准入等）——完整记录见提交 `eb5f0d5a` 中本文件；
 退役清理三批与清理收尾批的批次登记见提交 `1b086afd`；更早执行史见 `e84a169b` 及 `git log -- docs/REQUIREMENTS.md`。
-R10 执行指南 PLAN.md 已于 2026-10-05 退役（用户裁决，原文见提交 `68b5802f`）；其仍有效的 R10d 段、对照裁决与验收口径并入下方 CS-G。
+R10 执行指南 PLAN.md 已于 2026-10-05 退役（用户裁决，原文见提交 `68b5802f`）；其 R10d 段、对照裁决与验收口径
+当时并入 CS-G，后随 CS-G 于 2026-10-07 销账移出（原文查法见上）。
 
-**授权现状**：既有付费与正文外发授权只覆盖原三书 manifest、原根、原配置与额度（见 CS-T）；rc16 新根上的任何
-付费调用与正文外发都须单独授权（付费显式 `--yes`，外发 `--allow-egress`）。
-**CS-F3 标定授权（2026-10-05 用户批准）**：语义核验判官的真实标定调用，上限 **90 次**；档位经用户中途调整
-（2026-10-05）：deepseek-flash、thinking on、**effort low、max_tokens 65536**（首轮 high/4000 的 15 次实测全部把
-额度耗在 reasoning、content 为空，如实留账不退还）；材料为仓外 Golden_Set_v3.0 三本 yaml 的 source_checks 与
-rc15 冻结根（`outputs/cs_golden_20261004_rc15`，只读）的真实产物片段，正文外发随之授权（核验请求含源文片段）。
-纪律：标签先冻结提交、后发付费调用；账记 ledger；不授权之外的模型／额度／根。
-**（2026-10-05 封口）**45/90 次已用（末轮判官不满足启用硬规则，见下），剩余 45 次授权额度**作废**，
-不再提示词迭代重测；重开须新授权并满足 DECISIONS 同日登记的重开条件。金标 yaml 三本复认为 CS-G／CS-F5
-成书对比评估金标（原「即 CS-F3 金标」的判官标定用途随本批封口终止）。
+**授权现状**：既有付费与正文外发授权只覆盖原三书 manifest、原根（`outputs/rc14_acceptance`）、原配置与额度
+（全节点 high、总槽 4／8，已用 54／512；范围明细原登记于销账前 CS-T 节）；任何新根、新代码、新档位或新槽位上的
+付费调用与正文外发都须单独授权（付费显式 `--yes`，外发 `--allow-egress`）。CS-F3 判官标定授权（上限 90 次）已于
+2026-10-05 封口作废——45 次已用、剩余作废，重开须新授权并满足 DECISIONS 同日登记的重开条件；
+Golden_Set_v3.0 三本 yaml 的成书对比评估金标复认（2026-10-05 用户裁决）仍有效，口径见 DECISIONS 同日行。
+
+**2026-10-09 R7 单书新跑授权**：用户批准《夫君的报恩》的付费与向 DeepSeek 外发正文；原输出根在本工作树
+outputs/rc21_quality_20261009，同日用户要求整根转移至 E:/practice_group/Novel_rewriting/outputs/rc21_quality_20261009，
+保留原产物、账与额度。配置为 deepseek-flash／high／thinking on，用户单独指定下一节点 stage2.chapters 使用 low。
+范围先 Stage2～4，再按新设计
+选最多 6 章正文；逐节点执行，每节点产物交用户验收，用户确认后才进入下一节点。沿用既有单元修订上限，
+额度耗尽或无法窄修即停，不追加预算、不扩书目、不增加 Judge。此授权不复活其他冻结实验额度。
+
+同日用户确认空拍漏抽两部分修复：本书 ch04 第 4 拍以免费 owner patch 新增芸娘与裴书远
+获知“夫君从床底现身”，分别绑定 e04_17/e04_19；原已购响应不改，其余十章 SHA-256
+一致、该章其他拍去除派生命题编号后的内容一致，账本仍为 12 次付费（本次新增 0）。
+Preserve 升独立 wire v4/policy 7：允许既有拍＋该拍证据报告遗漏，义务/details 原子锚点
+闭集不变；chapters 回派只修所报拍、保留其他章，普通空知情合法。没有新增字段、节点或
+Judge。回派整链反例另暴露节点间输入边串入上游修订，已按节点边界清空来源窗口；保留章只验封/版本/新鲜度、不记内容依赖。章执行、派单关闭、补丁激活均使用同一局部范围。真实 names/associate/compile 及后续节点仍未运行，等用户验收；强化提示能否改善
+首答漏抽率、成书阅读质量和整书成本仍待后续实测，不把机械回归当作语义检出率。
+
+本批定向验证（2026-10-09，HEAD 97fcf290 上工作树）：§9.5 五文件及受影响的
+Stage2/4、发布、恢复、下游消费等共 861 项通过，0 失败/跳过；收尾范围边界变更再跑
+回派、瘦 wire、workflow、runtime records、CLI 五文件，86 项通过，0 失败/跳过。
+JUnit 分别为 .test_cache/missing-conflict-final.xml 与 missing-conflict-scope-final.xml。
+这是定向工程回归，不是全仓终验或 golden 成书质量验收。
+
+同日用户确认 Design 首轮可用率修复：按 Preserve 可交接条件、原子条件与自然叙事拍分离、
+版本化请求压缩的顺序实现。授权用本书冻结材料向 DeepSeek 付费配对，保持 flash/high/thinking on；
+费用仍走原根工作单元与整书总闸，不追加额度。首轮完整可用率必须含写手材料完整预检，失败、
+返修、累计 provider 调用耗时与设计核读分别记录；单书结果不外推总体成功率或成书质量。
+已购 v9 候选在正式 Preserve 修订后优先走现有免费沿用／窄复核规则。
 
 ## 未完成项
 
-### CS-F Stage4 停点收敛（RC-30～49）
-
-规格见 [repair_convergence.md](schema/repair_convergence.md)“Stage4停点解决方案”。已提交（`edf965d7`）：完整候选预检、
-事实锁引用（Design wire v8）、写手称谓投影、局部修订；历史采用的来源账与相对 `--adopt-root` 缺陷已在 `eb5f0d5a` 修复。
-契约因此升 rc16：`cs_golden_20261004_rc15` 三本旧根按契约表漂移拒收，保留为冻结失败证据，**续跑须新根**。约束不变：
-不新建通用验收框架、不增加工作流节点、不顺带引入任意目标称谓创作功能、不提高重试上限。
-
-| 子批 | 状态 | 余项与完成条件 |
-|---|---|---|
-| CS-F2 事实引用与名称呈现 | [~] | Hook 称谓投影已闭合（2026-10-05）：`HookContext.withheld_bindings` 按 Hook 自选 `surface_releases` 推导（与章 IR 同一把尺），`render_hook_context` 渲染期投影正向材料行与禁区行，上下文字段与来源归因保持原字段文本，留痕 `hook_name_projections` 进 guard report；`hook.json` 升 rc16，旧 rc12 楔子上下文拒读、免费重编译。余项：v8 提示词与 `lock` 闭集在真实模型上的表现未验证。Stage7 无需改动 |
-| CS-F3 关键语义离线标定 | [x] | 已封口（2026-10-05 用户裁决）：判官 flash/low 不满足启用硬规则，语义闸不启用、生产语义维持 `unver`；提示词迭代余项撤销，剩余 45 次授权作废。结论、归因更正与重开条件见 DECISIONS 同日行 |
-| CS-F4 本书正式恢复 | [x] | 已完成（2026-10-05，路线 A＋全链授权）：正式根 `outputs/csf4_restore_20261005` 交付 `stage7/final/夫君的报恩_rewriting.txt`（11/11 章接受、delivery_identity `01595264…`）；免费段（stage0/1 重放＋book/8章/names/ch04·06·08 采用）零 token；实付 28 行＝输入 434,004／输出 501,336（reasoning 415,287 不重复计）。补丁与证据：`outputs/csf4_fuhun_restore_20261005/`（义务审计、wire-dir、patch note 归档）、scratch 验证根 `outputs/csf4_patch_probe_20261005`。人工恢复如实登记：ch03 补丁 wire 与 Design 已购 wire（额度耗尽后零成本采用＋know 拍位补丁）为 unverified 类采用，preserve 裸姓 16 处走本根正式补丁链（active/preserve.json）；preserve 两次名面回派由模型修订轮闭合。**不计为全自动成功**；成书对比评估归 CS-F5 |
-| CS-F5 成书与成本对照 | [x] | 已完成（2026-10-05，免费工程阅读零付费）：对 `csf4_restore_20261005` 成书（`16d26c4b…`）按金标逐锚点核验——CS-F 四修复面全部落地（ch03 主体、ob44 当场识破、裸姓清零、Hook 投影留痕）；六维逐维证据报告（不设分数）与自动程度（无人改稿但有人辅助完成）分别交付；成本同口径（ledger）：核验新增＝机械闸重跑 3 行 13,126／17,228＋语义核验 0 行（闸未启用），返修节省＝旧协议本书 12 被拒轮 80,162／360,953 纯损失消除＋新协议 3 章首答通过＋本根 4 行 0 token 缓存复用，Design 段无净节省如实登记（rc15 三轮与本根四轮均未获接受 wire，人工路线 A 闭合），不宣称整书降费。**核验发现 1 项核心缺陷**：GS-01b 负控命中（童年坠河与芸娘救命融合为同一事件，连带丢失财貌救人动机与婚前互生情愫）＋6 项轻量缺陷（藏身计数×2、衣带/裤绳指称、雨夜站位、「这才确准」矛盾、受孕时点自认），均静默进入下游（机械闸无判据、语义闸未启用），已登记 R7，是否对本书走 owner patch 修订待用户裁决。报告与账目：`outputs/csf5_review_20261005/` |
-
-**CS-F3 已封口（2026-10-05 用户裁决，裁决全文见 DECISIONS 同日行）**：开发集标定执行 45/90 次真实调用
-（三轮报告与账本在 `outputs/csf3_calibration_20261005/`，已随 rc15 冻结根等证据安置主仓；装置代码可查提交
-`2d17a898`，harness／装载器／冻结标签与测试登记已删除）。末轮 59/70 案测得：正确 51（支持 29／否决 18／
-未确定 4），错误支持 1＝ch03 已裁决误派关系被 judge 背书（判官与抽取器同为 flash 的同源背书，恰为历史事故
-模式），错误否决 5，证据不足被断言 5，未确定漏判 2，wire_error 9＋missing 2（11 案未测得；其中引用渲染行
-前缀与首轮锚点窗口 ±2 量程不足属测量管道缺陷，归因更正见 DECISIONS）。启用硬规则违反，**flash/low＋当前
-提示词不可启用语义闸**，留出集未运行（先决条件不满足）。裁决：提示词迭代余项撤销、剩余 45 次授权作废；
-生产语义继续按现役 `unver` 披露，已确认错误经 owner patch 纠正（ch03／ob44 走 owner patch，见 CS-F4）；
-fake transport 绿例仍不得记成语义核验已通过。重开三条件（判官与抽取器不同源、两本以上书有观察级已裁决
-案例、装置缺陷修复）加新授权缺一不可。金标回归用户原意：Golden_Set_v3.0 三本 yaml 为 CS-G／CS-F5 成书
-对比金标（见 CS-G 前置），不再承担判官标定用途。
-
-**CS-F4 本书正式恢复**（《夫君的报恩》，11 章）：已完成（2026-10-05，用户裁决路线 A＋全链授权到交付），
-明细见 CS-F 表行与提交说明；一项机制债转入「工程余项」（换算链 wire 的正式 owner patch 绑定档缺口）。
-
-### CS-H H3 执行状态（2026-10-06，全部 fake transport／只读重放、零付费）
-
-已落地子批（各自独立提交）：H3a 显示面／投影／Design 原文闸（ff6f87d7）、
-H3b 必保揭名＋段落修句与 H3c 共享锁／主体包含（dca21787）、H3d Preserve 自闸
-＋条目返修＋replay preserve 接入（54ae82fa）、H3e 确定性转换收口与最终请求
-文本断言（d2174447＋本批 expression 追加式修复路径）。
-**H3g 收口批（本批）**：① 章首已释放前缀与回落纯称谓分表（`ChapterIR.display_fallback`，
-回落面不再抢占章内释放后的首位）；② Preserve 自闸口径精修——家族构词（「陆家」集体指称）
-不拒，多义带名面（同一登记称谓属两人）不作认领面、其中裸姓如实报出；③ 共享锁支撑拍先后
-在 Design 接受面带 wire 路径判掉（`accept_refs`），compile 面 `compile_support_early` 只兜底；
-④ 章机械校验唯一构造点 `chapter_prose_validator`（采用／补丁面此前漏带 `required_literals`
-与 `scene_markers`）；⑤ 段落修句轮专用 system 提示＋付费边界按合并后的稿记接受
-（修句 JSON 直接过整章校验器会把成功修句记成被拒）；⑥ Design 原文闸字面检查面并入家族构词
-（与正文／章 IR 同一把尺）。规格 CS-H 一节已落地口径／口径差标注随本批闭合（含「待用户裁决」
-第 5 项的位置口径差登记）。
-
-判据对账：①（七反例与绿对照，tests/test_str06_display_surface.py）、②（四反例，
-tests/test_str06_required_released.py）、③（共享并集／主体包含／派生支撑引用，
-tests/test_str06_a4_design_locks.py 改写＋新增）、④（tests/test_str06_preserve_gate.py：
-窄请求不含无关义务、无关义务字节不变、两行实付）、⑥（tests/test_str06_request_text.py）
-全部场景绑定通过。判据⑤ csf4 根只读重放实测（2026-10-06，本机）：**Design 四轮
-称谓残余全部带路径（无路径=0；含 expression/keep 站点经 expression_overrides
-数组补建）、共享锁错误 0（含主体包含与并集语义）**；**Preserve 首答 17 处裸姓
-（陆/沈/裴）在自闸被逐条定位**（计划文案「16 处」为起草估计，以盘面实测 17 为准）。
-每轮全量默认非 corpus 回归 pytest 退出码 0。
-
-余项（H3 收尾）已闭合：规格 CS-H 一节标注已落地面的口径差（随 H3g 收口批落盘）。
-**rc17 升版裁决（2026-10-06 用户裁定）**：随 H4 集中升一次——H4 完成后、首次
-真实运行前一次性升 rc17 并重钉 `tests/test_str06_f7e_freeze.py` 冻结钉；H3
-提交继续在当前分支不 push，不做两次升版。H3 形状变化清单＝Brief 认知变化
-requires_released、BriefFactLock.subjects、ChapterIR.display_prefix/
-display_fallback/requires_released、BeatIR.release_introductions、
-HookContext.display_faces/avoid_lines、BODY_VALIDATOR v2（新字段均可缺省读入，
-旧 payload 读兼容）。
-「待用户裁决」第 3 项就此闭合。
-
-### CS-H 接受版本只发一次、首答通过、窄返修（RC-50～65）
-
-规格见 [repair_convergence.md](schema/repair_convergence.md)“CS-H”一节与[返修场景](specs/repair_convergence.feature) RC-50 起
-（2026-10-05 用户批准的执行计划；四项裁决与二轮审阅的处理见 DECISIONS 同日行）。起因：`csf4_restore_20261005`（rc16）28 次实付里
-返修与返工占输出 token 的 52%（259,419／501,336），且仍靠人工收尾。目标：每个节点正式产物的接受版本数为 1、首答通过、返修只发窄输入
-（指标 M1～M5 见规格）。约束不变：不增加节点、不提高任何重试或额度上限、不加 LLM 审阅或判官、不做付费 A/B、不调 effort、不引入任意目标
-称谓创作；工程验证全部用 fake transport 与只读重放，零付费。每批独立提交在当前分支，不 push。
-
-| 批 | 状态 | 余项与完成条件 |
-|---|---|---|
-| H0 登记与只读装置 | [x] | 已完成（2026-10-05，无行为变化）：本表、规格 CS-H 一节、RC-50～65 场景、DECISIONS 同日行（含对 CS-F5「Preserve 条目返修已落地」的更正）；`tools/repair_rounds.py` 分母改为 `work_units.json` 登记的单元（csf4 根上因只有锁文件的空壳目录崩溃，已修）；只读重放 `tools/replay_candidates.py`（design 已接入，Preserve 随 H3、associate 随 H4 接入）。重放在 csf4 根上复现：Design 第 2 轮对最终 Brief 完整预检全绿，第 1／3 轮称谓错误 11／320 条，第 4 轮 2 条写手材料泄漏归 Design |
-| H1 候选集合、免费沿用与真实记录 | [x] | 已完成（2026-10-06，fake transport 全绿、零付费）：**H1a**（2026-10-06，记录真实性：判据④⑤）上游回派以类型化信号 `UpstreamOwned` 取代空错误列表、被回派／被机械闸拒的候选与文本首稿记 `accepted=false`、单节点路径交付后状态与整链同源（`delivered`／`accepted_body=true`）、回派问题按材料身份去重。**H1b**（本批）：`novel/stages/candidates.py` 从工作单元账与响应 blob 重建全部已购候选（含补丁链合并）并写登记 `runtime/candidates/<owner>.json`（可重建索引，非第二本账）；上游差异（复用 `wire_diff`，条目按（kind, anchors）对齐分未变/变化/新增/删除）与称谓规范形（复用 `claim_spans`）为纯函数；`run_body_design` 在 `ctx.ask` 之前做免费判定（兼容→差异→完整预检→择优：全绿优先、根因最少、同分取最近）并落地四档动作——无差异或变化条目规范形相等且预检全绿→**零调用采用**（成本链 ledger-row 指向原 attempt，本根只记一行零 token cached 行），变化不能证明等价→一轮条目返修其承载拍，删除条目→承载拍进复核目标，新增条目→可选目标闭集（`PatchTarget.optional`）；整份新购只限闭集五因并留痕；`OwnerRevisionRecord` 升 V2（新增必填 `applies_to_request_sha256` 与 kind `carried_forward`，V1 读兼容登记于下方兼容层表）；三个中断恢复窗口（回答已存证而登记未更新／补丁已验证而未发布／上游已修订而下游未复验）用现有证据继续，无重复购买、无重复发布、不沿用失效接受记录；只读复检不走沿用凭证。完成判据（fake transport stage 测试，走真实入口）：①请求身份变而条目未变→零调用采用旧候选、成本链指向原 attempt；②变化条目称谓规范形相等→同样零调用；③较早的合格候选不被较晚的失败候选挡住；④被拒或被回派的候选 `accepted=false` 且带错误，正文首轮被机械闸拒同样如此；⑤单节点路径交付后 `accepted_body=true`；⑥三个中断恢复无重复购买与发布 |
-| H2 Design／HookDesign 完整窄修通道 | [x] | 已完成（2026-10-06，fake transport 全绿＋csf4 根免费重放，零付费）：**③**规则码→修复路由表 `contracts/judges/str06.py::PATCH_ROUTES`（76 码，四态 locate／optional／whole_answer／stop；Guard M1–M8 与 compile 依赖码无 Design 编辑位置登记 stop，裁定见 DECISIONS）＋`tests/test_str06_patch_routes.py` 双向核对；判据全部铸规则码＋稳定位置（guard／compile／grounding／hook／preflight）。**①**带基底起步（`PatchBaseline`：窄复核从已购候选整份 wire 起步，attempt 引用经 `baseline_ref` 展开进 provenance）与可选目标（`PATCH_ROUTES` optional 码——必保义务漏标 `design_carrier_missing`、series 互斥 `series_collapsed`——由 `locate_design_patches` 给全部拍闭集，回答只覆盖选中子集、至少一个、闭集外拒绝；compile 面 `compile_must_unbound` 回声与覆盖闸同根因，按义务重叠在 inspection 去重）；**②**窄输入（`NarrowPatchRequest`：协议规则＋失败条目＋依赖切片＋合法取值，不带整份原请求与前序材料；Design 切片 `novel/stages/stage4/slim.py::design_patch_slice`、Hook 切片 `novel/stages/stage4/hook.py::hook_patch_slice`；可选行不内联当前值——切片已携带，避免整份 wire 双写）；**④**反馈按根因聚合（`novel/stages/stage4/preflight.py::DesignInspection.feedback`：同码多处＝一个任务＋受影响位置；任务身份＝无进展判定尺，候选字节变化不算进展）；**⑥**沿用判定后半（`narrow_review` 动作从已购候选 wire 带基底起步，一轮取代整份重生）；**⑦**HookDesign 同法接入（窄上下文＋与只读预览同一把尺的组合检查 `hook_combination_errors`）。完成判据验证：①上游改义务语义→一轮条目返修且无关拍字节不变（H1b 用例续跑＋子集采纳用例）；②新增义务→闭集选承载位（H1b 用例）＋可选子集采纳、未选拍字节不变（新用例）；③必保义务漏标→一轮可选目标返修（stage＋产品入口双用例，`obligation_unbound` 不再整份重写）；④同一根因两轮仍在即停、字节变化不算进展（新用例）；⑤重放实测——csf4 根单拍修复（事实锁错拍，3 拍）窄请求 28,910 字符（协议规则 20,151＋切片 4,578＋合法值 1,781），输出只回选中拍替换，对照本根整份修订轮输入 35,434／46,624、输出 29,102／66,403 tokens；⑥重放实测——Design 第 2 轮对最终 Brief 完整预检全绿（`reuse=green`，输入身份 match）⇒ 零调用采用即取代当时两轮整份重生（R3＋R4 计 70,087 输入／130,741 输出 tokens）加一轮 Preserve；其生成时上游（preserve R1）对最终 wire 差异 14 条（6 条称谓规范形相等／8 条模型改写→窄复核），R3／R4 的上游（preserve R2）差异 1 条且等价——计划文案「7 条变化、3 等价、4 改写」为起草时估计，以盘面实测为准（更正记 DECISIONS） |
-| H3 称谓、必保揭名、锁与写手材料 | [x] | 已完成（2026-10-06，fake transport 全绿＋csf4 根只读重放、零付费）：H3a～H3f 子批与 H3g 收口批（见上方执行状态）全部落地；判据①～⑥对账见执行状态一节；规格 CS-H 一节已落地口径／口径差标注闭合。遗留口径差（Design 原文闸位置口径）已于 2026-10-07 裁定改按章判并落地（「待用户裁决」第 5 项闭合） |
-| H4 其余节点的机械化与定位器 | [x] | 已完成（2026-10-06，fake transport 全绿＋csf4 根只读重放、零付费）。**H4a**：associate 升 `stage2-associate-v3`（R-2.12 改写）——维度句柄 `dim{nn}` 按（作用对象，键）地址聚合全部状态写入（同键配对按构造不可能），模型只配键不同但同维的维度，规范键由编译器按地址传播到两类全部写入（`novel/stages/stage2/compile.py::_StateClasses` 重写）；可配对 close 闭集排除章内已自开自闭的 close（wire 引用即精确 issue）；配对条目定位器 `associate_patch_locate` 接入 `run_associate`；维度配对不做同章拒绝。**rc17 已随 H4a 集中升版并重钉冻结钉**（用户裁决「随 H4 集中升一次」：H3 称谓面＋H4 associate v3 六份产物换身份，旧 rc16 根只读拒收）。**H4b**：book／names／naming 条目定位器（RC-57 覆盖收口——全部 JSON 节点都有定位器，不新增判据）：`compile_book_observation`／`compile_name_structure`／`compile_name_map` 重构为带 wire 路径的同源视图，`book_patch_locate`（characters.{slug}／initial_state[i]／world_constraints[i]／expression.narration）、`names_patch_locate`（families.{fid}／people.{slug}）、`naming_patch_locate`（entries[i]，冲突挂牵连两侧）接入各自 runner；覆盖增删、构造期复检与协议字面量等替换不了的返回 None 退整份。**H4c**：`tools/repair_rounds.py` 每节点 token 三分列（输入／输出／推理，未知各计，缓存不计）。完成判据对账：①同键状态很多时维度面/配对面不随写入数增长（`tests/test_str06_associate_v3.py`）；②章内已闭合 close 不可被配对（同上）；③csf4 根只读重放：已接受轮 90 对同键配对中 89 对不再需要、1 对近义键仍需维度配对（`tools/replay_candidates.py --owner associate`）。定位器判据见 `tests/test_str06_entry_locators.py` |
-| H5 验证与收口 | [ ] | 每批：先复现目标反例，再跑受影响的定向测试，契约形状稳定后跑 BACKEND_CONTRACT §9.5 五文件，视图或 API 形状有变补前端 test 与 typecheck；四批合并后按最终改动集合跑一次默认非 corpus 回归（本机 `-n 4` 会被系统因内存终止，改串行分批并留 JUnit）；免费重放 `csf4_restore_20261005` 与 `cs_golden_20261004_rc15` 出前后对照表；真实运行**须另行授权**（付费与正文外发分别授权、独立新输出根）：《夫君的报恩》与《三人成行》各一本，可并入 CS-G 的 R10d 重复轮，记录完整 M1～M5（人工干预与失败轮全部计入）并带三项质量回归：姓名披露、事实状态（计划与实际）、D1 |
-
-契约候选身份：H3、H4 含形状与协议变化（Brief、IR、Binding、Hook 上下文、正文 validator、`stage2-associate-v3`），默认首次真实运行前集中升一次 rc17
-（若分两次合入则各自升版并重钉 `tests/test_str06_f7e_freeze.py` 冻结钉）；旧根含 `csf4_restore_20261005` 按契约表漂移只读。
-
-**待用户裁决**（均不阻塞 H0～H4 的免费工程；第 1、2 项涉及付费与正文外发，未获授权不发起任何付费调用）：
-
-1. 真实运行的授权范围（两本书、输出根、额度），以及是否并入 CS-G 的 R10d 重复轮。未授权前不发起任何付费调用。
-2. 《夫君的报恩》成书里本计划不处理的两项：sc11 计划与实际不一致（事件写“直到沈知言搬出陆家”而状态仍是 planned，可用现有
-   Design owner patch 补一条 actual 状态）与 D1 救命／坠河融合（可用现有 `avoid` 写一句“救命经过未交代，不得认定发生在幼年坠河时”）。
-   两项都需重购受影响的章与楔子，属付费动作。
-3. （已闭合，2026-10-06 用户裁定：随 H4 集中升一次 rc17，见上方 H3 执行状态；编号保留供引用。）
-4. 两处超出审阅意见的补强——承载章正文必须出现必保姓名的检查、事实锁的主体包含检查——按计划保留；不保留则这两处退为读数。
-5. （已闭合，2026-10-07 用户裁定：Design 原文闸的「已释放」改按章判，与正文最终闸、绑定表同口径，落点 `novel/stages/stage4/materials.py::validate_design_materials`；csf4 只读重放第 2 轮 3→0 重新全绿，裁决见 DECISIONS 同日行；编号保留供引用。）
-
-### CS-T 分节点思考对照（含 CS-4：稳定输入前缀）
-
-[~] 冻结清单草案 `outputs/cs_review/experiment_plan.draft.json`；不预设所有节点降低思考，节点正式输入等制备通过后再锁请求摘要。
-
-- 控制配置：DeepSeek、`deepseek-flash`、thinking on、effort high；`str06.stage2.chapters` 与 `str06.stage5.body` 节点并发各 32，
-  整书总槽 32，供应商总槽 200（三项均为 1～200 整数，可再改）。
-- 唯一实验变量：`str06.stage2.book`、`str06.stage2.chapters`、`str06.stage4.preserve`、`str06.stage4.body_design` 四节点的
-  high／low，思考保持开启，其余节点不降档。
-- 停止规则沿用现役常量：整书内容调用 512、每内容轮最多 4 次、owner 修订 2 轮、跨节点回派每书 12 次、输出上限 131072；
-  截断、无进展、unknown 和额度耗尽都停止，不自动切档、换模型或追加额度。
-- 开发书《夫君的报恩》11 章，制备停在 `str06.stage5.hook` 之前，无修订预期 17 次，加四节点对照臂共 45 次；三书章数
-  17／22／11（三人成行／夫君不行但我有孕啦／夫君的报恩），后置整书无修订预期 124 次（均为预期，不是上限）。
-- 授权边界：原授权只覆盖 `outputs/rc14_acceptance`、代码 `14312181`、全节点 high 和总槽 4／8（已用 54／512）；新根、新代码、
-  总槽 32／200 与 low 臂不在其内。未创建实验目录，未发付费或外发请求。
-- 前置：草案钉的代码基线（`497d0a38`）与契约早于 rc15／rc16（Design wire v8，`semantic_binding`／`writer_book_ir` 升 rc16），
-  授权前须按当前基线重钉清单与分母。
-
-### CS-G＝R10d／B6c 整书验收
-
-[ ] 按用户要求后置，未发起新付费；六维工具已对齐。等其余问题（CS-F）修复后冻结三书并真实执行，人工与自动分别报告。
-
-- 前置与冻结判据：Workbench 三本源书以显式 `NOVEL_DATA`／`NOVEL_CORPUS` 核验，`NOVEL_OUTPUT` 是独立输出根。Golden Set v3.0
-  《夫君的报恩》《三人成行》双格式已冻结（源 sha 与 216＋139 锚点曾核验）；夫君为开发可见用书，三人成行 oracle 保持隔离，
-  不得进入生成／修复材料。Workbench 另有《夫君不行但我有孕啦》的 Golden Set v3.0 文件，冻结状态与源 sha 核验待确认（此前
-  只登记前两本）；若其 oracle 未冻结，依据源书与同一六维评价，不伪造 oracle。
-- **金标复认（2026-10-05 用户裁决）**：Golden_Set_v3.0 三本 yaml 确认为本节成书对比评估金标（CS-F5 同）；
-  其此前短暂承担的 CS-F3 判官标定用途已随该批封口终止（裁决见 DECISIONS 同日行）。
-- 冻结源版本、代码、模型、协议、预算、停止规则、评价方式与输出根；不得缩三书分母、择优替换失败轮或把恢复后的产物冒充
-  独立新生成；旧冻结运行与新候选分别报告。不做缺乏完整基线的新旧 renderer 付费对照（历史 F5e 原根已清理，只可引用历史
-  读数）；没有可比完整成书时不宣称整书相对改善。版本结论只报绝对达标（六维＋冻结关键案例＋九维阅读），对照缺失如实登记；
-  普适性由 R10d 第二本书与重复生成披露，不外推。
-- 评价以阅读为主，模型辅助另授权；只改评价过程时重评现有成书，不自动重生成；每个结论绑定精确成书 hash，改文后重验受影响
-  结论；工程通过不代签质量。
-- 六维：Core Preservation、Structural Originality、Causal Continuity、Character Continuity、Natural Progression、Local Prose
-  Coherence；Structural Originality 按场景与语义承载比较，不要求源目标同号章对应。NameMap 跨书与第二本表达力须独立证据。
-- **R10d 重复轮**（原 R10 执行指南的 R10d 段）：《三人成行》新根全链，对照其 v3.0 oracle 隔离评测；《夫君的报恩》至少一次独立
-  重复生成（独立空输出根，同候选版本固定源文／代码／协议／模型／预算／停止规则，不采用上一轮已购回答），用以区分「对反例书
-  定制」与「普适改善」；模型 A/B 只在此后按瓶颈层单独做。原三书 manifest 与该长期重复义务分别核对，不把一次三书运行记成
-  重复轮已完成。
-- **结果分类与自主完成度**：反例结果至少三分类记录——错误未再出现／错误被系统发现并修好／错误仍静默进入下游；停止、未完成、
-  未评价另列，不计入「错误已消除」；SourceTruth 错标 known 后下游正确继承只算工程传递通过、源语义仍可能失败，分开表述。
-  自主完成度三类：原定规则内自主完成（预算／修订／停止规则预先冻结，无人工内容 patch、基于质量的人工重采、临时加额度或
-  影响内容选择的人工决定）／无人改稿但有人辅助完成／未完成，纯运维重启单独标记。「评测完成」（规定运行的结果、失败、干预、
-  评价与成本记录完整；系统性错误致剩余运行未启动时标记中止与未执行单元）与「版本通过本轮样本验收」（每书两份新稿分别
-  达标，不挑最好的一份、不用辅助重采覆盖原轮失败）分开报告。防作弊分母：同时报义务总数与必保比例、未知锁数量、停止次数，
-  不以删义务、标未知或中止运行换通过率。
-- **成本口径**：以 `_service/ledger.jsonl` 为权威，逐轮记录付费调用、缓存、自动修订、失败尝试、耗时与人工干预；未知不作零、
-  reasoning 不重复计入。每份可接受成书成本按该版本评测总费用分摊（含失败尝试与自动修订），旧版对照与一次性研发费另列；
-  合格成书数为零时报告总投入与零成功。
-
-#### 人工阅读验收协议
-
-九项观察继续用作六维证据：情节因果、揭示时点、章间衔接、人物声线、说明书式正文、重复交代、行动对话展开、Hook 吸引力与
-披露边界、整体节奏流畅。记录“章段→维度→归因→处理→证据”，归因用现役 Stage2／Preserve／Design／compiler／renderer／
-写手协议／写手发挥；bind 已退役。正文及细读记录留运行根，不在仓库摘录。未读保持 `unver`。
-
-### 其余未完成项
+2026-10-09 用户确认独立事件锚点方案：现役版式 rc22、Preserve v5/policy 8，
+六类质量产物显式升版；冻结身份为 `9a7e1067bbbcca471d237f52ee2df63fc75020ed2166ff0aceb4272b2a51932d`。
+真实 Design/正文尚未新跑，首答成功率及成书阅读质量仍属下列 R7 待核；工程测试
+和免费人工修订不代签这些结论。详细前后证据在本书 runtime/review/rc22_event_anchor_review.json。
 
 - **CS-A 证据寻址（RC-26～29，rc15）**：另两本《三人成行》《夫君不行但我有孕啦》在 rc15 根只完成 book 与章观察（17／22 章），
   names／associate／compile 未运行（需付费授权）；完整首答通过率等下一本新书实测。
-- **CS-2 后续**：book 观察仍同时使用全文排版与证据地址，不能未经语义充分性证明删除；`basis.quote` 逐字要求不因省 token
-  取消；Preserve 输入／wire 瘦身仍有余项（Preserve 必要事实补全与 Design Brief 投影已闭合；补齐语义使 Preserve 体积增加，
+- **CS-2 后续**：book 观察仍同时使用全文排版与证据地址，不能未经语义充分性证明删除；basis 已指针化
+  （2026-10-07：wire 只给段 id、引文＝段全文由代码切出，转写失败类错误构造上消失），Preserve 输入／wire 瘦身
+  仍有余项（Preserve 必要事实补全与 Design Brief 投影已闭合；补齐语义使 Preserve 体积增加，
   不能记作降费成功）。
 - **R7 质量优化**：持续登记，按实际阅读反例启动：漏保／过保、因果、承接、声线、导演说明、重复与输入不足。风格画像仅在
   一句一段、环境密度、幽默通道、POV 漂移等既有批评复现且有阅读证据时提出具体方案；under-spec、过度失效、状态过建模、
   checklist prose、章内披露及表达力未验证继续登记；第一人称书不能代签第三人称稳定性。
+  2026-10-09 rc21 创作材料交接的阅读效果、首答可用率与整书成本待用户新跑反馈；原子条件、可选细节、
+  系列前情与姓名窄修的工程实现不代签这些质量结论（裁决见 DECISIONS 同日行）。
+  同日阅读反例推进顺序：先由 book／chapters 修自我表述的归属、关键目睹者与跨章悬念收束；
+  Preserve 发现证据冲突走已有源 owner 回派；Design 修重复确认、直接承接的反应归属与章末停点。
+  称谓保留显式释放，普通姓名在需要前释放，区分叙述与对白用途；暂不增加已写前文依赖。
+  独立新跑待核：目睹渠道、求娶—反应—跃梁连续性、系列概括不超前、救人动机、礼物愿望铺垫、
+  改口与亲属称谓、未解守卫、楔子与开章协调及语气、已说／未说、婚前／婚后告知。
+  先核对新源事实和设计，再选定点正文供用户阅读；不默认扩大整书或其他 golden，不增生产 Judge。
   CS-F5 阅读反例（2026-10-05，绑定成书 `16d26c4b…`，详单 `outputs/csf5_review_20261005/csf5_review.md` §二）：
   D1 婚史融合（GS-01b 负控：童年坠河＝救命同一次，财貌动机与婚前感情连带丢失，语义层静默漏过）；
   D2 藏身元计数错×2（ch8「上回是床底」应为衣柜、ch9「第三回」应为第四回）；D3 死结载体衣带→裤绳漂移；
@@ -201,13 +96,27 @@ HookContext.display_faces/avoid_lines、BODY_VALIDATOR v2（新字段均可缺�
 - **token 量级表**：新量级由账与补证逐节点重建（旧 B0／F5e／F9 量级仅作诊断参照，非现役报价，见 `e84a169b` 历史表）；
   异常先回查输入和协议；JSON 字符下降只证明 wire 瘦身，未证明整书费用下降；已退役 bind 不再作为预算项。
 
+### CS-S · Stage2 观察面收敛（2026-10-07 立项）
+
+背景：当日跑书产物审阅暴露四类问题——字段长尾与死字段、区间与证据错位靠人工 owner patch
+收口、names 变体字面靠模型通读全书发现、`initial_state.knowledge` 含义含混。路线＝把观察面
+收敛到「观察、判断、消歧、编译输入」，不是第三套故事事实（S2-8）。**验收方式（用户同日
+指令）**：不执行原方案的度量装置与付费 A/B 臂（0b／0c／1d 不做）；1a–1c、Phase 2、Phase 3
+完成后由用户手动经 CLI 逐节点跑书验收，自行判断首答通过率、token 消耗与产物质量。
+工程验证全程零付费（fake transport＋免费测试）；任何付费跑书由用户自跑，不走本路线预算。
+
+CS-S 全部批次（1a–1c、Phase 2、Phase 3）已落地销账；验证分母与命令见各批提交说明。
+Phase 4（devices A/B）未立项，不随本路线执行。
+
 ## 待删除的兼容层与删除条件
 
 过渡例外必须在此登记删除条件；新增兼容层先取得用户裁决。
 
 | 对象 | 有效义务与删除条件 |
 |---|---|
-| rc12／rc13 五类产物 adapter | `novel/store.py::_upgrade_rc12_payload` 只迁移白名单无损信息（rc17 起 brief／writer_book_ir 的 rc12／rc13 载荷迁移目标直接钉 rc17；盘上 rc14～rc16 载荷不在白名单内，随模型字面量按契约表漂移拒读——`ChapterIR.display_prefix` 语义已变，不能当缺省字段读入；旧根续跑同样按候选契约表拒收）；旧 Brief 缺认知模式免费重放 Preserve，旧 Design 缺 confirms 走显式 owner patch。存量全部重建或退役后删除此 adapter 及 Str06Repository.read_graph_hook 的旧组件迁移，禁止无限新增版本 |
+| rc12／rc13 ExecutionPlan adapter | rc21 质量批删除已废止的五类旧质量产物迁移，仅 `novel/store.py::_upgrade_rc12_payload` 对形状未变的 ExecutionPlan 保留 rc12／rc13→rc14 无损适配。checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR 均须显式当前 rc22，旧版或缺版本拒读，不补造细节或概括判断。read_graph_hook 先验证当前图版本再摘组件，不绕版本读取旧图。存量 ExecutionPlan 全部重建或退役后删除此 adapter，禁止无限新增版本 |
+| Design v9 已购候选 | 用户 2026-10-09 明确要求修订后优先沿用／窄复核；v10/v2 新生成使用短引用，`novel/stages/stage4/slim.py::design_wire_model` 集中解码 v9，canonical rc22 不变。旧候选窄复核只用原 v9 引用语法与 v1 切片，原请求／响应／patch 基底摘要不改，不新增 v9 整份生成路径。所有存量 v9 候选已采用、归档且不再续跑后删除 v9 schema、解码与切片分支 |
+| Hook v1 已购引用换算 | 用户 2026-10-09 确认按事实判据→目录 wire→窄修/恢复顺序修复。`novel/stages/stage4/hook_wire.py::upgrade_purchased_hook_wire` 唯一显式 v1→v2 换算，仅按当前正式 BodyDesign 的唯一位置/地址映射；缺失或歧义拒绝。工具先核原请求/响应/成本，跨身份采用显式留原响应身份与当前应用身份，经现役完整闸；不改旧字节、不推断值、不新增 v1 生成路径，不重置轮数/额度。存量 v1 全部已采用或归档不再恢复后删除换算函数和 upgrade-hook 工具入口 |
 | OwnerIssue v1／v2 读兼容 | v3 显式 dispatch_pending、指纹历史与更正记录；只经 `contracts/schema/workflow.py::owner_issue_record_of_payload` 集中解码；所有存量 v1／v2 根只读归档／不再续跑后删除。旧错误路由账的更正按 RC-15 显式恢复，不重置轮数 |
 | OwnerRevisionRecord V1 读兼容 | V2 增必填 `applies_to_request_sha256` 与 kind `carried_forward`（CS-H H1b，RC-54/56：免费沿用的采用凭证）；只经 `contracts/schema/workflow.py::owner_revision_record_of_payload` 集中解码（v1 的应用身份即其 `baseline_request_sha256`——V1 只可能是 owner_patch／resample）。现存根盘上不再存在 `schema_version=1` 的修订记录（只读归档／不再续跑）后删除 V1 读兼容；未知版本显式拒绝，不向领域 schema 塞默认值 |
 | names／Characters旧信封 | names v2与两类信封v2显式拒识旧版；须新协议names重建后compile重建Characters，不推断空resolutions。原冻结根只读，授权新epoch再重建；无隐式adapter |
@@ -217,6 +126,7 @@ HookContext.display_faces/avoid_lines、BODY_VALIDATOR v2（新字段均可缺�
 | 字符串判据身份 | `novel/core/validation.py::validation_identity` 集中解码仍现役字符串判据；材料、章内悬念冲突与关联问题已用结构化身份。剩余判据全部提供稳定身份后删除字符串前缀兼容，不在各节点扩散解析 |
 | 旧 associate 误派更正 | `novel/stages/issue_recovery.py::_legacy_loop_correction` 只从完整正式章观察重建历史重复 close 错误，证明旧问题全部覆盖后才显式 superseded；不解析文案猜 owner、不退费、不重置轮数。旧字符串 association_undecided 账全部只读归档且不再恢复后删除该兼容分支 |
 | 已退役链 | 拒识legacy_incompatible，RETIRED_ARTIFACT_PATHS和盘面探测维持闭合；守卫`tests/test_retired_surface_scan.py`，不复活历史解码面。三批退役名册统一登记在`tests/test_retired_surface_scan.py::CLEANUP_2026_10_04_MODULES`，回来即红 |
+| basis wire 引文面（≤v6／names ≤v4 wire） | 2026-10-07 指针化（用户裁决「模型只选段、代码切原文」）＋同日二次收口（wire 词汇 `evidence_refs`、book/chapters wire v7、names wire v5）：旧 wire 回答（逐字引文、或 v6/v4 段 id 词汇）按协议字面量关闭式拒收、不做推断采用（prompt 变化本就换请求身份）；`locate_quote`/`canonical_quote`/`content_equivalent_slice`/`norm_index` 已随批删除。当批 canonical 三者为 v4/v4/v3；CS-S 完成后只接受现役 v7/v7/v4，旧字面量关闭式拒收。canonical 直通读面（`{segment,quote}` 形 basis）作为 S-01 登记过的兼容层保留，删除条件＝canonical 自身证据面瘦身时与 slim 适配层一并退役（见 `novel/stages/stage2/slim.py` 模块头） |
 
 ### 候选根运行记录映射与删除条件
 

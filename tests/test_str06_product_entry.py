@@ -889,16 +889,17 @@ def test_faulted_product_entry_heals_via_revision_and_delivers(base, tmp_path,
     assert '柳婉' in final_text and '苏芸娘' not in final_text
 
     # ④ 修订轮真实发生并如实计费：12 笔干净外发＋1 笔 associate 修订轮实付
-    #    （CS-3 bind 退役）；整书总闸按 attempt 合账（I-17/I-43）。
+    #    ＋1 笔 cross_cause 因果窄调用（CS-S Phase 2：D-2 A，loop 配对拍对候选；
+    #    CS-3 bind 退役）；整书总闸按 attempt 合账（I-17/I-43）。
     rows = _ledger_rows(base)
     paid = [row for row in rows
             if row['sid'] == book.name and not row['cached']]
-    assert len(paid) == 13, '受影响 owner 应恰好多一笔修订轮实付'
+    assert len(paid) == 14, '受影响 owner 应恰好多一笔修订轮实付＋一笔因果窄调用'
     associate_rows = [row for row in paid
                       if row['node'] == 'str06.stage2.associate']
-    assert len(associate_rows) == 2, 'associate 一原轮＋一修订轮'
+    assert len(associate_rows) == 3, 'associate 一原轮＋一修订轮＋一因果窄调用'
     from novel.work_units import read_book_budget
-    assert read_book_budget(base, book.name).used == 13
+    assert read_book_budget(base, book.name).used == 14
 
     # ⑤ 重启读回：全新服务实例三面读回一致，成书与交付摘要互相咬合。
     candidate = book.name
@@ -1318,7 +1319,7 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
     messages = revision_payload['messages']
     revision_user = messages[-1]['content']
     assert obligation_core_id('ob01') not in revision_user
-    assert 'stage4-design-v8' in revision_user and 'ob01' in revision_user
+    assert 'stage4-design-v10' in revision_user and 'ob01' in revision_user
     if design_fault == 'obligation_unbound':
         # 必保义务漏标（design_carrier_missing）登记可选目标（RC-58）：一轮可选目标
         # 条目返修——模型在给定拍闭集里选承载位，不再整份重写（CS-H H2 判据③）。
@@ -1327,7 +1328,7 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
         assert '【条目返修】' in revision_user and '【修订要求】' not in revision_user
         item_section = revision_user.split('【条目返修】', 1)[1]
         assert '必保义务' in item_section and '可选目标闭集' in item_section
-        assert 'stage4-design-patch-slice-v1' in item_section, '窄请求带依赖切片'
+        assert 'stage4-design-patch-slice-v2' in item_section, '窄请求带依赖切片'
         assert 'stage4-design-input-v1' not in item_section, \
             '窄返修不带整份原请求的输入投影（RC-57）'
         assert read_owner_issue_file(Str06Repository(book), 'preserve') is None
@@ -1337,7 +1338,7 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
         assert '【条目返修】' in revision_user and '【修订要求】' not in revision_user
         item_section = revision_user.split('【条目返修】', 1)[1]
         assert '路径 scenes[0].beats[0]' in item_section and '陆大哥' in item_section
-        assert 'stage4-design-patch-slice-v1' in item_section, '窄请求带依赖切片'
+        assert 'stage4-design-patch-slice-v2' in item_section, '窄请求带依赖切片'
         assert 'stage4-design-input-v1' not in item_section, \
             '窄返修不带整份原请求的输入投影（RC-57）'
         assert 'b01_01.c1' not in item_section, 'Design反馈保持源盲'

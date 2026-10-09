@@ -92,14 +92,14 @@ def test_requires_released_needs_all_three_typed_signals():
 
 def _gate_wires():
     from copy import deepcopy
-    from tests.test_str06_design_slim import _brief, _obligations, _v8_wire
+    from tests.test_str06_design_slim import _brief, _obligations, _v9_wire
     brief = _brief()
     change = brief.requirements[0].knowledge_changes[0]
     brief = brief.model_copy(update={'requirements': (
         brief.requirements[0].model_copy(update={'knowledge_changes': (
             change.model_copy(update={'requires_released': ('陆大哥',)}),)}),
         *brief.requirements[1:],)})
-    return brief, _obligations(brief), _v8_wire(), deepcopy(_v8_wire())
+    return brief, _obligations(brief), _v9_wire(), deepcopy(_v9_wire())
 
 
 def _gate_errors(brief, obligations, wire):
@@ -156,7 +156,7 @@ def test_chapter_ir_carries_requires_released_for_the_carrier_chapter():
         length_band=(plain_ir.book_brief.length_band_low,
                      plain_ir.book_brief.length_band_high),
         projection=chars.name_projection(), structure=chars.name_structure,
-        required_releases={('yun_niang', 'vow', 'known'): ('苏芸娘',)})
+        required_releases={('yun_niang', 'intent', 'known'): ('苏芸娘',)})
     assert ir.chapters[0].requires_released == ('苏芸娘',)
     packet = project_chapter_packet(ir, 1)
     assert '必保揭名：本章正文必须出现称谓字面「苏芸娘」' in render_chapter_packet(packet)

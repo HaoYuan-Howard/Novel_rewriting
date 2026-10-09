@@ -109,7 +109,7 @@ from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 
 # ── STR-06 新链契约模型（F8a 激活；F8c 分流至正式 stageN 模块后改 import）──
 from contracts.schema.source import (
-    BlueprintsArtifactV15, CharactersArtifactV4, CharactersCore,
+    BlueprintsArtifactV17, CharactersArtifactV6, CharactersCore,
 )
 from contracts.schema.observation import (
     STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL, AssociateObservation,
@@ -223,8 +223,8 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # names 按新协议重建后，compile 免费重建 Characters，旧根保留证据不原地猜迁。
     'stage2/observations/names.json': ArtifactSpec(NamesObservation, 2),
     'stage2/observations/associate.json': ArtifactSpec(AssociateObservation, 1),
-    'stage2/blueprints/chapter_blueprints.json': ArtifactSpec(BlueprintsArtifactV15, 1),
-    'stage2/characters/characters.json': ArtifactSpec(CharactersArtifactV4, 2),
+    'stage2/blueprints/chapter_blueprints.json': ArtifactSpec(BlueprintsArtifactV17, 1),
+    'stage2/characters/characters.json': ArtifactSpec(CharactersArtifactV6, 2),
     # Stage4：目标故事与确定性编译（preserve／body_design／hook_design／bind／compile）
     'runtime/preserve_checkpoint.json': ArtifactSpec(PreserveCheckpoint, 1),
     'stage4/grounding/reconstruction_brief.json': ArtifactSpec(ReconstructionBrief, 1),
