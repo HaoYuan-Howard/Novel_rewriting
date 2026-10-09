@@ -42,6 +42,8 @@ Golden_Set_v3.0 三本 yaml 的成书对比评估金标复认（2026-10-05 用�
 - **R7 质量优化**：持续登记，按实际阅读反例启动：漏保／过保、因果、承接、声线、导演说明、重复与输入不足。风格画像仅在
   一句一段、环境密度、幽默通道、POV 漂移等既有批评复现且有阅读证据时提出具体方案；under-spec、过度失效、状态过建模、
   checklist prose、章内披露及表达力未验证继续登记；第一人称书不能代签第三人称稳定性。
+  2026-10-09 rc21 创作材料交接的阅读效果、首答可用率与整书成本待用户新跑反馈；原子条件、可选细节、
+  系列前情与姓名窄修的工程实现不代签这些质量结论（裁决见 DECISIONS 同日行）。
   CS-F5 阅读反例（2026-10-05，绑定成书 `16d26c4b…`，详单 `outputs/csf5_review_20261005/csf5_review.md` §二）：
   D1 婚史融合（GS-01b 负控：童年坠河＝救命同一次，财貌动机与婚前感情连带丢失，语义层静默漏过）；
   D2 藏身元计数错×2（ch8「上回是床底」应为衣柜、ch9「第三回」应为第四回）；D3 死结载体衣带→裤绳漂移；
@@ -74,7 +76,7 @@ Phase 4（devices A/B）未立项，不随本路线执行。
 
 | 对象 | 有效义务与删除条件 |
 |---|---|
-| rc12／rc13 五类产物 adapter | `novel/store.py::_upgrade_rc12_payload` 只迁移白名单无损信息（CS-S 1b 起 brief／writer_book_ir 的 rc12／rc13 载荷迁移目标直接钉 rc18，并剥掉 anchors 的死字段 visibility；盘上 rc14～rc17 载荷不在白名单内，随模型字面量按契约表漂移拒读——`ChapterIR.display_prefix` 语义已变，不能当缺省字段读入；旧根续跑同样按候选契约表拒收）；旧 Brief 缺认知模式免费重放 Preserve，旧 Design 缺 confirms 走显式 owner patch。存量全部重建或退役后删除此 adapter 及 Str06Repository.read_graph_hook 的旧组件迁移，禁止无限新增版本 |
+| rc12／rc13 ExecutionPlan adapter | rc21 质量批删除已废止的五类旧质量产物迁移，仅 `novel/store.py::_upgrade_rc12_payload` 对形状未变的 ExecutionPlan 保留 rc12／rc13→rc14 无损适配。checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR 均须显式当前 rc21，旧版或缺版本拒读，不补造细节或概括判断。read_graph_hook 先验证当前图版本再摘组件，不绕版本读取旧图。存量 ExecutionPlan 全部重建或退役后删除此 adapter，禁止无限新增版本 |
 | OwnerIssue v1／v2 读兼容 | v3 显式 dispatch_pending、指纹历史与更正记录；只经 `contracts/schema/workflow.py::owner_issue_record_of_payload` 集中解码；所有存量 v1／v2 根只读归档／不再续跑后删除。旧错误路由账的更正按 RC-15 显式恢复，不重置轮数 |
 | OwnerRevisionRecord V1 读兼容 | V2 增必填 `applies_to_request_sha256` 与 kind `carried_forward`（CS-H H1b，RC-54/56：免费沿用的采用凭证）；只经 `contracts/schema/workflow.py::owner_revision_record_of_payload` 集中解码（v1 的应用身份即其 `baseline_request_sha256`——V1 只可能是 owner_patch／resample）。现存根盘上不再存在 `schema_version=1` 的修订记录（只读归档／不再续跑）后删除 V1 读兼容；未知版本显式拒绝，不向领域 schema 塞默认值 |
 | names／Characters旧信封 | names v2与两类信封v2显式拒识旧版；须新协议names重建后compile重建Characters，不推断空resolutions。原冻结根只读，授权新epoch再重建；无隐式adapter |

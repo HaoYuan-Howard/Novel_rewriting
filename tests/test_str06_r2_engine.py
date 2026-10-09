@@ -682,8 +682,8 @@ def test_render_has_six_partitions_and_protocol_v5():
     for name in SECTIONS:
         assert f'【{name}】' in text
     # 协议 v7 按三类身份组织（六分区仍在）；版本常量由契约批登记
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v8'
-    assert RENDERER_VERSION == 'str06-render-v10'     # RC-24：拍末结果作用域
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v9'
+    assert RENDERER_VERSION == 'str06-render-v11'     # rc21：细节与系列前情的送达身份
     for name in SECTIONS:
         assert name in WRITER_PROTOCOL
     # 同章包 ⇒ 同字节

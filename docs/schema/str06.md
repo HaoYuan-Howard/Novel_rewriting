@@ -104,13 +104,13 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 
 ### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
 
-现役版式为 `str06-rc20`（CS-S Phase 3：观察面收官——CHANGE_KEYS 闭集/拍级 access/reader 派生/associate v5；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
+现役版式为 `str06-rc21`（2026-10-09 创作材料批：Preserve v3/policy 6、Design wire v9、可选细节与系列前情；Stage2 仍为 rc20；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
 `7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个（CS-3 bind
 退役后 13），运行配置未变。
 book 观察 `stage2-book-v3`、chapters 独立 `stage2-chapters-v2`（names 保持
 `stage2-observation-v1`、associate 保持 v2，输入投影变经 RC 表换身份）；
-Preserve `stage4-preserve-v2`＋policy 5、Design `stage4-design-v5`；
-hook-design 字面不变。写作层 renderer／写手协议 v6 不在本批（R10b 升 v7）。
+Preserve 当前 `stage4-preserve-v3`＋policy 6、Design 内部展开 `stage4-design-v5`；
+hook-design 字面不变。当前正文 renderer v11／写手协议 v9（可选细节与前情送达；历史 R10b 升 v7）。
 
 **章观察瘦 wire（CS-2 第一步，2026-10-03）**：`str06.stage2.chapters` 的
 LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模型：
@@ -145,7 +145,7 @@ RC-26～29，反例 `tests/test_stage2_evidence_addressing.py`、
 `tests/test_str06_chapter_slim.py`。
 
 **设计瘦 wire（CS-3 审阅修复，2026-10-03；事实锁引用升 v8，2026-10-04）**：LLM 输出为
-`stage4-design-v8`（`contracts/schema/design.py::DesignWireV8`）。`real` 保留
+`stage4-design-v9`（`contracts/schema/design.py::DesignWireV9`）。`real` 保留
 义务接受拍/支撑拍；Brief 每条 requirement 的 `knowledge_changes` 从正式
 anchor 派生，完整保留每次变化的盲身份、holder、kp、mode。代码按盲身份排序
 派发 `obNN.kNN` 短引用，模型在对应义务 real 拍的 `know:[{ref}]` 声明实际
@@ -174,11 +174,37 @@ Design 接受判据携带所有同址条目的 wire 路径，Binding 派生与�
 升 rc16，旧 rc15 候选根按契约表漂移关闭式拒收（`init_or_resume_candidate_workflow`），原根留作冻结失败证据，
 续跑用新根并经历史采用按请求身份复用已购响应。
 
-Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14；
-其它产物版本不变。旧 rc12/rc13 仅做登记的无损读取迁移，地址、读取、Hook
-引用与 IR 状态容器一起闭合。已经丢失逐义务模式的 Brief 免费重放 preserve
-重建；丢失 confirms 的 rc13 Design 须免费 owner patch 补 v7 know/confirms，
-复编译后恢复下游。旧 seal 字节不改写；迁移删除条件见 REQUIREMENTS。
+历史 R10 收口把 Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14。
+rc21 质量批后只保留未变化 ExecutionPlan 的 rc12/rc13→rc14 登记无损适配；六类质量产物
+（checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR）均显式 rc21，
+旧版或缺版本关闭式拒读，不能把缺省空细节／空概括当成历史判断证据。checkpoint 本次增
+contract_version；policy 升 6，请求输入变更会换身份。旧根与已购响应保持原字节，
+需从上游正式输入在新契约根重建；付费／外发仍由用户显式授权，迁移删除条件见 REQUIREMENTS。
+
+**创作材料交接（2026-10-09，用户批准方向；R-5.23／R-5.24）**：
+
+Preserve 以单一时点可核对的原子事实写 satisfaction，必要动机、铺垫与后果仍是保存条件；
+主题／情绪解释不能代替页面条件。可选 details 用源投影 anchor＋可改写文本，compiler
+生成 dt 盲身份，Brief 删除源坐标。Design 的拍上可用 details:[obNN.dNN] 引用；选中
+文本仅进该拍 creative_guidance，允许改写或省略，没有细节也可完成设计。来源身份和
+引文只审计，不增添锁或付费节点。
+
+series.summaries 显式给 member/covers，Brief 派生 summarizes_cores；Binding.series
+从 checkpoint 同次发布。概括已采用才要求其所覆盖实例已采用且不晚于概括，允许实例
+重排与最后实例同拍概括。compiler 按目标接受拍构造 PriorSeriesEvent（目标章号、
+目标事件及审计拍引用），只在概括拍的 must_respect 送达，不能让写手自行编造过往例子。
+原文同场与顺序只作审阅读数；世界事实成立、人物知情、读者披露仍分层，participants
+不推导知情，引文不推导说话人。全书表达机制逐场默认送达，拍上 ex 引用只说明重点。
+
+新闭集／时序闸均在 Design 接受循环有拍级窄修，同码同位置 compile 回声只在候选预检
+消重；正式免费重编译仍拒绝坏引用／过早概括，且不会以裸 KeyError 中断。
+
+上游细节文本变更会改变盲身份和短引用排序，因此已购候选的窄复核定位不仅取 real／
+支撑拍，还取 know／所选 details 的消费拍（含未 real 的义务）。当前候选不可构造时
+仍由已购 wire 的引用与旧／新对齐键定位；series 的成员／机制／概括覆盖范围纯投影进
+相关成员差异。不静默沿用已改变含义的短引用，复核只发送受影响拍及其当前材料闭包。
+细节字段的修复单位是完整拍，允许删除可选 details；整拍与字段目标不得重叠。
+源锚点对齐键只作审计，窄请求的复核原因使用旧／当前 ob 编号，不发送源拍或句段。
 
 关键语义交接的契约面（判据见 BACKEND_CONTRACT R-2.18/19、R-5.15～R-5.20）：
 
@@ -699,7 +725,7 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 
 | 模块 | 承载 | 关键不变量（构造期表达） |
 |---|---|---|
-| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v4）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
+| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v6）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
 | `contracts/schema/grounding.py` | `SourceObligation` / `PreserveCheckpoint` / `ReconstructionBrief` / `IdentityProjection` / `OutputConstraints` / `SemanticBinding` | 必保义务必有非空 `satisfaction`；checkpoint 无 Design/Bind 字段；Brief 无源章/源拍/叙述顺序/证据定位字段；Binding 是完整 snapshot |
 | `contracts/schema/design.py` | `BodyDesign`（rc11：narration、expression_decisions、可定位 entry；保留拍上线程、world_rules）／`PresentationGraph(BodyDesign)+hook` | source-blind；章号连续 1..N、场景全覆盖；POV 服从正文人称许可；表达决定恰好覆盖；entry 锚满足分支条件；hook 引用与线程生命周期闭合 |
 | `contracts/schema/hook.py` | `HookDesign`／`HookContext`／`HookReceipt`／`HookConstraints` | 起笔事实只引用已建立目标事实；first 恰一人且非 narrator；回执 semantic 恒 unverified |

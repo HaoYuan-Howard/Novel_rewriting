@@ -165,7 +165,8 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                 brief, _ = project_brief(checkpoint, chars.core_view(),
                                           repository.read_model('stage2/blueprints/chapter_blueprints.json'),
                                           structure=chars.name_structure)
-                binding = binding.model_copy(update={'obligations': checkpoint.obligations})
+                binding = binding.model_copy(update={
+                    'obligations': checkpoint.obligations, 'series': checkpoint.series})
         elif owner == 'hook_design':
             hook, errors = assemble_hook_design(candidate, body=body, known_char_ids=set(chars.characters),
                                                 name_projection=projection, name_structure=chars.name_structure)

@@ -73,7 +73,10 @@
       ],
       "cases": {
         "test_execution_plan_failure_does_not_claim_writer_checks_passed": "unit_contract",
-        "test_dangling_proposition_stops_projection_without_an_uncaught_exception": "unit_contract"
+        "test_dangling_proposition_stops_projection_without_an_uncaught_exception": "unit_contract",
+        "test_series_dependency_projection_detects_group_and_summary_revision": "unit_contract",
+        "test_unconstructable_candidate_locates_raw_refs_in_recorded_and_current_entry_keys": "unit_contract",
+        "test_overlapping_real_and_detail_dependencies_produce_one_mandatory_patch_target": "unit_contract"
       }
     },
     "tests/test_str06_fact_lock_stage.py": {
@@ -107,7 +110,8 @@
         "test_nested_paths_fold_into_the_outer_replacement_without_overlap": "unit_contract",
         "test_missing_keys_climb_to_the_nearest_existing_ancestor_and_unlocatable_means_full_revision": "unit_contract",
         "test_every_error_object_is_returned_so_the_ask_loop_can_check_full_coverage": "unit_contract",
-        "test_read_and_confirm_closure_errors_carry_wire_paths_for_item_revision": "unit_contract"
+        "test_read_and_confirm_closure_errors_carry_wire_paths_for_item_revision": "unit_contract",
+        "test_optional_details_repair_uses_the_complete_beat_and_can_remove_the_field": "unit_contract"
       }
     },
     "tests/test_str06_material_repair.py": {
@@ -674,7 +678,9 @@
         "test_body_chapters_full_run_after_canary_only_fills_missing": "stage",
         "test_body_chapters_rejects_invalid_selection_before_any_call": "stage",
         "test_body_chapters_does_not_enter_request_or_receipt_identity": "stage",
-        "test_chapter_failure_keeps_other_legal_commits_and_stops_truncated": "stage"
+        "test_chapter_failure_keeps_other_legal_commits_and_stops_truncated": "stage",
+        "test_summary_packet_carries_target_instances_and_only_summary_gets_the_recall": "stage",
+        "test_series_recall_changes_summary_packet_and_leaves_unrelated_future_packet_unchanged": "stage"
       }
     },
     "tests/test_canary_chapters.py": {
@@ -1139,7 +1145,10 @@
       "stages": [
         "stage2",
         "stage4"
-      ]
+      ],
+      "cases": {
+        "test_summary_real_candidate_preflight_keeps_narrow_repair": "stage"
+      }
     },
     "tests/test_str06_r10b_writer_packet.py": {
       "layer": "unit_contract",
@@ -1217,6 +1226,13 @@
         "test_assemble_routes_v7_and_enforces_coverage": "stage"
       }
     },
+    "tests/test_str06_quality_materials.py": {
+      "layer": "stage",
+      "stages": [
+        "stage4",
+        "stage5"
+      ]
+    },
     "tests/test_str06_name_resolution.py": {
       "layer": "unit_contract",
       "stages": [
@@ -1290,7 +1306,8 @@
         "stage4"
       ],
       "cases": {
-        "test_one_obligation_repair_sends_only_that_item_and_keeps_others_intact": "stage"
+        "test_one_obligation_repair_sends_only_that_item_and_keeps_others_intact": "stage",
+        "test_optional_details_use_same_name_gate_and_detail_item_paths": "unit_contract"
       }
     },
     "tests/test_str06_required_released.py": {

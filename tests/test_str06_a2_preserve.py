@@ -12,6 +12,7 @@ series 成员闭集互斥（C3/C5 的机械面）、冲突报告只验形状（�
 from __future__ import annotations
 
 from contracts.schema.grounding import ObligationSeries, PreserveCheckpoint
+from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
 from contracts.schema.source import (
     BlueprintsArtifactV17, ChapterBlueprint, CharactersCore,
 )
@@ -76,7 +77,7 @@ def _blueprint() -> BlueprintsArtifactV17:
 
 
 def _wire(**over) -> dict:
-    wire = {'protocol_version': 'stage4-preserve-v2', 'obligations': [
+    wire = {'protocol_version': STAGE4_PRESERVE_PROTOCOL, 'obligations': [
         {'kind': 'event_core', 'statement': '夫君藏身床底',
          'anchors': ['b01_01.e1'],
          'must_preserve': True, 'satisfaction': '正文呈现藏身与佯离的关系',
@@ -338,7 +339,7 @@ def test_preserve_revision_wire_roundtrips_semantics_without_derived_fields():
     assert not errors
     before = deepcopy(checkpoint.model_dump())
     wire = preserve_revision_wire(checkpoint)
-    assert wire['protocol_version'] == 'stage4-preserve-v2'
+    assert wire['protocol_version'] == STAGE4_PRESERVE_PROTOCOL
     assert wire['obligations'][0]['anchors'] == ['b01_01.e1']
     assert wire['series'][0]['members'] == [1, 2]
     assert not any(k in wire for k in ('checkpoint_id', 'checkpoint_sha256', 'provider'))
@@ -347,3 +348,144 @@ def test_preserve_revision_wire_roundtrips_semantics_without_derived_fields():
     again, errors = _assemble(wire)
     assert not errors and again == checkpoint
     assert checkpoint.model_dump() == before
+
+
+def test_optional_details_resolve_anchors_and_keep_stable_identity_without_mutation():
+    """可用细节不改变必保分母；锚点与身份由代码派生，改无关义务不漂移。"""
+    from copy import deepcopy
+    wire = _wire()
+    wire['obligations'][0]['details'] = [
+        {'anchor': 'b01_01.e1', 'text': '先佯装走开，再从床底钻出'}]
+    before = deepcopy(wire)
+    checkpoint, errors = _assemble(wire)
+    assert not errors, errors
+    detail = checkpoint.obligations[0].details[0]
+    assert detail.anchor == checkpoint.obligations[0].anchors[0]
+    assert detail.detail_id.startswith('dt_') and len(detail.detail_id) == 19
+    changed = deepcopy(wire)
+    changed['obligations'][1]['statement'] = '女主的怀疑加深'
+    other, errors = _assemble(changed)
+    assert not errors and other.obligations[0].details == (detail,)
+    assert checkpoint.obligations[1].details == ()
+    assert wire == before
+
+
+def test_detail_bad_shapes_unknown_anchors_and_duplicates_get_exact_patch_paths():
+    from copy import deepcopy
+    cases = [
+        {'anchor': 'b99_99.e1', 'text': '门边放一只篮子'},
+        {'anchor': 'b01_01.e1', 'text': '   '},
+        {'anchor': 'b01_01.e1', 'text': '藏身床底', 'detail_id': 'forged'},
+        {'anchor': ['b01_01.e1'], 'text': '藏身床底'},
+        '藏身床底',
+    ]
+    for detail in cases:
+        wire = _wire()
+        wire['obligations'][0]['details'] = [detail]
+        before = deepcopy(wire)
+        checkpoint, errors = _assemble(wire)
+        assert checkpoint is None and errors
+        assert errors[0].context['wire_paths'] == [['obligations', 0, 'details', 0]]
+        assert wire == before
+    wire = _wire()
+    detail = {'anchor': 'b01_01.e1', 'text': '藏身床底'}
+    wire['obligations'][0]['details'] = [detail, dict(detail)]
+    checkpoint, errors = _assemble(wire)
+    assert checkpoint is None and errors[0].code == 'preserve_detail_duplicate'
+    assert errors[0].context['wire_paths'] == [['obligations', 0, 'details', 1]]
+
+
+def test_detail_revision_and_brief_projection_keep_content_but_remove_source_coordinates():
+    from novel.stages.stage4.grounding import (
+        obligation_core_id, preserve_patch_slice, preserve_revision_wire, project_brief,
+    )
+    wire = _wire()
+    wire['obligations'][0]['details'] = [
+        {'anchor': 'b01_01.e1', 'text': '先佯装走开，再从床底钻出'}]
+    wire['series'] = [{'members': [1, 2, 3], 'mechanism': None,
+                       'summaries': [{'member': 2, 'covers': [1]}]}]
+    checkpoint, errors = _assemble(wire)
+    assert not errors, errors
+    revision = preserve_revision_wire(checkpoint)
+    assert revision['obligations'][0]['details'] == wire['obligations'][0]['details']
+    assert revision['series'] == wire['series']
+    assert _assemble(revision)[0] == checkpoint
+    brief, _identity = project_brief(checkpoint, _characters(), _blueprint())
+    by_core = {r.core_id: r for r in brief.requirements}
+    detail = by_core[obligation_core_id('ob01')].details[0]
+    assert detail.text == wire['obligations'][0]['details'][0]['text']
+    assert set(detail.model_dump()) == {'detail_id', 'text'}
+    assert by_core[obligation_core_id('ob02')].summarizes_cores == (
+        obligation_core_id('ob01'),)
+    assert by_core[obligation_core_id('ob03')].summarizes_cores == ()
+    assert 'b01_01' not in str(brief.model_dump())
+    slices = preserve_patch_slice(wire, _characters(), _blueprint(), [0])
+    assert slices['targets'][0]['atoms'][0]['handle'] == 'b01_01.e1'
+
+
+def test_series_summary_covers_only_instances_in_same_group_and_can_precede_future_member():
+    """中途回顾已发生子集合法；不要求回顾在全组末尾，也不把先后当因果。"""
+    from contracts.schema.grounding import SemanticBinding
+    wire = _wire(series=[{'members': [1, 2, 3], 'mechanism': None,
+                         'summaries': [{'member': 2, 'covers': [1]}]}])
+    checkpoint, errors = _assemble(wire)
+    assert not errors, errors
+    summary = checkpoint.series[0].summaries[0]
+    assert summary.member == 'ob02' and summary.covers == ('ob01',)
+    binding = SemanticBinding(
+        binding_id='bind', preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
+        obligations=checkpoint.obligations, series=checkpoint.series, entries=(), unbound=())
+    assert binding.series == checkpoint.series
+    invalid = [
+        [{'member': 2, 'covers': [2]}],
+        [{'member': 2, 'covers': [1, 1]}],
+        [{'member': 2, 'covers': []}],
+        [{'member': True, 'covers': [1]}],
+        [{'member': 2, 'covers': [True]}],
+        [{'member': 2, 'covers': [9]}],
+        [{'member': 2, 'covers': [1]}, {'member': 2, 'covers': [3]}],
+        [{'member': 2, 'covers': [1]}, {'member': 1, 'covers': [3]}],
+    ]
+    for summaries in invalid:
+        bad = _wire(series=[{'members': [1, 2, 3], 'summaries': summaries}])
+        checkpoint, errors = _assemble(bad)
+        assert checkpoint is None and errors, summaries
+    for summaries in ([{'member': 3, 'covers': [1]}],
+                      [{'member': 2, 'covers': [3]}]):
+        checkpoint, errors = _assemble(_wire(series=[{
+            'members': [1, 2], 'summaries': summaries}]))
+        assert checkpoint is None and any('同一个 series 闭集' in e for e in errors)
+
+
+def test_binding_detail_identity_is_globally_unique_and_compiler_defends_bypassed_models():
+    import pytest
+    from pydantic import ValidationError
+    from contracts.schema.grounding import SemanticBinding, SourceDetail, UnboundEntry
+    from novel.stages.stage4.compile import compile_execution_plan
+    from tests.test_str06_body import _green_binding, _green_design
+
+    body = _green_design()
+    binding = _green_binding(body)
+    obligation = binding.obligations[0]
+    detail = SourceDetail(detail_id='dt_1234567890abcdef',
+                          anchor=obligation.anchors[0], text='迎娶的人群散去')
+    first = obligation.model_copy(update={'details': (detail,)})
+    second = obligation.model_copy(update={
+        'obligation_id': 'ob02', 'must_preserve': False, 'satisfaction': '',
+        'details': (detail.model_copy(update={'text': '只剩新婚两人对坐'}),)})
+    bad = binding.model_copy(update={
+        'obligations': (first, second),
+        'unbound': (UnboundEntry(obligation_id='ob02', owner='design', reason='可综合'),)})
+    with pytest.raises(ValidationError, match='细节身份必须唯一'):
+        SemanticBinding.model_validate(bad.model_dump(mode='json'))
+    plan, errors = compile_execution_plan(body, bad)
+    assert plan is None
+    [duplicate] = [error for error in errors
+                   if getattr(error, 'code', '') == 'design_detail_ref']
+    assert duplicate.owner == 'compile'
+    assert duplicate.location == ('detail_identity', detail.detail_id, ('ob01', 'ob02'))
+    unique_second = second.model_copy(update={'details': (
+        second.details[0].model_copy(update={'detail_id': 'dt_fedcba0987654321'}),)})
+    green = SemanticBinding.model_validate(bad.model_copy(update={
+        'obligations': (first, unique_second)}).model_dump(mode='json'))
+    assert compile_execution_plan(body, green)[0] is not None

@@ -255,6 +255,11 @@ def entry_keys(pairs: Sequence[tuple[str, Iterable[str]]]) -> list[tuple[str, tu
 
 
 def _entries_of(wire: Any) -> dict[tuple[str, tuple[str, ...]], dict]:
+    """按义务对齐，并派生各条目实际依赖的系列语义；不改修订 wire。
+
+    系列的成员与机制影响全组；一个概括及其 covers 只投影到概括成员和
+    被覆盖实例。这样仅改 covers 也会定位到相关承载拍，不把顶层变化当未变。
+    """
     if not isinstance(wire, dict):
         raise ValueError('上游修订对照 wire 必须是 JSON 对象')
     obligations = wire.get('obligations')
@@ -268,7 +273,40 @@ def _entries_of(wire: Any) -> dict[tuple[str, tuple[str, ...]], dict]:
     keys = entry_keys([
         (item.get('kind', ''), item['anchors'] if isinstance(item.get('anchors'), list) else ())
         for item in obligations])
-    return dict(zip(keys, obligations))
+    series = wire.get('series', [])
+    if not isinstance(series, list):
+        raise ValueError('上游修订对照 wire 的 series 必须是数组')
+    dependencies: dict[int, list[dict]] = {}
+
+    def ordinals(refs: Any) -> list[int]:
+        if not isinstance(refs, list) or any(
+                not isinstance(ref, int) or isinstance(ref, bool)
+                or not 1 <= ref <= len(obligations) for ref in refs):
+            raise ValueError('上游修订对照 wire 的 series 引用必须在义务序号闭集内')
+        return refs
+
+    for group in series:
+        if not isinstance(group, dict):
+            raise ValueError('上游修订对照 wire 的 series 条目必须是对象')
+        members = ordinals(group.get('members'))
+        summaries = group.get('summaries', [])
+        if not isinstance(summaries, list):
+            raise ValueError('上游修订对照 wire 的 summaries 必须是数组')
+        for summary in summaries:
+            if not isinstance(summary, dict):
+                raise ValueError('上游修订对照 wire 的 summary 必须是对象')
+            involved = ordinals([summary.get('member'), *ordinals(summary.get('covers'))])
+            if not set(involved) <= set(members):
+                raise ValueError('上游修订对照 wire 的 summary 必须引用本组成员')
+        for member in members:
+            dependencies.setdefault(member, []).append({
+                'members': list(members), 'mechanism': group.get('mechanism'),
+                'summaries': [dict(summary) for summary in summaries
+                              if member == summary['member'] or member in summary['covers']],
+            })
+    return {key: ({**item, '_series_dependencies': dependencies[index]}
+                  if index in dependencies else dict(item))
+            for index, (key, item) in enumerate(zip(keys, obligations), 1)}
 
 
 def upstream_diff(before: Any, after: Any) -> UpstreamDiff:
@@ -488,21 +526,36 @@ def _review_targets(assessment: CandidateAssessment) -> tuple[ReviewTarget, ...]
     if diff is None:
         return ()
     targets: list[ReviewTarget] = []
+
+    def label(entry: UpstreamEntryDiff) -> str:
+        # 对齐键含源锚点，仅审计使用；模型复核原因只显示位置派生的 ob 引用。
+        before = f'ob{entry.before_index + 1:02d}' if entry.before_index is not None else ''
+        after = f'ob{entry.after_index + 1:02d}' if entry.after_index is not None else ''
+        reference = after or (f'旧{before}' if before else '')
+        if before and after and before != after:
+            reference = f'旧{before}→当前{after}'
+        return entry.key[0] + (f'，{reference}' if reference else '')
+
     for entry in (*diff.changed, *diff.removed):
         for path in assessment.carriers.get(entry.key, ()):
             targets.append(ReviewTarget(
                 path=path,
-                reason=(f'上游条目{entry.status}（{entry.key[0]}'
-                        + (f'/{",".join(entry.key[1])}' if entry.key[1] else '')
-                        + f'）引用本拍，须复核')))
+                reason=f'上游条目{entry.status}（{label(entry)}）引用本拍，须复核'))
     if diff.added and assessment.beat_closed_set:
-        added = '、'.join(f'{e.key[0]}/{",".join(e.key[1])}'
-                          for e in diff.added) or '上游新增条目'
+        added = '、'.join(label(entry) for entry in diff.added) or '上游新增条目'
         for path in assessment.beat_closed_set:
             targets.append(ReviewTarget(
                 path=path, reason=f'上游新增条目（{added}）：如由本拍承载请给出替换',
                 optional=True))
-    return tuple(dict.fromkeys(targets))
+    # 一拍可同时引用 real 和另一义务的软材料；多个变化原因须合并为一个
+    # 替换目标，不能让相同 JSON 路径重复进入 patches。任一必选原因优先。
+    by_path: dict[tuple[str | int, ...], list[ReviewTarget]] = {}
+    for target in targets:
+        by_path.setdefault(target.path, []).append(target)
+    return tuple(ReviewTarget(
+        path=path, reason='；'.join(dict.fromkeys(item.reason for item in items)),
+        optional=all(item.optional for item in items))
+        for path, items in by_path.items())
 
 
 # ── 候选登记（可由单元账重建的索引） ──────────────────────────────────────────

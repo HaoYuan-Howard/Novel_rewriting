@@ -44,7 +44,7 @@ from novel.stages.stage4.book_ir import (
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.slim import (
-    design_patch_legal_values, design_patch_slice, knowledge_change_index,
+    design_patch_legal_values, design_patch_slice, detail_index, knowledge_change_index,
     project_design_input, project_hook_semantics,
 )
 from novel.stages.stage4.fold import (
@@ -87,7 +87,7 @@ __all__ = [
     'check_read_projection', 'check_thread_lifecycle', 'check_thread_projection',
     'compile_execution_plan', 'compile_hook_context', 'compile_writer_book_ir',
     'design_fact_marks', 'design_obligation_index', 'design_patch_legal_values',
-    'design_patch_slice', 'design_placements',
+    'design_patch_slice', 'design_placements', 'detail_index',
     'derive_semantic_binding', 'locate_design_patches', 'wire_paths_of',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
     'init_establishments', 'lock_order_violations', 'obligation_core_id',

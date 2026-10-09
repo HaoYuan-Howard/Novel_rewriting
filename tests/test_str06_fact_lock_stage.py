@@ -80,7 +80,7 @@ def test_body_design_publishes_binding_with_lock_mapping_and_no_kf_state_key(tmp
     repo = ctx.repository
     body = repo.read_model('stage4/design/body_design.json')
     binding = repo.read_model('stage4/grounding/semantic_binding.json')
-    assert binding.contract_version == 'str06-rc18'
+    assert binding.contract_version == 'str06-rc21'
     [mapping] = binding.fact_bindings
     assert (mapping.kf_id, mapping.beat_ref) == (KF_PLAN, 'sc01#b03')
     assert (mapping.address.domain.value, mapping.address.key) == ('world', 'agreement')

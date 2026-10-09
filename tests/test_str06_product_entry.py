@@ -1319,7 +1319,7 @@ def test_obligation_unbound_replans_across_single_node_subprocesses(base,
     messages = revision_payload['messages']
     revision_user = messages[-1]['content']
     assert obligation_core_id('ob01') not in revision_user
-    assert 'stage4-design-v8' in revision_user and 'ob01' in revision_user
+    assert 'stage4-design-v9' in revision_user and 'ob01' in revision_user
     if design_fault == 'obligation_unbound':
         # 必保义务漏标（design_carrier_missing）登记可选目标（RC-58）：一轮可选目标
         # 条目返修——模型在给定拍闭集里选承载位，不再整份重写（CS-H H2 判据③）。

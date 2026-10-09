@@ -231,6 +231,28 @@ def test_design_own_field_is_verified_before_routing():
         assert repair.owner == expected
 
 
+def test_selected_detail_routes_to_preserve_only_with_exact_formal_source():
+    """软材料的错误也有窄回派入口；错误来源身份或改写后的文本不得冒充正式证据。"""
+    from contracts.schema.grounding import SourceDetail
+    body, binding, brief, _ = _conflict()
+    obligation = binding.obligations[0]
+    detail = SourceDetail(detail_id='dt_1234567890abcdef',
+                          anchor=obligation.anchors[0], text='陆大哥停在灯下')
+    changed = obligation.model_copy(update={'details': (detail,)})
+    binding = binding.model_copy(update={'obligations': (
+        changed, *binding.obligations[1:])})
+    for detail_id, text, expected in (
+            (detail.detail_id, detail.text, 'preserve'),
+            ('dt_ffffffffffffffff', detail.text, ''),
+            (detail.detail_id, '陆大哥停在窗边', '')):
+        source = MaterialSource('obligation', obligation.obligation_id,
+                                f'details/{detail_id}', text)
+        problem = MaterialIssue('positive_material_leak', 'creative_guidance', 0,
+                                '陆大哥', (source,), 1)
+        repair, = plan_material_repairs([problem], body=body, binding=binding, brief=brief)
+        assert repair.owner == expected
+
+
 def test_hook_owned_text_routes_only_with_formal_hook_proof():
     from contracts.schema.design import PresentationGraph
     from contracts.schema.hook import HookDesign, HookMaterial

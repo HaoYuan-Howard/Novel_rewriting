@@ -235,6 +235,64 @@ def test_paragraph_patch_round_is_recorded_by_the_merged_prose_not_the_patch_jso
     assert transport.systems[1] == BODY_PARAGRAPH_REPAIR_SYSTEM != transport.systems[0],         '修句请求不用「只输出完整正文」的写手 system 提示'
 
 
+def test_withheld_paragraph_patch_runs_through_body_commit_and_free_missing_receipt_recovery(tmp_path):
+    """真实 Stage5 runner：姓名泄漏首稿被拒，窄修合并后提交；回执缺失免费重放两轮。"""
+    from novel.stages.common import BODY_PARAGRAPH_REPAIR_SYSTEM
+
+    draft = '\n'.join(('苏芸娘坐到天明。', '烛火未熄。', '陆大哥低声答应旧约。',
+                       '她没有追问。', '窗外天色渐亮。'))
+    repaired = draft.replace('陆大哥', '夫君')
+    patch = json.dumps({'paragraphs': [{'index': 2, 'text': repaired.split('\n')[2]}]},
+                       ensure_ascii=False)
+
+    class NarrowNameTransport(_RoutingTransport):
+        def __init__(self, wires):
+            super().__init__(wires)
+            self.patch_requests = []
+
+        def send(self, request):
+            if request.system == BODY_PARAGRAPH_REPAIR_SYSTEM:
+                self.patch_requests.append(request.user)
+                self.calls.append('body_ch01')
+                return ChatResponse(content=patch, finish_reason='stop',
+                                    usage={'prompt_tokens': 20, 'completion_tokens': 8}, model='fake')
+            if self._owner(request) == 'body_ch01':
+                self.calls.append('body_ch01')
+                return ChatResponse(content=draft, finish_reason='stop',
+                                    usage={'prompt_tokens': 100, 'completion_tokens': 40}, model='fake')
+            return super().send(request)
+
+    wires = _full_chain_wires()
+    transport = NarrowNameTransport(wires)
+    repo, session, _ = _make_session(tmp_path, wires, transport=transport)
+    _run(repo, session, through='stage4')
+    report = _run(repo, session, node_filter=('str06.stage5.body',))
+    assert report['body_complete'] and repo.read_text('stage5/body/ch01.txt') == repaired
+    assert repo.read_text('stage5/body/ch02.txt'), '其他章仍正常提交'
+    assert len(transport.patch_requests) == 1
+    narrow = transport.patch_requests[0]
+    assert '允许替换的行号：[2]' in narrow
+    assert '1（只读邻段）' in narrow and '3（只读邻段）' in narrow
+    assert '苏芸娘坐到天明。' not in narrow and '窗外天色渐亮。' not in narrow
+    rows = _records(repo.root.parent, 'run', 'str06.stage5.body', 'chapter:1')
+    assert [(turn, accepted) for turn, accepted, _parse, _errors in rows] == [(1, False), (2, True)]
+    assert all(e.startswith('[withheld_literals]') for e in rows[0][3])
+    assert rows[1][2:] == ('ok', ())
+    attempts = repo.inspect('runtime/body_attempts_ch01.json')['attempts']
+    assert len(attempts) == 2 and attempts[-1]['errors'] == []
+    assert attempts[1]['identity'] == repo.inspect(
+        'stage5/acceptance/body/ch01.json')['request_identity']
+    calls_before = len(transport.calls)
+    chapter2_receipt = repo.inspect('stage5/acceptance/body/ch02.json')
+    repo.path('stage5/acceptance/body/ch01.json').unlink()
+    recovered = _run(repo, session, node_filter=('str06.stage5.body',))
+    assert recovered['body_complete'] and len(transport.calls) == calls_before
+    assert repo.read_text('stage5/body/ch01.txt') == repaired
+    assert repo.inspect('stage5/acceptance/body/ch02.json') == chapter2_receipt
+    assert repo.inspect('runtime/body_failures.json')['chapters'] == {}
+    assert _records(repo.root.parent, 'run', 'str06.stage5.body', 'chapter:1') == rows
+
+
 # ─── 单节点路径跑完交付：accepted_body 与整链同源 ────────────────────────────
 
 def test_single_node_assemble_after_delivery_reports_the_delivery_state(tmp_path):

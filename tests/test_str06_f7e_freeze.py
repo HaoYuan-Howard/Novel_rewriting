@@ -150,7 +150,9 @@ from novel.llm.paid_requests import candidate_contract_identity
 # rc20 续（2026-10-08 CS-S 审阅补升）：writer_book_ir.json 行 rc17→rc18——1b 删
 # ObligationAnchor.visibility 时漏升（IR 经 VerificationIR.obligations 内嵌 anchors，
 # I-13）；RC 版式头仍为 rc20（同一未发布批次内补齐），冻结身份随该行重钉。
-FROZEN_CONTRACT_IDENTITY = '55da9e2fb9d66c2f787842721c17346d7a0c2433e11f2dd0d3e21722926dee1b'
+# rc21（2026-10-09，用户批准）：Preserve v3/policy 6、Design wire v9，
+# 六类质量产物显式升版；原文同场/顺序仍不作为目标设计硬约束。
+FROZEN_CONTRACT_IDENTITY = '7d04c2c74fdfbd2bbbaed6fb5fef7aaecaa450ad87ee8e6c03ce1fad315ae202'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -222,7 +224,7 @@ def test_frozen_rc_version_label():
     # rc17：CS-H H3 称谓面＋H4 associate v3；rc18：CS-S Phase 1 死字段收口；
     # rc19：CS-S Phase 2 观察面收敛（facts／know.fact／associate v4／D-5／fold 时间线）；
     # rc20：CS-S Phase 3 收官（CHANGE_KEYS 闭集／access／reader 派生／associate v5）。
-    assert STR06_RC_VERSION == 'str06-rc20'
+    assert STR06_RC_VERSION == 'str06-rc21'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是
@@ -250,8 +252,8 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     # 升 v4——条目级窄 resolver；rc20（CS-S Phase 3）升 v5——same_state_dimension
     # 消失（change 键闭集＝键即 canonical）。
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v5',
-    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v2',
-    'STAGE4_PRESERVE_POLICY_VERSION': 5,
+    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v3',
+    'STAGE4_PRESERVE_POLICY_VERSION': 6,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
     'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v1',
     # CS-3（2026-10-03）：bind 协议随节点退役——wire 面由 design v6 的 real

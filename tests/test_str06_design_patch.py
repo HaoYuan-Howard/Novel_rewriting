@@ -67,6 +67,26 @@ def test_scene_level_scalars_and_top_level_scalars_stay_in_place():
     assert list(targets(issue('驱动', ('scenes', 0, 'driver')))) == [('scenes', 0, 'driver')]
 
 
+@pytest.mark.parametrize('selected', [False, True])
+def test_optional_details_repair_uses_the_complete_beat_and_can_remove_the_field(selected):
+    """失效或缺省软材料引用的最小完整父项是拍，整拍替换可合法删除 optional 键。"""
+    wire = deepcopy(WIRE)
+    beat = wire['scenes'][0]['beats'][1]
+    if selected:
+        beat['details'] = ['ob02.d01']
+    before = deepcopy(wire)
+    problem = issue('软材料引用失效', ('scenes', 0, 'beats', 1, 'details'))
+    located = locate_design_patches(wire, [problem])
+    assert located == [(('scenes', 0, 'beats', 1), [problem])], '数组叶替换无法删除可选字段'
+    assert wire == before, '定位器不修输入'
+    replacement = {key: value for key, value in beat.items() if key != 'details'}
+    merged = deepcopy(wire)
+    merged['scenes'][0]['beats'][1] = replacement
+    assert 'details' not in merged['scenes'][0]['beats'][1]
+    assert merged['scenes'][0]['beats'][0] == before['scenes'][0]['beats'][0]
+    assert merged['scenes'][1] == before['scenes'][1], '完整拍替换不会扩大到相邻拍或场'
+
+
 def test_coupled_fields_in_one_beat_merge_to_the_whole_beat():
     """事实绑定、认知拍位、称谓释放与事件文本彼此耦合：同拍两处及以上待修 ⇒ 整拍替换。"""
     a = issue('state 问题', ('scenes', 0, 'beats', 0, 'state', 0))
@@ -270,7 +290,7 @@ def test_item_patch_round_resends_only_the_failing_beats_and_merges_to_a_full_gr
     body = repo.read_model('stage4/design/body_design.json')
     assert [b.event for b in body.scenes[0].beats[:2]] == ['拜堂成亲', '洞房夜夫君立约']
     assert not any('陆大哥' in b.event for s in body.scenes for b in s.beats)
-    assert repo.read_model('stage4/grounding/semantic_binding.json').contract_version == 'str06-rc18'
+    assert repo.read_model('stage4/grounding/semantic_binding.json').contract_version == 'str06-rc21'
     # 成本记账：原轮＋条目返修各一次实付，不是整份重写两遍的另一种计法。
     from novel.llm.ledger import read_cost_snapshot
     rows, _ = read_cost_snapshot(repo.root.parent)
@@ -432,7 +452,7 @@ def _confirm_wire():
     """v8 wire＋扩展 Brief：第 1 拍两个 know 行——先普通知情行、后带悬空 confirms
     的读者确认行（检验序数→wire 行号的映射不受非确认行穿插影响）。"""
     from contracts.schema.grounding import ReconstructionBrief
-    from tests.test_str06_design_slim import _brief, _v8_wire
+    from tests.test_str06_design_slim import _brief, _v9_wire
 
     payload = _brief().model_dump(mode='json')
     payload['requirements'].append({
@@ -451,7 +471,7 @@ def _confirm_wire():
     by_core = {r.core_id: r for r in brief.requirements}
     obligations = {'ob01': by_core['req_aaaa'], 'ob02': by_core['req_bbbb'],
                    'ob03': by_core['req_cccc'], 'ob04': by_core['req_eeee']}
-    wire = _v8_wire()
+    wire = _v9_wire()
     beat = wire['scenes'][0]['beats'][0]
     beat['real'] = ['ob01', 'ob04']
     beat['know'] = [
@@ -466,7 +486,7 @@ def test_read_and_confirm_closure_errors_carry_wire_paths_for_item_revision():
     """读取闭合→read 行；确认闭合→初始行／know 行（含非确认行穿插）；
     多处违例各自独立定位；混入无路径错误仍整份退回。"""
     from novel.stages.stage4.design import assemble_body_design
-    from tests.test_str06_design_slim import _brief, _obligations, _v8_wire
+    from tests.test_str06_design_slim import _brief, _obligations, _v9_wire
 
     def assemble(wire, brief, obligations):
         return assemble_body_design(
@@ -476,7 +496,7 @@ def test_read_and_confirm_closure_errors_carry_wire_paths_for_item_revision():
             obligations=obligations)
 
     brief = _brief()
-    wire = _v8_wire()
+    wire = _v9_wire()
     wire['scenes'][1]['reads'] = [{'domain': 'character', 'subjects': ['yun_niang'],
                                    'holder': None, 'key': 'ghost_state'}]
     body, errors = assemble(wire, brief, _obligations(brief))

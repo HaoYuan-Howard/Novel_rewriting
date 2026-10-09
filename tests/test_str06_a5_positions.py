@@ -32,7 +32,7 @@ from novel.stages.stage4.grounding import (
     assemble_preserve, derive_semantic_binding, project_brief,
 )
 from novel.stages.stage4.guard import check_epistemic_lock_order
-from tests.str06_expression_inputs import sample_narration, sample_readings
+from tests.str06_expression_inputs import sample_narration, sample_readings, sample_requirements
 from tests.str06_facilities import v13_beat, v13_effect
 from tests.str06_semantic_cases import CASES_BY_BATCH
 
@@ -139,7 +139,7 @@ def _blueprint() -> BlueprintsArtifactV17:
 
 
 def _preserve_wire() -> dict:
-    return {'protocol_version': 'stage4-preserve-v2', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v3', 'obligations': [
         {'kind': 'event_core', 'statement': '芸娘从起疑到证实同一件事',
          'anchors': ['b01_01.c1', 'b01_02.c1'],
          'must_preserve': True, 'satisfaction': '怀疑渐进到证实',
@@ -174,6 +174,172 @@ def _checkpoint() -> PreserveCheckpoint:
 def _brief() -> ReconstructionBrief:
     brief, _ = project_brief(_checkpoint(), _characters(), _blueprint())
     return brief
+
+
+def _summary_design_fixture(placements, *, optional_instance=False):
+    """源盲 Brief 与真实 wire：只标显式 covers，不从源顺序推导先后。"""
+    from contracts.schema.grounding import BriefRequirement
+    from contracts.schema.policy import PreserveKind
+    from tests.test_str06_hook import _design_wire_v7
+    requirements = tuple(BriefRequirement(
+        core_id=core, summary=text, kind=PreserveKind.EVENT_CORE,
+        must_preserve=not (optional_instance and index == 2), satisfaction=text,
+        series_group='sr_example',
+        summarizes_cores=('core_first', 'core_second') if index == 3 else ())
+        for index, (core, text) in enumerate((
+            ('core_first', '第一次经历'), ('core_second', '第二次经历'),
+            ('core_summary', '回顾两次经历')), 1))
+    brief = ReconstructionBrief(
+        brief_id='br_summary', preserve_checkpoint_sha256='a' * 64,
+        requirements=requirements, source_narration=sample_narration(),
+        expression=sample_requirements(), expression_readings=sample_readings())
+    index = {f'ob{i:02d}': requirement
+             for i, requirement in enumerate(requirements, 1)}
+    wire = _design_wire_v7()
+    for scene in wire['scenes']:
+        for beat in scene['beats']:
+            beat['real'] = []
+    for ob, sites in placements.items():
+        for scene_i, beat_i in sites:
+            wire['scenes'][scene_i]['beats'][beat_i]['real'].append(ob)
+    return wire, brief, index
+
+
+def _assemble_summary_fixture(placements, *, optional_instance=False):
+    wire, brief, index = _summary_design_fixture(
+        placements, optional_instance=optional_instance)
+    body, errors = assemble_body_design(
+        wire, known_char_ids={'fu_jun', 'yun_niang'},
+        expression_requirements=brief.expression,
+        source_narration=brief.source_narration, brief=brief, obligations=index)
+    return wire, body, errors
+
+
+def test_explicit_summary_order_has_both_wire_sites_and_allows_same_beat_and_reorder():
+    from novel.stages.stage4.design_paths import locate_design_patches, wire_paths_of
+    wire, body, errors = _assemble_summary_fixture({
+        'ob01': [(0, 0)], 'ob02': [(1, 0)], 'ob03': [(0, 1)]})
+    assert body is None
+    early = [e for e in errors if getattr(e, 'code', '') == 'series_summary_early']
+    assert len(early) == 1
+    assert wire_paths_of(early[0]) == (
+        ('scenes', 0, 'beats', 1), ('scenes', 1, 'beats', 0))
+    targets = locate_design_patches(wire, early)
+    assert {target[0] for target in targets} == {
+        ('scenes', 0, 'beats', 1), ('scenes', 1, 'beats', 0)}
+    # 实例互换目标阅读顺序、同拍完成概括都保留重设计自由。
+    for placements in (
+        {'ob01': [(0, 1)], 'ob02': [(0, 0)], 'ob03': [(1, 0)]},
+        {'ob01': [(0, 0)], 'ob02': [(0, 1)], 'ob03': [(0, 1)]},
+    ):
+        _, accepted, green = _assemble_summary_fixture(placements)
+        assert accepted is not None and not green, green
+
+
+def test_explicit_summary_requires_optional_covered_instance_and_offers_all_wire_beats():
+    from novel.stages.stage4.design_paths import locate_design_patches, wire_paths_of
+    wire, body, errors = _assemble_summary_fixture(
+        {'ob01': [(0, 0)], 'ob03': [(1, 0)]}, optional_instance=True)
+    assert body is None
+    missing = [e for e in errors if getattr(e, 'code', '') == 'series_summary_unbound']
+    assert len(missing) == 1 and missing[0].context['instance'] == 'ob02'
+    assert wire_paths_of(missing[0]) is None
+    targets = locate_design_patches(wire, missing)
+    assert {target[0] for target in targets} == {
+        ('scenes', s, 'beats', b)
+        for s, scene in enumerate(wire['scenes']) for b, _ in enumerate(scene['beats'])}
+    assert all(len(target) == 3 and target[2] is True for target in targets)
+    # 未选概括不触发“必须承载可选实例”的新任务。
+    wire, brief, index = _summary_design_fixture(
+        {'ob01': [(0, 0)]}, optional_instance=True)
+    index['ob03'] = index['ob03'].model_copy(update={'must_preserve': False})
+    brief = brief.model_copy(update={'requirements': tuple(index.values())})
+    accepted, green = assemble_body_design(
+        wire, known_char_ids={'fu_jun', 'yun_niang'},
+        expression_requirements=brief.expression, source_narration=brief.source_narration,
+        brief=brief, obligations=index)
+    assert accepted is not None and not green, green
+
+
+def test_internal_design_detail_refs_are_validated_against_formal_brief():
+    """免费人工恢复的内部 v5 输入也不能绕过细节闭集。"""
+    from contracts.schema.grounding import BriefDetail
+    from novel.stages.stage4.design_paths import wire_paths_of
+    from tests.test_str06_hook import _body_wire
+    _, brief, _ = _summary_design_fixture({})
+    detail = BriefDetail(detail_id='dt_' + '1' * 16, text='临窗摆着一盏茶')
+    first = brief.requirements[0].model_copy(update={'details': (detail,)})
+    brief = brief.model_copy(update={'requirements': (first, *brief.requirements[1:])})
+    wire = _body_wire()
+    wire['scenes'][0]['beats'][0]['detail_refs'] = [detail.detail_id]
+    accepted, green = assemble_body_design(
+        wire, known_char_ids={'fu_jun', 'yun_niang'},
+        expression_requirements=brief.expression, source_narration=brief.source_narration,
+        brief=brief)
+    assert accepted is not None and not green, green
+    assert accepted.scenes[0].beats[0].detail_refs == (detail.detail_id,)
+    wire['scenes'][0]['beats'][0]['detail_refs'] = [detail.detail_id, detail.detail_id]
+    refused, repeated = assemble_body_design(
+        wire, known_char_ids={'fu_jun', 'yun_niang'},
+        expression_requirements=brief.expression, source_narration=brief.source_narration,
+        brief=brief)
+    assert refused is None
+    duplicates = [e for e in repeated if getattr(e, 'code', '') == 'design_detail_ref']
+    assert len(duplicates) == 1 and '重复引用' in duplicates[0]
+    assert duplicates[0].location == ('detail_ref', 'sc01', 'b01', detail.detail_id)
+    assert wire_paths_of(duplicates[0]) is None
+    wire['scenes'][0]['beats'][0]['detail_refs'] = ['dt_' + '2' * 16]
+    refused, errors = assemble_body_design(
+        wire, known_char_ids={'fu_jun', 'yun_niang'},
+        expression_requirements=brief.expression, source_narration=brief.source_narration,
+        brief=brief)
+    assert refused is None
+    unknown = [e for e in errors if getattr(e, 'code', '') == 'design_detail_ref']
+    assert len(unknown) == 1 and wire_paths_of(unknown[0]) is None
+
+
+@pytest.mark.parametrize(('placements', 'optional_instance', 'code'), (
+    ({'ob01': [(0, 0)], 'ob02': [(1, 0)], 'ob03': [(0, 1)]}, False,
+     'series_summary_early'),
+    ({'ob01': [(0, 0)], 'ob03': [(1, 0)]}, True,
+     'series_summary_unbound'),
+))
+def test_summary_real_candidate_preflight_keeps_narrow_repair(
+    placements, optional_instance, code,
+):
+    """真实付费入口预检不让compile同根回声吞掉Design局部返修范围。"""
+    from contracts.schema.grounding import (
+        ObligationSeries, OutputConstraints, SeriesSummary, SourceLineage,
+        SourceObligation,
+    )
+    from novel.stages.stage4.design_paths import locate_design_patches
+    from novel.stages.stage4.preflight import inspect_design_candidate
+    from tests.str06_facilities import anchor_stub
+    from tests.test_str06_hook import _characters as full_characters
+    wire, brief, index = _summary_design_fixture(
+        placements, optional_instance=optional_instance)
+    checkpoint = PreserveCheckpoint(
+        checkpoint_id='cp', policy_id='p', policy_version=1,
+        characters_sha256='a' * 64, blueprints_sha256='a' * 64,
+        provider='x', model='y', request_sha256='r' * 64,
+        checkpoint_sha256='a' * 64,
+        obligations=tuple(SourceObligation(
+            obligation_id=ob, kind=req.kind, statement=req.summary,
+            anchors=anchor_stub(), lineage=SourceLineage(
+                blueprint_refs=('b01_01',), character_ids=('yun_niang',)),
+            must_preserve=req.must_preserve, satisfaction=req.satisfaction)
+            for ob, req in index.items()),
+        series=(ObligationSeries(members=tuple(index), summaries=(
+            SeriesSummary(member='ob03', covers=('ob01', 'ob02')),)),))
+    inspection = inspect_design_candidate(
+        wire, checkpoint=checkpoint, brief=brief, obligations=index,
+        chars=full_characters(), constraints=OutputConstraints(
+            target_chapter_count=2, total_length_budget=2000), length_band=(0.6, 1.3))
+    assert not inspection.passed
+    issues = [e for e in inspection.errors if getattr(e, 'code', '') == code]
+    assert len(issues) == 1 and issues[0].owner == 'design'
+    tasks = inspection.feedback(list(inspection.errors))
+    assert locate_design_patches(wire, tasks) is not None
 
 
 def _kp_x(brief: ReconstructionBrief) -> str:
@@ -325,7 +491,7 @@ def test_initial_reader_confirmation_requires_an_actual_initial_fact():
 
 
 def test_v7_composite_obligation_preserves_cognitive_change_positions():
-    from contracts.schema.design import DesignWireV8
+    from contracts.schema.design import DesignWireV9
     from novel.stages.stage4.grounding import design_obligation_index
     from novel.stages.stage4.slim import design_fact_marks, knowledge_change_index
     checkpoint, brief = _checkpoint(), _brief()
@@ -352,7 +518,7 @@ def test_v7_composite_obligation_preserves_cognitive_change_positions():
         if change.holder == 'reader':
             placement['confirms'] = {'domain': 'world', 'key': 'secret'}
         beats[position].setdefault('know', []).append(placement)
-    wire = {'protocol_version': 'stage4-design-v8', 'book_style': source['book_style'],
+    wire = {'protocol_version': 'stage4-design-v9', 'book_style': source['book_style'],
             'scenes': [{'driver': source['scenes'][0]['driver'], 'brief': '由起疑推进到证实',
                         'beats': beats}], 'chapters': source['chapters']}
     body, errors = assemble_body_design(
@@ -365,7 +531,7 @@ def test_v7_composite_obligation_preserves_cognitive_change_positions():
     binding, errors = derive_semantic_binding(
         {ob: [(0, i) for i, beat in enumerate(beats) if ob in beat['real']]
          for ob in obligations}, body, checkpoint,
-        design_fact_marks(DesignWireV8.model_validate(wire)))
+        design_fact_marks(DesignWireV9.model_validate(wire)))
     assert not errors, errors
     assert check_epistemic_lock_order(body, binding) == []
 
@@ -587,7 +753,7 @@ def _a5_wires():
 
     wires = deepcopy(looped_full_chain_wires())
     wires['preserve'] = {
-        'protocol_version': 'stage4-preserve-v2',
+        'protocol_version': 'stage4-preserve-v3',
         'obligations': [
             {'kind': 'event_core', 'statement': '苏芸娘嫁入陆家且夫君立下旧约',
              'anchors': ['b01_01.e1'], 'must_preserve': True,
@@ -712,7 +878,7 @@ def test_preserve_model_validation_error_feeds_revision_not_crash():
               'anchors': ['b01_01.e1']}
     try:
         checkpoint, errors = assemble_preserve(
-            {'protocol_version': 'stage4-preserve-v2',
+            {'protocol_version': 'stage4-preserve-v3',
              'obligations': [entry, entry2],
              'series': [{'members': [1, 2], 'mechanism': None},
                         {'members': [1, 2], 'mechanism': None}]},  # 全员双 series

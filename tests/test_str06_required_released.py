@@ -92,14 +92,14 @@ def test_requires_released_needs_all_three_typed_signals():
 
 def _gate_wires():
     from copy import deepcopy
-    from tests.test_str06_design_slim import _brief, _obligations, _v8_wire
+    from tests.test_str06_design_slim import _brief, _obligations, _v9_wire
     brief = _brief()
     change = brief.requirements[0].knowledge_changes[0]
     brief = brief.model_copy(update={'requirements': (
         brief.requirements[0].model_copy(update={'knowledge_changes': (
             change.model_copy(update={'requires_released': ('陆大哥',)}),)}),
         *brief.requirements[1:],)})
-    return brief, _obligations(brief), _v8_wire(), deepcopy(_v8_wire())
+    return brief, _obligations(brief), _v9_wire(), deepcopy(_v9_wire())
 
 
 def _gate_errors(brief, obligations, wire):

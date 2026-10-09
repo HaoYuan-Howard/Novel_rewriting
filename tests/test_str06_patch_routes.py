@@ -225,7 +225,7 @@ def _assemble(wire, brief, obligations):
 
 
 def _locating_cases() -> dict[str, tuple]:
-    """规则码 → 产出它的最小 v8 wire 变形（坏稿）。与 `_v8_wire` 绿底座同源。
+    """规则码 → 产出它的最小 v8 wire 变形（坏稿）。与 `_v9_wire` 绿底座同源。
 
     只收**本文件能稳定触发**的码；其余 locate 码（`design_pov_closed_set`、
     `design_unregistered_surface`、`design_knowledge_lock`、kp/kf 家族、
@@ -235,30 +235,30 @@ def _locating_cases() -> dict[str, tuple]:
     「路由表与判据一一对应」这张网，不复制每条判据的红例。
     """
     from copy import deepcopy
-    from tests.test_str06_design_slim import _brief, _obligations, _v8_wire
+    from tests.test_str06_design_slim import _brief, _obligations, _v9_wire
 
     def bad_unknown_char():
-        wire = _v8_wire()
+        wire = _v9_wire()
         wire['scenes'][0]['beats'][0]['who'] = ['ghost']
         return wire
 
     def bad_chapter_slice():
-        wire = _v8_wire()
+        wire = _v9_wire()
         wire['chapters'][0]['scenes'] = 3      # 章切片总数与场景总数不符
         return wire
 
     def bad_scene_weights():
-        wire = _v8_wire()
+        wire = _v9_wire()
         wire['scene_weights'] = [1.0]        # 与场景等长失败
         return wire
 
     def bad_expression_ref():
-        wire = _v8_wire()
+        wire = _v9_wire()
         wire['scenes'][0]['beats'][0]['ex'] = ['ex_99']
         return wire
 
     def bad_read_unestablished():
-        wire = _v8_wire()
+        wire = _v9_wire()
         wire['scenes'][1]['reads'] = [{'domain': 'character', 'subjects': ['yun_niang'],
                                        'key': 'ghost_state'}]
         return wire

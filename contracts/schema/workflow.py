@@ -661,14 +661,17 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 # 知情由 compile 按拍级 access 派生**（wire 禁 reader，蓝图 reader 条目全部是
 # 派生物）；Blueprints v17（Beat.access＋派生 reader cognition）、Characters v6
 # （初态键闭集）。旧 rc19 根按契约表漂移只读拒收。
-STR06_RC_VERSION: Final = 'str06-rc20'
+# rc21（2026-10-09）：Preserve v3 增可改写细节与系列回顾的显式覆盖关系；
+# Design v9 只选细节短引用，compiler 向对应拍送达提示及真实目标前情。
+# 三层知情、源盲重设计、节点和额度不变；旧质量契约不隐式迁移。
+STR06_RC_VERSION: Final = 'str06-rc21'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
                           'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
                           'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15',
                           'str06-rc16', 'str06-rc17', 'str06-rc18', 'str06-rc19',
-                          'str06-rc20')
+                          'str06-rc20', 'str06-rc21')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒
@@ -694,8 +697,8 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 #: believes→believes；asserts 转公开声称标记）＋kf 事实锁（时态/值未知/
 #: 原文未回答）；requirement 带 series 盲标记与 mechanism。kp/kf 键规则与
 #: 必保锁兑现归 assemble_body_design（revise_self）。
-STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v2'
-STAGE4_PRESERVE_POLICY_VERSION: Final = 5
+STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v3'
+STAGE4_PRESERVE_POLICY_VERSION: Final = 6
 STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v5'
 # CS-3（2026-10-03）：`str06.stage4.bind` 退役——承载位由 design wire 的 real
 # 标注派生（stage4-design-v6 的面），stage4-bind-v1 wire 协议随之退役。

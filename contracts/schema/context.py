@@ -49,12 +49,12 @@ from contracts.schema.base import StrictModel
 from contracts.schema.design import TargetBeat, TargetDelta, ThreadKind
 from contracts.schema.execution import Establishment
 from contracts.schema.state import StateAddress, SurfaceIntroduction, SurfaceRelease
-from contracts.schema.grounding import SourceObligation
+from contracts.schema.grounding import BriefDetail, SourceObligation
 from typing import Literal, Mapping, Sequence
 
 __all__ = ['BeatIR', 'KnowledgeEntry', 'ObligationCarrier', 'OpenThreadIR',
-           'StateEntry', 'SurfaceRelease', 'ThreadOpIR', 'UnansweredGuard',
-           'VerificationIR', 'WriterBrief', 'WriterContext', 'WriterPacket']
+           'PriorSeriesEvent', 'StateEntry', 'SurfaceRelease', 'ThreadOpIR', 'UnansweredGuard',
+           'VerificationIR', 'WriterBrief', 'WriterContext', 'WriterDetail', 'WriterPacket']
 
 
 class StateEntry(StateAddress):
@@ -78,6 +78,12 @@ class KnowledgeEntry(StrictModel):
     mode: Literal['known', 'suspected', 'heard', 'believes']
 
 
+class WriterDetail(BriefDetail):
+    """可改写提示加正式来源身份；引用供归因审计，写手只读 text。"""
+
+    obligation_id: str = Field(min_length=1)
+
+
 class BeatIR(StrictModel):
     """拍级事实定位：本场每一拍的行动内核、逐拍结果与释放位置。
 
@@ -91,6 +97,8 @@ class BeatIR(StrictModel):
     #: 本拍承载的源表达任务（a4：ex_id 原样保留；renderer v7（R10b）把它
     #: 展开成拍级表达任务——v6 阶段仅随 IR 存档，不进阅读面）。
     expression_refs: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 从正式义务解析的可改写材料；源锚点只留在义务审计面。
+    details: tuple[WriterDetail, ...] = Field(default=(), min_length=0)
     surface_introductions: tuple[str, ...] = Field(
         default=(), min_length=0,
         description='该拍首次释放的称谓字面（释放位置的可追溯投影）')
@@ -194,6 +202,20 @@ class UnansweredGuard(StrictModel):
     carrier_ref: str = Field(min_length=1, description='承载位置（审计位）')
 
 
+class PriorSeriesEvent(StrictModel):
+    """显式系列概括的目标实例；只引用目标 Design，不引用源章或源引文。
+
+    compiler 按 Binding.series 的 covers 找到实例最终接受拍，原样投影该拍
+    event。summary_beat_ref 把回顾挂在概括拍上：同场此前或同拍实例也合法，
+    不能在章首把尚待本场发生的实例说成已经发生。
+    """
+
+    summary_beat_ref: str = Field(pattern=r'^[^#]+#[^#]+$')
+    beat_ref: str = Field(pattern=r'^[^#]+#[^#]+$')
+    chapter_ordinal: int = Field(ge=1)
+    event: str = Field(min_length=1)
+
+
 class VerificationIR(StrictModel):
     """事实约束视图：写前机械 Guard 的验证输入与写手的硬边界清单。"""
 
@@ -227,6 +249,8 @@ class VerificationIR(StrictModel):
     carried_obligations: tuple[ObligationCarrier, ...] = Field(default=(), min_length=0)
     #: 原文未回答的悬念（R10b，C9）：从承载位置起进章包禁区，目标不得作答。
     unanswered_guards: tuple[UnansweredGuard, ...] = Field(default=(), min_length=0)
+    #: 只在显式 summary 的接受拍送达已覆盖实例；普通 instance 不新增回顾任务。
+    prior_series_events: tuple[PriorSeriesEvent, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _beats_belong_to_scene(self) -> 'VerificationIR':
@@ -234,6 +258,12 @@ class VerificationIR(StrictModel):
                  if b.beat_ref.split('#', 1)[0] != self.scene_id]
         if stray:
             raise ValueError(f'BeatIR 挂在了别的场景上：{stray}')
+        refs = {b.beat_ref for b in self.beats}
+        if any(e.summary_beat_ref not in refs for e in self.prior_series_events):
+            raise ValueError('系列回顾必须挂在本场实际存在的概括拍上')
+        pairs = [(e.summary_beat_ref, e.beat_ref) for e in self.prior_series_events]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError('同一概括拍不得重复投影同一目标实例')
         return self
 
 
@@ -258,7 +288,7 @@ class WriterContext(StrictModel):
     消费该地址的章包。rc10（R2）：拍级读取值挂 BeatIR.reads；线程投影面
     thread_ops／open_threads 进 IR。"""
 
-    contract_version: Literal['str06-rc14'] = 'str06-rc14'
+    contract_version: Literal['str06-rc21'] = 'str06-rc21'
     scene_id: str = Field(min_length=1)
     execution_slice_sha256: str = Field(min_length=64, max_length=64)
     verification_ir: VerificationIR
@@ -310,7 +340,7 @@ class WriterPacket(StrictModel):
         """无内部 ID 与字段名（R0 检查 4 的 schema 面）。
 
         条目是给写手读的自然语言：`sc01#b02` 式复合引用、`th{nn}` 线程 id、
-        `kp_*`／`kf_*` 锁句柄（R10b：锁以内容送达，句柄绝不进阅读面）、
+        `kp_*`／`kf_*` 锁句柄与 `dt_*` 细节身份（只以内容送达，句柄绝不进阅读面）、
         `established_by`／`execution_slice_sha256` 等工程字段名出现在任何
         分区里都说明 renderer 把 Machine 材料漏给了写手——构造期即拒。
         """
@@ -319,6 +349,7 @@ class WriterPacket(StrictModel):
             re.compile(r'sc\d{2,}#b\d{2,}'),
             re.compile(r'th\d{2,}'),
             re.compile(r'k[pf]_[0-9a-f]{16}'),
+            re.compile(r'dt_[0-9a-f]{16}'),
             re.compile(r'established_by'),
             re.compile(r'execution_slice_sha256'),
         )
@@ -335,6 +366,7 @@ class WriterPacket(StrictModel):
 
 def beats_ir(scene_id: str, beats: tuple[TargetBeat, ...],
              reads_by_beat: Mapping[str, Sequence[StateEntry | KnowledgeEntry]] | None = None,
+             details_by_id: Mapping[str, WriterDetail] | None = None,
              ) -> tuple[BeatIR, ...]:
     """canonical 拍 → BeatIR 的确定性投影（供 compiler 复用，单一产地）。
 
@@ -342,10 +374,12 @@ def beats_ir(scene_id: str, beats: tuple[TargetBeat, ...],
     键是场内 beat_id，值是该拍定位点上解析到的条目；缺省不挂（无拍级读取）。
     """
     reads_by_beat = dict(reads_by_beat or {})
+    details_by_id = dict(details_by_id or {})
     return tuple(
         BeatIR(beat_ref=f'{scene_id}#{b.beat_id}', event=b.event,
                deltas=b.target_delta,
                expression_refs=b.expression_refs,
+               details=tuple(details_by_id[ref] for ref in b.detail_refs),
                surface_introductions=tuple(
                    s for intro in b.surface_introductions for s in intro.surfaces),
                # 显式构造：上游 model_copy 可能绕过校验放入同构的 SurfaceRelease。

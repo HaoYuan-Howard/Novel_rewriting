@@ -34,7 +34,8 @@ from typing import Any, Final, Iterable
 from contracts.schema.design import BodyDesign
 from contracts.schema.grounding import (
     BriefFactLock, BriefKnowledgeChange, BriefKnowledgeLock, BriefProposition, BriefRequirement,
-    FactLockBinding, IdentityProjection, ObligationAnchor, ObligationSeries, PreserveCheckpoint,
+    BriefDetail, FactLockBinding, IdentityProjection, ObligationAnchor, ObligationDetail,
+    ObligationSeries, PreserveCheckpoint, SeriesSummary, SourceDetail,
     ReconstructionBrief, SemanticBinding, SourceLineage, SourceObligation,
     BookConstraint, _lock_id,
 )
@@ -67,8 +68,9 @@ def _sha256_payload(obj: Any) -> str:
 #: 序号数组。R10a a2：义务以 anchors 引用投影句柄，lineage 退出 wire
 #: （compiler 派生）；顶层增 series／evidence_conflicts。
 _OBLIGATION_KEYS = frozenset({'kind', 'statement', 'anchors',
-                              'must_preserve', 'satisfaction', 'requires'})
-_SERIES_KEYS = frozenset({'members', 'mechanism'})
+                              'must_preserve', 'satisfaction', 'requires', 'details'})
+_SERIES_KEYS = frozenset({'members', 'mechanism', 'summaries'})
+_SUMMARY_KEYS = frozenset({'member', 'covers'})
 _CONFLICT_KEYS = frozenset({'anchor', 'segment', 'note'})
 
 
@@ -294,6 +296,8 @@ def preserve_revision_wire(checkpoint: PreserveCheckpoint) -> dict[str, Any]:
         raise ValueError('Preserve 修订投影拒绝重复 obligation_id')
     refs = [ref for o in checkpoint.obligations for ref in o.requires]
     refs.extend(ref for group in checkpoint.series for ref in group.members)
+    refs.extend(ref for group in checkpoint.series for summary in group.summaries
+                for ref in (summary.member, *summary.covers))
     if any(ref not in ordinals for ref in refs):
         raise ValueError('Preserve 修订投影拒绝闭集外义务引用')
     return {
@@ -302,10 +306,17 @@ def preserve_revision_wire(checkpoint: PreserveCheckpoint) -> dict[str, Any]:
             {'kind': o.kind.value, 'statement': o.statement,
              'anchors': [a.handle for a in o.anchors],
              'must_preserve': o.must_preserve, 'satisfaction': o.satisfaction,
-             'requires': [ordinals[ref] for ref in o.requires]}
+             'requires': [ordinals[ref] for ref in o.requires],
+             **({'details': [{'anchor': d.anchor.handle, 'text': d.text}
+                             for d in o.details]} if o.details else {})}
             for o in checkpoint.obligations],
         'series': [{'members': [ordinals[ref] for ref in group.members],
-                    'mechanism': group.mechanism} for group in checkpoint.series],
+                    'mechanism': group.mechanism,
+                    **({'summaries': [
+                        {'member': ordinals[s.member],
+                         'covers': [ordinals[ref] for ref in s.covers]}
+                        for s in group.summaries]} if group.summaries else {})}
+                   for group in checkpoint.series],
         'evidence_conflicts': [],
     }
 
@@ -337,6 +348,22 @@ def _preserve_shape_errors(wire: Any) -> list[str]:
                 requires = item.get('requires')
                 if requires is not None and not isinstance(requires, list):
                     errors.append(f'{path}.requires 必须是序号数组')
+                if 'details' in item:
+                    details = item['details']
+                    if not isinstance(details, list):
+                        errors.append(_preserve_issue(
+                            f'{path}.details 必须是细节对象数组',
+                            'preserve_detail_shape', ('detail_shape', n - 1),
+                            (('obligations', n - 1, 'details'),)))
+                    else:
+                        for di, detail in enumerate(details):
+                            try:
+                                ObligationDetail.model_validate(detail)
+                            except ValidationError as exc:
+                                errors.append(_preserve_issue(
+                                    f'{path}.details[{di + 1}] 形状错误：{exc}',
+                                    'preserve_detail_shape', ('detail_shape', n - 1, di),
+                                    (('obligations', n - 1, 'details', di),)))
             elif key == 'series':
                 members = item.get('members')
                 if members is not None and not isinstance(members, list):
@@ -344,6 +371,16 @@ def _preserve_shape_errors(wire: Any) -> list[str]:
                 mechanism = item.get('mechanism')
                 if mechanism is not None and not isinstance(mechanism, str):
                     errors.append(f'{path}.mechanism 必须是 ex_id 字符串或 null')
+                if 'summaries' in item:
+                    summaries = item['summaries']
+                    if not isinstance(summaries, list):
+                        errors.append(f'{path}.summaries 必须是对象数组')
+                    else:
+                        for si, summary in enumerate(summaries, 1):
+                            if not isinstance(summary, dict):
+                                errors.append(f'{path}.summaries[{si}] 必须是对象')
+                            elif not isinstance(summary.get('covers'), list):
+                                errors.append(f'{path}.summaries[{si}].covers 必须是序号数组')
             else:
                 for field in ('anchor', 'segment', 'note'):
                     if field in item and not isinstance(item[field], str):
@@ -357,7 +394,7 @@ def assemble_preserve(
     characters: CharactersCore, blueprint: BlueprintsArtifactV17,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
-    """Preserve wire（stage4-preserve-v2）→ checkpoint。
+    """Preserve wire（stage4-preserve-v3）→ checkpoint。
 
     确定性校验：协议版本、义务 anchors 在投影句柄闭集内（每条义务至少锚定
     一个原子）、requires 序号闭合无环、series 成员闭集互斥且 mechanism 属源
@@ -396,6 +433,22 @@ def assemble_preserve(
             if handle not in index:
                 errors.append(f'义务 {ordinal} anchors 引用未知句柄：{handle!r}'
                               '（只能取投影视图给出的 s0_*/wc_*/b拍.e|c|l 句柄）')
+        for di, detail in enumerate(item.get('details') or ()):
+            if detail['anchor'] not in index:
+                errors.append(_preserve_issue(
+                    f'义务 {ordinal} details[{di + 1}] 引用未知句柄：'
+                    f'{detail["anchor"]!r}（细节必须引用源证据投影闭集）',
+                    'preserve_detail_anchor', ('detail_anchor', ordinal - 1, di),
+                    (('obligations', ordinal - 1, 'details', di),)))
+        seen_details: set[tuple[str, str]] = set()
+        for di, detail in enumerate(item.get('details') or ()):
+            identity = (detail['anchor'], detail['text'])
+            if identity in seen_details:
+                errors.append(_preserve_issue(
+                    f'义务 {ordinal} details[{di + 1}] 与已有细节重复',
+                    'preserve_detail_duplicate', ('detail_duplicate', ordinal - 1, di),
+                    (('obligations', ordinal - 1, 'details', di),)))
+            seen_details.add(identity)
     if errors:
         return None, errors
     # ID 派发（I-21）：obligation_id 按列表序生成；requires 是 1-based 列表
@@ -442,7 +495,12 @@ def assemble_preserve(
                 anchors=tuple(index[h] for h in o.get('anchors') or ()),
                 must_preserve=o['must_preserve'],
                 satisfaction=o.get('satisfaction') or '',
-                requires=tuple(graph[oid]))
+                requires=tuple(graph[oid]),
+                details=tuple(SourceDetail(
+                    detail_id=_lock_id('dt_', _sha256_payload(
+                        [oid, d['anchor'], d['text']])),
+                    anchor=index[d['anchor']], text=d['text'])
+                    for d in o.get('details') or ()))
             for oid, o in zip(dispatched, raw))
     except (ValidationError, KeyError) as exc:
         return None, [f'义务构造失败：{exc}']
@@ -465,10 +523,30 @@ def assemble_preserve(
         if mechanism is not None and mechanism not in ex_ids:
             errors.append(f'series {n} mechanism 不在源表达 ex_id 闭集：'
                           f'{mechanism!r}')
+        summaries: list[SeriesSummary] = []
+        for si, summary in enumerate(group.get('summaries') or (), 1):
+            _reject_unknown_keys(errors, summary, _SUMMARY_KEYS, f'series {n} summary {si}')
+            member_raw = summary.get('member')
+            covers_raw = summary.get('covers') or []
+            if (not isinstance(member_raw, int) or isinstance(member_raw, bool)
+                    or not 1 <= member_raw <= len(raw)):
+                errors.append(f'series {n} summary {si} member 序号越界：{member_raw!r}')
+                continue
+            if any(not isinstance(ref, int) or isinstance(ref, bool)
+                   or not 1 <= ref <= len(raw) for ref in covers_raw):
+                errors.append(f'series {n} summary {si} covers 序号必须属于义务闭集')
+                continue
+            try:
+                summaries.append(SeriesSummary(
+                    member=dispatched[member_raw - 1],
+                    covers=tuple(dispatched[ref - 1] for ref in covers_raw)))
+            except ValidationError as exc:
+                errors.append(f'series {n} summary {si} 模型校验失败：{exc}')
         if not errors:
             try:
                 series_list.append(ObligationSeries(
-                    members=tuple(resolved_members), mechanism=mechanism))
+                    members=tuple(resolved_members), mechanism=mechanism,
+                    summaries=tuple(summaries)))
             except ValidationError as exc:
                 errors.append(f'series {n} 模型校验失败：{exc}')
     if errors:
@@ -798,11 +876,14 @@ def project_brief(
         _derive_brief_locks(checkpoint, blueprint, characters, structure)
     series_group: dict[str, str] = {}
     series_mechanism: dict[str, str | None] = {}
+    summarizes: dict[str, tuple[str, ...]] = {}
     for group in checkpoint.series:
         token = _lock_id('sr_', '|'.join(sorted(group.members)))
         for member in group.members:
             series_group[member] = token
             series_mechanism[member] = group.mechanism
+        for summary in group.summaries:
+            summarizes[summary.member] = tuple(core_ids[ref] for ref in summary.covers)
     cores = tuple(sorted((
         BriefRequirement(
             core_id=core_ids[o.obligation_id], summary=o.statement,
@@ -813,7 +894,9 @@ def project_brief(
             knowledge_changes=derived_locks[o.obligation_id]['knowledge_changes'],
             realize_locks=derived_locks[o.obligation_id]['realize_locks'],
             series_group=series_group.get(o.obligation_id),
-            series_mechanism=series_mechanism.get(o.obligation_id))
+            series_mechanism=series_mechanism.get(o.obligation_id),
+            details=tuple(BriefDetail(detail_id=d.detail_id, text=d.text) for d in o.details),
+            summarizes_cores=summarizes.get(o.obligation_id, ()))
         for o in checkpoint.obligations), key=lambda c: c.core_id))
     brief = ReconstructionBrief(
         brief_id=f'brief_{checkpoint.checkpoint_id}',
@@ -859,7 +942,7 @@ def design_obligation_index(
 
 def _preserve_issue(message: str, code: str, location: tuple,
                    paths=()) -> ValidationIssue:
-    """Preserve 判据问题：规则码＋稳定位置＋`obligations[i]` 条目路径。"""
+    """Preserve 判据问题：规则码＋稳定位置＋义务或细节的完整条目路径。"""
     return ValidationIssue(message, code=code, location=tuple(location),
                            owner='preserve',
                            context={'wire_paths': [list(p) for p in paths]})
@@ -902,8 +985,12 @@ def preserve_name_issues(
     claim_face = tuple(sorted((family_forms | bindable) - set(gate)))
     issues: list[ValidationIssue] = []
     for index, obligation in enumerate(checkpoint.obligations):
-        for field in ('statement', 'satisfaction'):
-            text = getattr(obligation, field) or ''
+        fields = [(field, getattr(obligation, field) or '', ('obligations', index))
+                  for field in ('statement', 'satisfaction')]
+        fields.extend((f'details/{detail.detail_id}', detail.text,
+                       ('obligations', index, 'details', di))
+                      for di, detail in enumerate(obligation.details))
+        for field, text, path in fields:
             if not text:
                 continue
             claimed = claim_spans(text, claim_face)
@@ -915,7 +1002,7 @@ def preserve_name_issues(
                     '保留 anchors 与原义务语义',
                     'preserve_name_literal',
                     ('preserve_name_literal', obligation.obligation_id, field, claim.literal),
-                    (('obligations', index),))
+                    (path,))
                 issue.context.update({'obligation_id': obligation.obligation_id,
                                       'field': field, 'literal': claim.literal})
                 issues.append(issue)
@@ -959,7 +1046,11 @@ def preserve_patch_slice(
         if not 0 <= i < len(raw) or not isinstance(raw[i], dict):
             continue
         atoms = []
-        for handle in raw[i].get('anchors') or ():
+        handles = list(raw[i].get('anchors') or ())
+        details = raw[i].get('details')
+        handles.extend(d['anchor'] for d in (details if isinstance(details, list) else ())
+                       if isinstance(d, dict) and isinstance(d.get('anchor'), str))
+        for handle in dict.fromkeys(handles):
             anchor = index.get(handle)
             if anchor is None:
                 continue
@@ -1105,6 +1196,7 @@ def derive_semantic_binding(
             binding_id=f'bind_{checkpoint.checkpoint_id}',
             preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
             obligations=checkpoint.obligations,
+            series=checkpoint.series,
             entries=tuple(_binding_entry(e) for e in entries),
             unbound=tuple(_unbound_entry(u) for u in unbound),
             fact_bindings=tuple(fact_bindings))
@@ -1119,8 +1211,10 @@ def derive_semantic_binding(
     # CS-H H2：候选拍闭集里改选承载位——可选目标，路径由 wire 侧拍坐标给出）。
     entry_of = {e.obligation_id: e for e in binding.entries}
     for group in checkpoint.series:
+        summary_ids = {summary.member for summary in group.summaries}
         carried = [(member, entry_of[member].beat_ref)
-                   for member in group.members if member in entry_of]
+                   for member in group.members
+                   if member in entry_of and member not in summary_ids]
         by_ref: dict[str, list[str]] = {}
         for member, ref in carried:
             by_ref.setdefault(ref, []).append(member)

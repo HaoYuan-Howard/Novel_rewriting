@@ -231,7 +231,8 @@ def str06_book_rel(title: str) -> str:
 # 与版本面当场分家。
 # rc14（2026-10-03 审阅修复）：Brief 保留逐次 knowledge_changes；Design v7
 # know 短引用与 confirms 明确拍位和事实关联；五份受影响产物显式换身份。
-# rc12/rc13 的无损字段经 store 集中迁移，缺失模式/事实关联走免费恢复。
+# 当时 rc12/rc13 无损字段经 store 集中迁移；rc21 质量批退役该旧质量迁移面，
+# 只保留形状未变化 ExecutionPlan 的登记适配，其它质量产物显式拒旧。
 STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc12（2026-10-01 R10a 收口，PLAN §二.4 全表）：关键语义交接批把源理解到
     # 正文的全链形状定格——Stage2 引文证据与事件时态（book v3／chapters v2／
@@ -288,20 +289,23 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc20（CS-S Phase 3）：Characters 升 v6——initial_state 键入 CHANGE_KEYS
     # 闭集（schema 层兜底直接构造的表外键）。
     'stage2/characters/characters.json': 'str06-rc20',
-    'runtime/preserve_checkpoint.json': 'str06-rc12',
+    # rc21 创作材料批：六类质量产物增可选细节/显式系列概括与目标前情。
+    # checkpoint 也携带 contract_version；旧版/缺版本不可补空值作为新证据。
+    # 旧五质量产物迁移退役，仅未变化 ExecutionPlan 保留登记的 rc12/13 适配。
+    'runtime/preserve_checkpoint.json': 'str06-rc21',
     # rc13（2026-10-03 CS-3 余项，D5 统一＋world 规则 id）：读者揭示统一走
     # knowledge(holder=reader)（TargetDelta 删 reader 域与 confirms；Brief 知
     # 情锁同写法）；Brief.book_constraints 升 WorldConstraint（wc_{nn} 稳定
-    # 规则 id）；ConstraintSpec.domain 改类别标签。旧 rc12 盘面经 store
-    # read_model 的登记迁移归一后读入（r10b 起的现役产物不拒读）。
+    # 规则 id）；ConstraintSpec.domain 改类别标签。历史登记迁移在 rc21 退役，
+    # 此行只接受显式当前质量契约；ExecutionPlan 的独立无损适配仍保留。
     # rc17（2026-10-06 CS-H H3，RC-61）：Brief 认知变化条目新增 requires_released
     # （必保揭名派生，随认知增量携带）；缺省读入兼容旧盘，身份随 rc17 换。
     # rc18：ObligationAnchor.visibility 删（effect 命题锚只在 cognition）。
-    'stage4/grounding/reconstruction_brief.json': 'str06-rc18',
+    'stage4/grounding/reconstruction_brief.json': 'str06-rc21',
     # rc16（2026-10-04 CS-F2）：Binding 增 fact_bindings（事实锁→已有目标状态的
     # 映射，只存引用不复制 value）；旧 rc12 Binding 缺该映射、无损推不回，拒读。
     # rc17（2026-10-06 CS-H H3，RC-63）：BriefFactLock 增 subjects（主体包含判定）。
-    'stage4/grounding/semantic_binding.json': 'str06-rc18',
+    'stage4/grounding/semantic_binding.json': 'str06-rc21',
     'stage4/compiled/execution_plan.json': 'str06-rc14',
     'stage4/acceptance/guard/compile.json': 'str06-rc12',
     'stage4/acceptance/guard/report.json': 'str06-rc12',
@@ -313,8 +317,8 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 确认必填事实地址（D4）。形状/判据变化，旧 Design／graph／WriterIR 拒读。
     # rc10（2026-09-28 R2 语义送达）：Design wire 升 stage4-design-v2——拍上线程
     # （threads）、书级 world_rules、章级 entry；四个静态跨章列表删除（AUD-04）。
-    'stage4/design/body_design.json': 'str06-rc14',
-    'stage4/design/presentation_graph.json': 'str06-rc14',
+    'stage4/design/body_design.json': 'str06-rc21',
+    'stage4/design/presentation_graph.json': 'str06-rc21',
     # rc16（2026-10-05 CS-F2）：HookContext 增 withheld_bindings（按 Hook 自选
     # surface_releases 算好的唯一绑定称谓表，渲染期投影）；旧 rc12 楔子上下文
     # 拒读，免费重编译。正文与楔子投影同尺（RC-40/41）。
@@ -335,7 +339,7 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc18（CS-S 1b 补升）：ChapterIR 经 VerificationIR.obligations 内嵌
     # ObligationAnchor，其 visibility 字段在 1b 已删，IR 形状随之变化；不升版则
     # 旧 rc17 IR 读入只得到无信息的 extra_forbidden（I-13）。免费重编译。
-    'stage4/ir/writer_book_ir.json': 'str06-rc18',
+    'stage4/ir/writer_book_ir.json': 'str06-rc21',
     'stage5/hook/hook.txt': 'str06-rc12',
     'stage5/hook/receipt.json': 'str06-rc12',
     'stage5/body/ch{nn}.txt': 'str06-rc12',

@@ -74,6 +74,44 @@ class ObligationAnchor(StrictModel):
     quotes: tuple[str, ...] = Field(default=(), min_length=0)
 
 
+class ObligationDetail(StrictModel):
+    """Preserve wire 的可改写细节：语义转述与正式源原子的投影句柄。
+
+    细节是可用材料；必要动机、铺垫与后果仍归 satisfaction。编号和完整源锚
+    不由模型输出，compiler 解析后发布 SourceDetail。
+    """
+
+    anchor: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _text_not_blank(self) -> 'ObligationDetail':
+        if not self.text.strip():
+            raise ValueError('细节 text 必须是非空的可改写转述')
+        return self
+
+
+class SourceDetail(StrictModel):
+    """有源证据的可改写细节；身份与锚点均由 compiler 派生。"""
+
+    detail_id: str = Field(pattern=r'^dt_[0-9a-f]{16}$')
+    anchor: ObligationAnchor
+    text: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _text_not_blank(self) -> 'SourceDetail':
+        if not self.text.strip():
+            raise ValueError('细节 text 必须是非空的可改写转述')
+        return self
+
+
+class BriefDetail(StrictModel):
+    """源盲细节材料：不携带源拍、章号、引文或锚点。"""
+
+    detail_id: str = Field(pattern=r'^dt_[0-9a-f]{16}$')
+    text: str = Field(min_length=1)
+
+
 class SourceObligation(StrictModel):
     """一条保存义务（Preserve 的输出原子）。
 
@@ -92,6 +130,7 @@ class SourceObligation(StrictModel):
     must_preserve: bool
     satisfaction: str = ''
     requires: tuple[str, ...] = Field(default=(), min_length=0)
+    details: tuple[SourceDetail, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _must_preserve_needs_satisfaction(self) -> 'SourceObligation':
@@ -100,6 +139,24 @@ class SourceObligation(StrictModel):
                 f'必保义务 {self.obligation_id!r} 必须给出实质满足条件（satisfaction）')
         if self.obligation_id in self.requires:
             raise ValueError(f'义务 {self.obligation_id!r} 的 requires 不得包含自身')
+        ids = [detail.detail_id for detail in self.details]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f'义务 {self.obligation_id!r} 的细节不得重复')
+        return self
+
+
+class SeriesSummary(StrictModel):
+    """系列内一次显式回顾及其覆盖的实例；不等同于全组的最后成员。"""
+
+    member: str = Field(min_length=1)
+    covers: tuple[str, ...] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _coverage_unique(self) -> 'SeriesSummary':
+        if len(set(self.covers)) != len(self.covers):
+            raise ValueError('summary covers 不得重复')
+        if self.member in self.covers:
+            raise ValueError('summary 不得覆盖自身')
         return self
 
 
@@ -113,11 +170,22 @@ class ObligationSeries(StrictModel):
 
     members: tuple[str, ...] = Field(min_length=2)
     mechanism: str | None = None
+    summaries: tuple[SeriesSummary, ...] = Field(default=(), min_length=0)
 
     @model_validator(mode='after')
     def _members_unique(self) -> 'ObligationSeries':
         if len(set(self.members)) != len(self.members):
             raise ValueError(f'series 成员不得重复：{self.members}')
+        summaries = [summary.member for summary in self.summaries]
+        if len(set(summaries)) != len(summaries):
+            raise ValueError('series summary 成员不得重复登记')
+        summary_ids = set(summaries)
+        members = set(self.members)
+        for summary in self.summaries:
+            if summary.member not in members or set(summary.covers) - members:
+                raise ValueError('summary 与 covers 必须属于同一个 series 闭集')
+            if set(summary.covers) & summary_ids:
+                raise ValueError('summary covers 只能引用实例，不得覆盖 summary')
         return self
 
 
@@ -130,6 +198,7 @@ class PreserveCheckpoint(StrictModel):
     R10a a2：义务带类型化 anchors；顶层增 series（同一机制的多次发生）。
     """
 
+    contract_version: Literal['str06-rc21'] = 'str06-rc21'
     provenance: FreeProvenance | LlmProvenance | None = Field(
         default=None, alias='_provenance', exclude=True)
     checkpoint_id: str = Field(min_length=1)
@@ -149,6 +218,10 @@ class PreserveCheckpoint(StrictModel):
         ids = [o.obligation_id for o in self.obligations]
         if len(set(ids)) != len(ids):
             raise ValueError('obligation_id 在 checkpoint 内必须唯一（稳定 ID，I-31）')
+        detail_ids = [detail.detail_id for obligation in self.obligations
+                      for detail in obligation.details]
+        if len(set(detail_ids)) != len(detail_ids):
+            raise ValueError('checkpoint 内细节身份必须唯一')
         known = set(ids)
         seen: set[str] = set()
         for group in self.series:
@@ -201,6 +274,10 @@ class BriefRequirement(StrictModel):
     #: series 的机制（源表达 ex_id 或 None；与 PreserveCheckpoint.series 的
     #: mechanism 同值，供 Design/Bind 理解「同一机制的多次发生」）。
     series_mechanism: str | None = None
+    details: tuple[BriefDetail, ...] = Field(default=(), min_length=0)
+    #: 显式回顾覆盖的实例；从唯一的 PreserveCheckpoint.series.summaries 派生。
+    #: 引用改为盲 core_id，不携带源顺序或坐标。
+    summarizes_cores: tuple[str, ...] = Field(default=(), min_length=0)
 
 
 #: 知情锁的目标侧模式闭集（a4）：源认知模式的唯一映射——learns/confirms→known、
@@ -329,7 +406,7 @@ class ReconstructionBrief(StrictModel):
     不得经状态或说明改写；兑现与越权校验归 assemble_body_design。
     """
 
-    contract_version: Literal['str06-rc18'] = 'str06-rc18'
+    contract_version: Literal['str06-rc21'] = 'str06-rc21'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
@@ -356,6 +433,23 @@ class ReconstructionBrief(StrictModel):
             raise ValueError('core_id 在 Brief 内必须唯一')
         if any(set(c.requires_cores) - set(ids) for c in self.requirements):
             raise ValueError('Brief 依赖必须闭合，非事件义务也必须投影')
+        requirements = {c.core_id: c for c in self.requirements}
+        detail_ids = [detail.detail_id for c in self.requirements for detail in c.details]
+        if len(detail_ids) != len(set(detail_ids)):
+            raise ValueError('Brief 细节身份必须唯一')
+        for requirement in self.requirements:
+            covers = requirement.summarizes_cores
+            if len(set(covers)) != len(covers) or requirement.core_id in covers:
+                raise ValueError('Brief 回顾覆盖不得重复或自指')
+            for core in covers:
+                instance = requirements.get(core)
+                if instance is None:
+                    raise ValueError('Brief 回顾覆盖引用必须闭合')
+                if (requirement.series_group is None
+                        or instance.series_group != requirement.series_group):
+                    raise ValueError('Brief 回顾与覆盖实例必须属于同一 series')
+                if instance.summarizes_cores:
+                    raise ValueError('Brief 回顾不得覆盖另一个回顾')
         # 锁引用闭合（a4）：知情锁引用已登记命题；义务的 locks 引用已登记锁；
         # 每个认知变化的 holder/kp/mode 必须引用已登记的授权锁行。
         kp_ids = {p.kp_id for p in self.propositions}
@@ -444,13 +538,15 @@ class SemanticBinding(StrictModel):
     产物没有该映射，由 `contract_version` 字面量拒读——缺省空表不会冒充旧产物。
     """
 
-    contract_version: Literal['str06-rc18'] = 'str06-rc18'
+    contract_version: Literal['str06-rc21'] = 'str06-rc21'
     binding_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     obligations: tuple[SourceObligation, ...] = Field(min_length=1)
     entries: tuple[BindingEntry, ...] = Field(min_length=0)
     unbound: tuple[UnboundEntry, ...] = Field(min_length=0)
     fact_bindings: tuple[FactLockBinding, ...] = Field(default=(), min_length=0)
+    #: 采用的 checkpoint 系列原样投影，供写手消费回顾覆盖关系；不另建系列真源。
+    series: tuple[ObligationSeries, ...] = Field(default=(), min_length=0)
     provenance: FreeProvenance | LlmProvenance | None = Field(
         default=None, alias='_provenance', exclude=True)
 
@@ -462,6 +558,18 @@ class SemanticBinding(StrictModel):
         ids = [o.obligation_id for o in self.obligations]
         if len(ids) != len(set(ids)):
             raise ValueError('Binding 完整义务内 ID 不得重复')
+        detail_ids = [detail.detail_id for obligation in self.obligations
+                      for detail in obligation.details]
+        if len(detail_ids) != len(set(detail_ids)):
+            raise ValueError('Binding 完整义务内细节身份必须唯一')
+        known = set(ids)
+        seen: set[str] = set()
+        for group in self.series:
+            if set(group.members) - known:
+                raise ValueError('Binding series 成员必须在完整义务闭集内')
+            if set(group.members) & seen:
+                raise ValueError('Binding series 成员互斥')
+            seen.update(group.members)
         bound = [e.obligation_id for e in self.entries]
         returned = [u.obligation_id for u in self.unbound]
         if len(set(bound)) != len(bound):

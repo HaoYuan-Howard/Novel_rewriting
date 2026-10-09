@@ -123,6 +123,11 @@ def _source_owner(source: MaterialSource, *, brief: ReconstructionBrief, literal
         return 'design', '认知know拍位／读取位置与称谓释放须一致；源命题保持不变'
     if source.kind == 'obligation':
         obligation = next((o for o in binding.obligations if o.obligation_id == source.ref), None)
+        if obligation is not None and source.field.startswith('details/'):
+            detail_id = source.field.removeprefix('details/')
+            if any(d.detail_id == detail_id and d.text == source.text for d in obligation.details):
+                return 'preserve', '仅修订可改写细节的指称，保留其源锚点和必要事实条件'
+            return '', '细节来源缺失或投影与正式binding不一致'
         if obligation is None or source.field not in ('statement', 'satisfaction') \
                 or getattr(obligation, source.field) != source.text:
             return '', '义务来源缺失或投影与正式binding不一致'

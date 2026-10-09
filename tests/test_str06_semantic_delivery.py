@@ -50,12 +50,15 @@ from contracts.schema.consumption import (
     STR06_CONSUMPTION_PROJECTIONS, STR06_FIELD_DELIVERY, DeliveryMode,
     DeliveryScope, FieldDeliverySpec,
 )
-from contracts.schema.context import KnowledgeEntry, PendingConfirmation, StateEntry
+from contracts.schema.context import (
+    KnowledgeEntry, PendingConfirmation, PriorSeriesEvent, StateEntry, WriterDetail,
+)
+from contracts.schema.grounding import SourceDetail
 from contracts.schema.hook import HookContext, HookOpeningFact, HookPov
 from contracts.schema.naming import NameMapV5
 from contracts.schema.state import EffectDomain, StateAddress
 from novel.stages.common import (
-    packet_sha256, project_chapter_packet, render_chapter_packet,
+    build_writer_packet, packet_sha256, project_chapter_packet, render_chapter_packet,
 )
 from tests.str06_faults import (
     FAULT_ENV, FAULTS, REPO_ENV, fault_sitecustomize_source,
@@ -349,6 +352,33 @@ class _BodyMutation:
     located: int | None
     sentinel: str | None
     apply: Callable[[WriterBookIR], WriterBookIR]
+    # 空集合上的审计叶子须先注入固定基底，再只变异待测字段；新增材料本身
+    # 不得被误算成 audit 字段导致的阅读面变化。
+    baseline: Callable[[WriterBookIR], WriterBookIR] | None = None
+
+
+def _inject_writer_detail(ir: WriterBookIR, **updates) -> WriterBookIR:
+    detail = WriterDetail(detail_id='dt_1111111111111111', obligation_id='ob_detail',
+                          text='先掩门再忍住追问').model_copy(update=updates)
+    return _patch_beat(ir, 2, 'sc02', 'sc02#b02', details=(detail,))
+
+
+def _inject_prior_series_event(ir: WriterBookIR, **updates) -> WriterBookIR:
+    prior = PriorSeriesEvent(summary_beat_ref='sc02#b02', beat_ref='sc01#b01',
+                             chapter_ordinal=1, event='先前她与夫君已经成亲').model_copy(
+                                 update=updates)
+    return _patch_scene_ir(ir, 2, 'sc02', prior_series_events=(prior,))
+
+
+def _inject_source_detail(ir: WriterBookIR, *, anchor_updates=None,
+                          **detail_updates) -> WriterBookIR:
+    source = _scene(ir, 1, 'sc01').verification_ir.obligations[0]
+    anchor = source.anchors[0].model_copy(update=anchor_updates or {})
+    detail = SourceDetail(detail_id='dt_2222222222222222', anchor=anchor,
+                          text='未选中的源细节只作审计').model_copy(update=detail_updates)
+    obligation = source.model_copy(update={'obligation_id': 'ob_source_detail',
+                                           'details': (detail,)})
+    return _patch_scene_ir(ir, 2, 'sc02', obligations=(obligation,))
 
 
 def _book_brief(ir: WriterBookIR, **updates) -> WriterBookIR:
@@ -680,7 +710,61 @@ def _body_mutations() -> list[_BodyMutation]:
     def bgs_value(ir):
         return bgs(ir, value='变异背景九九')
 
+    def summary_identity(ir):
+        # summary_ref 是定位键：给同一个列表拍换审计身份，随之更新该引用，
+        # 不把改送达拍/删送达内容冒充 audit 叶子的单字段变异。
+        changed = _inject_prior_series_event(ir, summary_beat_ref='sc02#audit_summary')
+        return _patch_beat(changed, 2, 'sc02', 'sc02#b02',
+                           beat_ref='sc02#audit_summary')
+
+    quality_path = 'writer_book_ir.chapters[].scenes[].verification_ir'
+    source_anchor_mutations = (
+        ('handle', 'b99_99.e1', 'b99_99.e1'),
+        ('source_kind', 'cognition', None),
+        ('holder', '审计细节持有者九九', '审计细节持有者九九'),
+        ('mode', 'suspected', None),
+        ('op', 'unknown', None),
+        ('proposition_ref', '审计细节命题引用九九', '审计细节命题引用九九'),
+        ('proposition_statement', '审计细节命题陈述九九', '审计细节命题陈述九九'),
+        ('address', 'char:审计细节主体九九.stub', '审计细节主体九九'),
+        ('value', '审计细节事实值九九', '审计细节事实值九九'),
+        ('modality', 'planned', None),
+        ('question', '审计细节问题九九', '审计细节问题九九'),
+        ('quotes', ('审计细节引文九九',), '审计细节引文九九'),
+    )
+
     return [
+        # rc21：新集合缺省为空，审计身份变异先注入固定材料基底；text 不豁免。
+        *[_BodyMutation(f'{quality_path}.beats[].details[].{field}', 2, sentinel,
+                        lambda ir, field=field, value=value:
+                        _inject_writer_detail(ir, **{field: value}), _inject_writer_detail)
+          for field, value, sentinel in (
+              ('detail_id', 'dt_9999999999999999', 'dt_9999999999999999'),
+              ('obligation_id', '审计细节义务九九', '审计细节义务九九'),
+              ('text', '变异可改写机关九九', '变异可改写机关九九'))],
+        _BodyMutation(f'{quality_path}.prior_series_events[].summary_beat_ref', 2,
+                      'sc02#audit_summary', summary_identity, _inject_prior_series_event),
+        _BodyMutation(f'{quality_path}.prior_series_events[].beat_ref', 2,
+                      'sc01#b02', lambda ir: _inject_prior_series_event(ir, beat_ref='sc01#b02'),
+                      _inject_prior_series_event),
+        _BodyMutation(f'{quality_path}.prior_series_events[].chapter_ordinal', 2,
+                      '第9章', lambda ir: _inject_prior_series_event(ir, chapter_ordinal=9),
+                      _inject_prior_series_event),
+        _BodyMutation(f'{quality_path}.prior_series_events[].event', 2,
+                      '变异既往系列实例九九',
+                      lambda ir: _inject_prior_series_event(ir, event='变异既往系列实例九九'),
+                      _inject_prior_series_event),
+        *[_BodyMutation(f'{quality_path}.obligations[].details[].{field}', 2, sentinel,
+                        lambda ir, field=field, value=value:
+                        _inject_source_detail(ir, **{field: value}), _inject_source_detail)
+          for field, value, sentinel in (
+              ('detail_id', 'dt_8888888888888888', 'dt_8888888888888888'),
+              ('text', '审计未选择细节九九', '审计未选择细节九九'))],
+        *[_BodyMutation(f'{quality_path}.obligations[].details[].anchor.{field}', 2,
+                        sentinel, lambda ir, field=field, value=value:
+                        _inject_source_detail(ir, anchor_updates={field: value}),
+                        _inject_source_detail)
+          for field, value, sentinel in source_anchor_mutations],
         # ── 书级（every_chapter）──
         _BodyMutation('writer_book_ir.book_brief.narration.person', None, None,
                       lambda ir: _book_brief(ir, narration=ir.book_brief.narration.model_copy(update={'person': 'first'}))),
@@ -880,8 +964,9 @@ def test_mutation_reaches_only_registered_chapters_and_face(green_ir, case):
     spec = STR06_FIELD_DELIVERY[case.path]
     total = len(green_ir.chapters)
     expected = _expected_chapters(spec, case.located, total)
-    before_d, before_r = _digests(green_ir), _renders(green_ir)
-    after = case.apply(green_ir)
+    baseline = case.baseline(green_ir) if case.baseline else green_ir
+    before_d, before_r = _digests(baseline), _renders(baseline)
+    after = case.apply(baseline)
     after_d, after_r = _digests(after), _renders(after)
     changed = {n for n in after_d if after_d[n] != before_d[n]}
     assert changed == expected, (
@@ -903,6 +988,42 @@ def test_mutation_reaches_only_registered_chapters_and_face(green_ir, case):
         for ordinal, text in after_r.items():
             assert (case.sentinel in text) == (ordinal in expected), (
                 f'{case.path} 的变异值出现在了登记范围之外的章 {ordinal}')
+
+
+def test_quality_field_mutation_cases_cover_each_new_registered_leaf_without_waivers():
+    """细节与系列全部新增叶子进入变异分母；源细节证据面也逐字段覆盖。"""
+    prefix = 'writer_book_ir.chapters[].scenes[].verification_ir'
+    families = tuple(prefix + suffix for suffix in (
+        '.beats[].details[].', '.prior_series_events[].', '.obligations[].details[].'))
+    registered = {path for path in STR06_FIELD_DELIVERY if path.startswith(families)}
+    cases = [case for case in _body_mutations() if case.path.startswith(families)]
+    assert len(cases) == len(registered) == 21, '3 个拍细节叶子、4 个系列叶子、14 个源细节叶子'
+    assert {case.path for case in cases} == registered
+    assert all(case.located == 2 for case in cases), '新增材料的变异只定位第 2 章 sc02'
+    assert not (registered & set(_WRITER_CASE_WAIVERS))
+
+
+def test_selected_details_and_prior_series_reach_only_their_declared_writer_sections(green_ir):
+    """可改写提示只进创作分区，既往实例只进事实分区；所有来源身份留在审计面。"""
+    detail_text, event_text = '分区可改写机关九九', '分区既往系列实例九九'
+    injected = _inject_writer_detail(green_ir, text=detail_text)
+    injected = _inject_prior_series_event(injected, event=event_text)
+    injected = _inject_source_detail(injected, text='未选中源细节审计九九', anchor_updates={
+        'handle': '审计细节源柄九九', 'quotes': ('审计细节原文九九',)})
+    before, after = _renders(green_ir), _renders(injected)
+    assert after[1] == before[1] and after[2] != before[2]
+    view = build_writer_packet(project_chapter_packet(injected, 2))
+    sections = ('must_realize', 'must_respect', 'continuity', 'creative_guidance',
+                'background', 'guard_only')
+    for section in sections:
+        text = '\n'.join(getattr(view, section))
+        assert (detail_text in text) == (section == 'creative_guidance')
+        assert (event_text in text) == (section == 'must_respect')
+    reading = '\n'.join(after.values())
+    for audit_identity in ('dt_1111111111111111', 'ob_detail', 'dt_2222222222222222',
+                           'ob_source_detail', 'sc02#b02', 'sc01#b01',
+                           '未选中源细节审计九九', '审计细节源柄九九', '审计细节原文九九'):
+        assert audit_identity not in reading, f'{audit_identity!r} 泄漏进写手阅读面'
 
 
 def test_name_map_mutation_never_reaches_body_packets(green_ir):

@@ -44,7 +44,7 @@ from typing import Any, Callable, Iterable, Iterator, NamedTuple, TypeVar, cast
 from pydantic import BaseModel, ValidationError
 
 from contracts.artifacts import (
-    ARTIFACT_PATHS,
+    ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS,
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
     STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
     STAGE2_ANALYZE_RECEIPT, STAGE2_BLUEPRINT_CHARACTER_PROJECTION,
@@ -119,111 +119,63 @@ def _artifact_model(rel: str | None):
     return ARTIFACT_SPECS[rel].model if rel in ARTIFACT_SPECS else None
 
 
-# ── rc12/rc13→rc14 登记迁移：仅正式模型读取口；inspect 保留原字节 ─────────
-# 删除条件见 REQUIREMENTS：历史运行根全部重建或退役后删除此兼容层。
-# rc17（CS-H H3）：brief／writer_book_ir 形状再升（H3 新字段全部可缺省读入）；
-# rc18（CS-S 1b）两者再升（ObligationAnchor.visibility 删；IR 经 VerificationIR
-# 内嵌 anchors）——rc12／rc13 载荷的迁移目标随行钉 rc18，并剥掉 anchors 上的
-# 死字段 visibility（单写者、零逻辑读者，无损）。⚠ 盘上 rc14～rc17 载荷不在迁移
-# 白名单内：模型字面量只收现行版，按契约表漂移拒读（ChapterIR.display_prefix
-# 语义已变，不能把旧值当新字段缺省读入）；旧根续跑同样按候选契约表拒收。
-_RC14_SITES = {
-    'stage4/design/body_design.json', 'stage4/design/presentation_graph.json',
-    'stage4/compiled/execution_plan.json',
-}
-#: rc18（CS-S 1b）：ObligationAnchor.visibility 删除的站点，迁移目标钉 rc18。
-_RC18_SITES = {
+# ── 质量契约拒旧；未变化的 ExecutionPlan 独立保留登记迁移 ─────────────
+# 新增系列回顾与细节证据无法从旧盘面机械推导；显式检查载荷版本，防止模型
+# 默认值把缺失的旧版本标记补成当前版。版本值只取 contracts/artifacts.py。
+_QUALITY_CONTRACT_SITES = frozenset({
+    'runtime/preserve_checkpoint.json',
     'stage4/grounding/reconstruction_brief.json',
+    'stage4/grounding/semantic_binding.json',
+    'stage4/design/body_design.json',
+    'stage4/design/presentation_graph.json',
     'stage4/ir/writer_book_ir.json',
-}
-_ADDRESS_FIELDS = {'domain', 'key', 'subjects', 'holder', 'at', 'op', 'value',
-                   'scope', 'knowledge_mode', 'modality', 'confirms',
-                   'established_by', 'status'}
+})
+
+
+def _require_current_quality_contract(spec: str | None, data: dict) -> None:
+    """正式质量产物须显式携带当前版本；不改写旧字节或补造新证据。"""
+    if spec not in _QUALITY_CONTRACT_SITES:
+        return
+    expected = STR06_ARTIFACT_RC_VERSIONS[spec]
+    found = data.get('contract_version')
+    if found != expected:
+        raise ProvenanceRefused(
+            f'{spec} 的质量契约版本不兼容：载荷 {found!r}，当前 {expected}。'
+            '旧产物或缺版本标记的产物不能补成新系列回顾与细节证据；'
+            '保留旧盘只读，按当前契约从所属 owner 重建')
 
 
 def _upgrade_rc12_payload(spec: str | None, data: dict) -> dict:
-    """仅做无损、确定性迁移；丢失的认知模式/事实关联显式拒绝，交免费恢复。
+    """只迁移形状未变的 ExecutionPlan；历史质量产物不再进入迁移面。
 
-    地址、读取、Hook 地址和变化使用同一 reader 归一。StateEntry 读者条目
-    转为 KnowledgeEntry，并移动到相应知情容器；不修改输入或历史封存字节。
+    已折叠执行项的 reader 地址归一、删除不被执行消费的 confirms；约束类别
+    标签保留。迁移只在内存进行，删除条件见 REQUIREMENTS 的存量适配表。
     """
-    if spec not in _RC14_SITES | _RC18_SITES or data.get('contract_version') not in (
+    if spec != 'stage4/compiled/execution_plan.json' or data.get('contract_version') not in (
             'str06-rc12', 'str06-rc13'):
         return data
     out = copy.deepcopy(data)
-    if spec == 'stage4/grounding/reconstruction_brief.json':
-        if out.get('knowledge_locks') and any(
-                'knowledge_changes' not in req for req in out.get('requirements') or []):
-            raise ProvenanceRefused('旧 Brief 缺逐次认知分母；请免费重放 preserve 重建 Brief')
-        for req in out.get('requirements') or []:
-            if req.get('realize_holders'):
-                raise ProvenanceRefused(
-                    '旧 Brief 已丢失逐义务认知模式；请免费重放 preserve '
-                    '（--check-only，必要时 --adopt-root）重建 Brief，禁止猜模式')
-            req.pop('realize_holders', None)
-        constraints = out.get('book_constraints')
-        if isinstance(constraints, list):
-            out['book_constraints'] = [
-                {'constraint_id': f'wc_{i:02d}', 'statement': c} if isinstance(c, str) else c
-                for i, c in enumerate(constraints, start=1)]
 
-    def knowledge_entry(row: dict) -> dict:
-        if row.get('status', 'set') != 'set' or row.get('value') is None:
-            raise ProvenanceRefused('旧读者状态未建立，不能补造命题与模式；请免费重编译 WriterBookIR')
-        return {'holder': 'reader', 'key': row['key'], 'subjects': [],
-                'proposition': row['value'],
-                'established_by': row['established_by'],
-                'status': row.get('status', 'set'), 'mode': 'known'}
+    def establishments(rows) -> None:
+        if not isinstance(rows, list):
+            return
+        for row in rows:
+            if not isinstance(row, dict):
+                continue  # 非法形状交正式模型拒绝，不尝试修复。
+            if row.get('domain') == 'reader':
+                row.update(domain='knowledge', holder='reader', subjects=[],
+                           knowledge_mode='known' if row.get('op') == 'set' else None)
+            row.pop('confirms', None)
 
-    def walk(value, path: str = ''):
-        if isinstance(value, list):
-            return [walk(item, f'{path}[{i}]') for i, item in enumerate(value)]
-        if not isinstance(value, dict):
-            return value
-        if {'fact', 'position', 'in_scene', 'address'} <= set(value):
-            address = value['address']
-            if isinstance(address, dict) and address.get('domain') == 'knowledge' \
-                    and address.get('holder') == 'reader':
-                raise ProvenanceRefused('旧 IR 的确认目标已丢失；请免费重编译 WriterBookIR')
-        # 只匹配 StateAddress/StateRead/StateChange/StateEntry 的登记字段闭集。
-        # ConstraintSpec.domain 是类别标签（带 expected），不属于地址，保留原值。
-        if (value.get('domain') == 'reader' and 'key' in value
-                and set(value) <= _ADDRESS_FIELDS):
-            value.update(domain='knowledge', holder='reader', subjects=[])
-            if 'op' in value:
-                value['knowledge_mode'] = 'known' if value['op'] == 'set' else None
-        if value.get('contract_version') in ('str06-rc12', 'str06-rc13'):
-            value['contract_version'] = 'str06-rc14'
-        # ObligationAnchor（handle＋source_kind 是它的必填身份）的 visibility 已于
-        # rc18 删除；StrictModel 禁止多余字段，旧载荷里的该键须剥掉才读得进。
-        if {'handle', 'source_kind'} <= set(value):
-            value.pop('visibility', None)
-        # 已折叠的建立项不是 TargetDelta，不保留揭示关联。
-        if 'established_by' in value and 'op' in value:
-            value.pop('confirms', None)
-        elif (value.get('domain') == 'knowledge' and value.get('holder') == 'reader'
-              and value.get('op') == 'set' and value.get('knowledge_mode') == 'known'
-              and not isinstance(value.get('confirms'), dict)):
-            raise ProvenanceRefused(
-                f'{spec}{path} 的旧读者确认已丢失事实关联；请免费 owner patch '
-                'design 补齐 v7 know/confirms 并复编译，禁止按 key 猜同义')
-        for field in ('entry_state', 'background_state'):
-            rows = value.get(field)
-            if isinstance(rows, list):
-                reader = [r for r in rows if r.get('domain') == 'reader']
-                value[field] = [r for r in rows if r.get('domain') != 'reader']
-                dest = field.replace('_state', '_knowledge')
-                value.setdefault(dest, []).extend(knowledge_entry(r) for r in reader)
-        if isinstance(value.get('reads'), list):
-            value['reads'] = [knowledge_entry(r) if isinstance(r, dict)
-                              and r.get('domain') == 'reader' and 'status' in r else r
-                              for r in value['reads']]
-        return {key: walk(item, f'{path}.{key}') for key, item in value.items()}
-
-    result = walk(out)
-    if spec in _RC18_SITES:
-        result['contract_version'] = 'str06-rc18'
-    return result
+    establishments(out.get('initial_establishments'))
+    scenes = out.get('scenes')
+    if isinstance(scenes, list):
+        for scene in scenes:
+            if isinstance(scene, dict):
+                establishments(scene.get('establishments'))
+                establishments(scene.get('planned_delta'))
+    out['contract_version'] = STR06_ARTIFACT_RC_VERSIONS[spec]
+    return out
 
 
 
@@ -2434,22 +2386,22 @@ class Str06Repository:
         data = self.read(rel)
         if isinstance(data, dict):
             data = {k: v for k, v in data.items() if k != '_provenance'}
+            _require_current_quality_contract(spec, data)
             data = _upgrade_rc12_payload(spec, data)
         return model.model_validate(data)
 
     def read_graph_hook(self):
         """免费 Design 修复只读已封存 graph 的独立 Hook 组件。
 
-        旧正文丢失 confirms 时不消费或补猜它；Hook 仍须经过正式地址迁移与
-        schema 校验，修复后的新 graph 再由 compile 做引用闭合。
+        当前版本 graph 的正文局部损坏时只校验 Hook 组件，修复后的新 graph
+        再由 compile 做引用闭合；旧版本 graph 不得通过摘取组件绕过拒旧边界。
         """
         from contracts.schema.hook import HookDesign
         rel = 'stage4/design/presentation_graph.json'
         self._require_sealed(rel)
         data = self.read(rel)
-        component = _upgrade_rc12_payload(rel, {
-            'contract_version': data['contract_version'], 'hook': data['hook']})
-        return HookDesign.model_validate(component['hook'])
+        _require_current_quality_contract(rel, data)
+        return HookDesign.model_validate(data['hook'])
 
     def _require_sealed(self, rel: str) -> None:
         """正式输入的发布校验（R6）：无覆盖当前字节的已封存组即拒绝消费。

@@ -651,20 +651,20 @@ def test_r2_version_constants():
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
-    assert STR06_RC_VERSION == 'str06-rc20'          # rc19 CS-S Phase 2 观察面收敛；rc18 CS-S 1b
+    assert STR06_RC_VERSION == 'str06-rc21'          # 创作材料：可选细节与系列前情
     assert 'str06-rc10' in STR06_RC_LABELS
-    assert RENDERER_VERSION == 'str06-render-v10'    # CS-F2：称谓投影（v9：RC-24 拍末结果作用域）
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v8'
+    assert RENDERER_VERSION == 'str06-render-v11'
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v9'
     for rel in ('stage4/design/body_design.json',
                 'stage4/design/presentation_graph.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc14', rel  # rc13 D5 统一
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc21', rel
     # rc17（CS-H H3）：IR 因显示面分表（display_fallback）、必保揭名
     # （requires_released）与拍级释放（release_introductions）再升版。
     # rc18（CS-S 1b 补升）：IR 经 VerificationIR.obligations 内嵌 ObligationAnchor，
     # visibility 删除使 IR 形状变化——模型字面量与产物表同批钉 rc18（I-13）。
-    assert STR06_ARTIFACT_RC_VERSIONS['stage4/ir/writer_book_ir.json'] == 'str06-rc18'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/ir/writer_book_ir.json'] == 'str06-rc21'
     from contracts.schema.book_ir import WriterBookIR
-    assert WriterBookIR.model_fields['contract_version'].default == 'str06-rc18'
+    assert WriterBookIR.model_fields['contract_version'].default == 'str06-rc21'
     # rc17（CS-H H3，RC-61）：BODY_VALIDATOR v2——必保揭名必现字面进章级机械校验。
     assert STR06_ARTIFACT_RC_VERSIONS['stage5/acceptance/body/ch{nn}.json'] \
         == 'str06-rc17'
@@ -675,9 +675,9 @@ def test_r2_version_constants():
     from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
     from contracts.schema.grounding import SemanticBinding
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/grounding/semantic_binding.json'] \
-        == 'str06-rc18'
-    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v8'
-    assert SemanticBinding.model_fields['contract_version'].default == 'str06-rc18'
+        == 'str06-rc21'
+    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v9'
+    assert SemanticBinding.model_fields['contract_version'].default == 'str06-rc21'
 
 
 # ═════════════════ 九、Design wire v2（生产侧同步） ═════════════════

@@ -60,7 +60,7 @@ from contracts.invariants import (
 )
 from contracts.schema.grounding import OutputConstraints, PreserveCheckpoint
 from contracts.schema.hook import HookConstraints, HookReceipt
-from contracts.schema.design import DesignWireV8, STAGE4_DESIGN_WIRE_PROTOCOL
+from contracts.schema.design import DesignWireV9, STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
 from contracts.schema.workflow import (
     OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1,
@@ -116,7 +116,7 @@ from novel.stages.stage4 import (
     assemble_hook_design,
     assemble_preserve, compile_execution_plan, compile_hook_context,
     compile_writer_book_ir, design_obligation_index,
-    knowledge_change_index, lock_order_violations, obligation_core_id,
+    detail_index, knowledge_change_index, lock_order_violations, obligation_core_id,
     preserve_name_issues, preserve_patch_slice, project_brief,
     project_design_input, project_preserve_view, preserve_revision_wire,
     publish_graph,
@@ -925,7 +925,7 @@ def run_preserve(ctx: ChainContext) -> dict:
         return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars)
 
     def locate_preserve_patches(wire, errors):
-        """RC-64 条目定位器：自闸问题按 `obligations[i]` 给出最小可替换单元。"""
+        """Preserve 自闸按义务或完整细节对象定位；其余问题沿用整份修订。"""
         if not isinstance(wire, dict) or not errors:
             return None
         targets: dict[tuple, list] = {}
@@ -934,12 +934,23 @@ def run_preserve(ctx: ChainContext) -> dict:
             if not paths:
                 return None
             for path in paths:
-                if (len(path) != 2 or path[0] != 'obligations'
-                        or not isinstance(path[1], int)):
+                if (len(path) not in (2, 3, 4) or path[0] != 'obligations'
+                        or not isinstance(path[1], int)
+                        or (len(path) >= 3 and path[2] != 'details')
+                        or (len(path) == 4 and not isinstance(path[3], int))):
                     return None
                 targets.setdefault(tuple(path), [])
                 if error not in targets[tuple(path)]:
                     targets[tuple(path)].append(error)
+        # 同一义务的整项与细节同时有问题时，完整父项覆盖子项；替换不能重叠。
+        merged: dict[tuple, list] = {}
+        for path in sorted(targets, key=lambda p: (len(p), p)):
+            parent = next((p for p in merged if path[:len(p)] == p), None)
+            if parent is None:
+                merged[path] = list(targets[path])
+            else:
+                merged[parent].extend(e for e in targets[path] if e not in merged[parent])
+        targets = merged
         covered = {id(e) for errs in targets.values() for e in errs}
         if {id(e) for e in errors} != covered:
             return None
@@ -947,14 +958,16 @@ def run_preserve(ctx: ChainContext) -> dict:
 
     def preserve_narrow_context(base_wire, targets):
         """RC-64 窄输入：协议规则＋失败条目＋该义务 anchors 的源原子与引文。"""
-        indices = {t.path[1] for t in targets if len(t.path) == 2}
+        indices = {t.path[1] for t in targets if t.path[0] == 'obligations'}
         return NarrowPatchRequest(
             rules=PRESERVE_RULES,
             dependency=json.dumps(preserve_patch_slice(base_wire, core, blueprint, indices),
                                   ensure_ascii=False, separators=(',', ':')),
             legal_values=json.dumps({
                 'obligation_keys': sorted(['kind', 'statement', 'anchors',
-                                           'must_preserve', 'satisfaction', 'requires']),
+                                           'must_preserve', 'satisfaction', 'requires',
+                                           'details']),
+                'detail_keys': ['anchor', 'text'],
                 'obligation_count': len(base_wire.get('obligations') or []),
                 'protocol_version': STAGE4_PRESERVE_PROTOCOL,
             }, ensure_ascii=False, separators=(',', ':')))
@@ -1025,30 +1038,38 @@ def _design_root_causes(inspection) -> int:
     return len(codes)
 
 
-def _design_beat_paths(body) -> tuple[tuple[str | int, ...], ...]:
+def _design_beat_paths(body, wire=None) -> tuple[tuple[str | int, ...], ...]:
     """候选 Design 全部拍的 wire 路径（新增条目可选目标的闭集，RC-58）。"""
     if body is None:
-        return ()
+        # 当前上游使旧短引用失效时，canonical body 尚不可构造；已购 wire 的
+        # 场/拍容器仍给出同一有限闭集，不为可定位引用错误开启整份新购。
+        if not isinstance(wire, dict):
+            return ()
+        return tuple(('scenes', si, 'beats', bi)
+                     for si, scene in enumerate(wire.get('scenes') or ())
+                     if isinstance(scene, dict)
+                     for bi, beat in enumerate(scene.get('beats') or ())
+                     if isinstance(beat, dict))
     return tuple(('scenes', si, 'beats', bi)
                  for si, scene in enumerate(body.scenes)
                  for bi in range(len(scene.beats)))
 
 
-def _design_carriers(inspection, obligation_keys: Mapping[str, tuple[str, tuple[str, ...]]]
+def _design_carriers(inspection, obligation_keys: Mapping[str, tuple[str, tuple[str, ...]]],
+                     *, wire=None, recorded_obligation_keys=None,
                      ) -> dict[tuple[str, tuple[str, ...]], tuple[tuple[str | int, ...], ...]]:
-    """上游条目键 → 引用它的承载拍 wire 路径（Binding 的 beat_ref／支撑拍派生）。
+    """上游条目键 → 引用它的拍；包含 real、know 与所选软细节材料。
 
-    承载拍来自候选自己的 Binding（`beat_ref`＋`supporting_beat_refs`），映射到
-    Design wire 的拍路径；引用不存在的拍不猜（Design 构造已拒，这里只做投影）。
+    Binding 给出当前可构造候选的正式承载位；已购 wire 的 ob 前缀另按旧/新
+    对齐键同时定位，覆盖短引用删失、编号漂移与未选 real 的软细节。只解析
+    登记引用，不猜文本语义；即使当前 body 构造失败也仍能定位窄复核。
     """
     body, binding = inspection.body, inspection.binding
-    if body is None or binding is None:
-        return {}
     position_of = {(scene.scene_id, beat.beat_id): ('scenes', si, 'beats', bi)
                    for si, scene in enumerate(body.scenes)
-                   for bi, beat in enumerate(scene.beats)}
+                   for bi, beat in enumerate(scene.beats)} if body is not None else {}
     carriers: dict[tuple[str, tuple[str, ...]], set[tuple[str | int, ...]]] = {}
-    for entry in binding.entries:
+    for entry in binding.entries if binding is not None else ():
         key = obligation_keys.get(entry.obligation_id)
         if key is None:
             continue
@@ -1057,6 +1078,22 @@ def _design_carriers(inspection, obligation_keys: Mapping[str, tuple[str, tuple[
             path = position_of.get((scene_id, beat_id))
             if path is not None:
                 carriers.setdefault(key, set()).add(path)
+    if isinstance(wire, dict):
+        recorded_obligation_keys = recorded_obligation_keys or {}
+        for path in _design_beat_paths(None, wire):
+            beat = wire['scenes'][path[1]]['beats'][path[3]]
+            refs = list(beat.get('real') or ())
+            refs.extend(item.get('ref') for item in beat.get('know') or ()
+                        if isinstance(item, dict))
+            refs.extend(beat.get('details') or ())
+            for ref in refs:
+                if not isinstance(ref, str):
+                    continue
+                obligation = ref.split('.', 1)[0]
+                for keys in (obligation_keys, recorded_obligation_keys):
+                    key = keys.get(obligation)
+                    if key is not None:
+                        carriers.setdefault(key, set()).add(path)
     return {key: tuple(sorted(paths)) for key, paths in carriers.items()}
 
 
@@ -1090,6 +1127,9 @@ def _design_reuse_plan(ctx: ChainContext, *, checkpoint, chars, brief, obligatio
         has_lineage = isinstance(recorded_wire, dict)
         diff = (candidates.upstream_diff(recorded_wire, upstream_wire)
                 if has_lineage else None)
+        recorded_obligation_keys = {
+            f'ob{item.before_index + 1:02d}': item.key for item in diff.entries
+            if item.before_index is not None} if diff is not None else {}
         if has_lineage and diff.empty is False:
             # 条目键毫无交集＝上游是全新回答，与候选生成时的版本没有修订谱系
             # （RC-53 闭集原因）：此时差异不能证明任何东西。
@@ -1114,8 +1154,9 @@ def _design_reuse_plan(ctx: ChainContext, *, checkpoint, chars, brief, obligatio
             has_lineage=has_lineage, diff=diff, changed_equivalent=changed_equivalent,
             preflight_passed=inspection.passed,
             root_causes=_design_root_causes(inspection),
-            carriers=_design_carriers(inspection, obligation_keys),
-            beat_closed_set=_design_beat_paths(inspection.body)))
+            carriers=_design_carriers(inspection, obligation_keys, wire=rnd.wire,
+                                      recorded_obligation_keys=recorded_obligation_keys),
+            beat_closed_set=_design_beat_paths(inspection.body, rnd.wire)))
     return candidates.plan_reuse(assessments), tuple(assessments)
 
 
@@ -1125,7 +1166,7 @@ def _design_candidate_compatible(wire, constraints: OutputConstraints) -> tuple[
     if not isinstance(wire, dict) or wire.get('protocol_version') != STAGE4_DESIGN_WIRE_PROTOCOL:
         return False, '协议字面量不兼容'
     try:
-        model = DesignWireV8.model_validate(wire)
+        model = DesignWireV9.model_validate(wire)
     except ValidationError as exc:
         return False, '候选无法按当前schema构造'
     if len(model.chapters) != constraints.target_chapter_count:
@@ -1148,6 +1189,7 @@ def run_body_design(ctx: ChainContext) -> dict:
     # 同一把尺——窄请求只裁掉整份输入材料，不另造一套协议（I-11）。
     protocol_rules = design_rules(
         known_char_ids=set(chars.characters),
+        detail_refs=detail_index(obligation_index),
         knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
                         for ref, (_, change) in knowledge_change_index(obligation_index).items()},
         # 禁区（unanswered）不承载状态，不进 lock 闭集。

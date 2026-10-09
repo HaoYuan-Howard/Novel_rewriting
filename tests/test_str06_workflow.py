@@ -39,7 +39,7 @@ def _design_wire_v7():
     """stage4-design-v8（CS-3）：real 承载标注替 bind；义务 ob01–ob03 的接受拍
     都是首拍（与原 bind wire 等价）；kp 知情行经 ob02 的锁派生，不写在 wire。"""
     return {
-        'protocol_version': 'stage4-design-v8',
+        'protocol_version': 'stage4-design-v9',
         'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],
@@ -364,7 +364,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                               'basis': [{'segment': 'e01_01',
                                          'quote': '夫君与云娘一处住着'}]}])]}
     design = {
-        'protocol_version': 'stage4-design-v8',
+        'protocol_version': 'stage4-design-v9',
         'book_style': '冷峻克制的第三人称叙事。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],
@@ -386,7 +386,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
              'beats': [{'ev': '确认床底有人', 'who': ['yun', 'fu_jun'],
                         'real': ['ob02'], 'know': [{'ref': 'ob02.k01', 'confirms': {'domain': 'world', 'key': 'secret'}}]}]}],
         'chapters': [{'purpose': '夜半响动到床底确认', 'scenes': 2}]}
-    preserve = {'protocol_version': 'stage4-preserve-v2', 'obligations': [
+    preserve = {'protocol_version': 'stage4-preserve-v3', 'obligations': [
         {'kind': 'event_core',
          'statement': '夫君佯称离开实则藏身床底',
          'anchors': ['b01_01.e1'],

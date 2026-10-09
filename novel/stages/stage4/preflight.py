@@ -7,7 +7,7 @@ from typing import Literal, Sequence
 from pydantic import ValidationError
 
 from contracts.schema.book_ir import WriterBookIR
-from contracts.schema.design import BodyDesign, DesignWireV8, STAGE4_DESIGN_WIRE_PROTOCOL
+from contracts.schema.design import BodyDesign, DesignWireV9, STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.grounding import OutputConstraints, SemanticBinding
 from novel.core.material_trace import MaterialIssue
 from novel.core.name_materials import appellation_fallbacks
@@ -235,6 +235,15 @@ def inspect_design_candidate(wire, *, checkpoint, brief, obligations, chars,
                           and error.code == 'compile_must_unbound'
                           and len(error.location) > 1
                           and str(error.location[1]) in coverage_missing)]
+    # 相同正式引用/目标时序在 Design 与免费 compile 同验；候选入口保留 Design
+    # 的真实编辑位置，去掉同码同位置的 compile 回声。独立正式重编译仍完整报错。
+    echoed_codes = {'design_detail_ref', 'series_summary_early', 'series_summary_unbound'}
+    design_roots = {(error.code, tuple(error.location)) for error in errors
+                    if isinstance(error, ValidationIssue) and error.owner == 'design'
+                    and error.code in echoed_codes}
+    errors = [error for error in errors
+              if not (isinstance(error, ValidationIssue) and error.owner == 'compile'
+                      and (error.code, tuple(error.location)) in design_roots)]
     return DesignInspection(body, binding, tuple(dict.fromkeys(errors)), materials,
                             tuple(checks), projections)
 
@@ -248,7 +257,7 @@ def _design_wire_projections(wire) -> tuple[dict | None, tuple, list[str]]:
             'real承载标注与事实锁引用',
             code='design_protocol_literal', location=('protocol_version',))]
     try:
-        model = DesignWireV8.model_validate(wire)
+        model = DesignWireV9.model_validate(wire)
     except ValidationError as exc:
         return None, (), [design_issue(
             f'design 瘦 wire 协议校验失败：{exc}',

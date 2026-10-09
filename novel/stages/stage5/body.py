@@ -32,6 +32,7 @@ import json
 from typing import Any, NamedTuple
 
 from contracts.schema.receipt import ChapterLengthDisclosure, ChapterReceipt
+from novel.core.validation import ValidationIssue
 from novel.stages.common import (
     BODY_PARAGRAPH_REPAIR_SYSTEM, RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
     ChapterWriterPacket, chapter_identities, render_chapter_packet,
@@ -81,13 +82,27 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def _paragraph_repair_prompt(previous: str, errors: list[str]) -> str:
+def _repair_identity(packet: ChapterWriterPacket, previous: str) -> str:
+    """窄请求绑定完整基底与章包身份，省略的正文或材料变化仍须换请求。"""
+    identities = chapter_identities(packet)
+    return json.dumps({
+        'chapter_ordinal': packet.chapter.chapter_ordinal,
+        'base_text_sha256': sha256_text(previous),
+        'writer_view_sha256': identities.writer_view_sha256,
+        'validation_sha256': identities.validation_sha256,
+    }, ensure_ascii=False, sort_keys=True)
+
+
+def _paragraph_repair_prompt(previous: str, errors: list[str], *,
+                             packet: ChapterWriterPacket, patch_error: str = '') -> str:
     """段落级修句（CS-H H3，RC-61）：只差必保揭名字面时，不重发整份章包与整稿——
     按行编号送达当前稿，只要求回需要替换的段落（窄输入窄输出，M3 返修宽度）。"""
     numbered = '\n'.join(f'{index}: {line}'
                          for index, line in enumerate(previous.split('\n')))
-    return ('【段落修句】上一稿仅以下必保揭名问题未过，其余机械检查全部通过：'
+    return ('【段落修句身份】' + _repair_identity(packet, previous)
+            + '\n【段落修句】上一稿仅以下必保揭名问题未过，其余机械检查全部通过：'
             + '；'.join(errors)
+            + ('\n上次修句回答失败：' + patch_error if patch_error else '')
             + '\n只修订需要改动的段落：在相关段落把该称谓字面自然写进情节'
             '（人物的首次正式点名），不得新增或改变事实、不得改动无关段落。'
             '\n当前稿按行编号列出；输出 JSON（不要围栏、不要解释）：'
@@ -95,38 +110,110 @@ def _paragraph_repair_prompt(previous: str, errors: list[str]) -> str:
             '只输出需要替换的行，未列出的行保持原样。\n〔当前稿〕\n' + numbered)
 
 
-def _merge_paragraph_patch(previous: str, answer: str) -> tuple[str | None, str]:
+def _withheld_repair_lines(previous: str, errors: list[str]) -> tuple[int, ...]:
+    """按 validator 给出的原稿区间定位行；没有可靠位置即报实现缺陷，禁止猜文案。"""
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    for line in previous.split('\n'):
+        spans.append((cursor, cursor + len(line)))
+        cursor += len(line) + 1
+    selected: set[int] = set()
+    for issue in errors:
+        if not isinstance(issue, ValidationIssue) or issue.code != 'withheld_literals':
+            raise ValueError('未释放字面窄修需要 validator 的 typed 位置诊断')
+        literal = issue.context.get('literal')
+        start, end = issue.context.get('start'), issue.context.get('end')
+        if (not isinstance(literal, str) or type(start) is not int or type(end) is not int
+                or not 0 <= start < end <= len(previous)
+                or previous[start:end] != literal):
+            raise ValueError('未释放字面窄修诊断与完整原稿不一致')
+        selected.update(index for index, (low, high) in enumerate(spans)
+                        if low < end and start < high)
+    if not selected:
+        raise ValueError('未释放字面窄修没有可编辑段落')
+    return tuple(sorted(selected))
+
+
+def _withheld_repair_prompt(previous: str, errors: list[str], *,
+                            packet: ChapterWriterPacket, editable_lines: tuple[int, ...],
+                            patch_error: str = '') -> str:
+    """纯姓名泄漏只送受影响段与前后邻段；邻段只读，完整基底仅以摘要绑定。"""
+    lines = previous.split('\n')
+    context_lines = set(editable_lines)
+    for index in editable_lines:
+        for step in (-1, 1):
+            neighbor = index + step
+            while 0 <= neighbor < len(lines) and not lines[neighbor].strip():
+                neighbor += step
+            if 0 <= neighbor < len(lines):
+                context_lines.add(neighbor)
+    excerpt = '\n'.join(
+        f'{index}（{"可编辑" if index in editable_lines else "只读邻段"}）: {lines[index]}'
+        for index in sorted(context_lines))
+    issues = [{'literal': issue.context['literal'], 'start': issue.context['start'],
+               'end': issue.context['end']} for issue in errors]
+    return ('【未释放字面段落修句身份】' + _repair_identity(packet, previous)
+            + '\n上一稿仅未释放专名字面检查失败；只修这些字面的表达，不改事实或知情位置。'
+            + '\n待修字面与原稿位置：' + json.dumps(issues, ensure_ascii=False)
+            + '\n本章合法已释放称谓：'
+            + json.dumps(list(packet.chapter.released_surfaces), ensure_ascii=False)
+            + '\n允许替换的行号：' + json.dumps(list(editable_lines))
+            + ('\n上次修句回答失败：' + patch_error if patch_error else '')
+            + '\n将未释放字面改为已有合法称谓或不点名的自然表述，保持原有语气、视角与篇幅。'
+            '只读邻段帮助衔接，不得修改；每个 text 只含一行，不能插入新段。'
+            '\n只输出 JSON（不要围栏、不要解释）：'
+            '{"paragraphs":[{"index":允许的行号,"text":"该行替换后的全文"}]}。'
+            '\n〔受影响段落与必要邻段〕\n' + excerpt)
+
+
+def _merge_paragraph_patch(previous: str, answer: str, *,
+                           editable_lines: tuple[int, ...] | None = None,
+                           ) -> tuple[str | None, str]:
     """段落修句回答的确定性合并：按行号替换，范围外/重复/坏形状拒绝（返回错误）。"""
+    def unique_fields(pairs):
+        values = {}
+        for key, value in pairs:
+            if key in values:
+                raise ValueError(f'段落修句回答含重复 JSON 键：{key}')
+            values[key] = value
+        return values
+
     try:
-        data = json.loads(answer)
+        data = json.loads(answer, object_pairs_hook=unique_fields)
     except ValueError as exc:
         return None, f'[paragraph_patch] 段落修句回答不是合法 JSON：{exc}'
     lines = previous.split('\n')
-    entries = data.get('paragraphs') if isinstance(data, dict) else None
+    entries = data.get('paragraphs') if isinstance(data, dict) and set(data) == {'paragraphs'} else None
     if not isinstance(entries, list) or not entries:
         return None, '[paragraph_patch] 段落修句回答缺 paragraphs 数组（至少修订一行）'
     seen: set[int] = set()
     for entry in entries:
-        if (not isinstance(entry, dict) or not isinstance(entry.get('index'), int)
+        if (not isinstance(entry, dict) or set(entry) != {'index', 'text'}
+                or not isinstance(entry.get('index'), int)
                 or isinstance(entry.get('index'), bool)
                 or not isinstance(entry.get('text'), str)):
             return None, '[paragraph_patch] 段落修句条目形状失败（须含 index 与 text）'
         index = entry['index']
-        if not 0 <= index < len(lines) or index in seen:
-            return None, f'[paragraph_patch] 段落行号越界或重复：{index}'
+        if (not 0 <= index < len(lines) or index in seen
+                or (editable_lines is not None and index not in editable_lines)):
+            return None, f'[paragraph_patch] 段落行号不可编辑、越界或重复：{index}'
+        if '\n' in entry['text'] or '\r' in entry['text']:
+            return None, '[paragraph_patch] 单行替换不得插入换行或新段落'
         seen.add(index)
         lines[index] = entry['text']
     return '\n'.join(lines), ''
 
 
-def _patch_answer_validator(previous: str, validate):
+def _patch_answer_validator(previous: str, validate, *,
+                            editable_lines: tuple[int, ...] | None = None):
     """段落修句回答的接受校验：先确定性合并进上一稿，再跑本章同一把机械检查。
 
     付费边界（`ask_text_once`）把返回的错误写进接受记录；回答是行替换 JSON，
     不能拿整章校验器直接验它（篇幅带必然报错 ⇒ 成功的修句被记成 accepted=false）。
     """
     def check(answer: str) -> list[str]:
-        merged, merge_error = _merge_paragraph_patch(previous, answer)
+        merged, merge_error = _merge_paragraph_patch(
+            previous, answer, editable_lines=editable_lines)
         return [merge_error] if merge_error else validate(merged)
     return check
 
@@ -158,18 +245,29 @@ def write_chapter(
     errors: list[str] = []
     identity = ''
     previous: str | None = None   # 重写基线：最近一份非空回答（空回答不进基线）
+    patch_error = ''              # 已定位的未释放字面窄修，格式失败仍绑定同一原稿
     for attempt in range(1 + MAX_BODY_REWRITES):
-        # 段落级修句（RC-61）：只差必保揭名字面时按行窄修，不重发整份章包。
-        patch_round = (previous is not None and bool(errors)
-                       and all(error.startswith('[required_literals]') for error in errors))
+        # 纯字面问题走段落窄修；混合篇幅等问题仍走原整章重写，不加收缩臂。
+        required_patch = (previous is not None and bool(errors)
+                          and all(error.startswith('[required_literals]') for error in errors))
+        withheld_patch = (previous is not None and bool(errors)
+                          and all(isinstance(error, ValidationIssue)
+                                  and error.code == 'withheld_literals' for error in errors))
+        patch_round = required_patch or withheld_patch
+        editable_lines = _withheld_repair_lines(previous, errors) if withheld_patch else None
         if previous is None:
             answered = ask(packet_text, validate)
         elif patch_round:
             # 回答是行替换 JSON，不是整章正文：付费边界收到的校验器必须校验**合并后**
             # 的稿（接受记录 accepted 才如实，RC-54），请求用专用 system 提示
             # （写手 system 要求「只输出完整正文」，与本轮的 JSON 输出相冲突）。
-            answered = ask(_paragraph_repair_prompt(previous, errors),
-                           _patch_answer_validator(previous, validate),
+            prompt = (_withheld_repair_prompt(
+                previous, errors, packet=packet, editable_lines=editable_lines,
+                patch_error=patch_error) if withheld_patch else _paragraph_repair_prompt(
+                    previous, errors, packet=packet, patch_error=patch_error))
+            answered = ask(prompt,
+                           _patch_answer_validator(previous, validate,
+                                                   editable_lines=editable_lines),
                            system=BODY_PARAGRAPH_REPAIR_SYSTEM)
         else:
             answered = ask(_rewrite_prompt(packet_text, previous, errors), validate)
@@ -177,9 +275,14 @@ def write_chapter(
         if answered.text is None:
             # B1/D5：空回答计一次失败留证；重发同一份章包（同请求身份 → Runtime
             # 在同一内容轮内续发下一 attempt），不再取上一稿。
-            errors = ['[non_empty] 响应为空']
+            empty_error = '[non_empty] 响应为空'
             attempts.append(ChapterAttempt(attempt + 1, identity, answered.finish_reason,
-                                           0, tuple(errors)))
+                                           0, (empty_error,)))
+            if withheld_patch:
+                patch_error = empty_error
+            else:
+                errors = [empty_error]
+                patch_error = ''
             continue
         prose = answered.text
         if answered.finish_reason == 'length':
@@ -192,16 +295,22 @@ def write_chapter(
                 ('[truncated] 响应被截断（finish_reason=length），即停该章（D6）',)))
             break
         if patch_round:
-            merged, merge_error = _merge_paragraph_patch(previous, prose)
+            merged, merge_error = _merge_paragraph_patch(
+                previous, prose, editable_lines=editable_lines)
             if merge_error:
-                # 解析失败如实留证；原有的缺字面问题继续带入下一轮（整份重写要知道
-                # 为什么要重写），只把本轮失败排在前面。
+                # 已定位的未释放字面保留原稿与诊断，下一轮仍修同一段；缺字面修句
+                # 未定位允许改哪些段落，格式失败沿既有语义退整章恢复，并保留两种原因。
                 attempts.append(ChapterAttempt(attempt + 1, identity,
                                                answered.finish_reason,
                                                count_body_chars(previous), (merge_error,)))
-                errors = [merge_error, *errors]
+                if withheld_patch:
+                    patch_error = merge_error
+                else:
+                    errors = [merge_error, *errors]
+                    patch_error = ''
                 continue
             prose = merged
+        patch_error = ''
         errors = validate(prose)
         attempts.append(ChapterAttempt(attempt + 1, identity, answered.finish_reason,
                                        count_body_chars(prose), tuple(errors)))

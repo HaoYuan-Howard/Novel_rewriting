@@ -45,8 +45,8 @@ from contracts.schema.book_ir import (
 )
 from contracts.schema.context import (
     KnowledgeEntry, ObligationCarrier, OpenThreadIR, PendingConfirmation,
-    StateEntry, SurfaceRelease, ThreadOpIR, UnansweredGuard, VerificationIR,
-    WriterBrief, WriterContext, WriterPacket, beats_ir,
+    PriorSeriesEvent, StateEntry, SurfaceRelease, ThreadOpIR, UnansweredGuard, VerificationIR,
+    WriterBrief, WriterContext, WriterDetail, WriterPacket, beats_ir,
 )
 from contracts.schema.hook import HookContext
 from contracts.schema.design import BodyDesign
@@ -142,12 +142,13 @@ def material_identities(graph: BodyDesign, binding: SemanticBinding, chars: Char
                  if d.key.startswith('kp_')}
     lock_keys |= {d.key for d in graph.initial_state if d.key.startswith('kp_')}
     lock_keys |= {f.kf_id for f in binding.fact_bindings}
+    detail_ids = {d.detail_id for o in binding.obligations for d in o.details}
     return (set(chars.characters) | {s.scene_id for s in graph.scenes}
             | {b.beat_id for s in graph.scenes for b in s.beats}
             | {t.ref for s in graph.scenes for b in s.beats for t in b.threads}
             | {o.obligation_id for o in binding.obligations}
             | {d.ex_id for d in graph.expression_decisions}
-            | lock_keys)
+            | lock_keys | detail_ids)
 
 
 def validate_positive_materials(
@@ -496,6 +497,8 @@ def check_binding_covers_checkpoint(
     problems: list[str] = []
     if binding.obligations != checkpoint.obligations:
         problems.append('Binding 义务内容与采用的 Preserve 不一致')
+    if binding.series != checkpoint.series:
+        problems.append('Binding 系列及回顾范围与采用的 Preserve 不一致')
     denominator = {o.obligation_id for o in checkpoint.obligations}
     bound = {e.obligation_id for e in binding.entries}
     returned = {u.obligation_id for u in binding.unbound}
@@ -848,7 +851,7 @@ _PRESERVE_KIND_LINES = '\n'.join(
     f'- {kind}：{definition}' for kind, definition in PRESERVE_KIND_DEFS.items())
 
 PRESERVE_RULES = f"""任务：从源证据投影视图选择改写不可丢失的最小语义义务
-（保存策略 v5；wire 协议 stage4-preserve-v2）。
+（保存策略 v6；wire 协议 stage4-preserve-v3）。
 
 【输入的形状（源证据投影视图，R10a a2）】视图按「书级初态 → 世界约束 →
 逐章逐拍」给出源真值的原子，每原子一行：方括号内是**投影句柄**（书级初态
@@ -876,15 +879,19 @@ hears_claim/believes/asserts；事实带 modality：actual＝已发生／planned
 - 事实成立与揭示的时点：事实成立与后续认知对同一命题的揭示（持有者＋模式）
   是两件事：reveal 类义务必须写清**谁在何时确认**（含读者），不能只保事实成立。
 
-【satisfaction 写"改写后必须成立什么，才能保住同样的作用"】
-触发与后果的连接点、误会如何形成、何时由谁确认（含读者）、成立的喜剧或反讽效果。
-可替换的细节（具体物件、措辞、场面陈设）不列。重复行为：satisfaction 写
-"重复本身的作用"（日复一日的侵蚀／习惯的养成），不是其中任意一次的细节。
+【satisfaction 写页面上可核对的事实条件】
+写触发、行动、必要动机、公开说辞与真实想法的区别、后果及何时由谁获知。
+用具体条件保住反差，不给人物强加“羞辱、悲凉、控制”等主题或情绪解释；语域由表达机制决定。
+可替换的道具、动作或台词形状放进可改写 details，不升成必保字面。
+必要铺垫与后果仍须独立成为条件，不能降成可选细节。重复行为分别保各次实例，
+需要回顾时另列回顾义务并明确它涵盖的实例，不把未来实例写进当前认知。
 loop 未收束的问题与 close 时的 resolution：悬念的铺设与兑现方式进 satisfaction。
 
 【义务边界（v5）】
 satisfaction 写正文必须成立的条件，也写哪些表现不足以兑现、哪些改法会改变因果。
 不得把救人动机改成事后获利或感谢，把主动行为改成被动巧合，或交换行为主体。
+一条义务只承载一个时点、单处可核对的事实条件。跨时点人物弧、内外反差与重复行为拆为
+各次发生的阶段条件，不把全书一条人物概括压在前两章。关系与因果只连接这些原子条件。
 不同时点的决定保留条件和先后；跨场复合义务拆为能在单处兑现的阶段义务，用 requires
 表达必要的因果／信息前提；单纯先后不写因果。身份义务不捆绑首次出现时点不同的称谓。
 
@@ -895,6 +902,14 @@ satisfaction 写正文必须成立的条件，也写哪些表现不足以兑现�
 - 揭示义务只在源文确有**读者确认**（视图里 reader 的 learns/confirms）时要求
   读者确认；线索、怀疑、传闻阶段合法，不为满足阶段规则新增确认或故事事件；
 - 源文未说明的（unknown、未收束的悬念）保持未知——不得在义务里替源文补答案。
+
+【可改写 details（软材料，不是追加义务）】
+从源投影视图中选具体机关：动作、道具、台词形状、内心与对白的落差或铺垫。
+用短转述说明可用画面及其作用，别逐字抄源句，也不引用原文章号。内心话、某人对白、
+背景事实要在转述中保留区别和主体；不能凭有无引号猜说话人。没有合适细节就省略。
+每条为 {{"anchor":"源视图中的句柄","text":"可改写提示"}}，不输出ID。
+细节锚点不自动成为必保条件，不为一个可改写动作另添义务或知情锁。
+源观察的命题若在当前时点包含未发生实例，报 evidence_conflicts，不在 details 中替它补真。
 
 【切分与去重】
 - 一条义务承担一个作用，不整场转写；
@@ -917,19 +932,22 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
 【wire 形状（编号由 compiler 生成，你不输出任何 ID）】
 - 义务按列表序书写；**不输出义务编号**——编号由 compiler 按列表序派发；
 - 每项 kind,statement,anchors,must_preserve(布尔 true/false),satisfaction,
-  requires；
+  requires；可选 details；
 - anchors 是**投影句柄数组**（闭集选择，至少 1 个）——该义务依赖的源原子；
   不输出 lineage，来源由工程从 anchors 解析；
 - requires 用 **1-based 列表序号**引用其它义务（如第 2 项依赖第 1 项写 [1]），
   不得自指，只收必要先决条件——**只写因果或信息前提**（不承载它就立不起来），
   源文先后顺序本身不是依赖：两件事只是先后发生、没有谁依赖谁时不得写
   requires（写出来会把改写顺序错误地锁死）；
-- wire 顶层：{{"protocol_version":"stage4-preserve-v2","obligations":[...],
+- series 可选 summaries：[{{"member":回顾义务序号,"covers":[已发生实例序号,...]}}]。
+  member 和 covers 都必须属于该组；covers 不得含回顾义务或自身。允许中途回顾，
+  不要求回顾是全组最后一项；只回顾明确覆盖的实例。
+- wire 顶层：{{"protocol_version":"stage4-preserve-v3","obligations":[...],
   "series":[...],"evidence_conflicts":[...]}}（后两项可省略）。
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/义务清单/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v8）。你是整书一次调用的结构设计者：只表达**选择、
+（wire 协议 stage4-design-v9）。你是整书一次调用的结构设计者：只表达**选择、
 结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一、默认值、
 知情增量的键与模式全部由 compiler 派生，你不输出任何 ID、编号或归一化数值
 （I-21）。机械字段（world_rules、expression 保留决定、narration、pov/voice、
@@ -958,7 +976,9 @@ Brief.requirements 以 obNN 为键，包含完整语义、依赖 requires、锁�
 - 承载位必须能单独完成该义务的 satisfaction（复合义务前半用支撑拍）；
 - 若 A requires B：跨场时B不得晚于A；同场接受拍和支撑拍允许交错；
   已声明事实读取和认知披露仍须满足各自建立时点与授权边界；
-- series 成员是同一机制的离散兑现时点：接受拍必须**不同拍**，不得合并；
+- series 的实例是同一机制的离散兑现时点：实例接受拍必须**不同拍**，不得合并；
+  summarizes 明确本次回顾覆盖哪些义务；回顾不得早于这些实例，但可与最后一个实例同拍。
+  不用“屡次”替代具体实例，不加入其覆盖关系以外的未来事件。
 - 认知变化清单由 compiler 按 know 标注派生；必保义务的**事实锁**（requirements 里
   realize_locks 列出的 kf_*）由你在承载该义务的拍上，让**表达该事实的那条 state** 带上
   lock 兑现（漏兑现即拒）：该拍已有这样的 state 就直接标注，没有就写这一条并标注——
@@ -1015,6 +1035,13 @@ Brief.requirements 以 obNN 为键，包含完整语义、依赖 requires、锁�
 拍上 ex:[ex_id] 声明本拍承载的源表达（只能取 Brief.expression 给出的项；
 narration 是书级机制不上拍）。书级风格、声线与叙述机制只在 book_style/
 character_voices 声明，不举后段具体情节。
+所有保留的书级表达机制对全部场景默认生效；ex 是局部重点，不是适用白名单。
+场级 brief 不得用无事实依据的悲凉、羞辱或惊悚解释覆盖全书质地。
+
+【可改写细节（details）】
+requirements.details 给出 obNN.dNN 短引用与提示；拍上 details:["obNN.dNN",…]
+选择对该拍有用的机关、动作或台词形状。可以换道具、换措辞或省略；不因此新增
+必保条件，也不降低 satisfaction 中必要动机与铺垫的强度。提示只用于创作，不复述成说明句。
 
 【场景与拍】
 每拍 release 只声明该位置首次允许的称谓 [{char_id,surfaces}]，不得一次放开
@@ -1031,6 +1058,10 @@ driver.focal_actor/immediate_want/opposition/turn 语义同前（写具体阻力
 收束与衔接；不规定逐句正文，不逐拍复述事件。凡涉及关键行动、持久认知
 变化、秘密、承诺或因果条件的表述，必须同时进 driver/ev/state/real/
 threads/release 等正式字段，不得只写在 brief 里。
+事实成立、人物获知与读者理解可以在同一拍自然完成，不为 confirms 专造解释或确认场。
+一人称的每项可叙述内容须有合理感知通道；视角人物未参与时，在事件与 brief 明确
+她怎样目睹、听到、被告知或有依据地推断，不要求写手自行编造“后来我才知道”的前史。
+人物指代只是材料标签，不能直接当作任意说话人对她的称呼；称呼须符合说话人与对象的关系。
 pov 缺省＝叙述唯一焦点（compiler 派生）；多焦点书才逐场写 pov。
 
 【章间承接（第 1 章固定开篇）】
@@ -1047,22 +1078,30 @@ scene_weights（可选）：与场景等长的正数数组（相对篇幅重点�
 返回一个 JSON object，不要围栏、不要解释。
 """
 
-from contracts.schema.design import DesignWireV5, DesignWireV8
+from contracts.schema.design import DesignWireV5, DesignWireV9
 _DESIGN_INSTRUCTIONS = DESIGN_RULES
 
 
 def design_rules(*, known_char_ids: set[str] | None = None,
                  registered_surfaces: Mapping[str, set[str]] | None = None,
                  knowledge_refs: Mapping[str, bool] | None = None,
+                 detail_refs: Iterable[str] | None = None,
                  fact_lock_ids: Iterable[str] | None = None) -> str:
     """模型 Schema 是唯一形状源；动态闭集与接受函数使用同一输入。
 
-    CS-3（2026-10-03）：形状源换瘦模型（现为 DesignWireV8）；闭集注入面随
+    CS-3（2026-10-03）：形状源换瘦模型（现为 DesignWireV9）；闭集注入面随
     之换名（who／可选 pov 的 anyOf 分支），语义与 v5 面一致。CS-F2：
     `fact_lock_ids` 是可被 `lock` 引用的事实锁句柄闭集（Brief.fact_locks 去掉
     unanswered 禁区）；空集合时 `lock` 只允许 null。
     """
-    schema = DesignWireV8.model_json_schema()
+    schema = DesignWireV9.model_json_schema()
+    if detail_refs is not None:
+        allowed_details = sorted(detail_refs)
+        props = schema['$defs']['SlimDesignBeat']['properties']['details']
+        if allowed_details:
+            props['items']['enum'] = allowed_details
+        else:
+            props['maxItems'] = 0
     if fact_lock_ids is not None:
         lock_ids = sorted(fact_lock_ids)
         state_props = schema['$defs']['SlimDesignState']['properties']
@@ -1262,7 +1301,8 @@ BODY_PARAGRAPH_REPAIR_SYSTEM = """你是小说正文的修句编辑（paragraph 
 绝大部分机械检查，只有用户消息点名的问题（如必保揭名的称谓字面缺失）未过。
 
 规则（违反任何一条即报废）：
-1. 只修订用户消息指出的问题：把缺失的字面自然写进相关段落，保持原有语气、视角与篇幅；
+1. 只修订用户消息指出的问题：自然补齐必保字面，或将未获准字面改用该处合法指称，
+   保持原有语气、视角与篇幅；
    不新增、删除、替换事实、事件、知情与称谓释放位置，不改动无关段落。
 2. 本轮不是重写整章：不要输出整章正文、章号、标题、场景标记、解释、前言或 markdown 围栏。
 3. 只输出一个 JSON 对象，形状与用户消息给定的一致：只列需要替换的行，
@@ -1923,6 +1963,32 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     # 跨场义务只携带明确的已完成支撑拍；绝不把整条复合义务当作先前真值。
     positions = {f'{s.scene_id}#{b.beat_id}': (i, j, b)
                  for i, s in enumerate(graph.scenes) for j, b in enumerate(s.beats)}
+    # 系列前情只由正式 covers 投影：使用目标接受拍事件，不带源章、引文或
+    # 整条义务的跨章概括。实例可重排；概括不得早于实例（Design/compile
+    # 共用判据已验证），同场此前/同拍实例在概括拍送达而非章首提前叙述。
+    entry_of = {e.obligation_id: e for e in binding.entries}
+    chapter_of = {sid: chapter.chapter_ordinal for chapter in graph.chapters
+                  for sid in chapter.scene_ids}
+    series_events: dict[tuple[str, str], PriorSeriesEvent] = {}
+    for group in binding.series:
+        for summary in group.summaries:
+            summary_entry = entry_of.get(summary.member)
+            if summary_entry is None or summary_entry.scene_id != scene_id:
+                continue
+            summary_ref = summary_entry.beat_ref
+            for member in summary.covers:
+                instance = entry_of.get(member)
+                if instance is None:
+                    raise ValueError(f'系列概括 {summary.member} 所覆盖实例 {member} 未承载')
+                instance_ref = instance.beat_ref
+                if positions[instance_ref][:2] > positions[summary_ref][:2]:
+                    raise ValueError(f'系列概括 {summary.member} 早于实例 {member}')
+                series_events[(summary_ref, instance_ref)] = PriorSeriesEvent(
+                    summary_beat_ref=summary_ref, beat_ref=instance_ref,
+                    chapter_ordinal=chapter_of[instance.scene_id],
+                    event=positions[instance_ref][2].event)
+    prior_series = tuple(series_events[key] for key in sorted(
+        series_events, key=lambda pair: (positions[pair[0]][:2], positions[pair[1]][:2])))
     refs = sorted({ref for e in entries for ref in e.supporting_beat_refs},
                   key=lambda r: positions[r][:2])
     current = next(i for i, s in enumerate(graph.scenes) if s.scene_id == scene_id)
@@ -1940,7 +2006,12 @@ def project_context(*, scene_id: str, graph: BodyDesign,
         for b in scene.beats)
     ir = VerificationIR(scene_id=scene_id, obligations=owned,
                         beats=beats_ir(scene_id, beats,
-                                       reads_by_beat=beat_reads),
+                                       reads_by_beat=beat_reads,
+                                       details_by_id={detail.detail_id: WriterDetail(
+                                           detail_id=detail.detail_id, text=detail.text,
+                                           obligation_id=obligation.obligation_id)
+                                           for obligation in binding.obligations
+                                           for detail in obligation.details}),
                         entry_state=state, entry_knowledge=knowledge,
                         released_surfaces=releases, planned_delta=delta,
                         pending_reader_confirmations=pending,
@@ -1950,7 +2021,8 @@ def project_context(*, scene_id: str, graph: BodyDesign,
                         background_state=background_state,
                         background_knowledge=background_knowledge,
                         carried_obligations=carried,
-                        unanswered_guards=guards)
+                        unanswered_guards=guards,
+                        prior_series_events=prior_series)
     actor = surface_display(releases, scene.driver.focal_actor)
     brief = WriterBrief(
         scene_id=scene_id,
@@ -2026,13 +2098,13 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 #: v10（2026-10-04 CS-F2，称谓投影）：正向材料行里已证明唯一绑定人物的完整登记称谓
 #: 按本场已释放称谓确定性投影（`project_withheld_names`）；短姓、关系称呼与未登记表达
 #: 不投影，仍按字面检查回派 owner。
-RENDERER_VERSION = 'str06-render-v10'
+RENDERER_VERSION = 'str06-render-v11'
 
 #: 整书写作约定与自由度（Writer 协议，固定文本）。v7 按三类身份重写（必须写出／
 #: 必须遵守不必复述／写手自由）：场景是控制单元、反差不写成总结句、知情与
 #: 时态按输入措辞——「事实全对、处处交代」的对症条款。分区名用「」引用
 #: （阅读面的节标题用【】，二者不冲突）。v8明确逐拍结果与状态的有效时点。
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v8'
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v9'
 WRITER_PROTOCOL = """\
 可补措辞、对白、即时反应和局部动作；不得新增或改变动机、行为主体、关系、历史、时序、知情条件或后文依赖的前件。\n本章写作输入按六个分区给出，归三类用法：
 【必须写出】在正文里实际完成：拍的事件、承载的义务满足条件、表达任务、线索的推进或收束。化进情节写出——不是提到关键词，也不逐条宣布；条目可拆开融入叙述，不要求逐条对应句子、段落或独立场景。
@@ -2258,7 +2330,7 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
                                      else '第三人称，限于本场指定视角或旁白叙述')
                        + '；对白中的自称不改变正文叙述人称。')
     for choice in brief.expression_decisions:
-        creative.append(f'表达机制：{choice.statement}',
+        creative.append(f'全场默认表达机制：{choice.statement}',
                         source('expression', choice.ex_id, 'statement', choice.statement))
     for voice in brief.character_voices:
         if _face(voice.char_id):
@@ -2361,6 +2433,15 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
             for read_index, (read, value) in enumerate(zip(reads, beat.reads)):
                 must_respect.append(f'{label}·第{no}拍依赖的事实：{read}',
                                     fact_source(value, f'reads/{read_index}', beat.beat_ref))
+            for prior in ir.prior_series_events:
+                if prior.summary_beat_ref == beat.beat_ref:
+                    timing = '与本拍一起完成' if prior.beat_ref == beat.beat_ref else '此前已安排'
+                    must_respect.append(
+                        f'{label}·第{no}拍概括系列时可回顾的实例'
+                        f'（第{prior.chapter_ordinal}章，{timing}）：{prior.event}'
+                        '；依据这些实例，不另编人物或前史，不复述整段情节。',
+                        source('design', prior.beat_ref, 'event', prior.event,
+                               prior.summary_beat_ref))
             for obligation in carried_by_beat.get(no, ()):
                 support = sorted(set(support_of.get(no, ())))
                 lead = (f'（第{"、".join(str(m) for m in support)}拍起铺垫）'
@@ -2385,6 +2466,11 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
                                         '（呈现目标——通过话语与内心反应的落差实现，'
                                         '不写成解释性总结句）',
                                         source('expression', ex_id, 'statement', statement, beat.beat_ref))
+            for detail in beat.details:
+                # 细节可用于其它承载拍；来源身份由 compiler 从全书正式义务解析。
+                creative.append(f'{label}·第{no}拍可用细节（可改写或省略）：{detail.text}',
+                                source('obligation', detail.obligation_id,
+                                       f'details/{detail.detail_id}', detail.text, beat.beat_ref))
         # 拍行结束：回到场末前缀（场级说明行的取位），并把本场累积并入章内前缀。
         set_scope(scene_end)
         for op in ir.thread_ops:

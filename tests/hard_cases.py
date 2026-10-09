@@ -285,7 +285,7 @@ def _preserve_bad_wire() -> list:
              'must_preserve': True, 'satisfaction': '明确呈现',
              'anchors': ['b01_01.e1']}
     _checkpoint, errors = assemble_preserve(
-        {'protocol_version': 'stage4-preserve-v2', 'obligations': [entry]},
+        {'protocol_version': 'stage4-preserve-v3', 'obligations': [entry]},
         policy_id='preserve-default', policy_version=1,
         characters=CharactersCore(characters={'ch1': CharacterEntry(
             canonical='苏姑娘',
@@ -826,7 +826,7 @@ def _preserve_unknown_anchor() -> list:
     )
     from tests.str06_facilities import v13_beat, v13_effect
     _checkpoint, errors = assemble_preserve(
-        {'protocol_version': 'stage4-preserve-v2', 'obligations': [
+        {'protocol_version': 'stage4-preserve-v3', 'obligations': [
             {'kind': 'event_core', 'statement': 's', 'anchors': ['b09_99.e1'],
              'must_preserve': True, 'satisfaction': '明确呈现', 'requires': []}]},
         policy_id='preserve-default', policy_version=1,
@@ -883,6 +883,35 @@ def _binding_series_same_beat() -> list:
     body, _binding, brief = _green_graph_and_binding()
     _model, errors = derive_semantic_binding(
         _placements(ob04=[(0, 4)]), body, _checkpoint(), _fact_marks(brief))
+    return errors
+
+
+def _binding_series_summary_early_or_unbound() -> list:
+    """R-5.23：显式概括早回顾／遗漏可选被覆实例；沿真实Design与compile入口。"""
+    from tests.test_str06_a5_positions import _assemble_summary_fixture
+    from tests.test_str06_body import _green_design, _series_binding
+    from novel.stages.stage4.compile import compile_execution_plan
+    _wire, _body, design_errors = _assemble_summary_fixture({
+        'ob01': [(0, 0)], 'ob02': [(1, 0)], 'ob03': [(0, 1)]})
+    body = _green_design()
+    binding = _series_binding(body, {
+        'ob01': [(0, 0)], 'ob03': [(1, 0)]}, optional_instance=True)
+    _plan, compile_errors = compile_execution_plan(body, binding)
+    return [*design_errors, *compile_errors]
+
+
+def _design_detail_ref_outside() -> list:
+    """R-5.24：内部人工恢复输入引用Brief未登记细节，真实Design组装必须拒。"""
+    from novel.stages.stage4.design import assemble_body_design
+    from tests.test_str06_a5_positions import _summary_design_fixture
+    from tests.test_str06_hook import _body_wire
+    _wire, brief, _index = _summary_design_fixture({})
+    wire = _body_wire()
+    wire['scenes'][0]['beats'][0]['detail_refs'] = ['dt_' + '2' * 16]
+    _body, errors = assemble_body_design(
+        wire, known_char_ids={'fu_jun', 'yun_niang'},
+        expression_requirements=brief.expression, source_narration=brief.source_narration,
+        brief=brief)
     return errors
 
 
@@ -972,6 +1001,10 @@ CASES.update({
         'stage4', _design_lock_mode_escalation, '无锁或模式越权'),
     'binding_series_collapse': Case(
         'stage4', _binding_series_same_beat, 'series_collapsed'),
+    'binding_series_summary': Case(
+        'stage4', _binding_series_summary_early_or_unbound, '系列概括'),
+    'design_detail_ref_closure': Case(
+        'stage4', _design_detail_ref_outside, '不在正式 Brief 细节闭集内'),
     'epistemic_lock_order_guard': Case(
         'stage4', _epistemic_lock_early_upgrade, 'epistemic_lock_order'),
     'answer_reuse_four_conditions': Case(

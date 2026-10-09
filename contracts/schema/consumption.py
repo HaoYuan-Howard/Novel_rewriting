@@ -1087,6 +1087,33 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
              '重算（I-16）'),
 }
 
+# rc21：细节的源锚点与身份只供审计，只有选中提示送达对应拍的创作分区。
+_QUALITY_IR_PREFIX = 'writer_book_ir.chapters[].scenes[].verification_ir'
+for _field in ('detail_id', 'text'):
+    _path = f'{_QUALITY_IR_PREFIX}.obligations[].details[].{_field}'
+    STR06_FIELD_DELIVERY[_path] = _spec(
+        _path, consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='源细节存档；只有拍上选中的提示送达写手')
+_ANCHOR_PREFIX = f'{_QUALITY_IR_PREFIX}.obligations[].anchors[].'
+for _path, _entry in tuple(STR06_FIELD_DELIVERY.items()):
+    if _path.startswith(_ANCHOR_PREFIX):
+        _detail_path = _path.replace('.anchors[].', '.details[].anchor.', 1)
+        STR06_FIELD_DELIVERY[_detail_path] = _spec(
+            _detail_path, consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+            note='细节证据复用唯一 ObligationAnchor 形状；不进入源盲阅读面')
+for _field in ('detail_id', 'obligation_id', 'text'):
+    _path = f'{_QUALITY_IR_PREFIX}.beats[].details[].{_field}'
+    STR06_FIELD_DELIVERY[_path] = _spec(
+        _path, consumers=(_W,) if _field == 'text' else (_A,), scope=_SCENE,
+        mode=DeliveryMode.CREATIVE_GUIDANCE if _field == 'text' else DeliveryMode.AUDIT_ONLY,
+        note='拍上可改写提示；身份只用于归因，省略提示不触发质量返修')
+for _field in ('summary_beat_ref', 'beat_ref', 'chapter_ordinal', 'event'):
+    _path = f'{_QUALITY_IR_PREFIX}.prior_series_events[].{_field}'
+    STR06_FIELD_DELIVERY[_path] = _spec(
+        _path, consumers=(_W,) if _field in ('event', 'chapter_ordinal') else (_A,), scope=_SCENE,
+        mode=DeliveryMode.MUST_RESPECT if _field in ('event', 'chapter_ordinal') else DeliveryMode.AUDIT_ONLY,
+        note='显式回顾覆盖的目标实例；目标章号与事件在回顾拍送达，拍引用只审计')
+
 #: 七档身份的闭环自检：R2 引擎批起七档全部有登记实例——background 落在
 #: `background_state`／`background_knowledge`（编译器按参与者补齐的入场基线）。
 #: 守卫测试钉住「七档齐全＋background 档恰是补齐基线字段」的对应关系。

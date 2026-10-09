@@ -670,6 +670,262 @@ def test_narrow_review_starts_from_the_purchased_candidate_with_a_narrow_request
         any(row['attempt_id'] == a for row in _ledger_rows(repo)) for a in first_attempts)
 
 
+def _material_reuse_setup(tmp_path, wires):
+    """从真实 Stage2/Preserve/Design 入口建立带完整候选谱系的零付费基座。"""
+    from tests.test_str06_body import _RoutingTransport
+    from tests.test_str06_preserve_gate import _prepared
+    transport = _RoutingTransport(wires)
+    ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires, transport=transport)
+    run_preserve(ctx)
+    run_body_design(_design_ctx(ctx, _reopened_session(repo, transport)))
+    return ctx, transport
+
+
+def _reassemble_preserve_for_reuse(repo, checkpoint, wire):
+    """沿用正式 compiler 生成细节身份和内容摘要，不在测试中手造排序身份。"""
+    from novel.stages.stage4 import assemble_preserve
+    chars = repo.read_model('stage2/characters/characters.json')
+    blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
+    updated, errors = assemble_preserve(
+        wire, policy_id=checkpoint.policy_id, policy_version=checkpoint.policy_version,
+        characters=chars.core_view(), blueprint=blueprint,
+        provider=checkpoint.provider, model=checkpoint.model,
+        request_sha256=checkpoint.request_sha256)
+    assert updated is not None and not errors, errors
+    return updated
+
+
+def _inspect_reuse_wire(ctx, wire):
+    repo = ctx.repository
+    chars = repo.read_model('stage2/characters/characters.json')
+    checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
+    blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
+    brief, _ = project_brief(checkpoint, chars.core_view(), blueprint,
+                             structure=chars.name_structure)
+    return inspect_design_candidate(
+        wire, checkpoint=checkpoint, brief=brief,
+        obligations=design_obligation_index(checkpoint, brief), chars=chars,
+        constraints=OutputConstraints(target_chapter_count=2, total_length_budget=2000),
+        length_band=ctx.length_band)
+
+
+@pytest.mark.parametrize('field', ['members', 'mechanism', 'summaries'])
+def test_series_dependency_projection_detects_group_and_summary_revision(field):
+    """系列语义进相关条目差异；派生对照不回写 wire，也不假定文本等价。"""
+    from novel.stages import candidates
+    before = {'obligations': [
+        {'kind': 'event_core', 'anchors': [f'b0{number}_01.e1'], 'statement': f'实例{number}'}
+        for number in range(1, 5)],
+        'series': [{'members': [1, 2, 3], 'mechanism': None,
+                    'summaries': [{'member': 3, 'covers': [1]}]}]}
+    original = deepcopy(before)
+    after = deepcopy(before)
+    after['series'][0][field] = {
+        'members': [1, 2, 3, 4], 'mechanism': 'ex_02',
+        'summaries': [{'member': 3, 'covers': [2]}],
+    }[field]
+    diff = candidates.upstream_diff(before, after)
+    expected = {0, 1, 2, 3} if field == 'members' else {0, 1, 2}
+    assert not diff.empty and {entry.after_index for entry in diff.changed} == expected
+    assert not any(candidates.entry_equivalent(entry, {}) for entry in diff.changed)
+    assert before == original and '_series_dependencies' not in str(before)
+    assert candidates.upstream_diff(before, original).empty
+
+
+@pytest.mark.parametrize('field,reference', [
+    ('real', 'ob02'), ('know', {'ref': 'ob02.k01'}), ('details', 'ob02.d01')])
+def test_unconstructable_candidate_locates_raw_refs_in_recorded_and_current_entry_keys(field, reference):
+    """body 构造失败仍按短引用前缀定位；编号换义须同时复核旧/新条目。"""
+    from types import SimpleNamespace
+    from novel.stages.chain import _design_carriers
+    old_key, current_key = ('event_core', ('old',)), ('causal', ('current',))
+    wire = {'scenes': [{'beats': [{field: [reference]}, {'ev': '无关拍'}]}]}
+    carriers = _design_carriers(
+        SimpleNamespace(body=None, binding=None), {'ob02': current_key}, wire=wire,
+        recorded_obligation_keys={'ob02': old_key})
+    assert carriers == {old_key: (('scenes', 0, 'beats', 0),),
+                        current_key: (('scenes', 0, 'beats', 0),)}
+
+
+def test_overlapping_real_and_detail_dependencies_produce_one_mandatory_patch_target():
+    """同拍的必保与另一义务软细节同时修订时，不能给模型重复替换路径。"""
+    from novel.stages import candidates
+    before = {'obligations': [
+        {'kind': 'event_core', 'anchors': ['a1'], 'statement': '事件'},
+        {'kind': 'causal', 'anchors': ['a2'], 'statement': '细节'},
+    ]}
+    after = deepcopy(before)
+    for obligation in after['obligations']:
+        obligation['statement'] += '改变'
+    diff = candidates.upstream_diff(before, after)
+    path = ('scenes', 0, 'beats', 0)
+    plan = candidates.plan_reuse([candidates.CandidateAssessment(
+        entry='已购稿', ordinal=1, compatible=True, preflight_passed=True, diff=diff,
+        carriers={entry.key: (path,) for entry in diff.changed})])
+    assert plan.action == 'narrow_review' and len(plan.targets) == 1
+    [target] = plan.targets
+    assert target.path == path and target.optional is False
+    assert 'event_core，ob01' in target.reason and 'causal，ob02' in target.reason
+    assert 'a1' not in target.reason and 'a2' not in target.reason, '源锚点只作审计对齐键'
+
+
+@pytest.mark.parametrize('mutation', ['text', 'remove_detail', 'remove_obligation', 'resort'])
+def test_non_real_detail_revision_reuses_purchased_candidate_through_one_narrow_round(
+        tmp_path, mutation):
+    """非 real 软材料的改义、排序换义和删失均按已购短引用窄审，不能静默沿用。"""
+    import re
+    from novel.stages.stage4 import preserve_revision_wire
+    from tests.test_str06_design_patch import PatchingTransport
+    from tests.test_str06_quality_materials import _detail_wires
+    wires = _detail_wires()
+    if mutation == 'resort':
+        wires['preserve']['obligations'][1]['details'].append({
+            'anchor': 'b01_01.e1', 'text': '新娘在喜帐旁听见风吹窗纸'})
+    ctx, transport = _material_reuse_setup(tmp_path, wires)
+    repo = ctx.repository
+    first = repo.read_model('stage4/design/body_design.json')
+    checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
+    binding = repo.read_model('stage4/grounding/semantic_binding.json')
+    assert not any(entry.obligation_id == 'ob02' for entry in binding.entries)
+    [selected_id] = first.scenes[0].beats[2].detail_refs
+    before_calls = transport.calls.count('design')
+    target = ('scenes', 0, 'beats', 2)
+
+    def revise(checkpoint):
+        wire = preserve_revision_wire(checkpoint)
+        if mutation == 'remove_obligation':
+            wire['obligations'].pop(1)
+        elif mutation == 'remove_detail':
+            wire['obligations'][1].pop('details')
+        elif mutation == 'text':
+            wire['obligations'][1]['details'][0]['text'] = '两人隔着喜烛坐下，烛泪逐渐堆高'
+        else:
+            # 只改当前 d01 所指细节；由正式 compiler 重派 hash，挑确定性的
+            # 新文本使其排到另一细节之后，证明旧短引用此时合法却已换含义。
+            selected_at = next(i for i, detail in enumerate(checkpoint.obligations[1].details)
+                               if detail.detail_id == selected_id)
+            for number in range(64):
+                wire['obligations'][1]['details'][selected_at]['text'] = (
+                    f'喜烛映着门边的红绸，暗纹逐渐显出{number}处褶皱')
+                updated = _reassemble_preserve_for_reuse(repo, checkpoint, wire)
+                now = sorted(updated.obligations[1].details, key=lambda detail: detail.detail_id)
+                if now[0].detail_id != updated.obligations[1].details[selected_at].detail_id:
+                    assert now[0].detail_id != selected_id
+                    return updated
+            raise AssertionError('确定性细节排序换位反例未构成')
+        return _reassemble_preserve_for_reuse(repo, checkpoint, wire)
+
+    updated = republish_checkpoint(repo, revise)
+    inspection = _inspect_reuse_wire(ctx, wires['design'])
+    if mutation.startswith('remove'):
+        assert inspection.body is None and not inspection.passed, '删失短引用使 canonical 构造失败'
+        wires['design']['scenes'][0]['beats'][2].pop('details')
+    else:
+        assert inspection.passed, '合法但改义的短引用也必须复核，预检绿不代表等价'
+    patching = PatchingTransport(wires, wires['design'])
+    resumed = _design_ctx(ctx, _reopened_session(repo, patching))
+    result = run_body_design(resumed)
+    assert result['reuse']['action'] == 'narrow_review'
+    assert len(patching.owner_requests) == 1, '从已购基底起步，仅一轮窄审'
+    request = patching.owner_requests[0]
+    assert '【窄返修】' in request and '【基底】' in request
+    assert 'stage4-design-input-v1' not in request
+    paths = re.findall(r'- 路径 ([^\s：]+)：', request)
+    assert paths == ['scenes[0].beats[2]'], '非 real 细节只影响引用它的一拍'
+    assert 'ob02' in request
+    assert 'b01_01.e1' not in request and '"quotes"' not in request
+    after = repo.read_model('stage4/design/body_design.json')
+    assert after.scenes[0].beats[:2] == first.scenes[0].beats[:2]
+    assert after.scenes[1] == first.scenes[1], '无关拍与场完整保留'
+    if mutation.startswith('remove'):
+        assert after.scenes[0].beats[2].detail_refs == ()
+    else:
+        current_first = sorted(updated.obligations[1].details,
+                               key=lambda detail: detail.detail_id)[0]
+        assert after.scenes[0].beats[2].detail_refs == (current_first.detail_id,)
+    assert transport.calls.count('design') == before_calls
+    assert patching.calls.count('design') == 1
+    paid = [row for row in _ledger_rows(repo) if not row.get('cached')]
+    assert len(paid) == 2, '原稿与本次窄审分别计一轮，无整份重购'
+    provenance = repo.inspect('stage4/design/body_design.json')['_provenance']
+    assert provenance['usage']['prompt_tokens'] == 10 + 100, '成本同时绑定基底与窄审轮'
+    from novel.work_units import sealed_commit_bundles
+    current_sha = repo.file_sha256(repo.path('stage4/design/body_design.json'))
+    bundle = next(bundle for _path, bundle in sealed_commit_bundles(repo.root)
+                  if any(output.key == 'stage4/design/body_design.json' and output.sha256 == current_sha
+                         for output in bundle.outputs))
+    assert len(bundle.adoptions) == 2, '封存采用记录明确包含原 attempt 和窄审 attempt'
+    calls = len(patching.calls)
+    run_body_design(resumed)
+    assert len(patching.calls) == calls, '重入免费重放已购窄审结果'
+
+
+def test_series_covers_only_revision_narrowly_reviews_summary_and_affected_instances(tmp_path):
+    """只改顶层 summary.covers：义务原文不变，也须窄审旧/新实例和回顾拍。"""
+    import re
+    from novel.stages import candidates
+    from novel.stages.stage4 import preserve_revision_wire
+    from tests.test_str06_design_patch import PatchingTransport
+    wires = _full_chain_wires()
+    wires['preserve']['obligations'].extend([
+        {'kind': 'event_core', 'statement': '芸娘在新婚夜立誓查清旧约',
+         'anchors': ['b01_01.e1'], 'must_preserve': False,
+         'satisfaction': '立誓查清旧约的决意已经发生', 'requires': []},
+        {'kind': 'event_core', 'statement': '门外人声远去后渐渐安静',
+         'anchors': ['b01_01.e1'], 'must_preserve': False,
+         'satisfaction': '', 'requires': []},
+        {'kind': 'event_core', 'statement': '次日回顾此前发生的往事',
+         'anchors': ['b01_01.e1'], 'must_preserve': True,
+         'satisfaction': '回顾已发生的实例', 'requires': []},
+    ])
+    wires['preserve']['series'] = [{'members': [1, 2, 3, 4], 'mechanism': None,
+                                   'summaries': [{'member': 4, 'covers': [1]}]}]
+    wires['design']['scenes'][0]['beats'][2]['real'] = ['ob02']
+    wires['design']['scenes'][1]['beats'][0]['real'] = ['ob04']
+    ctx, transport = _material_reuse_setup(tmp_path, wires)
+    repo = ctx.repository
+    before = repo.read_model('stage4/design/body_design.json')
+    old_wire = preserve_revision_wire(repo.read_model('runtime/preserve_checkpoint.json'))
+
+    def revise(checkpoint):
+        group = checkpoint.series[0]
+        summary = group.summaries[0].model_copy(update={'covers': ('ob02',)})
+        return checkpoint.model_copy(update={'series': (group.model_copy(
+            update={'summaries': (summary,)}),)})
+
+    updated = republish_checkpoint(repo, revise)
+    current_wire = preserve_revision_wire(updated)
+    assert current_wire['obligations'] == old_wire['obligations'], '反例只改 covers'
+    diff = candidates.upstream_diff(old_wire, current_wire)
+    assert not diff.empty and {entry.after_index for entry in diff.changed} == {0, 1, 3}
+    assert {entry.after_index for entry in diff.unchanged} == {2}, '无关组员不扩进窄审'
+    assert not any(candidates.entry_equivalent(entry, {}) for entry in diff.changed)
+    assert old_wire['series'][0]['summaries'][0]['covers'] == [1], '投影不改历史 wire'
+    assert _inspect_reuse_wire(ctx, wires['design']).passed
+    patching = PatchingTransport(wires, wires['design'])
+    resumed = _design_ctx(ctx, _reopened_session(repo, patching))
+    result = run_body_design(resumed)
+    assert result['reuse']['action'] == 'narrow_review'
+    assert len(patching.owner_requests) == 1
+    request = patching.owner_requests[0]
+    paths = re.findall(r'- 路径 ([^\s：]+)：', request)
+    assert set(paths) == {'scenes[0].beats[0]', 'scenes[0].beats[1]',
+                          'scenes[0].beats[2]', 'scenes[1].beats[0]'}
+    assert len(paths) == len(set(paths)), '一拍被多个相关依赖引用时仍只替换一次'
+    assert '【窄返修】' in request and 'stage4-design-input-v1' not in request
+    assert 'b01_01.e1' not in request and '"quotes"' not in request
+    assert repo.read_model('stage4/design/body_design.json') == before, '窄审允许原拍不变'
+    [summary] = repo.read_model('stage4/grounding/semantic_binding.json').series[0].summaries
+    assert summary.covers == ('ob02',)
+    assert transport.calls.count('design') == patching.calls.count('design') == 1
+    assert len([row for row in _ledger_rows(repo) if not row.get('cached')]) == 2
+    registry = repo.inspect('runtime/candidates/design.json')
+    assert '_series_dependencies' not in str(registry), '派生差异不另写 canonical 或修订 wire'
+    calls = len(patching.calls)
+    run_body_design(resumed)
+    assert len(patching.calls) == calls
+
+
 def test_same_identity_reentry_is_a_plain_cached_replay_not_a_carry_forward(tmp_path):
     """同请求身份重入：沿用闭包主动放弃，节点走普通接受循环（缓存重放）。
 

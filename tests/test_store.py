@@ -2654,186 +2654,188 @@ def test_the_waiver_switches_off_nothing_but_the_unknown_half(
         box.close()
 
 
-# ───────────────── rc12→rc13 盘面归一（CS-3 余项：D5 统一＋world 规则 id） ─────────────────
+# ───────────────── 质量契约拒旧与 ExecutionPlan 无损适配 ─────────────────
 
-def _rc12_body_payload() -> dict:
-    """rc12 形状的 body_design 盘面（reader 域＋confirms；最小骨架，
-    容器用 list——盘面 JSON 读入后的真实形态）。"""
+_QUALITY_CASES = (
+    ('runtime/preserve_checkpoint.json', ('preserve',)),
+    ('stage4/grounding/reconstruction_brief.json', ('preserve',)),
+    ('stage4/grounding/semantic_binding.json', ('design',)),
+    ('stage4/design/body_design.json', ('design',)),
+    ('stage4/design/presentation_graph.json', ('design', 'hook_design')),
+    ('stage4/ir/writer_book_ir.json', ()),
+)
+
+
+def _quality_model(rel: str):
+    """每类产物用合法当前模型作绿对照；历史反例只改版本标记。"""
+    from contracts.schema.grounding import (
+        PreserveCheckpoint, ReconstructionBrief, SemanticBinding,
+    )
+    from tests.test_str06_contracts import _binding, _brief, _checkpoint
+    if rel == 'runtime/preserve_checkpoint.json':
+        return PreserveCheckpoint(**_checkpoint())
+    if rel == 'stage4/grounding/reconstruction_brief.json':
+        return ReconstructionBrief(**_brief())
+    if rel == 'stage4/grounding/semantic_binding.json':
+        return SemanticBinding(**_binding())
+    if rel == 'stage4/ir/writer_book_ir.json':
+        from tests.test_str06_body import _green_book_ir
+        return _green_book_ir()[3]
+    from tests.test_str06_hook import _green_pair
+    body, graph, _ = _green_pair()
+    return body if rel == 'stage4/design/body_design.json' else graph
+
+
+def _sealed_repository(tmp_path: Path):
+    from novel.store import Str06Repository
+    from tests.str06_facilities import make_context
+    repo = Str06Repository(tmp_path / 'book')
+    repo.attach_context(make_context(repo.root, ledger=CostLedger(path=None)))
+    return repo
+
+
+@pytest.mark.parametrize('rel,owners', _QUALITY_CASES)
+@pytest.mark.parametrize('version', [None, 'str06-rc12', 'str06-rc13', 'str06-rc14',
+                                     'str06-rc18', 'str06-rc20'])
+def test_quality_artifacts_refuse_old_or_missing_payload_versions(tmp_path, rel, owners, version):
+    """即使旧产物已有合法当前形状，也不能靠默认值把新证据当成已取得。"""
+    from contracts.artifacts import STR06_ARTIFACT_RC_VERSIONS
+    from novel.store import _upgrade_rc12_payload
+    from tests.str06_facilities import synthetic_ref
+    repo = _sealed_repository(tmp_path / 'green')
+    current = _quality_model(rel)
+    assert current.contract_version == STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc21'
+    refs = tuple(synthetic_ref(owner, '版本读取反例') for owner in owners)
+    repo.write(rel, current, owners=owners, refs=refs)
+    assert repo.read_model(rel) == current
+    old = current.model_dump(mode='json')
+    if version is None:
+        old.pop('contract_version')
+    else:
+        old['contract_version'] = version
+    before = copy.deepcopy(old)
+    assert _upgrade_rc12_payload(rel, old) is old, '质量产物已退出旧迁移白名单'
+    assert old == before, '不补 series/details，也不修改历史载荷'
+    repo = _sealed_repository(tmp_path / 'old')
+    repo.write(rel, old, owners=owners, refs=refs)
+    original = repo.path(rel).read_bytes()
+    with pytest.raises(ProvenanceRefused, match='质量契约版本不兼容'):
+        repo.read_model(rel)
+    assert repo.path(rel).read_bytes() == original, '拒读保持历史封存字节'
+
+
+def _rc12_execution_payload(version: str) -> dict:
+    """只有已折叠执行项需要地址归一；约束的 reader 是类别标签。"""
     return {
-        'contract_version': 'str06-rc12', 'graph_id': 'pg_main',
-        'narration': {'person': 'first', 'focalizers': ['yun']},
-        'book_style': 's', 'world_rules': ['术法须以寿命为代价'],
-        'character_voices': [], 'initial_state': [],
-        'expression_decisions': [
-            {'ex_id': 'ex_01', 'action': 'keep', 'reason': None,
-             'statement': '一本正经的荒诞'}],
-        'chapters': [
-            {'chapter_ordinal': 1, 'purpose': 'p', 'scene_ids': ['sc01'],
-             'entry': {'transition': 'new_scene', 'recap': 'do_not_recap'}}],
-        'scenes': [
-            {'scene_id': 'sc01',
-             'driver': {'focal_actor': 'yun', 'immediate_want': 'w',
-                        'opposition': 'o', 'turn': 't'},
-             'state_reads': [],
-             'realization_brief': 'b', 'delivery': {'pov': 'yun', 'voice': 'v',
-                                                    'avoid': []},
-             'beats': [
-                 {'beat_id': 'b01', 'event': 'e', 'participants': ['yun'],
-                  'target_delta': [
-                      {'domain': 'reader', 'subjects': [], 'holder': None,
-                       'key': 'kp_1111111111111111', 'op': 'set',
-                       'value': 'true', 'scope': 'book',
-                       'knowledge_mode': None, 'modality': None,
-                       'confirms': {'domain': 'world', 'key': 'hiding',
-                                    'subjects': [], 'holder': None}}]}],
-             }],
-        'chapter_weights': {},
+        'contract_version': version,
+        'initial_establishments': [{
+            'domain': 'world', 'key': 'debt', 'subjects': [], 'holder': None,
+            'op': 'set', 'value': '报恩约定成立', 'scope': 'book',
+            'knowledge_mode': None, 'modality': 'actual', 'established_by': 'initial',
+            'confirms': {'domain': 'world', 'key': 'debt'},
+        }],
+        'scenes': [{
+            'scene_id': 'sc01',
+            'establishments': [{
+                'domain': 'reader', 'key': 'agreement', 'subjects': [], 'holder': None,
+                'op': 'set', 'value': '约定被提出', 'scope': 'book',
+                'knowledge_mode': None, 'modality': 'actual', 'established_by': 'sc01#b01',
+                'confirms': {'domain': 'world', 'key': 'debt'},
+            }],
+            'planned_delta': [{
+                'domain': 'reader', 'key': 'agreement', 'subjects': [], 'holder': None,
+                'op': 'unknown', 'value': None, 'scope': 'scene',
+                'knowledge_mode': None, 'modality': None, 'established_by': 'sc01#b02',
+            }],
+            'constraints': [{'domain': 'reader', 'key': 'agreement',
+                             'expected': '约定被提出', 'scope': 'book'}],
+            'dependencies': [], 'reinforcements': [],
+        }],
     }
 
 
-def test_upgrade_rc12_body_design_normalizes_reader_rows():
-    """集中迁移（S-03）：reader 行→knowledge(holder=reader)、confirms 删除、
-    版本升 rc13；rc13 盘面原样通过；白名单外产物不动版本。"""
+@pytest.mark.parametrize('version', ['str06-rc12', 'str06-rc13'])
+def test_execution_plan_migration_is_pure_and_keeps_its_independent_version(version):
+    from contracts.schema.execution import ExecutionPlan
+    from contracts.schema.workflow import STR06_RC_VERSION
     from novel.store import _upgrade_rc12_payload
-
-    data = _upgrade_rc12_payload('stage4/design/body_design.json',
-                                 _rc12_body_payload())
-    assert data['contract_version'] == 'str06-rc14'
-    row = data['scenes'][0]['beats'][0]['target_delta'][0]
-    assert (row['domain'], row['holder'], row['knowledge_mode']) == (
+    source = _rc12_execution_payload(version)
+    original = copy.deepcopy(source)
+    migrated = _upgrade_rc12_payload('stage4/compiled/execution_plan.json', source)
+    assert source == original, '内存迁移不能修改输入或封存字节'
+    assert STR06_RC_VERSION == 'str06-rc21'
+    assert migrated['contract_version'] == 'str06-rc14', '全局版式头不决定独立产物版本'
+    scene = migrated['scenes'][0]
+    reader = scene['establishments'][0]
+    assert (reader['domain'], reader['holder'], reader['knowledge_mode']) == (
         'knowledge', 'reader', 'known')
-    assert row['confirms']['key'] == 'hiding'
-    # 迁移后可过 rc13 契约模型（整链兼容的机械证明）。
-    from contracts.schema.design import BodyDesign
-    BodyDesign.model_validate(data)
-    # rc13 盘面（版本已对）原样通过；形状未变的产物（semantic_binding）
-    # 不在白名单——版本不升。
-    assert _upgrade_rc12_payload('stage4/design/body_design.json', data) is data
-    untouched = {'contract_version': 'str06-rc12'}
-    assert _upgrade_rc12_payload('stage4/grounding/semantic_binding.json',
-                                 untouched) == {'contract_version': 'str06-rc12'}
+    assert scene['planned_delta'][0]['knowledge_mode'] is None
+    assert scene['constraints'] == original['scenes'][0]['constraints']
+    assert all('confirms' not in row for row in migrated['initial_establishments']
+               + scene['establishments'] + scene['planned_delta'])
+    ExecutionPlan.model_validate(migrated)
+    assert _upgrade_rc12_payload('stage4/compiled/execution_plan.json', migrated) is migrated
+    outside = {'contract_version': version, 'domain': 'reader', 'key': 'untouched'}
+    assert _upgrade_rc12_payload('stage2/observations/book.json', outside) is outside
 
 
-def test_upgrade_rc12_brief_structurizes_book_constraints():
-    """Brief 的 book_constraints：字符串列表→BookConstraint（序号派发
-    wc_{nn} 的登记近似——旧盘面 id 信息已丢，形状合法化用）。"""
+@pytest.mark.parametrize('version', ['str06-rc12', 'str06-rc13'])
+def test_execution_plan_formal_read_migrates_without_rewriting_sealed_bytes(tmp_path, version):
+    from contracts.schema.execution import ExecutionPlan
     from novel.store import _upgrade_rc12_payload
-
-    data = _upgrade_rc12_payload(
-        'stage4/grounding/reconstruction_brief.json',
-        {'contract_version': 'str06-rc12',
-         'book_constraints': ['术法须以寿命为代价', '官府不涉异事']})
-    # rc17（CS-H H3）：Brief 形状再升（新字段可缺省读入），迁移直接钉 rc17。
-    # CS-S 1b：brief 迁移目标随产物表钉 rc18（ObligationAnchor.visibility 删）。
-    assert data['contract_version'] == 'str06-rc18'
-    assert data['book_constraints'] == [
-        {'constraint_id': 'wc_01', 'statement': '术法须以寿命为代价'},
-        {'constraint_id': 'wc_02', 'statement': '官府不涉异事'}]
+    repo = _sealed_repository(tmp_path)
+    rel = 'stage4/compiled/execution_plan.json'
+    source = _rc12_execution_payload(version)
+    repo.write(rel, source)
+    original = repo.path(rel).read_bytes()
+    assert repo.read_model(rel) == ExecutionPlan.model_validate(_upgrade_rc12_payload(rel, source))
+    assert repo.path(rel).read_bytes() == original
 
 
-def test_rc12_migration_covers_reader_addresses_and_is_pure():
-    from copy import deepcopy
-    from novel.store import _upgrade_rc12_payload
-    source = _rc12_body_payload()
-    address = {'domain': 'reader', 'key': 'kp_test', 'subjects': [], 'holder': None}
-    source['scenes'][0]['state_reads'] = [dict(address, at=None)]
-    source['hook'] = {'opening_facts': [{'address': deepcopy(address)}],
-                      'materials': [{'withheld': [deepcopy(address)]}],
-                      'forbidden_reveals': [{'address': deepcopy(address)}]}
-    before = deepcopy(source)
-    data = _upgrade_rc12_payload('stage4/design/presentation_graph.json', source)
-    assert source == before
-    addresses = [data['scenes'][0]['state_reads'][0],
-                 data['hook']['opening_facts'][0]['address'],
-                 data['hook']['materials'][0]['withheld'][0],
-                 data['hook']['forbidden_reveals'][0]['address']]
-    assert all(a['domain'] == 'knowledge' and a['holder'] == 'reader' for a in addresses)
-    from contracts.schema.state import StateRead
-    StateRead.model_validate(addresses[0])
-
-
-def test_rc12_ir_moves_reader_entries_and_preserves_fact_addresses():
-    from novel.store import _upgrade_rc12_payload
-    state = {'domain': 'reader', 'subjects': [], 'holder': None, 'key': 'p',
-             'value': '已确认', 'status': 'set', 'established_by': 'sc01#b01'}
-    source = {'contract_version': 'str06-rc12', 'chapters': [{'scenes': [{
-        'contract_version': 'str06-rc12', 'verification_ir': {
-            'entry_state': [state], 'entry_knowledge': [],
-            'background_state': [dict(state)], 'background_knowledge': [],
-            'beats': [{'reads': [dict(state)]}],
-            'pending_reader_confirmations': [{'fact': '事实', 'position': 'sc02#b01',
-                                               'in_scene': False,
-                                               'address': {'domain': 'world', 'key': 'fact'}}]}}]}]}
-    data = _upgrade_rc12_payload('stage4/ir/writer_book_ir.json', source)
-    ir = data['chapters'][0]['scenes'][0]['verification_ir']
-    assert ir['entry_state'] == [] and ir['background_state'] == []
-    from contracts.schema.context import KnowledgeEntry
-    for row in [ir['entry_knowledge'][0], ir['background_knowledge'][0], ir['beats'][0]['reads'][0]]:
-        assert KnowledgeEntry.model_validate(row).holder == 'reader'
-    assert ir['pending_reader_confirmations'][0]['address']['domain'] == 'world'
-
-
-def test_rc12_ir_migration_targets_rc18_and_strips_dead_anchor_visibility():
-    """CS-S 1b 删 ObligationAnchor.visibility：IR 经 verification_ir.obligations
-    内嵌 anchors，登记迁移须剥掉旧载荷里的该键（StrictModel 禁多余字段），并把
-    迁移目标钉到现行 rc18；不碰 anchor 以外的 visibility 键，不改输入。"""
-    from copy import deepcopy
-    from contracts.schema.grounding import ObligationAnchor
-    from novel.store import _upgrade_rc12_payload
-    anchor = {'handle': 'b01_01.e1', 'source_kind': 'effect', 'op': 'set',
-              'visibility': 'on_page'}
-    source = {'contract_version': 'str06-rc13', 'chapters': [{'scenes': [{
-        'contract_version': 'str06-rc13', 'verification_ir': {
-            'obligations': [{'anchors': [anchor]}],
-            'other': {'visibility': 'kept'}}}]}]}
-    before = deepcopy(source)
-    data = _upgrade_rc12_payload('stage4/ir/writer_book_ir.json', source)
-    assert source == before, '迁移不得修改输入'
-    assert data['contract_version'] == 'str06-rc18'
-    migrated = data['chapters'][0]['scenes'][0]['verification_ir']
-    assert 'visibility' not in migrated['obligations'][0]['anchors'][0]
-    assert migrated['other'] == {'visibility': 'kept'}, '只剥 anchor 形状上的死字段'
-    ObligationAnchor.model_validate(migrated['obligations'][0]['anchors'][0])
-    with pytest.raises(Exception, match='visibility'):
-        ObligationAnchor.model_validate(anchor)
-
-
-def test_rc13_lost_reader_link_and_brief_modes_are_refused():
-    from novel.store import _upgrade_rc12_payload
-    from novel.errors import ProvenanceRefused
-    source = _rc12_body_payload()
-    source['contract_version'] = 'str06-rc13'
-    row = source['scenes'][0]['beats'][0]['target_delta'][0]
-    row.update(domain='knowledge', holder='reader', knowledge_mode='known')
-    row.pop('confirms')
-    with pytest.raises(ProvenanceRefused, match='免费 owner patch'):
-        _upgrade_rc12_payload('stage4/design/body_design.json', source)
-    with pytest.raises(ProvenanceRefused, match='免费重放 preserve'):
-        _upgrade_rc12_payload('stage4/grounding/reconstruction_brief.json', {
-            'contract_version': 'str06-rc13',
-            'requirements': [{'realize_holders': ['yun|kp_test']}]})
-
-
-def test_free_design_recovery_reads_sealed_hook_without_guessing_old_body(tmp_path):
-    from novel.store import Str06Repository
-    from novel.llm.ledger import CostLedger
-    from tests.str06_facilities import make_context, synthetic_ref
+@pytest.mark.parametrize('version', [None, 'str06-rc13', 'str06-rc14', 'str06-rc20'])
+def test_old_graph_hook_component_cannot_bypass_quality_version_refusal(tmp_path, version):
+    from tests.str06_facilities import synthetic_ref
     from tests.test_str06_hook import _green_pair
-    from novel.errors import ProvenanceRefused
     _, graph, _ = _green_pair()
     data = graph.model_dump(mode='json')
-    data['contract_version'] = 'str06-rc13'
-    data['scenes'][0]['beats'][0]['target_delta'].append({
-        'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
-        'key': 'old_disclosure', 'op': 'set', 'scope': 'book',
-        'value': 'true', 'knowledge_mode': 'known', 'modality': None})
-    repo = Str06Repository(tmp_path / 'book')
-    repo.attach_context(make_context(repo.root, ledger=CostLedger(path=None)))
+    if version is None:
+        data.pop('contract_version')
+    else:
+        data['contract_version'] = version
+    repo = _sealed_repository(tmp_path)
     rel = 'stage4/design/presentation_graph.json'
     repo.write(rel, data, owners=('design', 'hook_design'),
-               refs=(synthetic_ref('design', '旧正文'), synthetic_ref('hook_design', '旧 Hook')))
+               refs=(synthetic_ref('design'), synthetic_ref('hook_design')))
     original = repo.path(rel).read_bytes()
-    with pytest.raises(ProvenanceRefused, match='丢失事实关联'):
+    with pytest.raises(ProvenanceRefused, match='质量契约版本不兼容'):
+        repo.read_model(rel)
+    with pytest.raises(ProvenanceRefused, match='质量契约版本不兼容'):
+        repo.read_graph_hook()
+    assert repo.path(rel).read_bytes() == original
+
+
+def test_free_design_recovery_reads_current_sealed_hook_without_guessing_broken_body(tmp_path):
+    """只摘当前契约 Hook：正文局部损坏不阻断 owner 免费修复，组件仍过 schema。"""
+    from pydantic import ValidationError
+    from tests.str06_facilities import synthetic_ref
+    from tests.test_str06_hook import _green_pair
+    _, graph, _ = _green_pair()
+    data = graph.model_dump(mode='json')
+    data['scenes'][0]['beats'][0]['target_delta'].append({
+        'domain': 'reader', 'subjects': [], 'holder': None,
+        'key': 'broken_disclosure', 'op': 'set', 'scope': 'book',
+        'value': 'true', 'knowledge_mode': None, 'modality': None})
+    repo = _sealed_repository(tmp_path)
+    rel = 'stage4/design/presentation_graph.json'
+    refs = (synthetic_ref('design'), synthetic_ref('hook_design'))
+    repo.write(rel, data, owners=('design', 'hook_design'), refs=refs)
+    original = repo.path(rel).read_bytes()
+    with pytest.raises(ValidationError, match='domain'):
         repo.read_model(rel)
     assert repo.read_graph_hook() == graph.hook
     assert repo.path(rel).read_bytes() == original
+    data['hook'] = {}
+    repo = _sealed_repository(tmp_path / 'broken_hook')
+    repo.write(rel, data, owners=('design', 'hook_design'), refs=refs)
+    with pytest.raises(ValidationError):
+        repo.read_graph_hook()

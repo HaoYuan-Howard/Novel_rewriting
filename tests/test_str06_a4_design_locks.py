@@ -132,7 +132,7 @@ def _blueprint() -> BlueprintsArtifactV17:
 
 
 def _preserve_wire() -> dict:
-    return {'protocol_version': 'stage4-preserve-v2', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v3', 'obligations': [
         {'kind': 'event_core', 'statement': '芸娘从起疑到证实同一件事',
          'anchors': ['b01_01.c1', 'b01_02.c1'],
          'must_preserve': True, 'satisfaction': '正文呈现怀疑渐进到证实',
@@ -538,7 +538,7 @@ def test_lock_models_shape_constants():
 # 引用不复制 value。「承载状态的内容在语义上是否满足锁」（例如把暂缓和离绑到
 # 赏花）需要标定的语义核验，不在此处，也不由结构通过来宣称（I-42）。
 
-from contracts.schema.design import DesignWireV8
+from contracts.schema.design import DesignWireV9
 
 
 def _obligations_v8(brief: ReconstructionBrief) -> dict:
@@ -557,7 +557,7 @@ def _design_wire_v8(brief: ReconstructionBrief) -> dict:
     """
     obligations = _obligations_v8(brief)
     return {
-        'protocol_version': 'stage4-design-v8',
+        'protocol_version': 'stage4-design-v9',
         'book_style': '克制的限知叙事。',
         'scenes': [{
             'driver': {'focal_actor': 'yun_niang', 'immediate_want': '查明床底',
@@ -597,7 +597,7 @@ def _inspect_v8(wire: dict, brief: ReconstructionBrief):
 
 
 def _derive_binding_v8(wire: dict, body):
-    model = DesignWireV8.model_validate(wire)
+    model = DesignWireV9.model_validate(wire)
     return derive_semantic_binding(
         design_placements(model), body, _checkpoint(), design_fact_marks(model))
 
@@ -737,7 +737,7 @@ def test_binding_refuses_a_mapping_that_points_at_no_state_in_the_body():
     wire = _design_wire_v8(brief)
     body, errors = _inspect_v8(wire, brief)
     assert body is not None and not errors, errors
-    model = DesignWireV8.model_validate(wire)
+    model = DesignWireV9.model_validate(wire)
     moved = tuple(replace(m, beat=0) if m.kf_id == _kf(brief, 'expected') else m
                   for m in design_fact_marks(model))
     binding, errors = derive_semantic_binding(
@@ -968,7 +968,7 @@ def test_shared_fact_lock_carrier_belongs_to_any_sharing_obligation(
         del wire['scenes'][0]['beats'][5]['state'][0]['lock']
     body, acceptance_errors = _inspect_v8(wire, brief)
     assert body is not None
-    model = DesignWireV8.model_validate(wire)
+    model = DesignWireV9.model_validate(wire)
     binding, binding_errors = derive_semantic_binding(
         design_placements(model), body, checkpoint, design_fact_marks(model))
     if passed:
@@ -1029,7 +1029,7 @@ def test_shared_fact_lock_carrier_later_than_a_sharing_obligation_is_locatable()
     body, acceptance_errors = _inspect_v8(wire, brief)
     assert body is not None
     from novel.stages.stage4.compile import compile_execution_plan
-    model = DesignWireV8.model_validate(wire)
+    model = DesignWireV9.model_validate(wire)
     binding, binding_errors = derive_semantic_binding(
         design_placements(model), body, checkpoint, design_fact_marks(model))
     codes = lambda errs: sorted({getattr(e, 'code', str(e)[:40]) for e in errs})   # noqa: E731

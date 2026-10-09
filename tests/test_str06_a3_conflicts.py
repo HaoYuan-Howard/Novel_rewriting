@@ -306,7 +306,7 @@ def test_preserve_cross_node_revision_uses_wire_not_checkpoint_template(tmp_path
     runner()
     previous = transport.requests[-1].split('〔上一版〕\n', 1)[1].rsplit('\n请输出', 1)[0]
     wire = json.loads(previous)
-    assert wire['protocol_version'] == 'stage4-preserve-v2'
+    assert wire['protocol_version'] == 'stage4-preserve-v3'
     assert set(wire) == {'protocol_version', 'obligations', 'series', 'evidence_conflicts'}
     assert all(isinstance(a, str) for o in wire['obligations'] for a in o['anchors'])
     assert all('obligation_id' not in o and 'lineage' not in o for o in wire['obligations'])

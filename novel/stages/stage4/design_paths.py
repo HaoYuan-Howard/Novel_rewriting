@@ -94,6 +94,11 @@ def _complete_parent(wire: Any, path: Path) -> Path | None:
     node = _walk(wire, existing)
     if existing != path and isinstance(node, list):
         return None
+    # details 是可省略的材料选择；删去失效引用时必须允许连字段一起删除。
+    # 数组叶替换无法表达删除，也会与上游修订的整拍复核目标重叠；统一以
+    # 完整拍作为编辑单位，材料选择、事件措辞与 real 标注一起重验。
+    if len(existing) >= 5 and existing[4] == 'details' and _beat_of(existing) is not None:
+        return existing[:4]
     if isinstance(node, (dict, list)):
         return existing
     # 叶子标量：升到最近的数组元素（path 中最后一个 int 下标处），使模型替换的是自洽的完整

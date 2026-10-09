@@ -30,6 +30,7 @@ from novel.stages.stage4.read_closure import (
     confirmation_closure_errors, init_establishments, resolve_design_reads,
 )
 from novel.stages.stage4.guard import check_binding_beat_refs
+from novel.stages.stage4.series import summary_covers, summary_order_violations
 
 
 def compile_issue(message: str, code: str, location: tuple,
@@ -56,6 +57,29 @@ def compile_execution_plan(
             errors.append(compile_issue(
                 f'必保义务 {oid} 尚未承载，返回 owner 修复', 'compile_must_unbound',
                 ('must_unbound', oid)))
+    # 当前正式盘面免费重编译同样验证细节引用，不能等投影时以 KeyError 崩溃。
+    detail_owners: dict[str, list[str]] = {}
+    for obligation in binding.obligations:
+        for detail in obligation.details:
+            detail_owners.setdefault(detail.detail_id, []).append(obligation.obligation_id)
+    for detail_id, owners in sorted(detail_owners.items()):
+        if len(owners) > 1:
+            errors.append(compile_issue(
+                f'Binding 细节身份重复，不能确定唯一来源：{detail_id}（{owners}）',
+                'design_detail_ref', ('detail_identity', detail_id, tuple(owners))))
+    detail_ids = set(detail_owners)
+    for scene in graph.scenes:
+        for beat in scene.beats:
+            seen_details: set[str] = set()
+            for detail_ref in beat.detail_refs:
+                duplicate = detail_ref in seen_details
+                seen_details.add(detail_ref)
+                if duplicate or detail_ref not in detail_ids:
+                    errors.append(compile_issue(
+                        (f'{scene.scene_id}#{beat.beat_id} 重复引用细节：{detail_ref}'
+                         if duplicate else f'{scene.scene_id}#{beat.beat_id} '
+                         f'引用不存在的细节：{detail_ref}'),
+                        'design_detail_ref', ('detail_ref', scene.scene_id, beat.beat_id, detail_ref)))
     for start in sorted(obligations):
         frontier, seen = list(obligations[start].requires), set()
         while frontier:
@@ -77,6 +101,25 @@ def compile_execution_plan(
     positions = {f'{s.scene_id}#{b.beat_id}': (si, bi)
                  for si, s in enumerate(graph.scenes) for bi, b in enumerate(s.beats)}
     edges: set[tuple[str, str]] = set()
+    covers = summary_covers(binding.series)
+    accepted = {ob: positions[entry.beat_ref] for ob, entry in entries.items()
+                if entry.beat_ref in positions}
+    for violation in summary_order_violations(covers, accepted):
+        reason = '未承载' if violation.reason == 'unbound' else '晚于概括接受拍'
+        errors.append(compile_issue(
+            f'系列概括 {violation.summary} 所覆盖的实例 {violation.instance} {reason}',
+            'series_summary_unbound' if violation.reason == 'unbound'
+            else 'series_summary_early',
+            ('series_summary', violation.summary, violation.instance, violation.reason),
+            {'summary': violation.summary, 'instance': violation.instance,
+             'reason': violation.reason}))
+    for summary, members in covers.items():
+        if summary not in entries:
+            continue
+        for member in members:
+            instance = entries.get(member)
+            if instance is not None and instance.scene_id != entries[summary].scene_id:
+                edges.add((instance.scene_id, entries[summary].scene_id))
     for oid, entry in sorted(entries.items()):
         own = positions.get(entry.beat_ref)
         if own is None:
