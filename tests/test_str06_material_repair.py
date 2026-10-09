@@ -156,9 +156,12 @@ def test_correction_preserves_history_and_refuses_stale_preview(tmp_path):
     from novel.stages.stage4 import assemble_hook_design, publish_graph
     from novel.stages.owner_revision import read_owner_issue_file, open_issue_record
     from tests.str06_facilities import make_context, synthetic_ref
+    from tests.factories import hook_wire_v2
     from tests.test_str06_hook import _hook_wire
     body, binding, brief, chars = _conflict()
-    hook, errors = assemble_hook_design(_hook_wire(opening_facts=[], forbidden_reveals=[]), body=body, known_char_ids=set(chars.characters),
+    hook, errors = assemble_hook_design(
+        hook_wire_v2(_hook_wire(opening_facts=[], forbidden_reveals=[])),
+        body=body, known_char_ids=set(chars.characters),
         name_projection=chars.name_projection(), name_structure=chars.name_structure)
     assert not errors
     repo = Str06Repository(tmp_path / 'run')

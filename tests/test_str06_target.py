@@ -401,9 +401,10 @@ def test_design_rules_pin_pov_shape():
     from novel.stages.common import design_rules
     DESIGN_RULES = design_rules(known_char_ids={'yun'}, registered_surfaces={'yun': {'云娘'}})
     schema = json.loads(DESIGN_RULES.split('【wire JSON Schema（字段与分支以此为准）】\n')[1])
-    # CS-3（2026-10-03）：pov 移到 SlimDesignScene（v6 瘦面，缺省＝唯一焦点），
-    # 形状仍是单字符串闭集（anyOf 的非 null 分支带 enum，I-52 按新面重钉）。
-    pov = schema['$defs']['SlimDesignScene']['properties']['pov']
+    # 从现役 wire 的 scenes 引用取场景定义；模型类改名不应掩盖 POV 形状约束。
+    # 形状仍是单字符串闭集（anyOf 的非 null 分支带 enum，缺省＝唯一焦点）。
+    scene_ref = schema['properties']['scenes']['items']['$ref']
+    pov = schema['$defs'][scene_ref.rsplit('/', 1)[1]]['properties']['pov']
     assert pov['anyOf'][0]['enum'] == ['narrator', 'yun']
     assert schema['$defs']['SurfaceIntroduction']['allOf']
     # 同类钉（第二轮实证→CS-3 v6 重钉）：拍上事实断言的默认值必须写明——

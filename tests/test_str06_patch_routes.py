@@ -12,7 +12,7 @@
 
 本文件就是那条契约测试，外加它与现役判据的一一对应：
   · 枚举：五个判据模块（`stage4/design.py`／`grounding.py`／`compile.py`／
-    `guard.py`／`hook_validation.py`，外加同块的 `hook.py`／`preflight.py`）
+    `guard.py`／`hook_validation.py`，外加同块的 `hook.py`／`hook_wire.py`／`preflight.py`）
     与 `paid_requests.py` 的闭集合成码（`answer_shape`／`patch_shape`）在源码
     里出现的码字面量集合，必须与 `PATCH_ROUTES` 的键集合逐码相等；
   · 红例：每个 `locate` 码在真实判据入口产出**非空 wire 路径**；
@@ -32,7 +32,7 @@ from novel.stages.stage4.design_paths import wire_paths_of
 REPO = Path(__file__).resolve().parents[1]
 
 #: 判据模块 → 源码里出现的码字面量（本测试按 AST 抽，正则只做兜底核对）。
-#: 五个主判据模块（规格 D 表点名）＋同块的 hook/preflight/materials，加上它们的
+#: 五个主判据模块（规格 D 表点名）＋同块的 hook/hook_wire/preflight/materials，加上它们的
 #: 共用发射面：`read_closure.py`（读取闭合码）、`fact_bindings.py`（事实锁码）、
 #: `common.py`（材料泄漏码）、`repair.py`（材料归因码）。`epistemic_lock_order` 由
 #: `chain._backfill_epistemic_lock_order` 以 OwnerIssueV1 码发出（compile 回派面）。
@@ -45,6 +45,7 @@ JUDGMENT_MODULES: tuple[str, ...] = (
     'novel/stages/stage4/guard.py',
     'novel/stages/stage4/hook_validation.py',
     'novel/stages/stage4/hook.py',
+    'novel/stages/stage4/hook_wire.py',
     'novel/stages/stage4/preflight.py',
     'novel/stages/stage4/materials.py',
     'novel/stages/stage4/read_closure.py',
@@ -72,7 +73,7 @@ WRAPPED_CODES = frozenset({'design_read_unestablished', 'design_read_unknown'})
 #: 不得进入——它们必须落在 locate/optional。
 WHOLE_ANSWER_ALLOWED = frozenset(SYNTHESIS_CODES) | {
     'design_protocol_literal', 'hook_protocol_literal',
-    'design_wire_shape', 'hook_ref_shape', 'hook_wire_key_whitelist',
+    'design_wire_shape', 'hook_wire_key_whitelist',
     'book_design_construct', 'hook_construct',
 }
 
@@ -429,21 +430,33 @@ def test_hook_locate_codes_emit_wire_paths():
     from novel.stages.stage4.hook import assemble_hook_design
     from tests.test_str06_hook import _body_wire, _hook_wire
     from novel.stages.stage4.design import assemble_body_design
+    from tests.factories import hook_wire_v2
 
     body, errors = assemble_body_design(
         _body_wire(), known_char_ids={'fu_jun', 'yun_niang'},
         expression_requirements=_requirements(), source_narration=_narration())
     assert body is not None and not errors, errors
-    bad = _hook_wire()
-    bad['pov'] = {'person': 'first', 'focalizers': ['ghost']}      # hook_pov_char
-    bad['materials'][0]['withheld'] = [{'domain': 'character',
-                                        'subjects': ['nope'], 'key': 'k'}]  # hook_withheld_ref
-    _hook, found = assemble_hook_design(
-        bad, body=body, known_char_ids={'fu_jun', 'yun_niang'},
-        name_projection=_hook_projection(), name_structure=_hook_structure())
-    matched = [e for e in found if getattr(e, 'code', None) in (
-        'hook_pov_char', 'hook_withheld_ref')]
-    assert matched, f'Hook 红例没有触发定位码：{[str(e)[:60] for e in found]}'
+    bad_pov = hook_wire_v2(_hook_wire())
+    bad_pov['pov'] = {'person': 'first', 'focalizers': ['ghost']}
+    bad_withheld = hook_wire_v2(_hook_wire())
+    # v2 只能选目录事实；合法事实放到别的拍仍须拒绝，不能因引用存在就放行。
+    bad_withheld['materials'][0]['withheld'] = [bad_withheld['opening_facts'][1]['fact_ref']]
+    bad_fact = _hook_wire()
+    bad_fact['materials'][0]['withheld'] = [
+        {'domain': 'character', 'subjects': ['nope'], 'key': 'k'}]
+    bad_shape = hook_wire_v2(_hook_wire())
+    bad_shape['materials'][0]['beat_ref'] = 'sc02#b01'
+    matched = []
+    cases = ((bad_pov, 'hook_pov_char'), (bad_withheld, 'hook_withheld_ref'),
+             (hook_wire_v2(bad_fact), 'hook_fact_ref'), (bad_shape, 'hook_wire_shape'))
+    for bad, expected in cases:
+        _hook, found = assemble_hook_design(
+            bad, body=body, known_char_ids={'fu_jun', 'yun_niang'},
+            name_projection=_hook_projection(), name_structure=_hook_structure())
+        issues = [e for e in found if getattr(e, 'code', None) == expected]
+        assert issues, f'Hook 红例没有触发 {expected}：{[str(e)[:60] for e in found]}'
+        assert _hook is None
+        matched.extend(issues)
     for issue in matched:
         assert wire_paths_of(issue), 'Hook 问题没有 wire 路径'
     paths = {wire_paths_of(e)[0] for e in matched if wire_paths_of(e)}

@@ -351,7 +351,7 @@ def test_book_prompt_pins_story_start_moment_and_prologue_split():
     assert 'known_at_start' in BOOK_PROMPT and '提前披露' in BOOK_PROMPT
 
 
-def test_review_chapter_precheck_carries_segment_text():
+def test_review_chapter_precheck_carries_segment_text(tmp_path):
     """实证反例（2026-10-07，ch04 owner patch 收口）：str06_review 的 ch owner
     预检把闭集传成 `frozenset(local)`（只 id 无文本的合成闭集），v7 的 basis
     引文派生全数如实误报 unknown_segment，掩盖候选的真实错误面。预检闭集必须
@@ -362,6 +362,9 @@ def test_review_chapter_precheck_carries_segment_text():
     from tools.str06_review import request_preview
 
     class _ReadOnlyBookRepo:
+        def path(self, rel):
+            return tmp_path / rel
+
         def read_model(self, rel):
             assert rel == 'stage2/observations/book.json'
             from contracts.schema.observation import BookObservation

@@ -41,7 +41,8 @@ from novel.stages.stage4.compile import compile_execution_plan
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.fold import fold_accepted_prefix
 from novel.stages.common import (
-    chapter_identities, project_chapter_packet, surface_engine_release,
+    BODY_PARAGRAPH_REPAIR_SYSTEM, chapter_identities, project_chapter_packet,
+    surface_engine_release,
 )
 from novel.store import Str06Repository
 from novel.work_units import WorkUnitBudget, read_book_budget
@@ -133,12 +134,21 @@ def test_withheld_literal_is_hard_failure_never_disclosed():
     packet = project_chapter_packet(book_ir, 1)
     dirty = '芸娘望着空房，' * 100 + '陆大哥没有回来。'
     clean = '芸娘坐在窗前，烛火摇了三摇，门外没有脚步声。' * 30
-    answers = [AnsweredText(text=dirty, finish_reason='stop',
+    # 首稿后走现役行替换协议；合法修句回答仍泄漏同一未释放姓名，必须继续硬拒。
+    patch = json.dumps({'paragraphs': [{'index': 0, 'text': dirty}]}, ensure_ascii=False)
+    answers = [AnsweredText(text=dirty if i == 0 else patch, finish_reason='stop',
                             identity=f'attempt-{i}', cached=False)
                for i in range(1 + MAX_BODY_REWRITES)]
-    outcome = write_chapter(packet=packet, ask=lambda prompt, validate: answers.pop(0))
+    systems = []
+
+    def ask(prompt, validate, *, system=None):
+        systems.append(system)
+        return answers.pop(0)
+
+    outcome = write_chapter(packet=packet, ask=ask)
     assert outcome.prose is None and outcome.receipt is None, '硬失败不得披露放行'
     assert len(outcome.attempts) == 1 + MAX_BODY_REWRITES
+    assert systems == [None] + [BODY_PARAGRAPH_REPAIR_SYSTEM] * MAX_BODY_REWRITES
     assert all(any(e.startswith('[withheld_literals]') for e in a.errors)
                for a in outcome.attempts)
     # 同一把标尺下，只用已释放称谓的稿正常接受（纪律针对未释放面，不是全部专名）。

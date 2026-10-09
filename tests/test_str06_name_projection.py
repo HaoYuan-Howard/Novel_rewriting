@@ -24,6 +24,7 @@ from novel.stages.common import (
 )
 from novel.stages.stage4.hook_context import compile_hook_context
 from novel.stages.stage5.hook_writer import build_hook_user_prompt
+from tests.factories import hook_wire_v2
 from tests.test_str06_hook import _characters
 
 
@@ -366,7 +367,7 @@ def _hook_context(**hook_over):
         source_narration=sample_narration())
     assert body is not None and not errors, errors
     hook, errors = assemble_hook_design(
-        _hook_wire(**hook_over), body=body, known_char_ids=known,
+        hook_wire_v2(_hook_wire(**hook_over)), body=body, known_char_ids=known,
         name_projection=chars.name_projection())
     assert hook is not None and not errors, errors
     context, errors = compile_hook_context(
@@ -473,7 +474,8 @@ def test_hook_forbidden_lines_project_but_never_join_the_leak_check():
         concealed=[], surface_releases=_released_both(),
         forbidden_reveals=[{'ref': {'scene': 'sc01', 'beat': 'b01'}}])
     hook, errors = assemble_hook_design(
-        wire, body=body, known_char_ids=known, name_projection=chars.name_projection())
+        hook_wire_v2(wire), body=body, known_char_ids=known,
+        name_projection=chars.name_projection())
     assert hook is not None and not errors, errors
     context, errors = compile_hook_context(
         publish_graph(body, hook), chars.name_projection(),

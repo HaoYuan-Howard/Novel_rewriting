@@ -273,7 +273,7 @@ _metric('book_length_deviation', 'stage7',
 #
 # 一一对应（防漂移）：本表的键集合＝五个判据模块（`stage4/design.py`、
 # `grounding.py`、`compile.py`、`guard.py`、`hook_validation.py`，外加同块的
-# `hook.py`／`preflight.py`）与 `paid_requests.py` 闭集合成码（`answer_shape`／
+# `hook.py`／`hook_wire.py`／`preflight.py`）与 `paid_requests.py` 闭集合成码（`answer_shape`／
 # `patch_shape`）在源码里出现的码字面量集合。`tests/test_str06_patch_routes.py`
 # 逐码核对：判据加了码而本表没有（或反过来）当场红。
 PatchRoute = Literal['locate', 'optional', 'whole_answer', 'stop']
@@ -286,7 +286,6 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'design_protocol_literal': 'whole_answer',   # wire protocol_version 字面量不符（I-13）
     'hook_protocol_literal': 'whole_answer',     # hook wire 协议字面量不符
     'design_wire_shape': 'whole_answer',         # v9 wire 整体 pydantic 形状失败
-    'hook_ref_shape': 'whole_answer',            # hook wire 位置引用形状失败
     'hook_wire_key_whitelist': 'whole_answer',   # hook wire 顶层未知字段（协议外键）
     'book_design_construct': 'whole_answer',     # canonical BodyDesign 组装失败（形状面）
     'hook_construct': 'whole_answer',            # canonical HookDesign 组装失败（形状面）
@@ -351,6 +350,8 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'series_summary_unbound': 'optional',    # 被回顾实例未承载；在现有拍闭集选择
 
     # ── HookDesign（CS-F1 起错误在判定处带 wire 路径，同一定位器） ────────────
+    'hook_wire_shape': 'locate',
+    'hook_fact_ref': 'locate',
     'hook_concealed_char': 'locate',
     'hook_pov_char': 'locate',
     'hook_material_ref': 'locate',
@@ -359,11 +360,16 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'hook_hidden_presentation': 'locate',
     'hook_presentation_leak': 'locate',
     'hook_forbidden_address': 'locate',
+    'hook_forbidden_ref': 'locate',
+    'hook_forbidden_unestablished': 'locate',
     'hook_forbidden_conflict': 'locate',
     'hook_forbidden_leak': 'locate',
     'hook_opening_address': 'locate',
     'hook_opening_ref': 'locate',
     'hook_opening_unestablished': 'locate',
+    'hook_opening_stale': 'locate',
+    'hook_opening_modality': 'locate',
+    'hook_opening_holder': 'locate',
     'hook_opening_timing': 'locate',
     'hook_opening_horizon': 'locate',
     'hook_opening_forbidden': 'locate',
