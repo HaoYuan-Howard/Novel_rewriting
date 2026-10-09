@@ -788,6 +788,13 @@
         "stage4"
       ]
     },
+    "tests/test_str06_hook_facts.py": {
+      "layer": "unit_contract",
+      "stages": ["stage4", "stage5"],
+      "cases": {
+        "test_upgrade_cli_uses_authenticated_purchase_and_real_acceptance_without_published_graph": "stage"
+      }
+    },
     "tests/test_str06_hook.py": {
       "layer": "unit_contract",
       "stages": [

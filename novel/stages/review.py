@@ -177,7 +177,6 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                                    length_band=length_band, book_title=book_title)
         binding = repository.read_model('stage4/grounding/semantic_binding.json')
         body = repository.read_model('stage4/design/body_design.json')
-        graph = repository.read_model('stage4/design/presentation_graph.json')
         if owner == 'hook_design':
             hook, errors = assemble_hook_design(candidate, body=body, known_char_ids=set(chars.characters),
                                                 name_projection=projection, name_structure=chars.name_structure)

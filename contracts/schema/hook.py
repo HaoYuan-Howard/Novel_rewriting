@@ -27,7 +27,7 @@ Hook Design 自选（`surface_releases`，不是章释放表的投影），compi
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
@@ -114,6 +114,46 @@ class HookDesign(StrictModel):
         if len(set(refs)) != len(refs):
             raise ValueError('材料 beat_ref 重复：同一拍不得呈现两次')
         return self
+
+
+class HookBeatRefWire(StrictModel):
+    scene: str = Field(min_length=1)
+    beat: str = Field(min_length=1)
+
+
+class HookOpeningFactWire(StrictModel):
+    fact_ref: str = Field(min_length=1)
+    audience: Literal['world', 'pov', 'reader']
+
+
+class HookMaterialWire(StrictModel):
+    beat_ref: HookBeatRefWire
+    withheld: tuple[str, ...] = ()
+    presentation: str | None = None
+
+
+class HookForbiddenFactWire(StrictModel):
+    kind: Literal['fact']
+    fact_ref: str = Field(min_length=1)
+
+
+class HookForbiddenEventWire(StrictModel):
+    kind: Literal['event']
+    beat_ref: HookBeatRefWire
+
+
+class HookDesignWire(StrictModel):
+    """v2 只选目录引用；事实/整拍禁区用显式分支，不用 optional 偷带控制流。"""
+    protocol_version: Literal['stage4-hook-design-v2']
+    pov: HookPov
+    opening_facts: tuple[HookOpeningFactWire, ...] = ()
+    materials: tuple[HookMaterialWire, ...] = Field(min_length=1)
+    concealed: tuple[str, ...] = ()
+    surface_releases: tuple[SurfaceRelease, ...] = ()
+    forbidden_reveals: tuple[Annotated[
+        HookForbiddenFactWire | HookForbiddenEventWire, Field(discriminator='kind')], ...] = ()
+    design_brief: str = Field(min_length=1)
+    delivery_brief: str = Field(min_length=1)
 
 
 class HookConstraints(StrictModel):

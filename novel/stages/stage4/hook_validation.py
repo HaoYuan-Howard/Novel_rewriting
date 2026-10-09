@@ -1,11 +1,11 @@
 """Hook选择的纯结构判据；接受与canonical复验共用，不编译或发布产物。
 
 只验证引用闭合、披露时序、隐藏人物与称谓释放授权，返回错误、不修改输入。
-assembler先确定性解析wire位置，随后校验规范payload；恢复预览与正式Context
+assembler先确定性展开wire目录引用，随后校验规范payload；恢复预览与正式Context
 compiler直接复验canonical Hook。判据不依赖producer、compiler、LLM或repository。
 
 CS-F1（Hook 接入局部修订）：错误在判定处带 wire 路径——wire 与 canonical
-payload 同形同序（assembler 只解析位置引用、不改列表序），路径两用：wire 面
+payload 的条目容器同形同序（assembler 展开引用、不改列表序），路径两用：wire 面
 供条目返修定位（`locate_design_patches`），canonical 复验面留诊断。涉及两侧的
 冲突（禁止揭示 vs 材料）同时带两侧路径，模型可改任一侧。
 """
@@ -18,6 +18,7 @@ from contracts.schema.hook import HookDesign
 from contracts.schema.source import NameProjection, NameStructure
 from novel.core.name_materials import expand_surface_releases
 from novel.stages.stage4.design_paths import design_issue
+from novel.stages.stage4.hook_facts import established_fact, fact_is_current, hook_facts
 
 Init = 'init'
 
@@ -58,9 +59,7 @@ def _beat_deltas(body: BodyDesign) -> dict[str, tuple[tuple, ...]]:
 
 def _established_at(body: BodyDesign, ref: str, key: tuple) -> bool:
     """地址为 key 的事实是否确实在 ref 处建立（init 或该拍 delta）。"""
-    if ref == Init:
-        return any(d.address() == key for d in body.initial_state)
-    return key in (_beat_deltas(body).get(ref) or ())
+    return established_fact(hook_facts(body), ref, key) is not None
 
 
 def _delta_subjects(body: BodyDesign, ref: str) -> set[str]:
@@ -97,6 +96,7 @@ def validate_hook_payload(
     errors: list[str] = []
 
     positions = _position(body)
+    facts = hook_facts(body)
     deltas = _beat_deltas(body)
     concealed_raw = list(wire.get('concealed') or [])
     concealed = set(concealed_raw)
@@ -170,7 +170,15 @@ def validate_hook_payload(
                     'hook_forbidden_address', ('forbidden_reveals', k),
                     ('forbidden_reveals', k)))
                 continue
-            forbidden_addresses.append(key)
+            forbidden_addresses.append((ref, key))
+            if not _established_at(body, ref, key):
+                errors.append(_issue(
+                    f'禁止揭示的事实在 {ref} 未建立：{key}', 'hook_forbidden_unestablished',
+                    ('forbidden_reveals', k), ('forbidden_reveals', k)))
+        elif ref not in positions:
+            errors.append(_issue(
+                f'禁止揭示引用不存在的拍：{ref}', 'hook_forbidden_ref',
+                ('forbidden_reveals', k), ('forbidden_reveals', k)))
         if ref in material_refs:
             errors.append(_issue(
                 f'禁止揭示与材料冲突：同一拍 {ref} 既是材料又禁止揭示',
@@ -190,7 +198,8 @@ def validate_hook_payload(
                 'hook_forbidden_leak', ('forbidden_reveals', k, key),
                 ('forbidden_reveals', k), *leaked_paths))
 
-    # 起笔事实：必须真实建立、时序合法、不在禁止集内、不是任何材料拍的 delta。
+    # 一次建立由（位置、地址）定位；冷开起点按呈现序第一份材料，视界按最大故事位置。
+    # 后续同地址更新不等于同一次揭示；起点前已失效的旧值仍须拒绝。
     material_positions = [positions.get(r) for r in material_refs]
     timing_known = all(p is not None for p in material_positions) if material_positions else False
     for k, item in enumerate(wire.get('opening_facts') or []):
@@ -206,7 +215,8 @@ def validate_hook_payload(
                 f'起笔事实引用不存在的拍：{ref}', 'hook_opening_ref',
                 ('opening_facts', k, ref), ('opening_facts', k)))
             continue
-        if not _established_at(body, ref, key):
+        fact = established_fact(facts, ref, key)
+        if fact is None:
             errors.append(_issue(
                 f'起笔事实在 {ref} 未建立：{key}（只能引用已存在的目标事实）',
                 'hook_opening_unestablished', ('opening_facts', k, key),
@@ -214,21 +224,38 @@ def validate_hook_payload(
         if timing_known:
             pos = (-1, -1) if ref == Init else positions[ref]
             audience = item.get('audience')
-            if audience in ('world', 'pov') and pos >= min(material_positions):
+            opening = material_positions[0]
+            if audience in ('world', 'pov') and pos >= opening:
                 errors.append(_issue(
                     f'起笔事实（{audience}）必须早于首个材料：{ref}',
                     'hook_opening_timing', ('opening_facts', k, audience),
                     ('opening_facts', k)))
+            if (fact is not None and audience in ('world', 'pov') and pos < opening
+                    and not fact_is_current(fact, facts, opening)):
+                errors.append(_issue(
+                    f'起笔事实在冷开起点之前已变化、解除或失效：{ref} 的 {key}',
+                    'hook_opening_stale', ('opening_facts', k), ('opening_facts', k)))
+            if fact is not None and audience == 'world' and fact.delta.modality not in (None, 'actual'):
+                errors.append(_issue(
+                    f'起笔世界事实不能把 {fact.delta.modality} 当成已经发生：{ref} 的 {key}',
+                    'hook_opening_modality', ('opening_facts', k), ('opening_facts', k)))
+            if (fact is not None and audience == 'pov' and fact.delta.domain.value == 'knowledge'
+                    and fact.delta.holder not in (pov.get('focalizers') or ())):
+                errors.append(_issue(
+                    f'起笔 POV 知情持有人不属于视角人物：{fact.delta.holder}',
+                    'hook_opening_holder', ('opening_facts', k), ('opening_facts', k)))
             if audience == 'reader' and pos > max(material_positions):
                 errors.append(_issue(
                     f'起笔事实（reader）不得晚于材料视界：{ref}',
                     'hook_opening_horizon', ('opening_facts', k), ('opening_facts', k)))
-        if key in forbidden_addresses:
+        if (ref, key) in forbidden_addresses or (ref in forbidden_refs and
+                any(row.get('ref') == ref and row.get('address') is None
+                    for row in wire.get('forbidden_reveals') or ())):
             errors.append(_issue(
                 f'起笔事实落在禁止揭示集内：{key}', 'hook_opening_forbidden',
                 ('opening_facts', k, key), ('opening_facts', k)))
         for other_ref in dict.fromkeys(material_refs):
-            if other_ref in deltas and key in deltas[other_ref]:
+            if ref == other_ref and key in deltas.get(other_ref, ()):
                 errors.append(_issue(
                     f'起笔事实是材料拍 {other_ref} 的 delta：{key}',
                     'hook_opening_material_delta', ('opening_facts', k, key),

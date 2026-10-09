@@ -1607,7 +1607,7 @@ def run_hook_design(ctx: ChainContext) -> dict:
     projection = chars.name_projection()
     kp_statements = {p.kp_id: p.statement for p in brief.propositions}
     world_statements = {wc.constraint_id: wc.statement for wc in brief.book_constraints}
-    from novel.stages.stage4 import project_hook_semantics
+    from novel.stages.stage4 import project_hook_semantics, project_hook_input, hook_wire_schema
     try:
         semantics = project_hook_semantics(body, brief)
     except ValueError as exc:
@@ -1615,7 +1615,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
                                    node='str06.stage4.hook_design',
                                    issues=(str(exc),)) from exc
     hook_design_prompt = pack_prompt(
-        HOOK_DESIGN_RULES, book_title=ctx.book_title, design=body.model_dump(mode='json'),
+        HOOK_DESIGN_RULES, book_title=ctx.book_title, story=project_hook_input(body),
+        wire_schema=hook_wire_schema(body),
         semantics=semantics,
         identities=[i.model_dump(mode='json') for i in identities],
         constraints=ctx.hook_constraints.model_dump(mode='json'))
@@ -1649,8 +1650,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
         """
         return NarrowPatchRequest(
             rules=HOOK_DESIGN_RULES,
-            dependency=json.dumps(hook_patch_slice(body, base_wire,
-                                                   [t.path for t in targets]),
+            dependency=json.dumps({**hook_patch_slice(body, base_wire,
+                                                   [t.path for t in targets]), 'semantics': semantics},
                                   ensure_ascii=False, separators=(',', ':')),
             legal_values=json.dumps(hook_patch_legal_values(
                 body=body, known_char_ids=set(chars.characters),

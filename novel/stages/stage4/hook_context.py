@@ -95,7 +95,10 @@ def _render_fact(projection: NameProjection, key: tuple, delta,
         content = statement if statement is not None else delta.value
         return f'{who}{mode}：{content}（人物未必知晓）' if holder == 'reader' \
             else f'{who}{mode}：{content}'
-    return f'{head}{_DOMAIN_LABELS.get(domain, domain)}层面：{delta.value}'
+    modality = {'planned': '已定计划，尚未发生', 'expected': '预计，尚未发生',
+                'conditional': '条件成立时才发生'}.get(delta.modality)
+    suffix = f'（{modality}）' if modality else ''
+    return f'{head}{_DOMAIN_LABELS.get(domain, domain)}层面：{delta.value}{suffix}'
 
 
 #: 线程 kind → 人读措辞（禁区条目用；slug 不进阅读面）。

@@ -32,7 +32,7 @@ from novel.stages.common import (
     render_chapter_packet, render_hook_context, project_chapter_packet,
     validate_writer_materials, validate_hook_materials, material_identities,
 )
-from novel.stages.revisions import preview_owner_patch, validate_prose_wire
+from novel.stages.revisions import baseline_wire, preview_owner_patch, validate_prose_wire
 from novel.stages.review import dry_run_patch, character_literals
 from contracts.schema.hook import HookConstraints
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG
@@ -166,6 +166,12 @@ def main(argv=None):
                        help='cross_cause 预检的本轮已验身份候选；不采用旧盘面冒充')
     patch.add_argument('--reasoning-effort', choices=('low', 'high', 'max'), default=None)
     patch.add_argument('--request-profile', help='与被审阅请求相同的无密钥配置JSON；不授予新购权限')
+    upgrade = sub.add_parser('upgrade-hook', help='核验已购 v1 并无损换算 v2，完整免费预检')
+    upgrade.add_argument('--baseline-request-sha256', required=True)
+    upgrade.add_argument('--reasoning-effort', choices=('low', 'high', 'max'), default=None)
+    upgrade.add_argument('--request-profile')
+    upgrade.set_defaults(owner='hook_design', baseline_root=None,
+                         upstream_associate_candidate=None)
     args = parser.parse_args(argv)
     if not args.base:
         parser.error('NOVEL_OUTPUT／--base 未提供：没查')
@@ -201,17 +207,43 @@ def main(argv=None):
         baseline = purchased_baseline((args.baseline_root or root).resolve(), args.owner, baseline_identity)
         constraints = HookConstraints(target_chars=STR06_RUNTIME_CONFIG.hook_target_chars,
                                       hard_max_chars=STR06_RUNTIME_CONFIG.hook_hard_max_chars)
+        if args.command == 'upgrade-hook':
+            from novel.stages.stage4 import upgrade_purchased_hook_wire
+            candidate = upgrade_purchased_hook_wire(
+                baseline_wire(args.owner, baseline['content']),
+                repo.read_model('stage4/design/body_design.json'))
+        else:
+            candidate = repo.read_external(args.candidate)
         result = preview_owner_patch(owner=args.owner, identity=baseline_identity,
-            candidate=repo.read_external(args.candidate), baseline=baseline, validate=validate,
+            candidate=candidate, baseline=baseline, validate=validate,
             character_literals=character_literals(repo),
             dry_run=lambda w: dry_run_patch(repo, args.owner, w, evidence=build_evidence(source.chapters, source.hook_copy),
                 budget=derive_total_length_budget(source.chapters), hook_constraints=constraints, chapter_count=len(source.chapters),
                 source_texts=tuple(c['text'] for c in source.chapters), book_title=paths.title_of(root),
                 associate_candidate=upstream.get('associate')))
         result['applies_to_request_sha256'] = identity
+        if args.command == 'upgrade-hook':
+            result['candidate'] = candidate
+            result['patch_note'] = {
+                'base_response_identity': baseline_identity,
+                'applies_to_request_sha256': identity,
+                'reason': '用户批准 Hook v2：已购 v1 的位置与地址无损换算为目录引用，按现役完整判据免费复验'}
+            result['new_paid_calls'] = 0
     text = json.dumps(result, ensure_ascii=False, indent=2)
     if args.save:
         Str06Repository(root).write_text(f'runtime/review/{args.command}.json', text)
+        if args.command == 'upgrade-hook':
+            downstream = result['downstream']
+            if result['owner_errors'] or downstream.get('status') != 'ran' or downstream.get('errors'):
+                raise ValueError('Hook 换算预检未通过，保留报告但不导出采用材料')
+            for name, payload in (('hook_design_wire', result['candidate']),
+                                  ('hook_design_patch_note', result['patch_note'])):
+                Str06Repository(root).write_text(f'runtime/review/hook_v2_upgrade/{name}.json',
+                                                json.dumps(payload, ensure_ascii=False, indent=2))
+            print(json.dumps({'owner_errors': [], 'downstream': downstream,
+                              'wire_dir': str(root / 'runtime/review/hook_v2_upgrade'),
+                              'applies_to_request_sha256': identity, 'new_paid_calls': 0},
+                             ensure_ascii=False, indent=2))
     else:
         print(text)
     return 0

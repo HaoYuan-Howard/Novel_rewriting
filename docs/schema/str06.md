@@ -799,7 +799,7 @@ Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契约与�
 提交顺序：原响应耐久保存 → 编译与检查 → 选定候选 → 原子写正文 → 原子写章回执；
 各章经共享总槽并发执行，恢复按有效提交集合补缺。
 
-### Hook 的正式选择与确定性投影（现役；B3 代码归位 Stage4，语义不变）
+### Hook 的正式选择与确定性投影（现役；Hook wire v2）
 
 Hook 是同一目标故事的另一种呈现。设计负责材料及顺序、起笔、时间跳转、披露和收束；
 Writer 负责句法、措辞、对白、局部动作、节奏、意象和语气。`PresentationGraph(BodyDesign)+hook`
@@ -812,6 +812,28 @@ HookContext 包含 POV、按 audience 分组的起笔事实、材料投影、禁
 渲染保留 domain/holder/knowledge_mode 认知维度。Hook Writer 机械验非空、长度、编码、
 包装行与 withheld 字面泄漏；超长同 Context 有限重写（再 2 次，attempt 进请求身份）；
 回执 semantic 恒 unverified。
+
+2026-10-09 Hook 模型协议升为 `stage4-hook-design-v2`，canonical HookDesign 与 rc22
+产物形状不变。输入 `stage4-hook-input-v2` 从正式 BodyDesign 投影完整故事决策材料和
+事实目录；`fact_ref` 由 compiler 根据（建立位置、地址）计算，目录保留 op/value/
+modality/knowledge_mode/scope，不是第二份事实真源。模型只选：opening_facts 的
+`{fact_ref,audience}`、materials 的 `{beat_ref,withheld:[fact_ref],presentation}`，以及
+forbidden_reveals 的 `{kind:fact,fact_ref}`／`{kind:event,beat_ref}`；后者两分支不混用。
+材料 withheld 必须属于该拍；起笔与事实禁区只能指向唯一 set。目录闭集与完整分支 schema
+进入初答请求及窄返修合法取值；模型不拼状态地址，也不生成短引用。
+
+一次建立以（位置、地址）定位；后续同地址更新不等于同一次揭示，不由代码猜两个值的
+语义等价。world/pov 事实必须早于**呈现序第一材料**的故事位置，且在该起点前仍有效；
+book 底值与 scene 覆盖按显式 scope 重放，unknown/unset、值/时态/知情模式变化与场末
+过期均不得当成有效旧事实。world 不得把 planned/expected/conditional 当作已发生，POV
+知情 holder 必须是视角人物；非知情事实的 POV 可知性仍由语义选择负责，不机械推断。
+reader 可以使用材料视界（最大故事位置）以内的事实；视界与冷开起点分开。起笔事实不得
+与某材料的**同一次增量**或某禁区的**同一次建立**重叠。Context 保留尚未发生的时态措辞。
+
+生产、Context 重建、窄改合并及已购免费恢复共用 `validate_hook_payload`。未发布 graph
+的失败书也可从正式 BodyDesign 和候选 Hook 执行完整下游只读预检。v1 不在生产路径隐式
+解码；已购恢复仅经登记的 `upgrade_purchased_hook_wire` 无损换算，先核原请求/响应/成本，
+再绑定当前请求身份并经完整接受闸，不修改历史首过结果或成本。
 
 ### NameMap v5 与接受／交付文本分离（现役）
 

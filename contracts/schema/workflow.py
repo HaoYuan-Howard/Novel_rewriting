@@ -704,7 +704,8 @@ STAGE4_PRESERVE_POLICY_VERSION: Final = 8
 STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v5'
 # CS-3（2026-10-03）：`str06.stage4.bind` 退役——承载位由 design wire 的 real
 # 标注派生（stage4-design-v6 的面），stage4-bind-v1 wire 协议随之退役。
-STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v1'
+# Hook v2：事实引用由代码目录给出；canonical 的位置＋地址形状保持不变。
+STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v2'
 
 #: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`
 #: 是 typed 修复的显式 producer 边界（对齐正式 ExecutionEpochReason 的 continue）。

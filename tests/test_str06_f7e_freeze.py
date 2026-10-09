@@ -257,7 +257,7 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v5',
     'STAGE4_PRESERVE_POLICY_VERSION': 8,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
-    'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v1',
+    'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v2',
     # CS-3（2026-10-03）：bind 协议随节点退役——wire 面由 design v6 的 real
     # 承载标注取代，stage4-bind-v1 不再是现役协议字面量（常量删除）。
 }

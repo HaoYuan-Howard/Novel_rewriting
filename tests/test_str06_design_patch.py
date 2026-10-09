@@ -584,9 +584,9 @@ def test_hook_design_item_patch_round_fixes_only_the_failing_material(tmp_path):
 
     wires = _full_chain_wires()
     bad = deepcopy(wires['hook_design'])
-    bad['materials'][0]['withheld'] = [
-        {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
-         'key': 'marital_status'}]
+    from novel.stages.stage4.hook_facts import fact_ref_of
+    bad['materials'][0]['withheld'] = [fact_ref_of(
+        'init', ('character', ('yun_niang',), '', 'marital_status'))]
     transport = PatchingTransport(wires, bad, owner='hook_design')
     repo, session, _ = _make_session(tmp_path, wires, transport=transport)
     ctx = ChainContext(repository=repo, ask=json_ask(session), ask_text=text_ask(session),
@@ -604,7 +604,7 @@ def test_hook_design_item_patch_round_fixes_only_the_failing_material(tmp_path):
     # CS-H H2 ⑦：Hook 与 Design 同法接入窄返修（RC-57）——不带整份原请求，
     # 只带协议规则＋失败条目＋依赖切片（被引用拍与释放前缀）＋合法取值。
     assert '【窄返修】' in patch_request, 'Hook 返修走窄形状，原请求不作前缀'
-    assert 'stage4-hook-patch-slice-v1' in patch_request, 'Hook 窄请求带依赖切片'
+    assert 'stage4-hook-patch-slice-v2' in patch_request, 'Hook 窄请求带完整事实目录'
     listed = re.findall(r'- 路径 (.+?)：当前值', patch_request)
     assert listed == ['materials[0]'], '只返修越界材料，其余条目字节不动'
     graph = repo.read_model('stage4/design/presentation_graph.json')

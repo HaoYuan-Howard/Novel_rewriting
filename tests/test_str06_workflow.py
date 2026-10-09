@@ -114,7 +114,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         'preserve': _preserve_wire(), 'design': _design_wire_v7(),
         # F5 起 Hook Design 属 Stage4 腿：完整 graph 与 WriterIR 一起发布
         'hook_design': {
-            'protocol_version': 'stage4-hook-design-v1',
+            'protocol_version': 'stage4-hook-design-v2',
             'pov': {'person': 'first', 'focalizers': ['yun']},
             'materials': [{'beat_ref': {'scene': 'sc01', 'beat': 'b01'}, 'withheld': []}],
             'surface_releases': [],
@@ -412,7 +412,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         'cross_cause': {'protocol_version': 'stage2-cross-cause-v1', 'causes': []},
         'preserve': preserve, 'design': design,
         'hook_design': {
-            'protocol_version': 'stage4-hook-design-v1',
+            'protocol_version': 'stage4-hook-design-v2',
             'pov': {'person': 'first', 'focalizers': ['yun']},
             'materials': [{'beat_ref': {'scene': 'sc02', 'beat': 'b01'}, 'withheld': []}],
             'surface_releases': [], 'forbidden_reveals': [],

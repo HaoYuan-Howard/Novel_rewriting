@@ -3,7 +3,7 @@ compile 链发布映射并被下游消费（fake transport，零付费）。
 
 验证面（单元反例在 `test_str06_a4_design_locks.py` 的 CS-F2 一节）：
 · Preserve 义务锚定「预计」效应 → Brief 事实锁及必保兑现分母；
-· body_design 用 v8 `lock` 标注已选状态 → BodyDesign 与 SemanticBinding 同组发布，
+· body_design 用 v10 短 `lock` 标注已选状态 → BodyDesign 与 SemanticBinding 同组发布，
   Binding 只存锁→拍→地址、不复制 value，BodyDesign 里没有 kf 状态键；
 · 下游 compile 真实消费：WriterBookIR 的写手材料带「预计，尚未发生」措辞、不含 kf 句柄，
   packet_metrics 计入锁承载；
@@ -24,6 +24,7 @@ from tests.test_str06_body import _chapters, _make_session
 from tests.test_str06_hook import _full_chain_wires
 
 KF_PLAN = _lock_id('kf_', 'b01_01.e2')
+KF_PLAN_WIRE = KF_PLAN[:11]  # v10 请求：kf_＋八位；canonical 锁身份保持完整。
 
 
 def _wires(*, marked: bool = True, unknown: bool = False) -> dict:
@@ -47,7 +48,7 @@ def _wires(*, marked: bool = True, unknown: bool = False) -> dict:
     beat['state'].append({'at': 'world', 'key': 'agreement',
                           **({'op': 'unknown'} if unknown else
                              {'val': '约半月后归家', 'modality': 'expected'}),
-                          **({'lock': KF_PLAN} if marked else {})})
+                          **({'lock': KF_PLAN_WIRE} if marked else {})})
     return wires
 
 
@@ -178,7 +179,7 @@ def test_ambiguous_fact_lock_is_rejected_by_full_candidate_paid_entry_and_free_p
 def _move_lock_before_obligation(wire):
     """只移动有锁状态，不移动 ob02 的 real：早拍确有事实，但未声明承载义务。"""
     state = wire['scenes'][0]['beats'][2]['state'].pop()
-    assert state['lock'] == KF_PLAN
+    assert state['lock'] == KF_PLAN_WIRE
     wire['scenes'][0]['beats'][0]['state'].append(state)
 
 

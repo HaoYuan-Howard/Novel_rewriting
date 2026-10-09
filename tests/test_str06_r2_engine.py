@@ -808,7 +808,8 @@ def _hook_pair():
         'design_brief': '从深夜冷开倒叙入新婚夜旧约，玉佩之谜不露。',
         'delivery_brief': '第一人称冷面叙述，短句，不解释。',
     }
-    hook, errors = assemble_hook_design(wire, body=body,
+    from tests.factories import hook_wire_v2
+    hook, errors = assemble_hook_design(hook_wire_v2(wire), body=body,
                                         known_char_ids={'yun_niang', 'fu_jun'},
                                         name_projection=_chars().name_projection())
     assert hook is not None and not errors, errors

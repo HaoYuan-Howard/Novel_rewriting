@@ -36,3 +36,28 @@ def stage0_machine_revise(book, new_clean: str):
         removed=list(current.removed),
     )
     return rev.commit(store, transform, clean_text=new_clean)
+
+
+def hook_wire_v2(coordinates: dict) -> dict:
+    """测试用坐标式构造器：组装 v2 引用，不调用恢复 adapter 或待测验收函数。"""
+    from copy import deepcopy
+    from novel.stages.stage4.hook_facts import fact_ref_of
+    result = deepcopy(coordinates)
+
+    def handle(ref, address):
+        if isinstance(ref, dict):
+            ref = '#'.join((ref['scene'], ref['beat']))
+        key = (address['domain'], tuple(address.get('subjects') or ()),
+               address.get('holder') or '', address['key'])
+        return fact_ref_of(ref, key)
+
+    for row in result.get('opening_facts', []):
+        row['fact_ref'] = handle(row.pop('ref'), row.pop('address'))
+    for row in result['materials']:
+        row['withheld'] = [handle(row['beat_ref'], address) for address in row.get('withheld', [])]
+    for k, row in enumerate(result.get('forbidden_reveals', [])):
+        result['forbidden_reveals'][k] = (
+            {'kind': 'fact', 'fact_ref': handle(row['ref'], row['address'])}
+            if row.get('address') is not None else {'kind': 'event', 'beat_ref': row['ref']})
+    result['protocol_version'] = 'stage4-hook-design-v2'
+    return result

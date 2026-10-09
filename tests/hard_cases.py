@@ -336,7 +336,9 @@ def _hook_design_bad_wire() -> list:
 
     graph, projection, _context = _green_pair()
     _hook, errors = assemble_hook_design(
-        {'protocol_version': 'stage4-hook-design-v1',
+        {'protocol_version': 'stage4-hook-design-v2',
+         'pov': {'person': 'third', 'focalizers': ['narrator']},
+         'design_brief': '从不存在的材料拍冷开', 'delivery_brief': '克制',
          'materials': [{'beat_ref': {'scene': 's99', 'beat': 'bt1'},
                         'presentation': '倒叙材料'}],
          'opening_facts': [], 'forbidden_reveals': []},

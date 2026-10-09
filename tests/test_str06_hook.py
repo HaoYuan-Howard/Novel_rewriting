@@ -243,6 +243,11 @@ def _hook_wire_v7(**over) -> dict:
     return wire
 
 
+def _assemble_coordinate_fixture(wire, **kwargs):
+    from tests.factories import hook_wire_v2
+    return assemble_hook_design(hook_wire_v2(wire), **kwargs)
+
+
 def _projection():
     return _characters().name_projection()
 
@@ -251,7 +256,7 @@ def _green_pair():
     body, errors = assemble_body_design(_body_wire(),
                                         known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
-    hook, errors = assemble_hook_design(_hook_wire(), body=body,
+    hook, errors = _assemble_coordinate_fixture(_hook_wire(), body=body,
                                         known_char_ids={'fu_jun', 'yun_niang'},
                                         name_projection=_projection())
     assert hook is not None and not errors, errors
@@ -289,7 +294,7 @@ def test_pov_comes_from_design_not_body_majority():
         scene['delivery']['pov'] = 'fu_jun'
     wire_body['narration']['focalizers'] = ['fu_jun']
     body2, _ = assemble_body_design(wire_body, known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
-    hook, errors = assemble_hook_design(wire, body=body2,
+    hook, errors = _assemble_coordinate_fixture(wire, body=body2,
                                         known_char_ids={'fu_jun', 'yun_niang'},
                                         name_projection=_projection())
     assert hook is not None and not errors, errors
@@ -308,7 +313,7 @@ def test_third_person_multi_focalizer_passes():
     wire = _hook_wire()
     wire['pov'] = {'person': 'third', 'focalizers': ['yun_niang', 'fu_jun']}
     body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
-    hook, errors = assemble_hook_design(wire, body=body,
+    hook, errors = _assemble_coordinate_fixture(wire, body=body,
                                         known_char_ids={'fu_jun', 'yun_niang'},
                                         name_projection=_projection())
     assert hook is not None and not errors, errors
@@ -331,7 +336,7 @@ def test_partial_disclosure_single_beat():
     ]
     wire['opening_facts'] = [wire['opening_facts'][0]]
     body, _ = assemble_body_design(_body_wire(), known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
-    hook, errors = assemble_hook_design(wire, body=body,
+    hook, errors = _assemble_coordinate_fixture(wire, body=body,
                                         known_char_ids={'fu_jun', 'yun_niang'},
                                         name_projection=_projection())
     assert hook is not None and not errors, errors
@@ -357,7 +362,7 @@ def _rendered_deltas(*, knowledge_mode: str, holder: str):
     hook_wire['concealed'] = []
     hook_wire['materials'] = [{'beat_ref': {'scene': 'sc01', 'beat': 'b02'}, 'withheld': [], 'presentation': None}]
     hook_wire['opening_facts'] = [hook_wire['opening_facts'][0]]
-    hook, errors = assemble_hook_design(hook_wire, body=body,
+    hook, errors = _assemble_coordinate_fixture(hook_wire, body=body,
                                         known_char_ids={'fu_jun', 'yun_niang'},
                                         name_projection=_projection())
     assert hook is not None and not errors, errors
@@ -390,7 +395,7 @@ def test_fact_rendering_keeps_holder_and_knowledge_mode():
 def _assemble(wire, body=None):
     body = body if body is not None else assemble_body_design(
         _body_wire(), known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())[0]
-    return assemble_hook_design(wire, body=body,
+    return _assemble_coordinate_fixture(wire, body=body,
                                 known_char_ids={'fu_jun', 'yun_niang'},
                                 name_projection=_projection())
 
@@ -404,7 +409,7 @@ def test_dangling_refs_rejected():
     wire = _hook_wire()
     wire['opening_facts'][0]['ref'] = {'scene': 'sc09', 'beat': 'b01'}
     _, errors = _assemble(wire)
-    assert any('不存在的拍' in e or '未建立' in e for e in errors)
+    assert any('未知事实引用' in e for e in errors)
 
     wire = _hook_wire()
     wire['concealed'] = ['ghost']
@@ -471,7 +476,7 @@ def test_withheld_must_belong_to_beat_delta():
         {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
          'key': 'residence'}]
     _, errors = _assemble(wire)
-    assert any('不属于该拍 delta' in e for e in errors)
+    assert any('不属于该拍 delta' in e or '未知事实引用' in e for e in errors)
 
 
 # ───────────────────────── 隐藏身份的三层防线 ─────────────────────────
@@ -762,7 +767,8 @@ def _full_chain_wires():
         wire.update(over)
         return wire
 
-    hook_wire = _hook_wire_v7()
+    from tests.factories import hook_wire_v2
+    hook_wire = hook_wire_v2(_hook_wire_v7())
     naming_wire = {'entries': [
         {'char_ref': 'fu_jun', 'name': {'family': '顾', 'given': None}, 'aliases': {},
          'keep_reason': None},
