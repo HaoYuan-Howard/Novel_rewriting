@@ -9,6 +9,11 @@ rc22→rc23 不转换旧 Hook 语义。旧组织与期待无法确定性补出�
 付费工作单元的可用轮次恢复到基础额度（历史轮与费用证据保留）。rebuild 与
 refund 的差集是有意为之：stage5.body 的章产物不随本升级归档，其单元轮次
 不作废，不返还。
+
+rc23→rc24 只改 HookContext 形状（篇幅包络三字段）与请求字节：PresentationGraph
+（rc23）与 design wire v3 不变，已发布 Hook 选择继续有效；旧上下文按契约表
+漂移拒读，免费重编译即得 rc24 形状。stage5.hook 的请求身份随交付要求变化，
+旧稿不沿用（付费重写，轮次随归档返还）；正文与姓名映射原样保留。
 """
 from typing import Final, TypedDict
 
@@ -49,4 +54,24 @@ HOOK_UPGRADE: Final[ContractUpgradeSpec] = {
     ),
 }
 
-REGISTERED_UPGRADES: Final = (HOOK_UPGRADE,)
+#: rc24 篇幅包络：design/graph 不失效（形状与 wire 均未变），hook_design 不
+#: 重建、不返还；compile 免费重派生 rc24 上下文，hook 付费重写并返还轮次。
+HOOK_ENVELOPE_UPGRADE: Final[ContractUpgradeSpec] = {
+    'id': 'hook-rc23-rc24',
+    'source_identity': '2c833f1a715a4fcee944b5377cd5b12e8d2b7d84f77262f9c9261ec8861682ff',
+    'target_identity': '5a61ed782cd59035cee8d386bc03c3ed1dbee998fb204df688d3772b7442056c',
+    'source_version': 'str06-rc23',
+    'target_version': 'str06-rc24',
+    'rebuild_nodes': (
+        'str06.stage4.compile', 'str06.stage5.hook', 'str06.stage7.assemble',
+    ),
+    'refund_nodes': ('str06.stage5.hook',),
+    # 设计与正文／姓名映射原样保留；交付面随楔子换稿失效。
+    'archive_patterns': (
+        'stage4/context/hook/hook*.json',
+        'stage5/hook/*', 'stage7/final/*', 'runtime/delivery/*',
+        'runtime/workflow_status.json',
+    ),
+}
+
+REGISTERED_UPGRADES: Final = (HOOK_UPGRADE, HOOK_ENVELOPE_UPGRADE)

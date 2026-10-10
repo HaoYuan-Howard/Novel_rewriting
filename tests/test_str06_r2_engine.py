@@ -817,7 +817,7 @@ def _hook_pair():
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _chars().name_projection())
+        graph, _chars().name_projection(), total_budget=2000)
     assert context is not None and not errors, errors
     return graph, context
 

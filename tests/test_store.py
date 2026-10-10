@@ -2763,7 +2763,7 @@ def test_execution_plan_migration_is_pure_and_keeps_its_independent_version(vers
     original = copy.deepcopy(source)
     migrated = _upgrade_rc12_payload('stage4/compiled/execution_plan.json', source)
     assert source == original, '内存迁移不能修改输入或封存字节'
-    assert STR06_RC_VERSION == 'str06-rc23'
+    assert STR06_RC_VERSION == 'str06-rc24'
     assert migrated['contract_version'] == 'str06-rc14', '全局版式头不决定独立产物版本'
     scene = migrated['scenes'][0]
     reader = scene['establishments'][0]

@@ -81,7 +81,7 @@ def test_hook_forbidden_reveals_render_statement_not_true():
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
         graph, _projection(),
-        kp_statements={KP: STATEMENT})
+        kp_statements={KP: STATEMENT}, total_budget=2000)
     assert context is not None and not errors, errors
     joined = '\n'.join(context.forbidden_reveals)
     assert STATEMENT in joined, '禁区以命题 statement 送达'
@@ -95,7 +95,7 @@ def test_hook_dangling_kp_is_reported_not_raised():
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection())
+        graph, _projection(), total_budget=2000)
     assert context is None
     assert any('悬空 kp 引用' in e for e in errors)
 

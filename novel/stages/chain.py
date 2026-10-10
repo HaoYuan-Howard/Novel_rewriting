@@ -1632,7 +1632,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
         """
         return hook_combination_errors(
             w, body=body, binding=binding, chars=chars,
-            kp_statements=kp_statements, world_statements=world_statements)
+            kp_statements=kp_statements, world_statements=world_statements,
+            total_budget=ctx.budget)
 
     def hook_design_compile(w):
         hook, errors = assemble_hook_design(w, body=body, known_char_ids=set(chars.characters),
@@ -1724,7 +1725,8 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     hook_context, errors = compile_hook_context(graph, projection,
                                                 chars.name_structure, kp_statements,
                                                 world_statements,
-                                                characters=chars.core_view())
+                                                characters=chars.core_view(),
+                                                total_budget=ctx.budget)
     if errors:
         raise MechanicalDefectStop(
             f'stage4 hook 上下文机械缺陷：{errors}',

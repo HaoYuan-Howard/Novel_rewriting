@@ -270,7 +270,7 @@ def _green_pair():
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection())
+        graph, _projection(), total_budget=2000)
     assert context is not None and not errors, errors
     return body, graph, context
 
@@ -283,7 +283,7 @@ def test_context_rebuild_is_byte_identical_after_delete(tmp_path):
     repo.attach_context(make_context(tmp_path, ledger=CostLedger(path=None)))
     def build():
         context, errors = compile_hook_context(
-            graph, _projection())
+            graph, _projection(), total_budget=2000)
         assert context is not None and not errors, errors
         return repo.write('stage4/context/hook/hook.json', context).read_bytes()
     first = build()
@@ -308,7 +308,7 @@ def test_pov_comes_from_design_not_body_majority():
     assert hook is not None and not errors, errors
     graph = publish_graph(body2, hook)
     context, errors = compile_hook_context(
-        graph, _projection())
+        graph, _projection(), total_budget=2000)
     assert context is not None and not errors, errors
     assert context.pov.person == 'first'
     assert context.pov.focalizers == ('yun_niang',)
@@ -350,7 +350,7 @@ def test_partial_disclosure_single_beat():
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection())
+        graph, _projection(), total_budget=2000)
     assert context is not None and not errors, errors
     material = context.materials[0]
     assert material.event == '洞房夜夫君立约'
@@ -376,7 +376,7 @@ def _rendered_deltas(*, knowledge_mode: str, holder: str):
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection())
+        graph, _projection(), total_budget=2000)
     assert context is not None and not errors, errors
     return context.materials[0].deltas
 
@@ -570,17 +570,52 @@ def test_non_material_beat_change_keeps_context():
     body2 = BodyDesign.model_validate(body_dump)
     graph2 = publish_graph(body2, graph.hook)
     context2, errors = compile_hook_context(
-        graph2, _projection())
+        graph2, _projection(), total_budget=2000)
     assert errors == [], errors
     assert context2.model_dump(mode='json') == context.model_dump(mode='json')
 
 
 # ───────────────────────── Hook Writer 机械验 ─────────────────────────
 
-def test_hook_has_no_fixed_length_gate():
+def test_hook_length_envelope_derives_from_chapter_budget():
+    """rc24 包络派生：锚定书级章预算（R-5.3 同一预算源），不绑定源引子长度。"""
+    from novel.stages.stage4.hook_context import hook_length_envelope
+    # 实书规模：11 章 8999 预算 → 均值 818 → 327/450/573。
+    assert hook_length_envelope(8999, 11) == (327, 450, 573)
+    assert hook_length_envelope(2000, 2) == (400, 550, 700)
+    # 换书即换包络：预算随书缩放，无全书写死常数。
+    assert hook_length_envelope(120000, 300) == (160, 220, 280)
+    # 极小预算退化仍严格递增（schema 的 low<high<cap 恒可满足）。
+    assert hook_length_envelope(1, 1) == (1, 2, 3)
+    with pytest.raises(ValueError, match='正的书级预算'):
+        hook_length_envelope(0, 3)
+    with pytest.raises(ValueError, match='正的书级预算'):
+        hook_length_envelope(100, 0)
+
+
+def test_hook_request_carries_length_envelope_not_source_length():
+    """包络进请求字节（从而进请求身份）；换预算的请求不是同一请求。"""
     _, _, context = _green_pair()
+    request = build_hook_user_prompt(context)
+    assert '目标 400–550 字、硬上限 700 字' in request
+    assert '不参照原文引子长度' in request
+    assert '凑字数压缩或注水' in request
+
+
+def test_hook_length_gate_is_cap_only():
+    """rc24 篇幅包络：目标区间不拒稿（rc23 的观察结论），只有硬上限拒收。
+
+    `_green_pair` 的 fixture 预算 2000、章数 5 → 包络 400/550/700；
+    550–700 字之间（区间外、上限内）不得因字数报错——low/high 是创作指导，
+    不是硬闸。
+    """
+    _, _, context = _green_pair()
+    assert (context.length_low, context.length_high, context.length_cap) == (400, 550, 700)
     assert not validate_hook_prose('夜 \n\t' * 10, context)
-    assert not validate_hook_prose('夜' * 1200, context)
+    assert not validate_hook_prose('夜' * 650, context), '区间外、上限内不因字数拒稿'
+    errors = validate_hook_prose('夜' * 1200, context)
+    assert errors == ['[length_cap] 楔子 1200 字超过硬上限 700 字'
+                      '（目标区间 400–550，非空白字符）']
 
 
 def test_hook_writer_wrapper_rewrite_same_context():

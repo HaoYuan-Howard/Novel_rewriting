@@ -33,7 +33,7 @@ surface_releases（不是章释放表）在 compile 时算好，随上下文携�
 """
 from __future__ import annotations
 
-from typing import Iterable, Mapping, Sequence
+from typing import Final, Iterable, Mapping, Sequence
 
 from contracts.schema.context import SurfaceRelease
 from contracts.schema.design import PresentationGraph
@@ -183,17 +183,43 @@ def _protected_thread_entries(graph: PresentationGraph, horizon, cast: set[str],
     return entries
 
 
+#: 楔子篇幅包络系数（rc24）：锚定章预算均值——目标区间 [0.40, 0.55]、机械硬
+#: 上限 0.70。锚定章预算而非源引子长度：引子可长可短甚至缺席，而书级预算已随
+#: 全书篇幅边界进入请求身份（R-5.3 同一预算源）。
+_HOOK_LENGTH_FACTORS: Final = (0.40, 0.55, 0.70)
+
+
+def hook_length_envelope(total_budget: int, chapter_count: int) -> tuple[int, int, int]:
+    """书级预算＋章数 → 楔子篇幅包络（low/high/cap，非空白字符，严格递增）。
+
+    与 `allocate_chapter_budgets` 同一预算源：avg = total/count，四舍五入；
+    极小预算退化时逐级抬 1 保序，保证任何正输入都有合法区间（I-21：机械
+    派生归 compiler，不让 LLM 生成、也不逐书手填）。
+    """
+    if total_budget < 1 or chapter_count < 1:
+        raise ValueError('篇幅包络需要正的书级预算与章数')
+    avg = total_budget / chapter_count
+    low, high, cap = (max(1, round(avg * factor)) for factor in _HOOK_LENGTH_FACTORS)
+    low = max(low, 1)
+    high = max(high, low + 1)
+    cap = max(cap, high + 1)
+    return low, high, cap
+
+
 def compile_hook_context(
     graph: PresentationGraph, projection: NameProjection,
     structure: NameStructure | None = None,
     kp_statements: Mapping[str, str] = (),
     world_statements: Mapping[str, str] = (),
     characters: CharactersCore | None = None,
+    *, total_budget: int,
 ) -> tuple[HookContext | None, list[str]]:
-    """（完整 graph, 名称投影）→ HookContext。纯函数，不落盘。
+    """（完整 graph, 名称投影, 书级预算）→ HookContext。纯函数，不落盘。
 
     `characters`（CS-H H3）只用于显示面回落表的 compile 期计算（RC-60 第 3 步）；
-    缺席时无回落——未释放人物没有显示面，投影保持原文、由字面检查如实报告。"""
+    缺席时无回落——未释放人物没有显示面，投影保持原文、由字面检查如实报告。
+    `total_budget`（rc24）只用于篇幅包络派生：进 Context 字节即进请求身份——
+    换预算的请求不是同一请求，不沿用旧结论。"""
     hook = graph.hook
     # schema只保引用存在；恢复/重编同样先复验时序、隐藏与称谓释放授权。
     errors = validate_hook_design(
@@ -342,6 +368,8 @@ def compile_hook_context(
 
     if errors:
         return None, errors
+    length_low, length_high, length_cap = hook_length_envelope(
+        total_budget, len(graph.chapters))
     return HookContext(
         pov=hook.pov, opening_facts=tuple(facts), materials=tuple(materials),
         forbidden_reveals=tuple(forbidden), local_focus=hook.local_focus,
@@ -356,4 +384,5 @@ def compile_hook_context(
         scene_voices=scene_voices, usable_surfaces=usable,
         withheld_literals=tuple(sorted(withheld)),
         withheld_bindings=bindings, display_faces=display_faces,
-        avoid_lines=tuple(avoid_lines)), []
+        avoid_lines=tuple(avoid_lines),
+        length_low=length_low, length_high=length_high, length_cap=length_cap), []

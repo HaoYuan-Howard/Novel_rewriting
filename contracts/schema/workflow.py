@@ -692,14 +692,18 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 # 事件承载行动及细节，状态/知情/悬念锁仍由各自原子派生；六类质量产物同批升版。
 # rc23（2026-10-10）：Hook 设计的材料呈现、衔接与阅读期待显式化；
 # graph 单独升版，正文设计保持 rc22；楔子取消字数约束并继承正式风格与声线。
-STR06_RC_VERSION: Final = 'str06-rc23'
+# rc24（2026-10-10）：HookContext 恢复按书级章预算派生的篇幅包络（目标区间
+# 随请求送达 + 硬上限机械拒收），并修订 Hook 设计选材倾向为高张力情节切片；
+# 正文设计保持 rc22。rc23「篇幅由叙事需要决定」的观察结论由包络修订。
+STR06_RC_VERSION: Final = 'str06-rc24'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
                           'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
                           'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15',
                           'str06-rc16', 'str06-rc17', 'str06-rc18', 'str06-rc19',
-                          'str06-rc20', 'str06-rc21', 'str06-rc22', 'str06-rc23')
+                          'str06-rc20', 'str06-rc21', 'str06-rc22', 'str06-rc23',
+                          'str06-rc24')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒

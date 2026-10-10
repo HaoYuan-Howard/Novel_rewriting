@@ -24,6 +24,15 @@ Hook Design 自选（`surface_releases`，不是章释放表的投影），compi
 算好绑定表随上下文携带；`render_hook_context` 送达写手前把已证明唯一绑定人物的
 完整登记称谓换成本场已释放称谓。上下文字段保持原文本——条目返修的来源归因按
 原字段核对，投影只改送达字节。
+
+【篇幅包络（rc24，按章预算派生）】
+rc23 曾取消全部字数语义（「篇幅由叙事需要决定」）；实测放开后写手按材料的
+自然戏剧密度膨胀，与选材数量无关（4 拍 1 develop 仍写满千字）。rc24 恢复的是
+**锚定章预算的包络**，不是 rc22 之前对所有书写死的 280/360：`length_low/high`
+是送达写手的创作目标区间（指导，不是硬闸），`length_cap` 是机械硬上限
+（`validate_hook_prose` 拒收、可免费重验）。锚定章预算而非源引子长度——引子
+可长可短甚至缺席，章预算已随全书篇幅边界进入请求身份。包络由 compiler 从
+书级预算派生（I-21：不让 LLM 生成），随输入进 Context 字节与请求身份。
 """
 from __future__ import annotations
 
@@ -259,7 +268,7 @@ class HookContext(StrictModel):
     （无可证明绑定＝一律不投影），上下文字段本身不被投影改写。
     """
 
-    contract_version: Literal['str06-rc18'] = 'str06-rc18'
+    contract_version: Literal['str06-rc24'] = 'str06-rc24'
     pov: HookPov
     opening_facts: tuple[HookOpeningFact, ...] = ()
     materials: tuple[HookMaterialView, ...] = Field(min_length=1)
@@ -284,6 +293,18 @@ class HookContext(StrictModel):
     #: 材料所引场的明确禁止（CS-H H3 判据⑥）：materials 引用拍所在场的
     #: `delivery.avoid` 并集（去重保序）——楔子不得违背正文设计已声明的禁区。
     avoid_lines: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 楔子篇幅包络（rc24；非空白字符）：low/high 是创作目标区间（指导面，
+    #: 随请求送达写手），cap 是机械硬上限（validator 拒收，免费可复验）。
+    #: compiler 按书级章预算派生，不绑定源引子长度（I-21）。
+    length_low: int = Field(ge=1)
+    length_high: int = Field(ge=1)
+    length_cap: int = Field(ge=1)
+
+    @model_validator(mode='after')
+    def _envelope_ordered(self) -> 'HookContext':
+        if not self.length_low < self.length_high < self.length_cap:
+            raise ValueError('篇幅包络必须严格递增：low < high < cap')
+        return self
 
     @model_validator(mode='after')
     def _unique_binding_literals(self) -> 'HookContext':

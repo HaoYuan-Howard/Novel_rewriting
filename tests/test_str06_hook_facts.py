@@ -110,7 +110,7 @@ def test_plans_are_not_world_facts_and_writer_keeps_their_modality(modality):
     wire['opening_facts'][0]['audience'] = 'pov'
     hook, errors = _accept(body, wire)
     assert hook is not None and not errors, errors
-    context, errors = compile_hook_context(publish_graph(body, hook), _projection())
+    context, errors = compile_hook_context(publish_graph(body, hook), _projection(), total_budget=2000)
     assert context is not None and not errors, errors
     text = json.dumps(context.model_dump(mode='json'), ensure_ascii=False)
     assert ('尚未发生' if modality != 'conditional' else '条件成立时才发生') in text
@@ -128,7 +128,7 @@ def test_pov_knowledge_requires_correct_holder_and_keeps_knowledge_mode():
     wire['pov']['focalizers'] = ['fu_jun']
     hook, errors = _accept(body, wire)
     assert hook is not None and not errors, errors
-    context, errors = compile_hook_context(publish_graph(body, hook), _projection())
+    context, errors = compile_hook_context(publish_graph(body, hook), _projection(), total_budget=2000)
     assert context is not None and not errors, errors
     assert '怀疑' in json.dumps(context.model_dump(mode='json'), ensure_ascii=False)
 
@@ -286,7 +286,7 @@ def test_return_after_flashback_and_reader_development_use_real_later_beats():
     hook, errors = _accept(body, wire)
     assert hook is not None and not errors, errors
     assert hook.reader_expectation.followup_refs == ('sc02#b03',)
-    context, errors = compile_hook_context(publish_graph(body, hook), _projection())
+    context, errors = compile_hook_context(publish_graph(body, hook), _projection(), total_budget=2000)
     assert context is not None and not errors, errors
     assert context.reader_expectation.model_dump() == {
         'kind': 'action', 'focus': '她接下来会怎样追查？'}
@@ -437,7 +437,7 @@ def test_context_projects_authoritative_voice_and_never_copies_future_answer():
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     assert body.contract_version == 'str06-rc22' and graph.contract_version == 'str06-rc23'
-    context, errors = compile_hook_context(graph, _projection())
+    context, errors = compile_hook_context(graph, _projection(), total_budget=2000)
     assert context is not None and not errors, errors
     assert context.book_style == body.book_style
     assert [m.model_dump() for m in context.expression_mechanisms] == [

@@ -155,7 +155,8 @@ def _location_text(location: tuple) -> str:
 
 
 def hook_combination_errors(hook, *, body, binding, chars,
-                            kp_statements, world_statements) -> list[str]:
+                            kp_statements, world_statements,
+                            total_budget) -> list[str]:
     """候选 Hook 与目标正文的组合检查（CS-H H2，RC-57「同法接入」）。
 
     ``publish_graph`` → HookContext 编译 → 材料泄漏。**只读预览与生产接受循环
@@ -163,13 +164,15 @@ def hook_combination_errors(hook, *, body, binding, chars,
     `novel/stages/chain.py::run_hook_design`）：内部句柄闭集取
     `material_identities` 全集（scene/beat/thread/obligation/ex/kp/kf）——此前
     生产面只用 `chars.characters`，预览抓得到的内部 id 泄漏在生产里会漏网
-    （同一行为两把尺；判据 25：判定与预览同一把尺）。
+    （同一行为两把尺；判据 25：判定与预览同一把尺）。`total_budget`（rc24）
+    只进 Context 的篇幅包络派生，两侧同一预算源。
     """
     from novel.stages.common import material_identities
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
         graph, chars.name_projection(), chars.name_structure,
-        kp_statements, world_statements, characters=chars.core_view())
+        kp_statements, world_statements, characters=chars.core_view(),
+        total_budget=total_budget)
     if context is None:
         return list(errors)
     return list(errors) + list(validate_hook_materials(

@@ -761,7 +761,7 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 | `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v8）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
 | `contracts/schema/grounding.py` | `SourceObligation` / `PreserveCheckpoint` / `ReconstructionBrief` / `IdentityProjection` / `OutputConstraints` / `SemanticBinding` | 必保义务必有非空 `satisfaction`；checkpoint 无 Design/Bind 字段；Brief 无源章/源拍/叙述顺序/证据定位字段；Binding 是完整 snapshot |
 | `contracts/schema/design.py` | `BodyDesign`（rc11：narration、expression_decisions、可定位 entry；保留拍上线程、world_rules）／`PresentationGraph(BodyDesign)+hook` | source-blind；章号连续 1..N、场景全覆盖；POV 服从正文人称许可；表达决定恰好覆盖；entry 锚满足分支条件；hook 引用与线程生命周期闭合 |
-| `contracts/schema/hook.py` | `HookDesign`／`HookContext`／`HookReceipt` | 有序材料组织与阅读期待显式选择；起笔事实只引用已建立目标事实；声线同源；first 恰一人且非 narrator；字符数只统计，回执 semantic 恒 unverified |
+| `contracts/schema/hook.py` | `HookDesign`／`HookContext`／`HookReceipt` | 有序材料组织与阅读期待显式选择；起笔事实只引用已建立目标事实；声线同源；first 恰一人且非 narrator；篇幅包络按章预算派生（目标区间不拒稿、硬上限机械拒收），回执 semantic 恒 unverified |
 | `contracts/schema/naming.py` | `NameMapV5`／`NameAssignment`／`TargetName` | name 与 keep_reason 恰好一个；full 由 compiler 拼接；char_ref 唯一 |
 | `contracts/schema/source.py` | Characters v6（`CharactersCore`＋`name_structure`）／Blueprints v17（拍三类转移＋场景分段＋带证据源表达） | 名称结构 surface 恰好覆盖、模板渲染逐字相等；canonical 逐字等于某个已登记 surface；from_chapter 由证据锚点派生（`R-2.10`）；命题引用闭合与同拍两遍解析（`R-2.12`）；登记键作用域由 compiler 绑定；表达编号及读数由 compiler 生成 |
 | `contracts/schema/execution.py` | `ExecutionPlan`（establishment/constraint/dependency/reinforcement）与 `ExecutionSlice` | 必保只落 establishment/constraint；依赖边禁自指 |
@@ -822,9 +822,13 @@ Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契约与�
 ### Hook 的正式选择与确定性投影（现役；Hook wire v3）
 
 Hook 是同一目标故事的另一种呈现。Stage4 负责选材、入场、详略、转换、截断与阅读期待；
-Stage5 负责对白、即时反应、句法、措辞与节奏。设计默认围绕一个清楚的核心冲突，允许
-倒叙和跨场，各次切换要有定位与足够因果前提。设计同时考虑正式第 1 章的新推进，实际
-“楔子＋第 1 章”联合阅读是核心质量验收项；不默认改变已接受正文。
+Stage5 负责对白、即时反应、句法、措辞与节奏。楔子是高张力情节切片，不是完整场景的
+缩写版：设计默认围绕一个清楚的核心冲突，倾向取 2–4 拍、以其中一拍的 develop 为
+呈现中心、其余 brief 补足理解前提（rc24 设计倾向，不是机械闸）；不把整场戏的起因、
+经过、结果与后续计划演完——正文负责完成情节，楔子负责制造阅读期待，提前演完会让
+正文对应章节重复叙述。允许倒叙和跨场，各次切换要有定位与足够因果前提。设计同时
+考虑正式第 1 章的新推进，实际“楔子＋第 1 章”联合阅读是核心质量验收项；不默认
+改变已接受正文。
 
 `PresentationGraph(BodyDesign)+hook` 必填、`publish_graph` 唯一发布；`pov`、
 `opening_facts`（world／pov／reader 获准面）、有序 `materials`、`concealed`、
@@ -836,12 +840,14 @@ scene_cut），首条 start。材料顺序本身就是呈现顺序，不维护�
 两份自由剧情 brief 退出正式 Hook；`local_focus` 只表达表现重点与反差机制，不能
 复述或新增事件、动机、结果。API 保留的 `design_brief` 展示字段由组织选择确定性
 生成。阅读期待分事实谜题、行动、关系：fact 只选正式目录 `fact_ref`，发展分支
-选后文拍；依据须晚于材料故事视界。未来依据留在设计与校验侧，写手只获 kind／focus。
+选后文拍；依据须晚于材料故事视界，focus 聚焦截断处尚未解决的问题（在场人物即将
+到来的反应或决定），不另起下一轮剧情的悬念。未来依据留在设计与校验侧，写手只获
+kind／focus。
 引用存在和时序合法不证明它确实回答该问题，也不证明期待具有吸引力。
 独立显式选择的禁区继续负向投影；期待引用不自动转成禁区答案全文。
 
 2026-10-10 模型协议为 `stage4-hook-design-v3`，PresentationGraph 单独 rc23、
-HookContext rc18，BodyDesign／正文章包维持 rc22。正式输入从 BodyDesign 投影完整
+HookContext rc24（篇幅包络三字段，见下），BodyDesign／正文章包维持 rc22。正式输入从 BodyDesign 投影完整
 故事决策材料和事实目录；`fact_ref` 由 compiler 根据建立位置／地址计算，目录保留
 op／value／modality／knowledge_mode／scope，不是第二份事实真源。材料 withheld
 必须属于该拍；起笔与事实禁区只能指向唯一 set。完整目录与分支 schema 进入初答和
@@ -856,9 +862,13 @@ HookContext 从正式输入投影 POV、起笔事实、事件与状态、组织�
 正文编译独立读取 BodyDesign，背景消费闭包不含 Hook 选择；改 Hook 组织或期待只
 影响 Hook 与交付，不改变已接受章的写手／验证身份。
 
-Hook 取消固定字数目标与拒稿上限，字符数仅统计；每段须推进局面、人物认识或期待，
-背景只解释到足以理解当前行动，在期待最强处截断。机械验覆盖非空、编码、包装行、
-withheld 专名字面；同 Context 有限重写仍首次＋最多两次，attempt 进请求身份。
+Hook 篇幅走包络（rc24）：compiler 从书级章预算派生 `length_low/high/cap` 进
+Context 字节与请求身份（换预算即换请求，不沿用旧结论）；目标区间随交付要求送达、
+不拒稿，硬上限由机械验拒收——rc23 全放开后写手按材料戏剧密度膨胀（选材收缩到
+4 拍 1 develop 仍写满千字）的实证修订，锚定章预算而非源引子字数，也不回到早期
+对全书写死的 280/360。每段须推进局面、人物认识或期待，背景只解释到足以理解
+当前行动，在期待最强处截断。机械验覆盖非空、编码、包装行、withheld 专名字面与
+篇幅硬上限；同 Context 有限重写仍首次＋最多两次，attempt 进请求身份。
 输出 token 预算是执行边界。回执 semantic 恒 unverified，不新增生产审稿节点或
 Stage5 段落 patch；现有 Stage4 条目窄修继续。
 

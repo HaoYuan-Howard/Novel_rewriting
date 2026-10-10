@@ -325,7 +325,11 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc17（2026-10-06 CS-H H3，RC-60）：HookContext 增 display_faces/avoid_lines
     # （显示面投影与材料所引场 avoid 并集）。
     # rc18：继承全书风格与人物声线；材料强调与跳时显式投影，取消字数边界。
-    'stage4/context/hook/hook.json': 'str06-rc18',
+    # rc24（2026-10-10）：恢复按书级章预算派生的篇幅包络（length_low/high 目标
+    # 区间随请求送达写手 + length_cap 机械硬上限由 validator 拒收）——rc18 全
+    # 放开后写手按材料戏剧密度膨胀（选材收缩到 4 拍 1 develop 仍写满千字）；
+    # 不回到 rc22 前对全书写死的 280/360。旧上下文免费重编译。
+    'stage4/context/hook/hook.json': 'str06-rc24',
     # rc7 同批：BookBrief 带整书风格与稳定人物声线；PendingConfirmation 带事实
     # 地址（D4），投影按地址精确到消费该地址的章包。
     # rc8（2026-09-27 B4，D2）：ChapterIR 增章级验证材料（称谓许可、禁用字面

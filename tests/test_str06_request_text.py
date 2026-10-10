@@ -80,7 +80,7 @@ def test_hook_request_carries_referenced_scene_avoid_and_leaks_nothing():
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
         graph, chars.name_projection(),
-        chars.name_structure, {}, {}, characters=chars.core_view())
+        chars.name_structure, {}, {}, characters=chars.core_view(), total_budget=2000)
     assert context is not None and not errors, errors
     assert context.avoid_lines == ('倒叙开篇',)
     request = render_hook_context(context)

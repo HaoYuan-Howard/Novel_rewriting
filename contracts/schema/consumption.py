@@ -1070,6 +1070,18 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'hook_context.avoid_lines', consumers=(_H,), scope=_HOOK,
         mode=DeliveryMode.MUST_RESPECT,
         note='材料所引场 delivery.avoid 的并集：楔子不得违背正文设计已声明的禁区'),
+    # rc24 篇幅包络：锚定书级章预算（compiler 派生，I-21），不绑定源引子长度。
+    # 目标区间是创作指导（随请求送达），硬上限是机械拒收面（validator，免费可复验）。
+    'hook_context.length_low': _spec(
+        'hook_context.length_low', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='楔子篇幅目标区间下界（非空白字符）'),
+    'hook_context.length_high': _spec(
+        'hook_context.length_high', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='楔子篇幅目标区间上界（非空白字符）'),
+    'hook_context.length_cap': _spec(
+        'hook_context.length_cap', consumers=(_H, _V), scope=_HOOK,
+        mode=DeliveryMode.MUST_RESPECT,
+        note='楔子篇幅硬上限：validator 拒收超限稿（同一 Context 有限重写），人工 wire 免费采用'),
     # ── NameMapV5（改名面；不经任何写手）──────────────────────────────────
     'name_map.contract_version': _spec(
         'name_map.contract_version', consumers=(_N, _A), scope=_NAME,

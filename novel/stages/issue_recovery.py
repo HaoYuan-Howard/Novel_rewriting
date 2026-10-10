@@ -96,7 +96,7 @@ def preview_issue_correction(repository, owner: str, *, budget: int,
     context, errors = compile_hook_context(graph, chars.name_projection(), chars.name_structure,
         {p.kp_id: p.statement for p in brief.propositions},
         {w.constraint_id: w.statement for w in brief.book_constraints},
-        characters=chars.core_view())
+        characters=chars.core_view(), total_budget=budget)
     if errors:
         raise ValueError(f'Hook投影失败：{errors}')
     problems = (*inspection.materials, *hook_material_issues(

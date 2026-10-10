@@ -235,7 +235,7 @@ def test_hook_concealed_characters_do_not_fall_back_but_others_do():
         assert hook is not None and not errors, errors
         context, errors = compile_hook_context(
             publish_graph(body, hook), chars.name_projection(),
-            chars.name_structure, {}, {}, characters=chars.core_view())
+            chars.name_structure, {}, {}, characters=chars.core_view(), total_budget=2000)
         assert context is not None and not errors, errors
         return context
 

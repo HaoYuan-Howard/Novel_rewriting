@@ -7,7 +7,7 @@
 维护时先按节点或稳定编号定位相关节，不通读全表。待办见 `docs/REQUIREMENTS.md`，当前形状见
 `docs/schema/`，关键裁决及证据限制见 `docs/DECISIONS.md`。这些关联检查不能证明模型的语义质量。
 
-本文件对应现役契约版式 `str06-rc23`（`contracts/schema/workflow.py::STR06_RC_VERSION`；
+本文件对应现役契约版式 `str06-rc24`（`contracts/schema/workflow.py::STR06_RC_VERSION`；
 Preserve v5／policy 8、Design 模型面 wire `stage4-design-v10`，可选细节与显式系列前情）。R9（2026-09-30，
 D8 修订二）当时把消费面定为 rc11：book-v2 的源表达经 Blueprint v14
 与源盲 Brief 到 Design v4；正文 narration 约束场景 POV，表达 keep／change 的最终陈述
@@ -219,13 +219,13 @@ Stage5/6 从已读取的 Stage1 文本即时计算机械读数，不生成 Stage
 | R-4.2 | 正文与开篇文案段**分开测、互不污染**：现役只测完整正文；「Stage6 只测原作文案」的一半已随 STR-06 退役 | `结构`（`novel/stages/stage5/body_checks.py::count_body_chars`） |
 | R-4.3 | **没有现役 Stage3 节点或产物**：`stage3.style` 与 `stage3/style_grounding.json` 只登记为退役身份，不能由 CLI、队列、API 或 producer 重新创建 | `结构`（`contracts/artifacts.py::RETIRED_ARTIFACT_PATHS`（产物层关闭式拒识；节点名册已随 STR-06 关闭批删除，非现役节点一律拒）） |
 | R-4.3b | **【Stage5 侧】只消费正文机械精确投影**：即时结果只保留 `avg_sentence_chars`、`avg_paragraph_chars`、`paragraph_sep_chars`、对白比值/引号体、章均字数、逐章平均句长 min/max；对白适用性由 `dialogue_ratio is not None` 推出，不存重复布尔值。`shape_block` 只把这些值序列化为句子/段落/对白/章篇幅/章间差异 5 个正文档位。旧链 Stage5 review 的 `load_book` 消费面随旧链退役；新链 Stage5 侧只由 `str06` 正文写手消费章级机械投影（非空白码点计数与长度带），不重建第二套读数缓存 | `结构`（`novel/stages/stage5/body_checks.py::count_body_chars`） |
-| R-4.4 | **【已退役】Stage6 只消费原作文案机械五叶**——Stage6 层随 STR-06 切换退役，`hook_style_metrics` 已随 2026-10-04 清理批删除；现役 Hook 不消费原作文案机械投影，篇幅由叙事需要决定，不与源引子等长 | `结构`（`contracts/schema/hook.py::HookContext`） |
+| R-4.4 | **【已退役】Stage6 只消费原作文案机械五叶**——Stage6 层随 STR-06 切换退役，`hook_style_metrics` 已随 2026-10-04 清理批删除；现役 Hook 不消费原作文案机械投影，篇幅走 rc24 包络：compiler 按书级章预算派生目标区间与硬上限，不与源引子等长、也不对全书写死常数 | `结构`（`contracts/schema/hook.py::HookContext`／`novel/stages/stage4/hook_context.py::hook_length_envelope`） |
 | R-4.5 | 测量模型只是**进程内 strict 载体**，不带 `_schema_version`、`_provenance`、prompt、模型或 usage，也不进入 artifact registry | `载体`（`contracts/schema/measurement.py`） |
 | R-4.5b | 旧 Stage3 v2 的解码器及专用 consumed 投影已退役；旧来源边不能通过当前 Store 获得现役有效性，历史字节只随旧代码与旧根配对读取 | `载体`（`contracts/schema/__init__.py::ARTIFACT_SPECS` + `novel/store.py::_projection_payload`） |
 | R-4.6 | 开篇文案段是**必填输入**；无文案段已由 `R-1.12` 挡在 Stage1（其 Stage6 机械消费边已随 STR-06 退役，本层不造 nullable hook 或空兜底） | 见 `R-1.12` |
 | R-4.7 | 当前机械测量不独立记 provenance；Stage5 的来源账直接记录真正读取的 Stage1 主体（Stage6 来源边已随 STR-06 退役） | `结构`（`novel/consumption.py::stage2_main_text` / `contracts/schema/hook.py::HookContext`） |
 | R-4.8 | 测量算法口径是独立版本轴；只改算法、不改输入 JSON 形状时，下游也必须自然 stale。旧 `STYLE_MEASUREMENT_CONTRACT` 常量已随 2026-10-04 清理批删除，现役版本轴由章级 validator 版本承载 | `结构`（`contracts/schema/receipt.py::BODY_VALIDATOR_VERSION`） |
-| R-4.9 | 当前正文测量的真实上游只有 Stage1 正文（原作文案消费边已随 STR-06 退役）；测量本身不等待、也不消费 Stage2。Hook 字符数仅作观察，不作生成目标或质量硬闸 | `结构`（`novel/stages/stage5/body_checks.py::count_body_chars`／`novel/stages/stage5/hook_writer.py::validate_hook_prose`） |
+| R-4.9 | 当前正文测量的真实上游只有 Stage1 正文（原作文案消费边已随 STR-06 退役）；测量本身不等待、也不消费 Stage2。Hook 篇幅的 rc24 包络：目标区间随请求送达（创作指导，不拒稿），硬上限由 `validate_hook_prose` 机械拒收并触发同 Context 有限重写（I-42：免费重验与 hook_writer wire 人工采用入口在场） | `结构`（`novel/stages/stage5/body_checks.py::count_body_chars`／`novel/stages/stage5/hook_writer.py::validate_hook_prose`） |
 | R-4.10 | 测量契约必须进入 Stage5/6 对相应 Stage1 文本的 consumed 投影，使算法改动与输入文本改动走同一 freshness 机制 | `结构`（`novel/consumption.py::stage2_main_text` / `contracts/schema/hook.py::HookContext`） |
 | R-4.11 | 不再注册 Stage3 规则或 check 端点；即时读数只由 Stage5/6 的真实消费者继续进入 prompt、归一化或机械检查 | `结构`（`contracts/rules.py` + `novel/core/measure.py`） |
 | R-4.12 | 不再生产 Stage3 `.INVALID`、轮次稿或修复命令；Stage1 变更后下游现场重新计算 | `结构`（`contracts/artifacts.py::ARTIFACT_PATHS` + `contracts/invariants.py::NODES`） |

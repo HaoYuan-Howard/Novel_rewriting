@@ -403,7 +403,7 @@ def _hook_context_unresolvable() -> list:
             fact.model_copy(update={'ref': 's99#bt1'})
             for fact in graph.hook.opening_facts)})})
     _rebuilt, errors = compile_hook_context(
-        broken, _projection())
+        broken, _projection(), total_budget=2000)
     return errors
 
 

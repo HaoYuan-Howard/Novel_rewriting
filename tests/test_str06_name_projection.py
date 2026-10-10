@@ -368,7 +368,7 @@ def _hook_context(**hook_over):
         name_projection=chars.name_projection())
     assert hook is not None and not errors, errors
     context, errors = compile_hook_context(
-        publish_graph(body, hook), chars.name_projection(), chars.name_structure)
+        publish_graph(body, hook), chars.name_projection(), chars.name_structure, total_budget=2000)
     assert context is not None and not errors, errors
     return context
 
@@ -473,7 +473,7 @@ def test_hook_forbidden_lines_project_but_never_join_the_leak_check():
         name_projection=chars.name_projection())
     assert hook is not None and not errors, errors
     context, errors = compile_hook_context(
-        publish_graph(body, hook), chars.name_projection(), chars.name_structure)
+        publish_graph(body, hook), chars.name_projection(), chars.name_structure, total_budget=2000)
     assert context is not None and not errors, errors
     assert '事件不得提前揭示：夫君拜堂成亲' in render_hook_context(context)
     assert {'field': 'forbidden_reveals/0', 'literal': '陆大哥',
@@ -517,7 +517,7 @@ def test_hook_context_rejects_pre_rc16_payload_and_duplicate_bindings():
     with pytest.raises(ValidationError):
         HookContext.model_validate(stored)
     duplicate = dict(stored)
-    duplicate['contract_version'] = 'str06-rc18'
+    duplicate['contract_version'] = 'str06-rc24'
     duplicate['withheld_bindings'] = [
         dict(b) for b in context.withheld_bindings][:1] * 2
     with pytest.raises(ValidationError, match='重复'):
@@ -552,5 +552,5 @@ def test_hook_projection_reaches_the_compile_guard_report(tmp_path):
     reopened = Str06Repository(repo.root)
     assert reopened.inspect('stage4/acceptance/guard/report.json') == report
     context = reopened.read_model('stage4/context/hook/hook.json')
-    assert context.contract_version == 'str06-rc18'
+    assert context.contract_version == 'str06-rc24'
     assert '陆大哥' in context.local_focus and '陆大哥' not in build_hook_user_prompt(context)

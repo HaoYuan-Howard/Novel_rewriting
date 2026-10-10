@@ -190,7 +190,8 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         hook_context, hook_errors = compile_hook_context(graph, projection,
                                                         chars.name_structure, kp_statements,
                                                         world_statements,
-                                                        characters=chars.core_view())
+                                                        characters=chars.core_view(),
+                                                        total_budget=budget)
         errors.extend(hook_errors)
         if plan is not None and hook_context is not None:
             inspection = inspect_body_materials(graph, binding, brief, chars, budget=budget,
@@ -232,7 +233,8 @@ def _design_preview(repository, candidate, checkpoint, brief, chars, *, budget,
                     hook, body=inspection.body, binding=inspection.binding, chars=chars,
                     kp_statements={p.kp_id: p.statement for p in brief.propositions},
                     world_statements={w.constraint_id: w.statement
-                                      for w in brief.book_constraints})
+                                      for w in brief.book_constraints},
+                    total_budget=budget)
             except ValidationError as exc:
                 hook_errors = [f'已有Hook与候选不闭合：{e}' for e in exc.errors(include_url=False)]
             errors.extend(hook_errors)

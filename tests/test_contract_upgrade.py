@@ -5,7 +5,10 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from contracts.contract_upgrades import HOOK_UPGRADE
+from contracts.contract_upgrades import REGISTERED_UPGRADES
+
+#: 升级机制测试跟随最新登记边；边的语义断言（归档集／返还节点）全部由它派生。
+EDGE = REGISTERED_UPGRADES[-1]
 from novel import prov
 from novel.errors import ProvenanceRefused, TerminalState, UpgradeRefused
 from novel.llm.paid_requests import (
@@ -23,9 +26,9 @@ SOURCE = 'a' * 64
 
 
 def _old_workflow(repo, source=SOURCE):
-    epoch = candidate_epoch()._replace(contract_version='str06-rc22')
+    epoch = candidate_epoch()._replace(contract_version=EDGE['source_version'])
     before = open_candidate_workflow(epoch=epoch, source_identity=source, created_at=epoch.created_at)
-    before = before._replace(contract_identity=HOOK_UPGRADE['source_identity'])
+    before = before._replace(contract_identity=EDGE['source_identity'])
     repo.write(WORKFLOW_REL, workflow_to_disk(before))
     return before
 
@@ -80,7 +83,7 @@ def test_apply_archives_original_bytes_keeps_body_and_is_idempotent(tmp_path):
     identity = receipt['subject_sha256']
     after = workflow_from_disk(repo.inspect(WORKFLOW_REL))
     assert after.epoch.reason == 'contract_drift' and after.epoch.ordinal == 2
-    assert after.contract_identity == HOOK_UPGRADE['target_identity']
+    assert after.contract_identity == EDGE['target_identity']
     assert repo.read_text('stage5/body/ch01.txt') == '保留章稿。'
     assert not repo.path('stage5/hook/hook.txt').exists()
     assert repo.read_text(f'runtime/upgrades/{identity}/files/stage5/hook/hook.txt') == '原楔子证据。'
@@ -261,8 +264,8 @@ def test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body(tmp_path, monk
 
         def archive(upgrade, rel, sha):
             original_archive(upgrade, rel, sha)
-            if window == 'archive' and rel == 'stage4/ir/writer_book_ir.json':
-                raise OSError('模拟章稿仍保留、IR 已退出的窗口')
+            if window == 'archive' and rel == 'stage4/context/hook/hook.json':
+                raise OSError('模拟章稿仍保留、上下文已退出的窗口')
 
         def write(rel, *args, **kwargs):
             result = original_write(rel, *args, **kwargs)
@@ -283,7 +286,7 @@ def test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body(tmp_path, monk
     from novel.work_units import readonly_budget, registered_unit_ids
     for unit_id in registered_unit_ids(repo.root.parent, 'run'):
         ledger = readonly_budget(repo.root.parent, 'run', unit_id)._read()
-        if ledger.node in ('str06.stage4.hook_design', 'str06.stage5.hook'):
+        if ledger.node in EDGE['refund_nodes']:
             assert ledger.refunds, ledger.node
     assert all(p.read_bytes() == data for p, data in body.items())
     # 真实初始化入口必须接受新 epoch，历史账沿用同一 base／sid。
@@ -509,11 +512,10 @@ def test_workflow_lock_contention_is_a_terminal_stop_with_zero_writes(tmp_path):
 
 
 def test_open_hook_design_issue_is_resolved_when_product_archived(tmp_path):
-    """升级归档 presentation_graph 时，锚定它的 open 回派账一并收口。
+    """升级保留 presentation_graph（rc24 边）时，hook_design 回派账不收口。
 
-    留着 open 记录的话，run_hook_design 会去读已归档的上一版当修订模板
-    （FileNotFoundError / exit 70）；收口后按无 open 记录首跑重建，typed
-    问题与轮数在 resolved 记录里留账。
+    收口只随归档发生——归档后重建不能把已退出的旧版当修订模板；design 未
+    失效时修订模板仍可读，回派账继续有效，升级不越权清掉仍然承重的账。
     """
     from contracts.schema.workflow import OwnerIssueV1
     from novel.stages.owner_revision import (
@@ -530,21 +532,17 @@ def test_open_hook_design_issue_is_resolved_when_product_archived(tmp_path):
     assert read_owner_issue_file(repo, 'hook_design').status == 'open'
     _old_workflow(repo)
     _apply(repo, _preview(repo))
-    resolved = read_owner_issue_file(repo, 'hook_design')
-    assert resolved.status == 'resolved'
-    assert resolved.raised_by == 'contract-upgrade:hook-rc22-rc23'
-    # 收口后重建按首跑路径走：修订 prompt 不再读已归档的上一版（原缺陷是
-    # FileNotFoundError / exit 70）。请求身份未变时按 R-7.4 免费重放——
-    # 零新购、图按 rc23 重新发布，正是「不能把旧 Hook 补成新版」的正路。
-    calls = len(transport.calls)
+    assert read_owner_issue_file(repo, 'hook_design').status == 'open'
+    # design 保留 ⇒ 修订模板可读：重跑走回派修订路径，graph 保持 rc23 形状。
     _run(repo, session, node_filter=('str06.stage4.hook_design', 'str06.stage4.compile'))
-    assert len(transport.calls) == calls
     graph = repo.inspect('stage4/design/presentation_graph.json')
     assert graph['contract_version'] == 'str06-rc23'
 
 
 def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
-    from novel.llm.paid_requests import ask_json, ExecutionError, PaidRequestSession
+    from novel.llm.paid_requests import (
+        ExecutionError, PaidRequestSession, ask_json, ask_text_once,
+    )
     from novel.llm.transport import ChatRequest
     from novel.work_units import WorkUnitBudget, read_book_budget
     repo, session, transport = _make_session(tmp_path, _full_chain_wires())
@@ -557,17 +555,20 @@ def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
     request = ChatRequest(model='fake', system='未知调用', user='独立的新请求',
                           reasoning_effort='high', thinking=True, json_mode=True, max_tokens=1024)
     session.transport = Unconfirmed()
+    text_request = ChatRequest(model='fake', system='未知调用', user='独立的新文本请求',
+                               reasoning_effort='high', thinking=True, json_mode=False,
+                               max_tokens=1024)
     with pytest.raises((ExecutionError, TimeoutError)):
-        ask_json(session, 'hook_design', request, lambda _: [])
-    unit = WorkUnitBudget(repo.root.parent, 'run', 'str06.stage4.hook_design', 'executor', 'book')
+        ask_text_once(session, 'hook_writer', text_request, lambda _: [])
+    unit = WorkUnitBudget(repo.root.parent, 'run', 'str06.stage5.hook', 'executor', 'book')
     old_ledger = unit._read()
     old_budget = read_book_budget(repo.root.parent, 'run')
     assert old_ledger.turns[-1].state == 'unknown'
     # 预览附带的重建额度投影与账面一致：应用前就能看见「第一步会不会撞额度」。
     from novel.orchestrator.work_unit_evidence import rebuild_budget_views
     hook_view = next(v for v in rebuild_budget_views(
-        repo.root.parent, 'run', HOOK_UPGRADE['rebuild_nodes'])
-        if v['node'] == 'str06.stage4.hook_design')
+        repo.root.parent, 'run', EDGE['rebuild_nodes'])
+        if v['node'] == 'str06.stage5.hook')
     assert hook_view['content_used'] == len(old_ledger.turns)
     assert hook_view['content_remaining'] == hook_view['content_limit'] - len(old_ledger.turns)
     _old_workflow(repo)
@@ -584,7 +585,7 @@ def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
     session = PaidRequestSession(repo, context.ledger, Unconfirmed(), yes=True,
                                 allow_source_export=True, provider='fake', sid='run')
     with pytest.raises((ExecutionError, ValueError), match='unknown|未知'):
-        ask_json(session, 'hook_design', request, lambda _: [])
+        ask_text_once(session, 'hook_writer', text_request, lambda _: [])
     assert unit._read() == refunded
     assert read_book_budget(repo.root.parent, 'run') == old_budget
 
@@ -623,8 +624,8 @@ def test_operator_and_agent_resume_same_root_to_delivery(tmp_path, monkeypatch):
     repo = Str06Repository(paths.resolve_novel_dir(base, '9001'))
     current = workflow_from_disk(repo.inspect(WORKFLOW_REL))
     historical = current._replace(
-        epoch=current.epoch._replace(contract_version=HOOK_UPGRADE['source_version']),
-        contract_identity=HOOK_UPGRADE['source_identity'])
+        epoch=current.epoch._replace(contract_version=EDGE['source_version']),
+        contract_identity=EDGE['source_identity'])
     repo.write(WORKFLOW_REL, workflow_to_disk(historical))
     original = {p: p.read_bytes() for prefix in ('stage5/body', 'stage5/acceptance/body')
                 for p in (repo.root / prefix).glob('*')}
@@ -635,7 +636,9 @@ def test_operator_and_agent_resume_same_root_to_delivery(tmp_path, monkeypatch):
           actor='测试', reason='同根恢复真实自动编排入口')
     next_action = operator.next_action(base, '9001')
     assert next_action.state == 'ready' and next_action.action is not None
-    assert next_action.action.node == 'str06.stage4.hook_design'
+    # rc24 边保留 presentation_graph：恢复从免费重编译开始（context 已归档），
+    # 不再回到 hook_design——design 仍是现役产物，不是重建面。
+    assert next_action.action.node == 'str06.stage4.compile'
     box = {'dispatched': [], 'processes': []}
     _install_inprocess_subprocess(monkeypatch, box)
     _install_step_argv(monkeypatch, box)
@@ -643,7 +646,7 @@ def test_operator_and_agent_resume_same_root_to_delivery(tmp_path, monkeypatch):
                       profiles=profiles, pause_before_node=None)
     assert agent.wait(run.run_id, 120)
     assert operator.next_action(base, '9001').state == 'pipeline_complete'
-    assert {item['node'] for item in box['dispatched']} <= set(HOOK_UPGRADE['rebuild_nodes'])
+    assert {item['node'] for item in box['dispatched']} <= set(EDGE['rebuild_nodes'])
     assert not any(owner.startswith('body_') for owner in transport.calls[calls:])
     assert all(p.read_bytes() == data for p, data in original.items())
     assert repo.inspect('runtime/workflow_status.json')['status'] == 'delivered'
@@ -682,7 +685,7 @@ def test_cli_subprocess_preview_and_apply_are_free_and_reachable(tmp_path):
 def _exhausted_hook_unit(repo):
     from novel import work_units
     base, sid = repo.root.parent, repo.root.name
-    budget = work_units.WorkUnitBudget(base, sid, 'str06.stage4.hook_design')
+    budget = work_units.WorkUnitBudget(base, sid, 'str06.stage5.hook')
     for i in range(4):
         reservation = budget.reserve('a' * 64, run_id=f'r{i}')
         budget.finish(reservation.turn_id, outcome='failed',
@@ -697,7 +700,7 @@ def test_apply_refunds_registered_unit_rounds_to_base(tmp_path):
     plan = _preview(repo)
     receipt = _apply(repo, plan)
     row = next(r for r in receipt['round_refunds']
-               if r['node'] == 'str06.stage4.hook_design')
+               if r['node'] == 'str06.stage5.hook')
     assert row['status'] == 'refunded' and row['additional'] == 4
     assert budget.remaining == 4 and budget.used == 4
     ledger = budget._read()
@@ -709,7 +712,7 @@ def test_apply_refunds_registered_unit_rounds_to_base(tmp_path):
     # 重放幂等：同一升级不重复返还。
     again = _apply(repo, plan)
     row2 = next(r for r in again['round_refunds']
-                if r['node'] == 'str06.stage4.hook_design')
+                if r['node'] == 'str06.stage5.hook')
     assert row2['status'] == 'already_refunded' and budget.remaining == 4
 
 
@@ -747,14 +750,14 @@ def test_hook_edge_has_no_converter_and_refuses_explicitly(tmp_path):
     from novel.orchestrator.upgrade_converters import (
         CONVERTERS, convert_archived_wire,
     )
-    assert ('hook-rc22-rc23', 'str06.stage4.hook_design') not in CONVERTERS
+    assert (EDGE['id'], 'str06.stage5.hook') not in CONVERTERS
     repo = _minimal(tmp_path)
     plan = _preview(repo)
     _apply(repo, plan)
     from novel.errors import TerminalState
     with pytest.raises(TerminalState, match='未登记无损换算器'):
-        convert_archived_wire(repo, upgrade_id='hook-rc22-rc23',
-                              node='str06.stage4.hook_design',
+        convert_archived_wire(repo, upgrade_id=EDGE['id'],
+                              node='str06.stage5.hook',
                               wire_dir=tmp_path / 'w', actor='测试', reason='语义缺口')
 
 
@@ -766,21 +769,21 @@ def test_registered_converter_writes_wire_for_free_adoption(tmp_path):
     plan = _preview(repo)
     receipt = _apply(repo, plan)
     subject = receipt['subject_sha256']
-    key = ('hook-rc22-rc23', 'str06.stage4.hook_design')
+    key = (EDGE['id'], 'str06.stage5.hook')
     CONVERTERS[key] = WireConverter(
-        upgrade_id='hook-rc22-rc23', node='str06.stage4.hook_design',
-        owner='hook_design', source_rel='stage5/hook/hook.txt',
+        upgrade_id=EDGE['id'], node='str06.stage5.hook',
+        owner='hook_writer', source_rel='stage5/hook/hook.txt',
         note='测试边：演示无损换算登记面', convert=lambda p: dict(p))
     try:
         out = convert_archived_wire(repo, upgrade_id=key[0], node=key[1],
                                     wire_dir=tmp_path / 'w', actor='测试',
                                     reason='登记的免费换算')
         assert out['status'] == 'converted'
-        wire = json.loads((tmp_path / 'w' / 'hook_design_wire.json')
+        wire = json.loads((tmp_path / 'w' / 'hook_writer_wire.json')
                           .read_text(encoding='utf-8'))
         assert wire == {'prose': '原楔子证据。'}
         record = repo.inspect(
-            f'runtime/upgrades/{subject}/converted/hook_design.json')
+            f'runtime/upgrades/{subject}/converted/hook_writer.json')
         assert record['source_rel'] == 'stage5/hook/hook.txt'
         # 幂等：同一字节再换算不拒绝。
         again = convert_archived_wire(repo, upgrade_id=key[0], node=key[1],
