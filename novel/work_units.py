@@ -621,6 +621,48 @@ class WorkUnitBudget:
         ledger = self._read()
         return ledger.content_limit - ledger.base_content_limit
 
+    def refund_for_upgrade(self, upgrade_id: str, *, reason: str) -> dict:
+        """同根契约升级作废本单元已购产物后，把可用轮次恢复到基础额度。
+
+        2026-10-10 裁决「升级清账」的唯一写入口：返还量 =
+        max(0, base_content_limit − 当前剩余)。只增加可用轮次（追加
+        `UpgradeRoundRefund` 行），不清历史轮、不退费用、不改响应证据——
+        成本权威仍是 `_service/ledger.jsonl`（I-17），实际付费调用另经
+        `reserve_book_call` 的整书总闸与 `--yes` 授权（I-43）。同一
+        `upgrade_id` 幂等：已返还过即原样返回，不重复累计。
+        """
+        if not re.fullmatch(r'[0-9a-f]{64}', upgrade_id or ''):
+            raise WorkUnitRefused('升级身份必须是 SHA-256')
+        if not reason.strip():
+            raise WorkUnitRefused('轮次返还必须登记理由')
+        with path_transaction_lock(self.path):
+            ledger = self._read()
+            existing = [row for row in ledger.refunds if row.upgrade_id == upgrade_id]
+            if existing:
+                return {'status': 'already_refunded', 'additional': 0,
+                        'refunded_after_ordinal': existing[0].refunded_after_ordinal,
+                        'remaining': ledger.content_limit - len(ledger.turns)}
+            additional = ledger.base_content_limit - (
+                ledger.content_limit - len(ledger.turns))
+            if additional <= 0:
+                return {'status': 'noop', 'additional': 0,
+                        'refunded_after_ordinal': len(ledger.turns),
+                        'remaining': ledger.content_limit - len(ledger.turns)}
+            from contracts.schema.workflow import UpgradeRoundRefund
+            refund = UpgradeRoundRefund(
+                upgrade_id=upgrade_id, reason=reason.strip(),
+                created_at=int(time.time()),
+                before_ledger_sha256=_digest(ledger.model_dump(mode='json')),
+                refunded_after_ordinal=len(ledger.turns),
+                additional=additional)
+            updated = WorkUnitLedgerV2.model_validate({
+                **ledger.model_dump(mode='json'),
+                'refunds': [*ledger.refunds, refund]})
+            _write(self.base, self.path, updated)
+            return {'status': 'refunded', 'additional': additional,
+                    'refunded_after_ordinal': refund.refunded_after_ordinal,
+                    'remaining': updated.content_limit - len(updated.turns)}
+
     def reserve(self, request_sha256: str, *, run_id: str,
                 session_run_id: str = '',
                 agent_run_id: str = '', agent_epoch_id: str = '',
@@ -1311,7 +1353,9 @@ def unit_view(ledger: WorkUnitLedgerV2) -> dict[str, Any]:
                 scope=ledger.scope, content_used=len(ledger.turns),
                 content_limit=ledger.content_limit, content_base_limit=ledger.base_content_limit,
                 content_granted=ledger.content_limit - ledger.base_content_limit,
-                grant_count=len(ledger.grants), content_remaining=ledger.content_limit - len(ledger.turns),
+                content_refunded=sum(row.additional for row in ledger.refunds),
+                grant_count=len(ledger.grants), refund_count=len(ledger.refunds),
+                content_remaining=ledger.content_limit - len(ledger.turns),
                 state=state, latest_request_sha256=latest.request_sha256 if latest else None,
                 latest_response_sha256=latest.response_sha256 if latest else None,
                 recovery_action=recovery, processing=processing_view(ledger))

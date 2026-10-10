@@ -824,7 +824,10 @@ class WorkUnitView(StrictModel):
     content_limit: int = Field(ge=0)
     content_base_limit: int = Field(default=4, ge=0)
     content_granted: int = Field(default=0, ge=0)
+    #: 升级轮次返还（裁决「升级清账」）：granted 含返还，两项分列供展示。
+    content_refunded: int = Field(default=0, ge=0)
     grant_count: int = Field(default=0, ge=0)
+    refund_count: int = Field(default=0, ge=0)
     content_remaining: int = Field(ge=0)
     state: str
     latest_request_sha256: str | None = None

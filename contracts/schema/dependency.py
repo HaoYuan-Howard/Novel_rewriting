@@ -144,10 +144,12 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
                  'novel.stages.stage4.hook_wire', 'novel.stages.stage4.hook_validation')
         + _STAGE457),
     # wire compiler 仅展开引用；不借 validator 或下游编译推断缺失语义。
+    # novel.core.text：name_exposure 标注的命题回填与 hook_context 同尺
+    # （kp_statement，判据 25）；纯文本助手，不是生产或编译模块。
     DependencyRule(
         module='novel.stages.stage4.hook_wire',
         allows=('contracts.schema.*', 'novel.stages.stage4.hook_facts',
-                'novel.stages.stage4.design_paths'),
+                'novel.stages.stage4.design_paths', 'novel.core.text'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
                  'novel.stages.stage4.hook_validation') + _STAGE457),
     # hook_writer 只能消费 hook／receipt 契约：禁止 LLM 与 Stage2/4/7 模块。

@@ -267,7 +267,9 @@ def _parser() -> argparse.ArgumentParser:
     correction.add_argument('--subject-sha256')
     correction.add_argument('--reason')
 
-    upgrade = sub.add_parser('contract-upgrade', help='已登记的同根升级；保留历史证据和累计额度')
+    upgrade = sub.add_parser(
+        'contract-upgrade',
+        help='已登记的同根升级；保留历史证据，登记节点的轮次随 apply 返还')
     upgrade.add_argument('sid')
     upgrade.add_argument('--base', required=True)
     upgrade.add_argument('--apply', action='store_true')
@@ -276,6 +278,12 @@ def _parser() -> argparse.ArgumentParser:
     upgrade.add_argument('--subject-sha256')
     upgrade.add_argument('--actor')
     upgrade.add_argument('--reason')
+    upgrade.add_argument('--convert', default=None,
+                         help='0 成本：把已登记无损换算边的归档产物换算成当前 '
+                              'wire（如 str06.stage4.hook_design），不跑模型')
+    upgrade.add_argument('--wire-dir', default=None,
+                         help='--convert 的输出目录；随后 run --node … --wire-dir '
+                              '… 免费采用')
 
     mk = sub.add_parser('mark', help='进度信标打点（0 成本，恒 exit 0）')
     mk.add_argument('sid')
@@ -1323,6 +1331,21 @@ def _cmd_contract_upgrade(a: argparse.Namespace) -> int:
     code = prov.code_version()
     if code == prov.CODE_UNKNOWN:
         raise TerminalState('代码身份未知，不能规划契约升级')
+    if a.convert:
+        if a.apply or a.abort_pending:
+            raise TerminalState('--convert 与 --apply/--abort-pending 互斥')
+        if not a.wire_dir:
+            raise TerminalState('--convert 必须给 --wire-dir 输出目录')
+        if not all((a.actor, a.reason)):
+            raise TerminalState('--convert 必须给 --actor 和 --reason')
+        from novel.orchestrator.upgrade_converters import (
+            convert_archived_wire, upgrade_id_for_node,
+        )
+        result = convert_archived_wire(
+            repo, upgrade_id=upgrade_id_for_node(a.convert), node=a.convert,
+            wire_dir=Path(a.wire_dir), actor=a.actor, reason=a.reason)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
     if a.abort_pending:
         if a.apply:
             raise TerminalState('--abort-pending 与 --apply 互斥')

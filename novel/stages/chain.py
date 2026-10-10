@@ -1613,7 +1613,10 @@ def run_hook_design(ctx: ChainContext) -> dict:
                                    node='str06.stage4.hook_design',
                                    issues=(str(exc),)) from exc
     hook_design_prompt = pack_prompt(
-        HOOK_DESIGN_RULES, book_title=ctx.book_title, story=project_hook_input(body),
+        HOOK_DESIGN_RULES, book_title=ctx.book_title,
+        story=project_hook_input(body, projection=projection,
+                                 kp_statements=kp_statements,
+                                 world_statements=world_statements),
         wire_schema=hook_wire_schema(body),
         semantics=semantics,
         identities=[i.model_dump(mode='json') for i in identities])
@@ -1636,6 +1639,13 @@ def run_hook_design(ctx: ChainContext) -> dict:
                                            name_projection=projection, name_structure=chars.name_structure)
         if hook is not None:
             errors.extend(hook_combination(hook))
+        elif errors:
+            # 方向二（2026-10-10 裁决）：结构失败时仍聚合不依赖失败条目的
+            # 材料层机械错误，一轮反馈暴露全部机械缺陷，不逐层付费排雷。
+            from novel.stages.stage4 import hook_candidate_material_errors
+            errors.extend(hook_candidate_material_errors(
+                w, body=body, chars=chars, binding=binding,
+                kp_statements=kp_statements, world_statements=world_statements))
         return (None, errors) if errors else (hook, [])
 
     def hook_narrow_context(base_wire, targets):
@@ -1646,8 +1656,10 @@ def run_hook_design(ctx: ChainContext) -> dict:
         """
         return NarrowPatchRequest(
             rules=HOOK_DESIGN_RULES,
-            dependency=json.dumps({**hook_patch_slice(body, base_wire,
-                                                   [t.path for t in targets]), 'semantics': semantics},
+            dependency=json.dumps({**hook_patch_slice(
+                body, base_wire, [t.path for t in targets], projection=projection,
+                kp_statements=kp_statements, world_statements=world_statements),
+                'semantics': semantics},
                                   ensure_ascii=False, separators=(',', ':')),
             legal_values=json.dumps(hook_patch_legal_values(
                 body=body, known_char_ids=set(chars.characters),

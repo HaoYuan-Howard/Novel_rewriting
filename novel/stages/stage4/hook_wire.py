@@ -2,15 +2,21 @@
 
 模型仅选择已给出的引用与呈现策略；compiler 不补出旧版缺少的组织及读者期待。
 答案、后续承载位置只用于校验，不作为 Writer 的正向写作材料。
+
+【请求面派生标注（2026-10-10 裁决，方向一）】目录每条在原始事实字段之外附
+`later_writes`／`name_exposure` 两类 compiler 预推导标注，只进请求、不进 wire
+契约：判据可机械推导的部分（同地址覆盖时序、命题文本的专名暴露）由代码算好
+给模型查表，不再要求模型在全书事实上手工重放状态机（I-15/I-20）。
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from pydantic import ValidationError
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.hook import HookDesignWire
+from contracts.schema.source import NameProjection
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.hook_facts import hook_facts
 
@@ -26,6 +32,73 @@ def hook_catalog(body: BodyDesign) -> dict[str, dict]:
     return {fact.fact_ref: {'ref': ref_parts(fact.ref),
                            **fact.delta.model_dump(mode='json')}
             for fact in hook_facts(body)}
+
+
+def hook_name_exposure(text: str | None, projection: NameProjection) -> dict[str, list[str]]:
+    """文本命中的各人物专名字面（与 presentation 泄漏判据同一字面宇宙）。
+
+    只做存在性报告，不做替换；按人物分组让模型对照自己的 surface_releases
+    决定「释放该人物」还是「换选条目」。短姓、家族构词等非登记字面不在内，
+    与 `hook_validation` 的隐藏人物字面判据同尺。
+    """
+    exposure: dict[str, list[str]] = {}
+    if not text:
+        return exposure
+    for entry in projection.by_person:
+        literals = sorted(
+            {literal for literal in (*entry.proper_literals, *entry.name_bearing_surfaces)
+             if literal}, key=len, reverse=True)
+        found = [literal for literal in literals if literal in text]
+        if found:
+            exposure[entry.char_id] = found
+    return exposure
+
+
+def _statement_text(fact, kp_statements: Mapping[str, str],
+                    world_statements: Mapping[str, str]) -> str:
+    """该条事实渲染进写手视图时的命题/取值文本（`_render_fact` 同一来源：
+    kp 句柄经 `kp_statement` 回填，非 kp 键的 value 本就是内容）。"""
+    from novel.core.text import kp_statement
+    if fact.delta.domain.value == 'knowledge':
+        statement = kp_statement(kp_statements, fact.delta.key)
+        return statement if statement is not None else fact.delta.value
+    if fact.delta.domain.value == 'world' and fact.delta.key in world_statements:
+        return world_statements[fact.delta.key]
+    return fact.delta.value
+
+
+def annotated_hook_catalog(body: BodyDesign, *, projection: NameProjection | None = None,
+                           kp_statements: Mapping[str, str] = (),
+                           world_statements: Mapping[str, str] = ()) -> dict[str, dict]:
+    """hook_catalog + 请求面派生标注（later_writes／name_exposure）。
+
+    · `later_writes`——同地址在本条建立位置之后的全部写入（含 unset，阅读序）。
+      world/pov 起笔事实必须是冷开起点前该地址的**最后一次**写入；起点不早于
+      任一后续写入时旧值已失效（`hook_opening_stale`）。scene 作用域的有效性
+      由模型按 `scope`＋所在场核对，规则文本另有说明。
+    · `name_exposure`——本条命题/取值文本命中的专名字面（按人物）。这些文本会
+      原样进入写手视图；未释放且无显示面替换的人物字面即泄漏
+      （`positive_material_leak`）。
+    """
+    facts = hook_facts(body)
+    catalog = hook_catalog(body)
+    by_address: dict[tuple, list] = {}
+    for fact in facts:
+        by_address.setdefault(fact.delta.address(), []).append(fact)
+    for fact in facts:
+        row = catalog[fact.fact_ref]
+        later = [other for other in by_address[fact.delta.address()]
+                 if other.position > fact.position]
+        if later:
+            row['later_writes'] = [
+                {'fact_ref': other.fact_ref, 'at': ref_parts(other.ref)}
+                for other in later]
+        if projection is not None:
+            exposure = hook_name_exposure(
+                _statement_text(fact, kp_statements, world_statements), projection)
+            if exposure:
+                row['name_exposure'] = exposure
+    return catalog
 
 
 def hook_wire_schema(body: BodyDesign) -> dict:
@@ -58,11 +131,31 @@ def opening_chapter_input(body: BodyDesign) -> dict:
                       for scene_ref in opening.scene_ids for beat in scenes[scene_ref].beats]}
 
 
-def project_hook_input(body: BodyDesign) -> dict:
-    """保留入口决策的完整故事语义，剥离预算、审计和重复状态地址。"""
+def project_hook_input(body: BodyDesign, *, projection: NameProjection | None = None,
+                       kp_statements: Mapping[str, str] = (),
+                       world_statements: Mapping[str, str] = ()) -> dict:
+    """保留入口决策的完整故事语义，剥离预算、审计和重复状态地址。
+
+    `projection` 在场时目录与拍附派生标注（`annotated_hook_catalog`；拍上的
+    `name_exposure` 标注 `event` 文本——材料渲染会原样带上它）。
+    """
     facts = hook_facts(body)
+
+    def beat_row(scene, beat) -> dict:
+        row = {**beat.model_dump(mode='json', exclude={'target_delta'}),
+               'fact_refs': [f.fact_ref for f in facts
+                             if f.ref == f'{scene.scene_id}#{beat.beat_id}']}
+        if projection is not None:
+            exposure = hook_name_exposure(beat.event, projection)
+            if exposure:
+                row['name_exposure'] = exposure
+        return row
+
     return {
-        'input_version': 'stage4-hook-input-v3', 'facts': hook_catalog(body),
+        'input_version': 'stage4-hook-input-v3',
+        'facts': annotated_hook_catalog(body, projection=projection,
+                                        kp_statements=kp_statements,
+                                        world_statements=world_statements),
         'book_style': body.book_style, 'narration': body.narration.model_dump(mode='json'),
         'world_rules': list(body.world_rules),
         'character_voices': [v.model_dump(mode='json') for v in body.character_voices],
@@ -72,11 +165,7 @@ def project_hook_input(body: BodyDesign) -> dict:
             'scene_id': scene.scene_id, 'driver': scene.driver.model_dump(mode='json'),
             'realization_brief': scene.realization_brief,
             'delivery': scene.delivery.model_dump(mode='json'),
-            'beats': [{
-                **beat.model_dump(mode='json', exclude={'target_delta'}),
-                'fact_refs': [f.fact_ref for f in facts
-                              if f.ref == f'{scene.scene_id}#{beat.beat_id}']}
-                for beat in scene.beats]}
+            'beats': [beat_row(scene, beat) for beat in scene.beats]}
             for scene in body.scenes],
         'chapters': [c.model_dump(mode='json', exclude={'length_budget'}) for c in body.chapters],
         'opening_chapter': opening_chapter_input(body),

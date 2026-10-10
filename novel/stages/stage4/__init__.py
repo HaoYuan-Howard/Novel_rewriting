@@ -58,7 +58,8 @@ from novel.stages.stage4.grounding import (
     preserve_revision_wire,
 )
 from novel.stages.stage4.preflight import (
-    hook_combination_errors, inspect_body_materials, inspect_design_candidate,
+    hook_candidate_material_errors, hook_combination_errors,
+    inspect_body_materials, inspect_design_candidate,
 )
 from novel.stages.stage4.repair import plan_material_repairs
 from novel.stages.stage4.guard import (

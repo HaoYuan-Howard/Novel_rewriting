@@ -1,7 +1,9 @@
 """同根登记升级、崩溃补尾与逐章真实消费者；全程 fake transport，零真实付费。"""
 from copy import deepcopy
+import json
 
 import pytest
+from pydantic import ValidationError
 
 from contracts.contract_upgrades import HOOK_UPGRADE
 from novel import prov
@@ -248,7 +250,10 @@ def test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body(tmp_path, monk
     body = {p: p.read_bytes() for prefix in ('stage5/body', 'stage5/acceptance/body')
             for p in (repo.root / prefix).glob('*')}
     service = {p: p.read_bytes() for p in (repo.root.parent / '_service').rglob('*')
-               if p.is_file() and not p.name.endswith('.lock')}
+               if p.is_file() and not p.name.endswith('.lock')
+               # 轮次返还会追加登记节点的单元账行（裁决「升级清账」），
+               # 其余服务账面（费用／响应／登记）字节不变。
+               and p.name != 'ledger.json'}
     calls = len(transport.calls)
     plan = _preview(repo)
     if window != 'none':
@@ -274,6 +279,12 @@ def test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body(tmp_path, monk
         assert _preview(repo) == plan
     _apply(repo, plan)
     assert all(p.read_bytes() == data for p, data in service.items()), '升级不改账／额度／响应'
+    # 清账裁决：登记重建节点的付费单元获得轮次返还，历史轮与响应证据不变。
+    from novel.work_units import readonly_budget, registered_unit_ids
+    for unit_id in registered_unit_ids(repo.root.parent, 'run'):
+        ledger = readonly_budget(repo.root.parent, 'run', unit_id)._read()
+        if ledger.node in ('str06.stage4.hook_design', 'str06.stage5.hook'):
+            assert ledger.refunds, ledger.node
     assert all(p.read_bytes() == data for p, data in body.items())
     # 真实初始化入口必须接受新 epoch，历史账沿用同一 base／sid。
     from novel.llm.paid_requests import PaidRequestSession
@@ -560,8 +571,12 @@ def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
     assert hook_view['content_used'] == len(old_ledger.turns)
     assert hook_view['content_remaining'] == hook_view['content_limit'] - len(old_ledger.turns)
     _old_workflow(repo)
-    _apply(repo, _preview(repo))
-    assert unit._read() == old_ledger
+    receipt = _apply(repo, _preview(repo))
+    # 裁决「升级清账」：轮次返还入账；历史轮（含 unknown）与费用总闸原样保留。
+    refunded = unit._read()
+    assert refunded.turns == old_ledger.turns
+    assert [row.upgrade_id for row in refunded.refunds] == [receipt['subject_sha256']]
+    assert refunded.content_limit == old_ledger.content_limit + refunded.refunds[0].additional
     assert read_book_budget(repo.root.parent, 'run') == old_budget
     _, context = init_or_resume_candidate_workflow(repository=repo, base=repo.root.parent,
         code=prov.code_version(), root_sha1='a' * 40, source_identity=SOURCE,
@@ -570,7 +585,7 @@ def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
                                 allow_source_export=True, provider='fake', sid='run')
     with pytest.raises((ExecutionError, ValueError), match='unknown|未知'):
         ask_json(session, 'hook_design', request, lambda _: [])
-    assert unit._read() == old_ledger
+    assert unit._read() == refunded
     assert read_book_budget(repo.root.parent, 'run') == old_budget
 
 
@@ -660,3 +675,117 @@ def test_cli_subprocess_preview_and_apply_are_free_and_reachable(tmp_path):
     assert written.returncode == 0, written.stderr
     assert json.loads(written.stdout)['status'] == 'applied'
     assert repo.read_text('stage5/body/ch01.txt') == '保留章稿。'
+
+
+# ──────────── 裁决「升级清账」：登记节点轮次返还（2026-10-10） ────────────
+
+def _exhausted_hook_unit(repo):
+    from novel import work_units
+    base, sid = repo.root.parent, repo.root.name
+    budget = work_units.WorkUnitBudget(base, sid, 'str06.stage4.hook_design')
+    for i in range(4):
+        reservation = budget.reserve('a' * 64, run_id=f'r{i}')
+        budget.finish(reservation.turn_id, outcome='failed',
+                      reason_code='content_rejected')
+    assert budget.remaining == 0 and budget.used == 4
+    return budget
+
+
+def test_apply_refunds_registered_unit_rounds_to_base(tmp_path):
+    repo = _minimal(tmp_path)
+    budget = _exhausted_hook_unit(repo)
+    plan = _preview(repo)
+    receipt = _apply(repo, plan)
+    row = next(r for r in receipt['round_refunds']
+               if r['node'] == 'str06.stage4.hook_design')
+    assert row['status'] == 'refunded' and row['additional'] == 4
+    assert budget.remaining == 4 and budget.used == 4
+    ledger = budget._read()
+    assert [r.additional for r in ledger.refunds] == [4]
+    assert ledger.content_limit == 8
+    # 历史轮与费用证据保留：轮次只增可用额度，不清账面。
+    assert len(ledger.turns) == 4 and all(
+        t.reason_code == 'content_rejected' for t in ledger.turns)
+    # 重放幂等：同一升级不重复返还。
+    again = _apply(repo, plan)
+    row2 = next(r for r in again['round_refunds']
+                if r['node'] == 'str06.stage4.hook_design')
+    assert row2['status'] == 'already_refunded' and budget.remaining == 4
+
+
+def test_ledger_validator_orders_refunds_and_grants_chronologically():
+    from contracts.schema.workflow import (
+        BudgetGrant, UpgradeRoundRefund, WorkUnitContentTurn, WorkUnitLedgerV2,
+    )
+    def turn(i):
+        return WorkUnitContentTurn(turn_id=f't{i}', ordinal=i, request_sha256='a' * 64,
+                                   run_id='r', created_at=1000 + i)
+    turns = [turn(i) for i in range(1, 11)]
+    refund = UpgradeRoundRefund(upgrade_id='f' * 64, reason='升级作废已购产物',
+                                created_at=2000, before_ledger_sha256='b' * 64,
+                                refunded_after_ordinal=6, additional=4)
+    grant = BudgetGrant(intent_id='codex-refund-then-grant', preview_token='c' * 64,
+                        additional=2, reason='返还额度耗尽后的人工追加',
+                        created_at=3000, before_ledger_sha256='d' * 64,
+                        surface_sha256='e' * 64, authorized_after_ordinal=8,
+                        owner_run_ids=('run-1',))
+    ledger = WorkUnitLedgerV2(task_id='1' * 64, unit_id='2' * 64, sid='s',
+                              node='str06.stage4.hook_design', role='executor',
+                              scope='book', grants=(grant,), refunds=(refund,),
+                              turns=tuple(turns))
+    assert ledger.content_limit == 10
+    # 反例：追加越过合并序运行额度（8）时拒绝。
+    with pytest.raises(ValidationError, match='耗尽后累计'):
+        WorkUnitLedgerV2.model_validate({**ledger.model_dump(mode='json'),
+            'grants': (grant.model_copy(update={'authorized_after_ordinal': 9}),
+                       grant.model_copy(update={'intent_id': 'codex-second-grant'}))})
+
+
+# ──────────── 裁决③：已购产物免费换算层（2026-10-10） ────────────
+
+def test_hook_edge_has_no_converter_and_refuses_explicitly(tmp_path):
+    from novel.orchestrator.upgrade_converters import (
+        CONVERTERS, convert_archived_wire,
+    )
+    assert ('hook-rc22-rc23', 'str06.stage4.hook_design') not in CONVERTERS
+    repo = _minimal(tmp_path)
+    plan = _preview(repo)
+    _apply(repo, plan)
+    from novel.errors import TerminalState
+    with pytest.raises(TerminalState, match='未登记无损换算器'):
+        convert_archived_wire(repo, upgrade_id='hook-rc22-rc23',
+                              node='str06.stage4.hook_design',
+                              wire_dir=tmp_path / 'w', actor='测试', reason='语义缺口')
+
+
+def test_registered_converter_writes_wire_for_free_adoption(tmp_path):
+    from novel.orchestrator.upgrade_converters import CONVERTERS, WireConverter
+    from novel.orchestrator.upgrade_converters import convert_archived_wire
+    repo = _minimal(tmp_path)
+    repo.write_text('stage5/hook/hook.txt', '{"prose": "原楔子证据。"}')
+    plan = _preview(repo)
+    receipt = _apply(repo, plan)
+    subject = receipt['subject_sha256']
+    key = ('hook-rc22-rc23', 'str06.stage4.hook_design')
+    CONVERTERS[key] = WireConverter(
+        upgrade_id='hook-rc22-rc23', node='str06.stage4.hook_design',
+        owner='hook_design', source_rel='stage5/hook/hook.txt',
+        note='测试边：演示无损换算登记面', convert=lambda p: dict(p))
+    try:
+        out = convert_archived_wire(repo, upgrade_id=key[0], node=key[1],
+                                    wire_dir=tmp_path / 'w', actor='测试',
+                                    reason='登记的免费换算')
+        assert out['status'] == 'converted'
+        wire = json.loads((tmp_path / 'w' / 'hook_design_wire.json')
+                          .read_text(encoding='utf-8'))
+        assert wire == {'prose': '原楔子证据。'}
+        record = repo.inspect(
+            f'runtime/upgrades/{subject}/converted/hook_design.json')
+        assert record['source_rel'] == 'stage5/hook/hook.txt'
+        # 幂等：同一字节再换算不拒绝。
+        again = convert_archived_wire(repo, upgrade_id=key[0], node=key[1],
+                                      wire_dir=tmp_path / 'w', actor='测试',
+                                      reason='登记的免费换算')
+        assert again['wire_sha256'] == out['wire_sha256']
+    finally:
+        del CONVERTERS[key]

@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Literal, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 from pydantic import ValidationError
 
 from contracts.schema.book_ir import WriterBookIR
 from contracts.schema.design import BodyDesign, DesignWireV9, STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.grounding import OutputConstraints, SemanticBinding
+from contracts.schema.hook import HookDesignWire
 from novel.core.material_trace import MaterialIssue
 from novel.core.name_materials import appellation_fallbacks
 from novel.core.text import kp_statement
@@ -173,6 +174,126 @@ def hook_combination_errors(hook, *, body, binding, chars,
         return list(errors)
     return list(errors) + list(validate_hook_materials(
         context, internal_ids=material_identities(graph, binding, chars)))
+
+def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, chars,
+                                   binding, kp_statements: Mapping[str, str] = (),
+                                   world_statements: Mapping[str, str] = ()) -> list:
+    """结构判据失败时的尽力而为材料预检（2026-10-10 裁决，方向二：一次性聚合）。
+
+    正式组合检查（`hook_combination_errors`）只在结构全绿后运行；同一份首答里
+    互不依赖的浅层（结构）与深层（材料泄漏）机械缺陷会被拆到多轮付费里逐层
+    暴露——rc23 升版重跑 6/6 耗尽的实证：第 5 轮报两条 stale，补丁修复后第 6
+    轮才第一次看到首答里就存在的未释放专名泄漏。本函数对结构失败的候选**只读**
+    聚合不依赖失败条目的材料层错误：按候选自选的 surface_releases 推演写手视图
+    会看到的起笔事实与材料文本，跑与正式面同一把专名/句柄泄漏尺
+    （`positive_material_issues`），错误带 wire 路径供窄返修定位。
+
+    只增反馈信息量，不放宽任何验收判据（I-34 不变：候选照样被拒）；
+    不修改输入、不落盘、不调用模型。形状无法解析或条目引用不可解析时跳过
+    该条——对应错误已由结构判据报告。
+    """
+    from contracts.schema.state import WithheldNameBinding
+    from novel.core.name_materials import (
+        FIRST_PERSON_ROLE_WORD, expand_surface_releases, withheld_name_bindings,
+        withheld_name_literals,
+    )
+    from novel.stages.common import (
+        MaterialPart, MaterialSource, material_identities, positive_material_issues,
+        project_withheld_names,
+    )
+    from novel.stages.stage4.hook_facts import hook_facts
+    from novel.stages.stage4.hook_context import (
+        hook_display_faces, render_hook_fact_text,
+    )
+    try:
+        parsed = HookDesignWire.model_validate(wire)
+    except ValidationError:
+        return []
+    projection = chars.name_projection()
+    structure = chars.name_structure
+    releases = {r.char_id: list(r.surfaces) for r in parsed.surface_releases}
+    expanded = expand_surface_releases(releases, structure)
+    released = {surface for faces in expanded.values() for surface in faces}
+    concealed = {c for c in parsed.concealed if isinstance(c, str)}
+    _names, display_faces = hook_display_faces(
+        releases, structure, chars.core_view(), concealed)
+    faces_of = {row.char_id: row.surfaces[0] for row in display_faces}
+    focalizers = set(parsed.pov.focalizers)
+    first_person = parsed.pov.person == 'first'
+
+    def display(char_id: str) -> str:
+        if first_person and char_id in focalizers:
+            return FIRST_PERSON_ROLE_WORD
+        return faces_of.get(char_id, '')
+
+    display_projection = projection.model_copy(update={'by_person': tuple(
+        entry.model_copy(update={'display': display(entry.char_id)})
+        for entry in projection.by_person)})
+    withheld = withheld_name_literals(projection, released, structure)
+    bindings = tuple(
+        WithheldNameBinding(literal=literal, char_id=char_id, enclosing=enclosing)
+        for literal, char_id, enclosing
+        in withheld_name_bindings(withheld, structure, released))
+
+    def project(text: str) -> str:
+        projected, _hits, _blocked = project_withheld_names(
+            text, bindings=bindings,
+            display={b.char_id: display(b.char_id) for b in bindings})
+        return projected
+
+    index = {fact.fact_ref: fact for fact in hook_facts(body)}
+    parts: dict[str, MaterialPart] = {}
+    where_path: dict[str, tuple] = {}
+    for k, item in enumerate(parsed.opening_facts):
+        fact = index.get(item.fact_ref)
+        if fact is None:
+            continue
+        try:
+            text = render_hook_fact_text(display_projection, fact.delta.address(),
+                                         fact.delta, kp_statements)
+        except ValueError:
+            continue
+        where = f'hook/opening_facts/{k}'
+        parts[where] = MaterialPart(project(text), (
+            MaterialSource('hook', fact.ref, f'opening_facts/{k}', text),))
+        where_path[where] = ('opening_facts', k)
+    for k, item in enumerate(parsed.materials):
+        ref = item.beat_ref
+        beat = body.beat(ref['scene'], ref['beat']) if isinstance(ref, dict) else None
+        if beat is None:
+            continue
+        hidden = {index[h].delta.address() for h in item.withheld if h in index}
+        lines = [beat.event] if beat.event else []
+        for delta in beat.target_delta:
+            if delta.address() in hidden or delta.op != 'set':
+                continue
+            try:
+                lines.append(render_hook_fact_text(display_projection, delta.address(),
+                                                   delta, kp_statements))
+            except ValueError:
+                continue
+        if item.presentation:
+            lines.append(item.presentation)
+        where = f'hook/materials/{k}'
+        parts[where] = MaterialPart(project('\n'.join(lines)), (
+            MaterialSource('hook', f"{ref.get('scene', '')}#{ref.get('beat', '')}",
+                           f'materials/{k}', '\n'.join(lines)),))
+        where_path[where] = ('materials', k)
+    if not parts:
+        return []
+    issues = positive_material_issues(
+        parts, released=released, withheld=withheld,
+        internal_ids=material_identities(body, binding, chars))
+    errors = []
+    for issue in issues:
+        path = where_path.get(issue.where)
+        if path is None:
+            continue
+        code = ('hook_design_material_exposure' if issue.code == 'positive_material_leak'
+                else 'hook_design_internal_exposure')
+        errors.append(design_issue(
+            f'（材料预检）{issue.message}', code=code, location=path, paths=(path,)))
+    return errors
 
 
 def inspect_design_candidate(wire, *, checkpoint, brief, obligations, chars,

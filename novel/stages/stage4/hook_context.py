@@ -33,7 +33,7 @@ surface_releases（不是章释放表）在 compile 时算好，随上下文携�
 """
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Iterable, Mapping, Sequence
 
 from contracts.schema.context import SurfaceRelease
 from contracts.schema.design import PresentationGraph
@@ -69,6 +69,40 @@ _KNOWLEDGE_MODES = {'known': '确知', 'suspected': '怀疑', 'heard': '听说',
 #: 效果域 → 人读措辞（「读者揭示」与人物知情分开）。
 _DOMAIN_LABELS = {'character': '人物', 'relation': '关系', 'knowledge': '知情',
                   'world': '世界', 'reader': '读者'}
+
+
+def hook_display_faces(releases: Mapping[str, Sequence[str]],
+                       structure: NameStructure | None,
+                       characters: CharactersCore | None,
+                       concealed: Iterable[str]) -> tuple[dict, tuple]:
+    """Hook 自选释放面 + 非隐藏人物回落纯称谓的显示面表（compile 期一次算好）。
+
+    显示面前缀（CS-H H3，RC-60）：每人按 Hook 自选释放顺序的面；尚无释放且非
+    concealed 的人物附回落纯称谓（concealed 不回落——隐藏人物不得借回落面获得
+    指称，其姓名保持原文、由字面检查如实报告）。渲染期不读 Characters（D2 同尺），
+    回落表在 compile 期算好随上下文携带。入参是 char_id → 本次自选释放面的映射
+    （wire 或 canonical 两侧各自转好）。compile_hook_context 与结构失败时的材料
+    预检（hook_candidate_material_errors）共用同一张表：预检必须按**同一把尺**
+    推演写手视图会看到什么，两处各算一套会把「预检说安全、验收判泄漏」变成常态。
+    返回（expand 后的释放面表，显示面行元组）。
+    """
+    concealed_ids = set(concealed)
+    display_names = expand_surface_releases(releases, structure)
+    display_rows = {char_id: list(surfaces) for char_id, surfaces in releases.items()}
+    fallbacks = appellation_fallbacks(characters, structure) if characters is not None else {}
+    for char_id, fallback in sorted(fallbacks.items()):
+        if fallback and char_id not in display_rows and char_id not in concealed_ids:
+            display_rows[char_id] = [fallback]
+    display_faces = tuple(
+        SurfaceRelease(char_id=cid, surfaces=tuple(dict.fromkeys(row)))
+        for cid, row in sorted(display_rows.items()) if row)
+    return display_names, display_faces
+
+
+def render_hook_fact_text(projection: NameProjection, key: tuple, delta,
+                          kp_statements: Mapping[str, str]) -> str:
+    """单条事实的写手视图渲染（诊断与审计共用 `_render_fact` 同一实现）。"""
+    return _render_fact(projection, key, delta, kp_statements)
 
 
 def _render_fact(projection: NameProjection, key: tuple, delta,
@@ -167,22 +201,12 @@ def compile_hook_context(
         name_projection=projection, name_structure=structure)
     if errors:
         return None, errors
-    display_names = expand_surface_releases({r.char_id: r.surfaces for r in hook.surface_releases}, structure)
-    # 显示面前缀（CS-H H3，RC-60）：每人按 Hook 自选释放顺序的面；尚无释放且非
-    # concealed 的人物附回落纯称谓（concealed 不回落——隐藏人物不得借回落面获得
-    # 指称，其姓名保持原文、由字面检查如实报告并归 Hook）。渲染期不读 Characters
-    # （D2 同尺），回落表在 compile 期算好随上下文携带。
-    concealed = set(hook.concealed)
-    fallbacks = appellation_fallbacks(characters, structure) if characters is not None else {}
-    display_rows = {r.char_id: list(r.surfaces) for r in hook.surface_releases}
-    for char_id, fallback in sorted(fallbacks.items()):
-        if fallback and char_id not in display_rows and char_id not in concealed:
-            display_rows[char_id] = [fallback]
-    display_faces = tuple(
-        SurfaceRelease(char_id=cid, surfaces=tuple(dict.fromkeys(row)))
-        for cid, row in sorted(display_rows.items()) if row)
+    display_names, display_faces = hook_display_faces(
+        {r.char_id: r.surfaces for r in hook.surface_releases},
+        structure, characters, set(hook.concealed))
+    faces_of = {row.char_id: row.surfaces[0] for row in display_faces}
     display_projection = projection.model_copy(update={'by_person': tuple(
-        entry.model_copy(update={'display': (display_rows.get(entry.char_id) or ('',))[0]})
+        entry.model_copy(update={'display': faces_of.get(entry.char_id, '')})
         for entry in projection.by_person)})
 
     def _render_or_error(projection_, key, delta, where) -> str | None:
@@ -328,7 +352,7 @@ def compile_hook_context(
             HookExpressionView(ex_id=decision.ex_id, statement=decision.statement)
             for decision in graph.expression_decisions),
         character_voices=tuple(v for v in graph.character_voices
-                               if v.char_id in cast and v.char_id not in concealed),
+                               if v.char_id in cast and v.char_id not in set(hook.concealed)),
         scene_voices=scene_voices, usable_surfaces=usable,
         withheld_literals=tuple(sorted(withheld)),
         withheld_bindings=bindings, display_faces=display_faces,

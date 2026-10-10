@@ -886,3 +886,106 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monke
     status = repo2.read('runtime/workflow_status.json')
     assert status['status'] == 'needs_authorization'
     assert status['blocked_owner'] == 'hook_design'
+
+
+# ──────────── 请求面派生标注与结构失败时的材料预检（2026-10-10 裁决） ────────────
+
+def _superseded_body(*, leaky_agreement: bool = False):
+    """init 的 relation marital_status 与 sc01#b01 同地址覆盖（追加初始项）。
+
+    `leaky_agreement` 把 sc01#b02 知情增量的 value 换成含未释放专名的内容
+    （非 kp 句柄时 value 即渲染内容），复现 rc23 升版重跑的名字泄漏层。
+    """
+    wire = _body_wire()
+    wire['initial_state'] = [*wire['initial_state'], {
+        'domain': 'relation', 'subjects': ['yun_niang', 'fu_jun'], 'holder': None,
+        'key': 'marital_status', 'op': 'set', 'modality': 'actual',
+        'value': '待字闺中', 'scope': 'book'}]
+    if leaky_agreement:
+        wire['scenes'][0]['beats'][1]['target_delta'][0]['value'] = '陆大哥与苏芸娘有旧约'
+    body, errors = assemble_body_design(
+        wire, known_char_ids={'fu_jun', 'yun_niang'},
+        expression_requirements=sample_requirements(), source_narration=sample_narration())
+    assert body is not None and not errors, errors
+    return body
+
+
+def test_request_catalog_annotates_supersede_writes():
+    from novel.stages.stage4.hook_facts import fact_ref_of
+    from novel.stages.stage4.hook_wire import annotated_hook_catalog
+    body = _superseded_body()
+    catalog = annotated_hook_catalog(body)
+    init_ref = fact_ref_of('init', ('relation', ('yun_niang', 'fu_jun'), '', 'marital_status'))
+    beat_ref = fact_ref_of('sc01#b01', ('relation', ('yun_niang', 'fu_jun'), '', 'marital_status'))
+    assert [row['fact_ref'] for row in catalog[init_ref]['later_writes']] == [beat_ref]
+    assert catalog[init_ref]['later_writes'][0]['at'] == {'scene': 'sc01', 'beat': 'b01'}
+    assert 'later_writes' not in catalog[beat_ref]
+    only_once = fact_ref_of('sc02#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'secret'))
+    assert 'later_writes' not in catalog[only_once]
+
+
+def test_request_catalog_annotates_name_exposure_by_person():
+    from novel.stages.stage4.hook_facts import fact_ref_of
+    from novel.stages.stage4.hook_wire import annotated_hook_catalog
+    body = _superseded_body(leaky_agreement=True)
+    catalog = annotated_hook_catalog(body, projection=_projection())
+    agreement = fact_ref_of('sc01#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'agreement'))
+    assert catalog[agreement]['name_exposure'] == {
+        'fu_jun': ['陆大哥', '陆'],
+        'yun_niang': ['苏芸娘', '芸娘', '苏']}
+    plain = fact_ref_of('sc02#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'secret'))
+    assert 'name_exposure' not in catalog[plain]
+
+
+def test_structural_failure_still_aggregates_material_exposure():
+    """rc23 升版重跑 6/6 耗尽的回归反例：stale（结构层）与未释放专名
+    （材料层）同份首答并存时，一轮反馈必须同时暴露两层，不逐层付费排雷。"""
+    from types import SimpleNamespace
+
+    from tests.factories import hook_wire_v3
+    from novel.stages.stage4.preflight import hook_candidate_material_errors
+    body = _superseded_body(leaky_agreement=True)
+    wire = _hook_wire(
+        opening_facts=[
+            {'ref': 'init',
+             'address': {'domain': 'relation', 'subjects': ['yun_niang', 'fu_jun'],
+                         'holder': None, 'key': 'marital_status'},
+             'audience': 'world'},
+            {'ref': {'scene': 'sc01', 'beat': 'b02'},
+             'address': {'domain': 'knowledge', 'subjects': ['fu_jun'],
+                         'holder': 'yun_niang', 'key': 'agreement'},
+             'audience': 'pov'}])
+    hook, errors = _assemble_coordinate_fixture(
+        wire, body=body, known_char_ids={'fu_jun', 'yun_niang'},
+        name_projection=_projection())
+    # 结构层：init 旧值在冷开起点 sc02#b01 前已被 sc01#b01 覆盖。
+    assert hook is None and any('已变化、解除或失效' in str(e) for e in errors), errors
+    binding = SimpleNamespace(obligations=(), fact_bindings=())
+    diag = hook_candidate_material_errors(
+        hook_wire_v3(wire), body=body, chars=_characters(), binding=binding)
+    exposed = [e for e in diag if e.code == 'hook_design_material_exposure']
+    assert exposed and exposed[0].location == ('opening_facts', 1), [str(e) for e in diag]
+    assert '陆大哥' in str(exposed[0]) and '（材料预检）' in str(exposed[0])
+    assert [list(p) for p in exposed[0].context['wire_paths']] == [['opening_facts', 1]]
+
+
+def test_green_wire_material_preview_reports_no_exposure():
+    from types import SimpleNamespace
+
+    from tests.factories import hook_wire_v3
+    from novel.stages.stage4.preflight import hook_candidate_material_errors
+    body = _superseded_body(leaky_agreement=True)
+    # 只释放芸娘面、不选含名条目的合法设计：预检零误报。
+    wire = _hook_wire(
+        opening_facts=[{
+            'ref': {'scene': 'sc01', 'beat': 'b03'},
+            'address': {'domain': 'knowledge', 'subjects': ['yun_niang'],
+                        'holder': 'yun_niang', 'key': 'intent'},
+            'audience': 'pov'}])
+    hook, errors = _assemble_coordinate_fixture(
+        wire, body=body, known_char_ids={'fu_jun', 'yun_niang'},
+        name_projection=_projection())
+    assert hook is not None and not errors, errors
+    binding = SimpleNamespace(obligations=(), fact_bindings=())
+    assert hook_candidate_material_errors(
+        hook_wire_v3(wire), body=body, chars=_characters(), binding=binding) == []

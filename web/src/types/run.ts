@@ -73,7 +73,9 @@ export interface RunWorkUnit {
   content_limit: number
   content_base_limit?: number
   content_granted?: number
+  content_refunded?: number
   grant_count?: number
+  refund_count?: number
   content_remaining: number
   state: string
   latest_request_sha256: string | null

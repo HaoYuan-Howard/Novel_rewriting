@@ -548,7 +548,7 @@ export function RunScreen() {
                       <tr key={unit.unit_id}>
                         <td className="py-9">{unit.node} · {unit.scope}</td>
                         <td>{unit.role}</td>
-                        <td>基础 {unit.content_base_limit ?? '未知'} + 追加 {unit.content_granted ?? '未知'}<br />累计 <span>{unit.content_used} / {unit.content_limit}，剩余 {unit.content_remaining}</span></td>
+                        <td>基础 {unit.content_base_limit ?? '未知'} + 追加 {(unit.content_granted ?? 0) - (unit.content_refunded ?? 0)}{unit.content_refunded ? ` + 返还 ${unit.content_refunded}` : ''}<br />累计 <span>{unit.content_used} / {unit.content_limit}，剩余 {unit.content_remaining}</span></td>
                         <td>{unit.processing ? <>
                           总量 {unit.processing.total}，待处理 {unit.processing.pending}<br />
                           新生成 {unit.processing.generated}，机械处理 {unit.processing.mechanical}<br />

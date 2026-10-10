@@ -30,7 +30,8 @@ from contracts.schema.workflow import STAGE4_HOOK_DESIGN_PROTOCOL
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.hook_validation import validate_hook_payload
 from novel.stages.stage4.hook_wire import (
-    expand_hook_wire, hook_catalog, hook_wire_schema, opening_chapter_input,
+    annotated_hook_catalog, expand_hook_wire, hook_catalog, hook_name_exposure,
+    hook_wire_schema, opening_chapter_input,
 )
 
 _WIRE_KEYS = frozenset({
@@ -116,7 +117,10 @@ def _hook_followup_directory(index: dict, order: list[tuple[str, str]], material
             for scene_id, beat_id in candidates]}
 
 
-def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple]) -> dict:
+def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple],
+                     *, projection: NameProjection | None = None,
+                     kp_statements: Mapping[str, str] = (),
+                     world_statements: Mapping[str, str] = ()) -> dict:
     """Hook 窄返修的依赖切片：只带失败条目引用的拍与释放事实。
 
     · **被引用的拍**：目标材料／起笔事实／禁揭条目引用到的拍（event、参与人、
@@ -126,6 +130,8 @@ def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple]) -> 
       delta 的行动／关系拍；材料位置非法则明确给全拍目录，不猜时序界。
     · **secret 侧约束**：已发布正文里隐藏人物的呈现约束由 HookContext 编译时
       校验，切片不预判语义，只给事实。
+    · `projection` 在场时目录与拍附派生标注（later_writes／name_exposure），
+      与整份请求同一把尺——返修轮同样按查表修复机械层，不重放状态机。
     """
     index = {(scene.scene_id, beat.beat_id): (scene, beat)
              for scene in body.scenes for beat in scene.beats}
@@ -180,7 +186,15 @@ def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple]) -> 
             'event': beat.event, 'participants': list(beat.participants),
             'target_delta': [d.model_dump(mode='json') for d in beat.target_delta],
             'release_prefix': releases})
-    sliced = {'slice_version': 'stage4-hook-patch-slice-v3', 'facts': catalog,
+    if projection is not None:
+        for row in beats:
+            exposure = hook_name_exposure(row['event'], projection)
+            if exposure:
+                row['name_exposure'] = exposure
+    sliced = {'slice_version': 'stage4-hook-patch-slice-v3',
+            'facts': annotated_hook_catalog(body, projection=projection,
+                                            kp_statements=kp_statements,
+                                            world_statements=world_statements),
             'initial_surfaces': [s.model_dump(mode='json') for s in body.initial_surfaces],
             'materials': wire.get('materials', []),
             'reader_expectation': wire.get('reader_expectation'),

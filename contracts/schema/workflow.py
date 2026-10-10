@@ -181,6 +181,23 @@ class BudgetGrant(FrozenModel):
         return self
 
 
+class UpgradeRoundRefund(FrozenModel):
+    """同根契约升级作废已购产物后的轮次返还（2026-10-10 裁决：升级清账）。
+
+    系统动作，不是人工追加：登记过 `refund_nodes` 的升级在 apply 时，把本单元
+    可用轮次恢复到基础额度。历史轮、费用账与响应证据原样保留（成本权威仍是
+    `_service/ledger.jsonl`；本表只恢复**可用轮次**，不返还实际花费）。
+    同一升级对同一单元幂等：`upgrade_id` 唯一。
+    """
+
+    upgrade_id: Sha256
+    reason: str = Field(min_length=1, max_length=2000)
+    created_at: int = Field(ge=0)
+    before_ledger_sha256: Sha256
+    refunded_after_ordinal: int = Field(ge=0)
+    additional: int = Field(ge=1, le=4, strict=True)
+
+
 class WorkUnitProcessing(FrozenModel):
     """一次实际处理的来源；免费处理只记证据，绝不伪造内容轮次。"""
 
@@ -211,6 +228,9 @@ class WorkUnitLedgerV2(FrozenModel):
     scope: str = Field(min_length=1, max_length=160)
     base_content_limit: Literal[4] = 4
     grants: tuple[BudgetGrant, ...] = ()
+    # 升级轮次返还（2026-10-10 裁决）：加性字段，旧账缺省读作无返还；
+    # content_limit = base + Σgrants.additional + Σrefunds.additional。
+    refunds: tuple[UpgradeRoundRefund, ...] = ()
     turns: tuple[WorkUnitContentTurn, ...] = ()
     processing: tuple[WorkUnitProcessing, ...] = ()
     committed_through: int = Field(default=0, ge=0)
@@ -222,15 +242,33 @@ class WorkUnitLedgerV2(FrozenModel):
 
     @model_validator(mode='after')
     def _closed_turns(self) -> WorkUnitLedgerV2:
+        # 人工追加与升级返还按登记时间合并校验：追加只能在「当前额度（含此前
+        # 返还）已耗尽」时登记——先返还后追加的单元，追加的 authorized_after_
+        # ordinal 对合并序下的运行额度成立，而不是对「只数追加」的假额度。
         limit = self.base_content_limit
         intents: set[str] = set()
-        for grant in self.grants:
-            if grant.intent_id in intents or grant.authorized_after_ordinal != limit:
-                raise ValueError('追加授权必须唯一，且只能在已有额度耗尽后累计')
-            if grant.authorized_after_ordinal > len(self.turns):
-                raise ValueError('人工追加不得越过实际已用轮次')
-            intents.add(grant.intent_id)
-            limit += grant.additional
+        refund_ids: set[str] = set()
+        events = sorted(
+            [*((row.created_at, 1, index, row) for index, row in enumerate(self.grants)),
+             *((row.created_at, 0, index, row) for index, row in enumerate(self.refunds))],
+            key=lambda item: (item[0], item[1], item[2]))
+        for _at, _kind_order, _index, row in events:
+            if isinstance(row, BudgetGrant):
+                if row.intent_id in intents or row.authorized_after_ordinal != limit:
+                    raise ValueError('追加授权必须唯一，且只能在已有额度耗尽后累计')
+                if row.authorized_after_ordinal > len(self.turns):
+                    raise ValueError('人工追加不得越过实际已用轮次')
+                intents.add(row.intent_id)
+                limit += row.additional
+            else:
+                if row.upgrade_id in refund_ids:
+                    raise ValueError('同一升级对同一工作单元的轮次返还必须唯一')
+                if row.refunded_after_ordinal > len(self.turns):
+                    raise ValueError('轮次返还不得越过实际已用轮次')
+                if not row.reason.strip():
+                    raise ValueError('轮次返还必须登记理由')
+                refund_ids.add(row.upgrade_id)
+                limit += row.additional
         if len(self.turns) > self.content_limit:
             raise ValueError('工作单元内容预算超过上限')
         if self.committed_through > len(self.turns):
@@ -263,7 +301,9 @@ class WorkUnitLedgerV2(FrozenModel):
 
     @property
     def content_limit(self) -> int:
-        return self.base_content_limit + sum(grant.additional for grant in self.grants)
+        return (self.base_content_limit
+                + sum(grant.additional for grant in self.grants)
+                + sum(refund.additional for refund in self.refunds))
 
 
 class WorkUnitBlobV1(FrozenModel):

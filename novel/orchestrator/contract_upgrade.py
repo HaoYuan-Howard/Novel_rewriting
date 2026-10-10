@@ -243,6 +243,35 @@ def abort_pending(repository: Str06Repository, *, base: Path, sid: str,
                 'actor': actor, 'reason': reason}
 
 
+def _refund_rebuild_units(repository: Str06Repository, base: Path, sid: str,
+                          plan: ContractUpgradePlanV1, registration: ContractUpgradeSpec,
+                          subject_sha256: str, actor: str, reason: str) -> list[dict]:
+    """裁决「升级清账」（2026-10-10）：登记 refund_nodes 的付费单元轮次返还。
+
+    只在升级回执已成立后执行；`WorkUnitBudget.refund_for_upgrade` 负责幂等与
+    账内校验。返还失败＝账损坏，显式停（I-34），不静默跳过任何登记单元。
+    """
+    from novel import work_units
+    nodes = set(registration.get('refund_nodes') or ())
+    if not nodes:
+        return []
+    if not nodes <= set(registration['rebuild_nodes']):
+        raise UpgradeRefused('refund_nodes 必须是 rebuild_nodes 的子集')
+    summary: list[dict] = []
+    reason_line = (f"contract-upgrade:{plan.upgrade} 作废已购产物，"
+                   f"轮次恢复到基础额度；subject={subject_sha256}；"
+                   f"actor={actor}；{reason}")
+    for unit_id in work_units.registered_unit_ids(base, sid):
+        budget = work_units.readonly_budget(base, sid, unit_id)
+        if budget.identity['node'] not in nodes:
+            continue
+        refund = budget.refund_for_upgrade(
+            subject_sha256, reason=reason_line)
+        summary.append({'unit_id': unit_id, 'node': budget.identity['node'],
+                        'scope': budget.identity['scope'], **refund})
+    return summary
+
+
 def apply(repository: Str06Repository, *, base: Path, sid: str,
           source_identity: str, code_version: str, subject_sha256: str,
           actor: str, reason: str) -> dict[str, Any]:
@@ -294,7 +323,12 @@ def _apply_locked(repository: Str06Repository, *, base: Path, sid: str,
             if pending != saved or repository.inspect(WORKFLOW_REL) != saved.after:
                 raise ProvenanceRefused('升级完成回执与 pending／workflow 不符')
             repository.clear_upgrade_pending()
-        return receipt
+        # 裁决「升级清账」：已完成升级的重放同样补齐轮次返还（幂等），
+        # 已应用过旧语义的存量升级由此获得返还，不需要重新规划。
+        refunded = _refund_rebuild_units(repository, base, sid, saved.plan,
+                                         _registration(workflow_from_disk(saved.before)),
+                                         subject_sha256, actor, reason)
+        return {**receipt, 'round_refunds': refunded}
     plan = preview(repository, source_identity=source_identity, code_version=code_version)
     if digest(plan.model_dump(mode='json')) != subject_sha256:
         raise UpgradeRefused('升级预览已漂移；重新取得当前计划',
@@ -333,4 +367,10 @@ def _apply_locked(repository: Str06Repository, *, base: Path, sid: str,
                        record=record.model_dump(mode='json'), status='applied')
         repository.write(receipt_rel, receipt)
         repository.clear_upgrade_pending()
-        return receipt
+        # 裁决「升级清账」：回执成立后返还登记节点的轮次（幂等；失败＝账损坏，
+        # 显式停，不留「升级完成但轮次未返还」的静默状态）。
+        refunded = _refund_rebuild_units(repository, base, sid, plan,
+                                         _registration(workflow_from_disk(record.before)),
+                                         subject_sha256,
+                                         actor, reason)
+        return {**receipt, 'round_refunds': refunded}

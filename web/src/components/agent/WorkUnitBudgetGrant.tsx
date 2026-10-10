@@ -21,7 +21,7 @@ export function WorkUnitBudgetGrant({ sid, unitId }: { sid: string; unitId: stri
         <ErrorHint error={preview.error} />
         {current ? <>
           <p className="m-0">{current.reason}</p>
-          {current.unit ? <p className="m-0">基础 {current.unit.content_base_limit ?? '未知'} 次，已追加 {current.unit.content_granted ?? '未知'} 次；累计 {current.unit.content_used} / {current.unit.content_limit}，剩余 {current.unit.content_remaining} 次。</p> : null}
+          {current.unit ? <p className="m-0">基础 {current.unit.content_base_limit ?? '未知'} 次，已追加 {(current.unit.content_granted ?? 0) - (current.unit.content_refunded ?? 0)} 次{current.unit.content_refunded ? `，升级返还 ${current.unit.content_refunded} 次` : ''}；累计 {current.unit.content_used} / {current.unit.content_limit}，剩余 {current.unit.content_remaining} 次。</p> : null}
           {current.costs ? <p className="m-0">累计 token 成本：{current.costs.total_tokens ?? '未知'}；模型调用 {current.costs.calls} 次，失败 {current.costs.failed_calls} 次，缺用量 {current.costs.missing_usage_calls} 次。</p> : <p className="m-0">累计成本未知。</p>}
           {current.history?.map((grant) => <p className="m-0" key={grant.intent_id}>人工追加 {grant.additional} 次：{grant.reason}</p>)}
           <label>本次追加
