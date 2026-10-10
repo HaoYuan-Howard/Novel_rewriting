@@ -16,8 +16,8 @@ IR。验证材料（称谓许可、禁用字面）已在 compile 时算好并随
 即停该章，不重写、不进候选。
 
 【回执绑定（rc6 身份拆分）】
-章回执分别绑定写手视图摘要（`writer_view_sha256`，材料含 renderer 与写手协议
-版本）、验证输入摘要（`validation_sha256`：禁用字面、称谓许可、篇幅带）与
+章回执分别绑定写手视图摘要（`writer_view_sha256`，材料含实际正文 system、
+renderer 与写手协议版本）、验证输入摘要（`validation_sha256`：禁用字面、称谓许可、篇幅带）与
 Machine 审计摘要（`machine_view_sha256`，仅审计不触发重购）；不再绑定全书 IR
 与前文链（`R-7.4` 改写）。
 

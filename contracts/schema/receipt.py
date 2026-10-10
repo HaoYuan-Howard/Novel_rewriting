@@ -11,8 +11,8 @@
 【绑定语义（rc6，2026-09-28 R2：身份拆分）】
 回执分别绑定三把摘要（`novel/stages/common.py::chapter_identities`）：
 
-  · `writer_view_sha256`——写手视图摘要：写手实际可见的章包阅读面（renderer
-    渲染字节），材料含 renderer 与写手协议版本。写手看到的变化（导演说明、
+  · `writer_view_sha256`——写手视图摘要：实际正文 system 与章包阅读面（renderer
+    渲染字节），材料含 renderer 与写手协议版本。写手看到的变化（正文 system、导演说明、
     义务、拍事实、篇幅目标、协议或渲染版本）⇒ 该章重购；
   · `validation_sha256`——验证输入摘要：禁用字面、称谓许可与篇幅带。验证
     材料变化 ⇒ 旧机械验证不再成立，先免费重验原章稿；
@@ -76,7 +76,7 @@ class ChapterReceipt(StrictModel):
     writer_view_sha256: str = Field(
         min_length=64, max_length=64,
         description='写手视图摘要（rc6 身份拆分）：写手实际可见的章包阅读面'
-                    '（renderer 渲染字节，材料含 renderer 与写手协议版本）；'
+                    '（实际正文 system＋renderer 渲染字节，材料含 renderer 与写手协议版本）；'
                     '写手可见面变化使本章回执失效（重购）')
     validation_sha256: str = Field(
         min_length=64, max_length=64,

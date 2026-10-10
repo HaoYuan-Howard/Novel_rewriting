@@ -680,6 +680,7 @@
       ],
       "cases": {
         "test_full_pipeline_to_delivery_and_free_recovery": "stage",
+        "test_body_system_change_invalidates_commits_without_changing_packet_or_validation": "stage",
         "test_book_call_ceiling_stops_generation": "stage",
         "test_body_chapters_selection_writes_only_selected_chapters": "stage",
         "test_body_chapters_full_run_after_canary_only_fills_missing": "stage",
@@ -1251,6 +1252,7 @@
     "tests/test_str06_quality_materials.py": {
       "layer": "stage",
       "stages": [
+        "stage2",
         "stage4",
         "stage5"
       ]

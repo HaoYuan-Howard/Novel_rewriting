@@ -351,7 +351,7 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc5（rc8 同批）：回执改绑章包摘要＋请求身份＋验证版本＋改名前正文摘要，
     # 不再绑定全书 IR 与前文链（D2）；各章独立有效，支持集合恢复。
     # rc6（rc10 同批，R2 身份拆分）：packet_sha256 单摘要拆成写手视图摘要
-    # （writer_view_sha256，材料含 renderer 与写手协议版本）＋验证输入摘要
+    # （writer_view_sha256，材料含实际正文 system、renderer 与写手协议版本）＋验证输入摘要
     # （validation_sha256：禁用字面、称谓许可、篇幅带）＋Machine 审计摘要
     # （machine_view_sha256，仅审计不触发重购）。
     # rc17（2026-10-06 CS-H H3，RC-61）：BODY_VALIDATOR 升 v2——必保揭名必现

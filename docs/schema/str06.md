@@ -105,14 +105,14 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 
 ### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
 
-现役版式为 `str06-rc23`（2026-10-10 Hook 组织与声线批：PresentationGraph 独立 rc23、HookContext rc18，BodyDesign／正文章包仍 rc22；2026-10-09 独立事件锚点批：Preserve v5/policy 8、Design wire v9（现役 v10）、可选细节与系列前情；Stage2 仍为 rc20；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
+现役版式为 `str06-rc24`（2026-10-10 Hook 篇幅包络批：HookContext 独立 rc24；Hook 组织与声线批：PresentationGraph 独立 rc23，BodyDesign／正文章包仍 rc22；2026-10-09 独立事件锚点批：Preserve v5/policy 8、Design wire v9（现役 v10）、可选细节与系列前情；Stage2 仍为 rc20；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
 `7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个（CS-3 bind
 退役后 13），运行配置未变。
 book 观察 `stage2-book-v7`、chapters 独立 `stage2-chapters-v7`、names 独立
 `stage2-names-v4`、associate `stage2-associate-v5`（输入投影变经 RC 表换身份）；
-Preserve 当前 `stage4-preserve-v5`＋policy 8、Design 内部展开 `stage4-design-v5`
+Preserve 当前 `stage4-preserve-v5`＋policy 9、Design 内部展开 `stage4-design-v5`
 （瘦 wire 现役 v10）；
-Hook Design 为 `stage4-hook-design-v3`；正式输入／呈现协议显式换身份。当前正文 renderer v11／写手协议 v9（可选细节与前情送达；历史 R10b 升 v7）。
+Hook Design 为 `stage4-hook-design-v3`；正式输入／呈现协议显式换身份。当前正文 renderer v11／写手协议 v10（2026-10-10 有限补桥归 Design、写手仅呈现；可选细节与前情送达；历史 R10b 升 v7）。
 
 **章观察瘦 wire（CS-2 第一步，2026-10-03）**：`str06.stage2.chapters` 的
 LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模型：
@@ -213,6 +213,27 @@ series.summaries 显式给 member/covers，Brief 派生 summarizes_cores；Bindi
 目标事件及审计拍引用），只在概括拍的 must_respect 送达，不能让写手自行编造过往例子。
 原文同场与顺序只作审阅读数；世界事实成立、人物知情、读者披露仍分层，participants
 不推导知情，引文不推导说话人。全书表达机制逐场默认送达，拍上 ex 引用只说明重点。
+
+**目标故事有限补桥（2026-10-10，用户裁决）**：源证据已经支持的必要对话触发、
+行动衔接和决策条件由 Preserve 写进 statement/satisfaction，不能只存在于审计
+anchors.event_statement，也不能成为可省略 details；Brief 继续确定性、源盲投影。
+原文未交代的局部行动、沟通和决策可由 Design 设计，使已定骨架在目标故事中连贯；
+情节骨架、关键事实、结局、必保条件、锁、知情授权和刻意未知均不可改。桥梁不反写
+SourceTruth，不把猜测当原文事实，不新增重大前史、身份、人物价值准则或社会规则。
+
+字段职责维持单一：拍 event 保存实际目标行动、对话触发、反应与决策，必要的持续
+事实进入 target_delta/state，后续仍消费的目标、承诺与张力走 threads；real/know
+只标注已有义务与认知，不能因为补桥推造新锁或扩大知情许可。driver 概括本场真实
+欲望、阻力与转折，realization_brief 安排已定事件的详略、显现与收束，不独藏因果。
+章间 entry 声明本章如何接续；章内转场和明显跳时在事件中交代，必要时拆成自然
+场景，不让写手补出另一条时间线。本批不新增场级 entry 或人物状态模型：既有字段
+能完整表达当前反例，新增结构尚无独立闭包消费者；schema 完整不代签文学合理性。
+先组织目标故事，再附承载标注，原子条件仍不与自然叙事拍一一对应。
+
+Preserve policy 升 9；各 canonical/wire 形状和正文 renderer v11 保持，写手协议升
+v10。旧 checkpoint 仍绑定旧 policy，不静默套用新版交接判据；修订、采用和下游
+恢复沿现役身份、材料变化与完整预检闭合。首答完整可用率、设计阅读效果、正文质量
+与成本仍待真实验证；本批工程验证零付费，不新增语义 Judge 或节点。
 
 新闭集／时序闸均在 Design 接受循环有拍级窄修，同码同位置 compile 回声只在候选预检
 消重；正式免费重编译仍拒绝坏引用／过早概括，且不会以裸 KeyError 中断。
@@ -493,11 +514,12 @@ unset/unknown 与无消费者拍状态不投影（留在 Machine IR 与拍级「
 不复述」。拍级读取解析值挂到对应拍（`BeatIR.reads`，AUD-03）以 `must_respect`
 呈现「本场依赖的事实」；Guard M7 钉住每条声明读取已解析并进入 IR。
 
-**身份拆分（rc6）**：章回执分别绑定写手视图摘要（`writer_view_sha256`：renderer
-与写手协议版本＋渲染字节）和验证输入摘要（`validation_sha256`：禁用字面、称谓
+**身份拆分（rc6）**：章回执分别绑定写手视图摘要（`writer_view_sha256`：实际正文
+system＋renderer 与写手协议版本＋渲染字节）和验证输入摘要（`validation_sha256`：禁用字面、称谓
 许可、篇幅带）；Machine 摘要（`machine_view_sha256`）仅审计——只改 Machine 层
 字段不触发重购。`novel/stages/common.py::chapter_identities` 是唯一产地，
-Stage7 核对与 chain 恢复集合（E-7）同批同步。
+Stage7 核对与 chain 恢复集合（E-7）同批同步。仅改正文 system 也使旧章回执
+失效，不能只免费重验后继续采用；实际请求与摘要使用同一正文提示常量。
 
 **packet_metrics（派生读数，不是门）**：compile 写
 `stage4/acceptance/packet_metrics.json`（`novel/stages/common.py::packet_metrics`
@@ -580,7 +602,9 @@ BookBrief 进每章，以 `must_respect` 呈现「作为世界边界，不要讲
 
 - **已落地（2026-09-27，rc8）**：Writer 与 Validator 只收当前章包
   （`novel/stages/stage5/body.py::write_chapter` 的唯一输入是 `ChapterWriterPacket`），
-  不读前文正文、Design、Characters 或其他章 IR（D2）。Stage5 只做语言实现；新增跨章
+  不读前文正文、Design、Characters 或其他章 IR（D2）。Stage5 只做语言实现：局部行动、
+  沟通和决策的桥梁已由 Stage4 确定并送达，正文只选择对白、动作、停顿、即时反应
+  与节奏；不临场改变时间线、前史、身份、持久关系、后续因果或刻意未知。新增跨章
   事实没有机械检测手段，按 `R-7.6` 扩充未评披露（转场、跨章无名细节、声线归 B6 阅读）。
 - **已落地**：各章独立执行、验证、提交；`str06.stage5.body` 待补章经
   `novel/model_slots.py::pipeline_model_slot` 共享书级与供应商总槽并发执行。
@@ -602,7 +626,7 @@ BookBrief 进每章，以 `must_respect` 呈现「作为世界边界，不要讲
   章回执三把摘要、provenance 或契约身份——从 canary 续跑到全书不改变已提交章
   的采用与恢复身份（W1）。
 - **已落地**：每章首次＋最多两次内容重写保持；截断不再触发重写（D6，见执行设施失败表）。
-- **已落地**：章回执（rc6 身份拆分，R2）绑定写手视图摘要（renderer＋写手协议版本＋
+- **已落地**：章回执（rc6 身份拆分，R2）绑定写手视图摘要（实际正文 system＋renderer＋写手协议版本＋
   渲染字节）、验证输入摘要（禁用字面／称谓许可／篇幅带）、请求身份与改名前正文摘要，
   不再绑定全书 IR 与前文链（`R-7.4`、`R-10.3` 已改写；Machine 摘要仅审计）；Stage7
   逐章核对回执与当前编译出的写手视图／验证输入摘要一致
@@ -758,7 +782,7 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 
 | 模块 | 承载 | 关键不变量（构造期表达） |
 |---|---|---|
-| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v8）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
+| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v9）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
 | `contracts/schema/grounding.py` | `SourceObligation` / `PreserveCheckpoint` / `ReconstructionBrief` / `IdentityProjection` / `OutputConstraints` / `SemanticBinding` | 必保义务必有非空 `satisfaction`；checkpoint 无 Design/Bind 字段；Brief 无源章/源拍/叙述顺序/证据定位字段；Binding 是完整 snapshot |
 | `contracts/schema/design.py` | `BodyDesign`（rc11：narration、expression_decisions、可定位 entry；保留拍上线程、world_rules）／`PresentationGraph(BodyDesign)+hook` | source-blind；章号连续 1..N、场景全覆盖；POV 服从正文人称许可；表达决定恰好覆盖；entry 锚满足分支条件；hook 引用与线程生命周期闭合 |
 | `contracts/schema/hook.py` | `HookDesign`／`HookContext`／`HookReceipt` | 有序材料组织与阅读期待显式选择；起笔事实只引用已建立目标事实；声线同源；first 恰一人且非 narrator；篇幅包络按章预算派生（目标区间不拒稿、硬上限机械拒收），回执 semantic 恒 unverified |
@@ -768,7 +792,7 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 | `contracts/schema/context.py` | ChapterIR 双视图（`VerificationIR`＋`WriterBrief`）与写手层 `WriterPacket`（rc11 六分区，带人称与表达） | IR 带 `beats` 逐拍定位（`BeatIR.reads` 挂拍级读取解析值）与 `prohibitions`、`thread_ops`／`open_threads` 投影；Brief 只承载呈现；两视图 scene_id 与 slice 身份同源；WriterPacket 全自然语言、机械拒识内部 ID 与未释放正向字面 |
 | `contracts/schema/book_ir.py` | `WriterBookIR`＝`BookBrief`＋`ChapterIR[]`；`ChapterWriterPacket` 章包三件套 | BookBrief 确定性投影 world_rules、人称及表达决定，不调 LLM 总结或补造文风；章预算 largest-remainder 分配；验证材料 compile 时计算；`ChapterContinuity` 投影 entry、anchor_event 与前章末拍，不猜时地语义 |
 | `contracts/schema/workflow.py` | Stage4 四协议常量、运行记录模型与 R3 的 `OwnerIssueV1`／`OWNER_ISSUE_ROUTES` | 未知 issue code 一律停；`unbound.owner` 轴经 `UNBOUND_OWNER_ROUTES` 闭合，未映射即停；修订轮上限 `OWNER_REVISION_MAX_ROUNDS` |
-| `contracts/schema/receipt.py` | `ChapterReceipt`（章级回执，rc6 身份拆分） | 绑定章序、写手视图摘要（renderer＋写手协议版本＋渲染字节）、验证输入摘要（禁用字面／称谓许可／篇幅带）、改名前正文、实际请求身份；Machine 摘要仅审计（`machine_view_sha256`），只改 Machine 层字段不触发重购；不绑全书 IR 与前文链（D2）；只有篇幅偏差可在额度耗尽后披露放行 |
+| `contracts/schema/receipt.py` | `ChapterReceipt`（章级回执，rc6 身份拆分） | 绑定章序、写手视图摘要（实际正文 system＋renderer＋写手协议版本＋渲染字节）、验证输入摘要（禁用字面／称谓许可／篇幅带）、改名前正文、实际请求身份；Machine 摘要仅审计（`machine_view_sha256`），只改 Machine 层字段不触发重购；不绑全书 IR 与前文链（D2）；只有篇幅偏差可在额度耗尽后披露放行 |
 | `contracts/schema/consumption.py` | 六个消费投影族＋字段级送达登记（R0） | body_access 按章级有效回执判定；rename_materials 写明 Naming 只读投影与 Apply 唯一应用者；字段级登记见下节 |
 | `contracts/schema/families.py` | 三级路径家族登记（16 个家族） | 来源账键=完整相对路径 |
 | `contracts/schema/dependency.py` | 新链依赖方向登记＋per-stage 模块 owner 规则 | 由 AST 对真实文件执行（`tests/test_str06_hook.py`） |

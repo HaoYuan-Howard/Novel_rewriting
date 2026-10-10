@@ -26,6 +26,11 @@ iterative 重复行为的作用与 loop 问题／resolution 的兑现。类别�
 v4（2026-09-30 R9b）：satisfaction 明写动机、主体、因果及禁止改法；阶段义务
 分别承载并声明必要条件，回看未入选拍中的关键铺垫；身份与称谓揭示时点分离。
 类别集合不变，判据集中升版；版本唯一登记为 STAGE4_PRESERVE_POLICY_VERSION。
+v9（2026-10-10 目标故事有限补桥）：有源证据的必要对话触发、行动衔接与决策条件
+必须进入 statement/satisfaction，不能只留在审计 anchors 或降成可省略 details。
+源侧没有交代的连接条件不由 Preserve 发明；Design 在用户授权的骨架、关键事实、
+结局、事实锁、知情与刻意未知边界内设计局部桥梁。类别集合、wire 与 canonical
+形状不变，但交接判据改变 Preserve 结果，故升 policy；旧 checkpoint 不静默重解释。
 """
 from __future__ import annotations
 

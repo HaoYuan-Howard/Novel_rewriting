@@ -157,7 +157,9 @@ from novel.llm.paid_requests import candidate_contract_identity
 # rc23（2026-10-10，用户批准 Hook 质量设计）：Hook wire v3、graph rc23、
 # HookContext rc18；材料强调、跳时与阅读期待显式化，删除楔子长度配置。
 # 正文 Design/IR 的 rc22 及篇幅配置不变；不补造旧楔子的组织或后文依据。
-FROZEN_CONTRACT_IDENTITY = '2c833f1a715a4fcee944b5377cd5b12e8d2b7d84f77262f9c9261ec8861682ff'
+# rc24（2026-10-10 已有 Hook 篇幅包络批）：HookContext 单独升 rc24，
+# 正文 Design/IR 不变；补齐现役表的冻结记录，不改节点、配置或正文契约。
+FROZEN_CONTRACT_IDENTITY = '5a61ed782cd59035cee8d386bc03c3ed1dbee998fb204df688d3772b7442056c'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -228,7 +230,7 @@ def test_frozen_rc_version_label():
     # rc17：CS-H H3 称谓面＋H4 associate v3；rc18：CS-S Phase 1 死字段收口；
     # rc19：CS-S Phase 2 观察面收敛（facts／know.fact／associate v4／D-5／fold 时间线）；
     # rc20：CS-S Phase 3 收官（CHANGE_KEYS 闭集／access／reader 派生／associate v5）。
-    assert STR06_RC_VERSION == 'str06-rc23'
+    assert STR06_RC_VERSION == 'str06-rc24'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是
@@ -257,7 +259,8 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     # 消失（change 键闭集＝键即 canonical）。
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v5',
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v5',
-    'STAGE4_PRESERVE_POLICY_VERSION': 8,
+    # 2026-10-10 用户授权有限补桥：必要源因果完整交接，形状与 wire 不变。
+    'STAGE4_PRESERVE_POLICY_VERSION': 9,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
     'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v3',
     # CS-3（2026-10-03）：bind 协议随节点退役——wire 面由 design v6 的 real

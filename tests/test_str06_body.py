@@ -935,14 +935,18 @@ def test_full_pipeline_to_delivery_and_free_recovery(tmp_path):
 
     # ── IR 变化（导演说明变化经重新设计）→ 章包变化的章重新核验（重购）：
     # 提高预算改变 design 请求与全书 IR（CS-3 起 binding 随 design 派生）；
-    # Hook Context 未变 → hook_writer 缓存命中免费。
+    # rc24 起 Hook 篇幅包络也随章预算改变，hook_writer 须用新身份重写。
     wires_changed = deepcopy(wires)
     wires_changed['design']['scenes'][1]['brief'] = '重心改为追踪与藏匿。'
     transport.wires = wires_changed
     calls_before = len(transport.calls)
+    hook_before = repo.read_model('stage4/context/hook/hook.json')
     _run(repo, session, budget=2100)
-    new_calls = len(transport.calls) - calls_before
-    assert new_calls == 4  # design（双产物）+ hook_design（内嵌 design）+ 两章 body；hook_writer 缓存命中
+    assert sorted(transport.calls[calls_before:]) == [
+        'body_ch01', 'body_ch02', 'design', 'hook_design', 'hook_writer']
+    hook_after = repo.read_model('stage4/context/hook/hook.json')
+    assert (hook_after.length_low, hook_after.length_high, hook_after.length_cap) != (
+        hook_before.length_low, hook_before.length_high, hook_before.length_cap)
     assert repo.read('runtime/workflow_status.json')['status'] == 'delivered'
 
 
@@ -1132,6 +1136,85 @@ def test_chapter_failure_keeps_other_legal_commits_and_stops_truncated(tmp_path)
     assert evidence['chapters'] == {}
     assert evidence['requested'] == [1, 2] and evidence['attempted'] == [1, 2]
     assert evidence['recorded_at'] > 0
+
+
+def test_body_system_change_invalidates_commits_without_changing_packet_or_validation(
+        tmp_path, monkeypatch):
+    """仅正文 system 改变：真实提交不能沿用，重写请求与回执绑定同一提示。"""
+    from novel.stages import chain, common
+    from novel.stages.stage5.body import recheck_chapter
+    from tests.str06_facilities import body_ask
+
+    class RecordingTransport(_RoutingTransport):
+        def __init__(self, wires):
+            super().__init__(wires)
+            self.body_requests = []
+
+        def send(self, request):
+            if self._owner(request).startswith('body_ch'):
+                self.body_requests.append(request)
+            return super().send(request)
+
+    def canonical_body_ask(session):
+        # 通用测试替身默认用占位 system；本例送正式 system，保护实际外发与
+        # 回执摘要同源，不把只改变摘要、却继续发送旧提示的路径当成功。
+        ask = body_ask(session)
+
+        def ask_body(owner, prompt, validate=None, system=None):
+            return ask(owner, prompt, validate,
+                       system=system or chain.BODY_WRITER_SYSTEM)
+
+        return ask_body
+
+    monkeypatch.setitem(globals(), '_fake_body', canonical_body_ask)
+    wires = _full_chain_wires()
+    transport = RecordingTransport(wires)
+    repo, session, _ = _make_session(tmp_path, wires, transport=transport)
+    assert _run(repo, session)['assembly']['status'] == 'ready'
+    ir = repo.read_model('stage4/ir/writer_book_ir.json')
+    packets = {n: project_chapter_packet(ir, n) for n in (1, 2)}
+    identities_before = {n: chapter_identities(packet) for n, packet in packets.items()}
+    receipts_before = {n: repo.inspect_sealed_model(
+        f'stage5/acceptance/body/ch{n:02d}.json') for n in (1, 2)}
+    original_system = common.BODY_WRITER_SYSTEM
+    assert chain.BODY_WRITER_SYSTEM == original_system, '实际调用边界使用 common 的同源提示'
+    assert len(transport.body_requests) == 2
+    assert all(request.system == original_system for request in transport.body_requests)
+
+    changed_system = original_system + '\n本轮呈现时保留人物反应的停顿。'
+    # 模拟新代码进程重新 import：调用边界的 from-import 与身份产地一起读取
+    # 新提示，协议版本与章包保持不变，不能靠测试替身的旧占位 system 命中缓存。
+    monkeypatch.setattr(common, 'BODY_WRITER_SYSTEM', changed_system)
+    monkeypatch.setattr(chain, 'BODY_WRITER_SYSTEM', changed_system)
+    identities_after = {n: chapter_identities(packet) for n, packet in packets.items()}
+    for n, packet in packets.items():
+        old, new = identities_before[n], identities_after[n]
+        assert new.writer_view_sha256 != old.writer_view_sha256
+        assert new.validation_sha256 == old.validation_sha256
+        assert new.machine_view_sha256 == old.machine_view_sha256
+        assert recheck_chapter(packet, repo.read_text(f'stage5/body/ch{n:02d}.txt'),
+                               receipts_before[n]) is None, '机械重验不能消除写手提示漂移'
+
+    calls_before = len(transport.calls)
+    report = _run(repo, session, node_filter=('str06.stage7.assemble',))
+    assert report['assembly']['status'] == 'not_ready'
+    assert report['body_access']['stale'] == [1, 2]
+    assert report['body_access']['accepted'] == []
+    assert len(transport.calls) == calls_before, '交付检查只拒识旧稿，不发请求'
+
+    report = _run(repo, session,
+                  node_filter=('str06.stage5.body', 'str06.stage7.assemble'))
+    assert report['assembly']['status'] == 'ready'
+    assert len(transport.calls) == calls_before + 2, '旧提交不得继续采用或只免费重验'
+    assert all(request.system == changed_system for request in transport.body_requests[2:])
+    for n in (1, 2):
+        receipt = repo.inspect_sealed_model(f'stage5/acceptance/body/ch{n:02d}.json')
+        assert receipt.writer_view_sha256 == identities_after[n].writer_view_sha256
+        assert receipt.request_identity != receipts_before[n].request_identity
+        assert receipt.protocol_version == receipts_before[n].protocol_version
+        assert receipt.renderer_version == receipts_before[n].renderer_version
+        assert receipt.validation_sha256 == receipts_before[n].validation_sha256
+        assert receipt.machine_view_sha256 == receipts_before[n].machine_view_sha256
 
 
 def test_book_call_ceiling_stops_generation(tmp_path):

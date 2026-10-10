@@ -730,7 +730,9 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 #: 原文未回答）；requirement 带 series 盲标记与 mechanism。kp/kf 键规则与
 #: 必保锁兑现归 assemble_body_design（revise_self）。
 STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v5'
-STAGE4_PRESERVE_POLICY_VERSION: Final = 8
+# 2026-10-10 用户授权有限补桥：Preserve 必要源因果完整交接，Design 只在
+# 骨架、事实、结局与知情/未知边界内补局部行动、沟通和决策；wire/canonical 不变。
+STAGE4_PRESERVE_POLICY_VERSION: Final = 9
 STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v5'
 # CS-3（2026-10-03）：`str06.stage4.bind` 退役——承载位由 design wire 的 real
 # 标注派生（stage4-design-v6 的面），stage4-bind-v1 wire 协议随之退役。

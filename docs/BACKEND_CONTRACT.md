@@ -8,7 +8,7 @@
 `docs/schema/`，关键裁决及证据限制见 `docs/DECISIONS.md`。这些关联检查不能证明模型的语义质量。
 
 本文件对应现役契约版式 `str06-rc24`（`contracts/schema/workflow.py::STR06_RC_VERSION`；
-Preserve v5／policy 8、Design 模型面 wire `stage4-design-v10`，可选细节与显式系列前情）。R9（2026-09-30，
+Preserve v5／policy 9、Design 模型面 wire `stage4-design-v10`，可选细节与显式系列前情）。R9（2026-09-30，
 D8 修订二）当时把消费面定为 rc11：book-v2 的源表达经 Blueprint v14
 与源盲 Brief 到 Design v4；正文 narration 约束场景 POV，表达 keep／change 的最终陈述
 进写手导演说明，改变理由仅审计。承接锚按 transition 明确定位较早事件；紧接必须是
@@ -248,6 +248,20 @@ Stage4 的三个付费节点按固定序推进：`preserve`（保存策略义务
 只有 Preserve 投影（`project_brief`）、身份投影与 Characters v6，源叙述拓扑不进 prompt。
 章数恒等于源章数；跨章重构合法——场景可跨源章重组，输出章仍与源章一一同号。
 
+**目标故事的有限补桥（2026-10-10 用户裁决）**：Preserve 必须将已有证据支持的必要
+对话触发、行动衔接与决策条件写入 statement／satisfaction，不能只留在审计 anchors
+或降为可省略 details；有源证据的观察漏抽与冲突仍回对应源 owner，不由 compiler 猜补。
+Design 可以为目标故事补局部行动、沟通和决策，使场景转场、信息获取和人物转变有
+可理解的前因后果；必须保持情节骨架、关键事实、结局、必保条件、事实锁、知情授权
+和刻意未知。补桥不能替源未知作答、改写必要动机或建立新的身份、重大前史、价值
+准则和社会规则；新桥梁只属于目标故事，不反写源真值或冒充原文事实。
+设计先组织连续行动、触发与反应、选择与代价、时空衔接和章末停点，再附承载标注；
+必要行动与因果条件落入既有 event／state／threads 等正式字段，章间承接由 entry
+声明，brief 只指导已定故事怎样演出。既有字段承担唯一语义来源，不新增场级 entry
+或另一份人物状态模型；语义合理性仍按 R-5.7 未评披露，不增加生产 Judge。
+Preserve policy 升 9，wire／canonical 形状保持；旧 checkpoint 仍按其原 policy 身份
+解释，适用新版须经现役修订／重建与完整接受闸，不用默认值冒充新版交接结果。
+
 | # | 要求 | 谁在查 |
 |---|---|---|
 | R-5.1 | BodyDesign 编译闭合：场景、拍、章任务与约束合法（未知键、悬空引用、非法 POV 当场拒）；**称谓面闭合**——`initial_surfaces` 与逐拍 `surface_introductions` 只能释放 Characters 登记过的 surface（`registered_surfaces` 由 `novel/stages/chain.py::run_body_design` 传入），未登记字面在生产端尽早失败。 | `HARD`（`novel/stages/stage4/design.py::assemble_body_design`） |
@@ -304,7 +318,7 @@ M1–M8 在本节点聚合执行（判据码 → 检查函数的登记表
 | # | 要求 | 谁在查 |
 |---|---|---|
 | R-6.1 | ExecutionPlan 编译闭合：四类执行语义与依赖边合法。 | `HARD`（`novel/stages/stage4/compile.py::compile_execution_plan`） |
-| R-6.2 | WriterBookIR 双视图同源：VerificationIR 事实不遗漏、WriterBrief 只投影呈现；同一编译输入两次产出字节一致。两层 IR（R2）：Machine 层 `ChapterIR`（WriterContext：VerificationIR＋WriterBrief，审计与 Stage7 核对面）→ 写手层 `WriterPacket`（六分区渲染——must_realize／must_respect／continuity／creative_guidance／background／guard_only，全部自然语言、无内部 ID 与字段名），后者由确定性 renderer 从 Machine 层生成、从不落盘（章包是派生视图，I-16），其字节进章回执的写手视图摘要。**称谓投影（CS-F2，RC-40/41，renderer `str06-render-v10`）**：Machine 层 `ChapterIR.withheld_bindings` 记录本章尚未释放、且已证明唯一绑定某人物的**完整登记称谓**（登记 surface、含姓名部件、全书只属一人（归属统计含纯称谓登记）、长度≥2、非姓／家族构词；附包含它的更长称谓防拆分），renderer 在正向材料行（含禁区行）里把这类字面换成本场已释放称谓——确定性、可观测（`name_projections` 覆盖六分区的实际投影，含禁区；禁区仍不参与正向字面扫描，留痕不含行文本）、原字段与来源文本不改、不反写事实；短姓、关系称呼、多义字面、未登记表达（如源文没有的「陆郎」）与源引文一律不投影，仍按字面检查回派原 owner；人物本场没有已释放称谓时不投影、泄漏如实保留。Design 自有文本的名称冲突仍由 Design 接受判据报告（compiler 不自动提前释放全名，RC-43）。**Hook 同尺投影（rc16，2026-10-05）**：释放面由 Hook Design 自选（`surface_releases`），`compile_hook_context` 按本场释放算好 `HookContext.withheld_bindings`（`stage4/context/hook/hook.json` 升 rc16）随上下文携带；`render_hook_context` 在正向材料行与禁区行做同一确定性投影，上下文字段与来源文本不改——条目返修的来源归因仍按原字段核对（`_hook_source_matches`）；留痕 `hook_name_projections`（guard report，不含行文本）；concealed 人物不可释放面、无显示面即不投影，泄漏如实报告。 | `HARD`（`novel/stages/stage4/book_ir.py::compile_writer_book_ir`＋`novel/stages/common.py::project_chapter_packet`/`render_chapter_packet`/`project_withheld_names`/`render_hook_context`/`hook_name_projections`＋`novel/stages/stage4/hook_context.py::compile_hook_context`＋`novel/core/name_materials.py::withheld_name_bindings`；反例 `tests/test_str06_body.py`、`tests/test_str06_r2_contracts.py`、`tests/test_str06_name_projection.py`、`tests/test_str06_hook.py`） |
+| R-6.2 | WriterBookIR 双视图同源：VerificationIR 事实不遗漏、WriterBrief 只投影呈现；同一编译输入两次产出字节一致。两层 IR（R2）：Machine 层 `ChapterIR`（WriterContext：VerificationIR＋WriterBrief，审计与 Stage7 核对面）→ 写手层 `WriterPacket`（六分区渲染——must_realize／must_respect／continuity／creative_guidance／background／guard_only，全部自然语言、无内部 ID 与字段名），后者由确定性 renderer 从 Machine 层生成、从不落盘（章包是派生视图，I-16），其字节与实际正文 system、renderer／写手协议版本共同进入章回执的写手视图摘要；仅改 system 也使旧章失效，实际请求与摘要使用同源提示。**称谓投影（CS-F2，RC-40/41，renderer `str06-render-v10`）**：Machine 层 `ChapterIR.withheld_bindings` 记录本章尚未释放、且已证明唯一绑定某人物的**完整登记称谓**（登记 surface、含姓名部件、全书只属一人（归属统计含纯称谓登记）、长度≥2、非姓／家族构词；附包含它的更长称谓防拆分），renderer 在正向材料行（含禁区行）里把这类字面换成本场已释放称谓——确定性、可观测（`name_projections` 覆盖六分区的实际投影，含禁区；禁区仍不参与正向字面扫描，留痕不含行文本）、原字段与来源文本不改、不反写事实；短姓、关系称呼、多义字面、未登记表达（如源文没有的「陆郎」）与源引文一律不投影，仍按字面检查回派原 owner；人物本场没有已释放称谓时不投影、泄漏如实保留。Design 自有文本的名称冲突仍由 Design 接受判据报告（compiler 不自动提前释放全名，RC-43）。**Hook 同尺投影（rc16，2026-10-05）**：释放面由 Hook Design 自选（`surface_releases`），`compile_hook_context` 按本场释放算好 `HookContext.withheld_bindings`（`stage4/context/hook/hook.json` 升 rc16）随上下文携带；`render_hook_context` 在正向材料行与禁区行做同一确定性投影，上下文字段与来源文本不改——条目返修的来源归因仍按原字段核对（`_hook_source_matches`）；留痕 `hook_name_projections`（guard report，不含行文本）；concealed 人物不可释放面、无显示面即不投影，泄漏如实报告。 | `HARD`（`novel/stages/stage4/book_ir.py::compile_writer_book_ir`＋`novel/stages/common.py::project_chapter_packet`/`render_chapter_packet`/`project_withheld_names`/`render_hook_context`/`hook_name_projections`＋`novel/stages/stage4/hook_context.py::compile_hook_context`＋`novel/core/name_materials.py::withheld_name_bindings`；反例 `tests/test_str06_body.py`、`tests/test_str06_r2_contracts.py`、`tests/test_str06_name_projection.py`、`tests/test_str06_hook.py`） |
 | R-6.3 | HookContext 仅凭正式输入可确定性重建（PresentationGraph＋名称投影／结构与正式人物材料）；同输入字节一致，不依赖旧 session 或内存态。全书风格、正式表达决定的已选机制、出场人物声线及材料场声音同源投影；表达来源只供归因，场声线按材料编号送达，阅读期待只送 kind／focus，不自动投影未来答案；local_focus 只安排表现，不新增事实。 | `HARD`（`novel/stages/stage4/hook_context.py::compile_hook_context`） |
 | R-6.4 | **M1 义务覆盖**：本场 owner 的义务完整进入 IR，内容逐条一致。 | `HARD`（`novel/stages/stage4/guard.py::check_obligation_coverage`） |
 | R-6.5 | **M2 提前揭示**：`entry_knowledge` 的 `established_by` 早于本场起点。 | `HARD`（`novel/stages/stage4/guard.py::check_entry_timing`） |
@@ -334,6 +348,12 @@ M1–M8 在本节点聚合执行（判据码 → 检查函数的登记表
 提交顺序＝原响应耐久 → 检查 → 候选 → 原子写正文 → 原子写章回执。
 恢复按有效提交集合：已完成 1、2、4、6 章时只补 3、5；局部失败保留其他合法结果，
 授权、账务或取消故障关闭相应准入；章回执绑定当前章包摘要与正文字节。
+
+Stage5 只将 Stage4 已确定并送达章包的目标故事写成正文：可选择具体措辞、对白、
+动作、停顿、即时反应和节奏，但不能临场新增改变时间线、前史、身份、持久关系或
+后续因果的桥梁，也不能替未给出的动机、知情渠道或刻意未知补答案。有限补桥的
+语义决定归 Stage4，compiler 只投影，正文写手协议升 v10；renderer 未变仍为 v11。
+新规则及机械验均不证明首答文学质量，仍按 R-7.6 未评披露。
 
 | # | 要求 | 谁在查 |
 |---|---|---|
@@ -384,7 +404,7 @@ Hook 的必要选择进入 Stage4 正式 Design（`R-5.6`），经 HookContext �
 |---|---|---|
 | R-10.1 | NameMap v5 编译闭合：名称位一致、无姓氏冲突、保留项合法（带理由）。 | `HARD`（`novel/stages/stage7/naming.py::compile_name_map`） |
 | R-10.2 | ApplyNames 单遍替换后旧名零残留（遵守 claimed/kept；目标名含旧字面不误报）。 | `HARD`（`novel/stages/stage7/naming.py::check_residual`）；残留 0 条不等于人名都换干净（替换覆盖率验不了），见 `B-21` |
-| R-10.3 | 章回执集合核对（D2，rc8；B4 后半补五态；rc6 身份拆分）：逐章回执状态、当前编译出的写手视图摘要（`writer_view_sha256`，材料含 renderer 与写手协议版本）、验证输入摘要（`validation_sha256`：禁用字面、称谓许可、篇幅带）与正文 hash 绑定；Machine 层摘要（`machine_view_sha256`）仅审计不参与核对——只改 Machine 层字段不触发重购。有效／缺失／拒绝／未知／失效（绑定不成立的接受态回执）五态分开按 item 报告（I-42），不静默跳过；集合齐备才装配就绪（not_ready 显式，不落新交付），某章失效不截断其他章有效性。 | `HARD`（`novel/stages/stage7/assembly.py::verify_chapter_receipts`／`chapter_access`，共用 `_binding_problems`） |
+| R-10.3 | 章回执集合核对（D2，rc8；B4 后半补五态；rc6 身份拆分）：逐章回执状态、当前编译出的写手视图摘要（`writer_view_sha256`，材料含实际正文 system、renderer 与写手协议版本）、验证输入摘要（`validation_sha256`：禁用字面、称谓许可、篇幅带）与正文 hash 绑定；Machine 层摘要（`machine_view_sha256`）仅审计不参与核对——只改 Machine 层字段不触发重购。有效／缺失／拒绝／未知／失效（绑定不成立的接受态回执）五态分开按 item 报告（I-42），不静默跳过；集合齐备才装配就绪（not_ready 显式，不落新交付），某章失效不截断其他章有效性。 | `HARD`（`novel/stages/stage7/assembly.py::verify_chapter_receipts`／`chapter_access`，共用 `_binding_problems`） |
 | R-10.4 | TXT 先落盘、manifest 最后提交；manifest 与文件 hash 逐字一致，消费者核对 manifest 才算就绪。 | `HARD`（`novel/stages/stage7/assembly.py::build_delivery_manifest`） |
 | R-10.5 | 同输入交付字节一致（确定性重放）；重放只允许缓存与登记的历史采用，零新购。 | `HARD`（`novel/stages/stage7/assembly.py::assemble_delivery`） |
 | R-10.6 | 新名的阅读质量未经语义评审，保持未评披露。 | `INFO`（`naming_quality_unver` 明示 `UNVER`，进交付披露）；新名质量没有确定性判据，见 `B-22` |
