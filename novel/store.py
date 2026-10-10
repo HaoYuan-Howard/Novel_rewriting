@@ -118,6 +118,36 @@ def _artifact_model(rel: str | None):
     return ARTIFACT_SPECS[rel].model if rel in ARTIFACT_SPECS else None
 
 
+def _inherited_llm_provenance(raw: bytes, rel: str):
+    """旧回执字节里的付费来源账；免费/缺席返回 None（维持免费账路径）。
+
+    免费重验只改回执的一部分，生成事实必须原样带下去——但只有旧账本身
+    合法可读时才继承；形状损坏在重验口关闭式拒绝，不静默降级成免费账。
+    """
+    from contracts.schema.common import LlmProvenance
+
+    def unique(pairs):
+        result: dict = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f'JSON 重复键：{key}')
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(raw.decode('utf-8-sig'), object_pairs_hook=unique)
+    except ValueError as exc:
+        raise ProvenanceRefused(f'免费重验的原回执不是合法 JSON：{rel}') from exc
+    previous = payload.get('_provenance') if isinstance(payload, dict) else None
+    if not isinstance(previous, dict) or 'model' not in previous:
+        return None
+    try:
+        return LlmProvenance.model_validate(previous)
+    except ValidationError as exc:
+        raise ProvenanceRefused(
+            f'免费重验的原回执来源账损坏：{rel}（{exc.errors(include_url=False)}）') from exc
+
+
 # ── 质量契约拒旧；未变化的 ExecutionPlan 独立保留登记迁移 ─────────────
 # 新增系列回顾与细节证据无法从旧盘面机械推导；显式检查载荷版本，防止模型
 # 默认值把缺失的旧版本标记补成当前版。版本值只取 contracts/artifacts.py。
@@ -2084,6 +2114,10 @@ class PublishItem(NamedTuple):
     #: 付费节点零模型参与的确定性产物（如 associate 无候选的空判定面）——
     #: 显式声明铸 FreeProvenance（CS-S Phase 2；不声明且无引用即拒）。
     declared_free: bool = False
+    #: 0 成本局部改写路径继承的旧来源账（免费重验回执）：生成事实
+    #: （prompts/model/adopted_models/usage）原样带下去，inputs 换成本次真读到的。
+    #: 给了它就不再现造账；与 `refs` 互斥（继承账与采用声明不许同时给）。
+    previous_provenance: Any = None
 
 
 class Str06Repository:
@@ -2119,6 +2153,10 @@ class Str06Repository:
     def __init__(self, root: Path, context=None):
         self.root = Path(root).resolve()
         self.context = context
+        # 免上下文（诊断/只读探测）实例的 CommitBundle 清单复用面：这类实例
+        # 结构上写不出新 bundle（发布与重验都经 context.commit_bundle 铸 seal），
+        # 完成度逐章核对不必为每章重付一次全量扫描。生产读写口不缓存。
+        self._sealed_bundle_listing: list | None = None
 
     def attach_context(self, context) -> None:
         self.context = context
@@ -2292,10 +2330,18 @@ class Str06Repository:
                 raise ProvenanceRefused(
                     f'{item.rel} 是已登记候选产物，但 repository 未附加上下文：'
                     '拒绝在无来源账的情况下写正式产物')
-            # 已登记产物落盘即带来源账；正文（text）的账在绑定它的回执上。
-            provenance = self.context.provenance_for(
-                _writer_of(spec), item.rel, refs=item.refs,
-                claim_usage=item.claim_usage, declared_free=item.declared_free)
+            if item.previous_provenance is not None:
+                if item.refs:
+                    raise ProvenanceRefused(
+                        f'{item.rel} 同时声明继承来源账与采用引用——继承账属于'
+                        ' 0 成本局部改写，二者互斥（I-35）')
+                provenance = self.context.rewrite_provenance(
+                    item.rel, item.previous_provenance)
+            else:
+                # 已登记产物落盘即带来源账；正文（text）的账在绑定它的回执上。
+                provenance = self.context.provenance_for(
+                    _writer_of(spec), item.rel, refs=item.refs,
+                    claim_usage=item.claim_usage, declared_free=item.declared_free)
             payload = {**payload, '_provenance': provenance.to_disk()}
         return (json.dumps(payload, ensure_ascii=False, indent=2,
                            allow_nan=False).encode('utf-8'), provenance)
@@ -2375,13 +2421,17 @@ class Str06Repository:
 
     def clear_upgrade_pending(self) -> None:
         """升级完成后删除恢复日志；调用方先核对完成回执与 workflow。"""
-        self.path('runtime/contract_upgrade.json').unlink()
+        self.path(paths.CONTRACT_UPGRADE_PENDING_REL).unlink()
 
     def publish_chapter_recheck(self, rel: str, receipt: Any, prose_rel: str) -> None:
         """免费重验只刷新接受回执；原正文、请求与采用链保持原身份。
 
-        回执的新 provenance 是免费验证事实；新 seal 显式继承原章提交的
-        adoptions，避免免费重验令原已购轮失去正式采用关系。
+        回执的新 provenance 继承原章的生成事实（prompts／model／usage 原样，
+        inputs 换成本次验证真读到的，`partial_rewrite` 留痕）：正文的账在绑定
+        它的回执上，免费重验不能把「哪次付费产出」从正式位上抹掉；本次零调用，
+        也不现造任何模型事实。历史免费回执（本就没有模型账）维持 FreeProvenance。
+        新 seal 显式继承原章提交的 adoptions，避免免费重验令原已购轮失去正式
+        采用关系。
         """
         from novel.work_units import sealed_commit_bundles
         before = self.path(rel).read_bytes()
@@ -2392,7 +2442,8 @@ class Str06Repository:
                     and any(o.key == prose_rel and o.sha256 == prose_sha for o in b.outputs)), None)
         if old is None:
             raise UnsealedArtifact('免费重验缺少原正文／回执的完整提交证据')
-        item = PublishItem(rel=rel, value=receipt, declared_free=True)
+        item = PublishItem(rel=rel, value=receipt, declared_free=True,
+                           previous_provenance=_inherited_llm_provenance(before, rel))
         data, provenance = self._prepare_item(item)
         bundle = self.context.commit_bundle(
             node=old.node, rel=rel, artifact_sha256=hashlib.sha256(data).hexdigest(),
@@ -2499,11 +2550,18 @@ class Str06Repository:
         封存记录损坏（seal 不符）由 `sealed_commit_bundles` 关闭式上抛，不是
         「当它不存在」；组内缺文件、摘要不符与本条同走 `UnsealedArtifact`
         （fail fast，`I-34`），恢复入口免费：重跑所属 owner 重新发布并封存。
+        免上下文实例复用同一份清单装载（见 `__init__` 的 invariant）。
         """
         from novel.work_units import sealed_commit_bundles
 
+        if self.context is None and self._sealed_bundle_listing is not None:
+            bundles = self._sealed_bundle_listing
+        else:
+            bundles = sealed_commit_bundles(self.root)
+            if self.context is None:
+                self._sealed_bundle_listing = bundles
         digest = hashlib.sha256(self.path(rel).read_bytes()).hexdigest()
-        for _path, bundle in sealed_commit_bundles(self.root):
+        for _path, bundle in bundles:
             if any(output.key == rel and output.sha256 == digest
                    for output in bundle.outputs):
                 return

@@ -53,6 +53,12 @@ def workflow_manifest_path(base: str | os.PathLike[str]) -> Path:
     return service_dir(base) / 'workflow.json'
 
 
+#: 同根契约升级恢复日志的唯一落点（runtime 家族，非版本化书产物）。
+#: 删除口（store）、节点阻断口（paid_requests）与升级编排共用这一份字面量
+#: ——三处各写一遍会在下一次改布局时静默分家。
+CONTRACT_UPGRADE_PENDING_REL = 'runtime/contract_upgrade.json'
+
+
 def output_root_fence_path(base: str | os.PathLike[str]) -> Path:
     """整根离线切换的外部围栏；旧根移动后原路径仍不得重新接纳任务。"""
     root = Path(os.path.abspath(base))

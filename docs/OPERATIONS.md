@@ -51,11 +51,29 @@ conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <O
   --apply --subject-sha256 <预览SHA> --actor <操作者> --reason <升级依据>
 ```
 
+预览输出附带 `rebuild_budgets`（重建节点的工作单元内容轮剩余额度，易变状态、
+不进计划指纹）。**应用前先核对**：`content_remaining` 为 0 的付费重建节点
+（如 hook_design）升级后第一步就会 `WorkUnitBudgetExhausted`——先对账那轮
+delivered、经跑书页追加额度或人工处置，再 apply，避免已交付的书停在
+「成书已归档、Hook 重建不了」。
+
 仅接受登记身份边。原产物和 workflow 原字节留在书内 `runtime/upgrades/<SHA>/`；
-不中断账与额度。prepared 中断后以相同 SHA 重放；代码或源身份漂移时明确阻断。
-rc22→rc23 之后重建 Hook Design、免费 Stage4 compile、Hook，再运行 Stage5 body
-（逐章沿用／免费重验／局部恢复）和 Stage7 assemble。付费节点先用 `--check-only`
-核已购响应；新请求仍须原有的 `--yes` 与 `--allow-egress` 授权，不在升级命令中购买。
+不中断账与额度。升级同时收口锚定被归档产物的 open 回派账（rc22→rc23 即
+hook_design），typed 问题与轮数在 resolved 记录里留账。prepared 中断后以相同
+SHA 重放；代码或源身份漂移时明确阻断——**尚未归档任何文件**的恢复日志可显式
+放弃后重新规划：
+
+```powershell
+conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录> `
+  --abort-pending --actor <操作者> --reason <放弃依据>
+```
+
+已开始归档的日志没有放弃出路，必须重放同一计划至完成。升级与在跑的节点执行
+互斥（workflow 锁）；撞上时命令以显式终态退出并提示先停/等待，本次未写任何
+字节。rc22→rc23 之后重建 Hook Design、免费 Stage4 compile、Hook，再运行
+Stage5 body（逐章沿用／免费重验／局部恢复）和 Stage7 assemble。付费节点先用
+`--check-only` 核已购响应；新请求仍须原有的 `--yes` 与 `--allow-egress`
+授权，不在升级命令中购买。
 
 自动运行的暂停、恢复、停止和按原配置继续使用跑书页；Stage 页只读监控。工程诊断先查询
 `python -m novel.cli --help` 和目标子命令 `--help`。内部执行入口为

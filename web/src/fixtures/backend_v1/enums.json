@@ -252,7 +252,9 @@
   "--dry-run": "只打印将要发出去的东西，不调用、不写盘"
  },
  "paid_flags": {},
- "partial_rewrite_flags": [],
+ "partial_rewrite_flags": [
+  "free-recheck"
+ ],
  "valued_flags": {
   "--source": "stage0.remove 的原始小说路径（首次摄入；相对路径相对 cwd）"
  },

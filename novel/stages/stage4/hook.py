@@ -80,8 +80,10 @@ def assemble_hook_design(
 
 def publish_graph(body: BodyDesign, hook: HookDesign) -> PresentationGraph:
     """完整 PresentationGraph 的唯一 publisher。"""
+    from contracts.artifacts import STR06_ARTIFACT_RC_VERSIONS
     payload = body.model_dump()
-    payload['contract_version'] = 'str06-rc23'
+    payload['contract_version'] = STR06_ARTIFACT_RC_VERSIONS[
+        'stage4/design/presentation_graph.json']
     payload['hook'] = hook.model_dump()
     return PresentationGraph.model_validate(payload)
 

@@ -82,7 +82,7 @@ from pathlib import Path
 from typing import Any, Callable, Final, NamedTuple, Sequence
 
 from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
-from novel import run_identity
+from novel import paths, prov, run_identity
 from novel.core.validation import ValidationIssue, validation_identity
 from contracts.invariants import (
     NARROW_OWNER_UNITS, NODES, OWNER_REVISION_MAX_ROUNDS, WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
@@ -97,13 +97,12 @@ from contracts.schema.workflow import (
     commit_bundle_seal, CommitAdoptionRef, CommitBundleV1, CommitInputRef,
     CommitOutputRef,
 )
-from novel.errors import ProvenanceRefused, TerminalState
+from novel.errors import ProvenanceRefused, TerminalState, UpgradeRefused
 from novel.llm.json_text import normalize_json_text
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
 from novel.llm.retry import TransportRetryPolicy
 from novel.llm.transport import ChatRequest, Transport, TransportError
 from novel.llm.usage import ledger_usage, parse_usage
-from novel import prov
 from novel.store import Str06Repository
 from novel.work_units import (
     ContentReservation, WorkUnitBudget, WorkUnitBudgetExhausted, WorkUnitRefused,
@@ -2213,6 +2212,22 @@ class CandidateRunContext:
             code=self.code, root_clean_sha1=self.root_sha1,
             inputs=self._take_inputs(rel), prompts=None, usage=None)
 
+    def rewrite_provenance(self, rel: str, prev, *, by: str = 'free-recheck'):
+        """0 成本局部改写（免费重验回执）：生成事实原样继承，inputs 换新。
+
+        与 `novel/run.py::RunContext.rewrite_provenance` 同一纪律：本次零调用，
+        prompts／model／adopted_models／usage 一个字不现造也不抹掉——usage 留
+        当初那次（一份产物的账一次结算）；inputs 只能来自本次真读到的 `_edges`。
+        旧账的根正文身份必须仍是当前根，否则是旧根产物冒充，必须从产地重建。
+        """
+        if prev.root_clean_sha1 != self.root_sha1:
+            raise ProvenanceRefused(
+                f'{self.node}: 局部改写继承的旧来源账 root_clean_sha1='
+                f'{prev.root_clean_sha1}，当前根={self.root_sha1}；旧根产物不能'
+                '靠免费重验续用，必须从产地重建')
+        return prev.partially_rewritten(by=by, code=self.code,
+                                        inputs=self._take_inputs(rel))
+
     def llm_provenance(self, rel: str, *,
                        refs: tuple[AdoptionRef, ...] = (),
                        claim_usage: bool = True,
@@ -2334,8 +2349,12 @@ def init_or_resume_candidate_workflow(
     ledger 以 epoch 的 `session_run_id` 为 parent：每次 CLI 调用是新 run，
     epoch 是稳定窗口，与正式 AgentRun 的 run／parent 分工同构。
     """
-    if repository.path('runtime/contract_upgrade.json').exists():
-        raise ProvenanceRefused('同根契约升级尚未完成；请重放 contract-upgrade 原计划，禁止节点执行')
+    if repository.path(paths.CONTRACT_UPGRADE_PENDING_REL).exists():
+        raise UpgradeRefused(
+            '同根契约升级尚未完成；请重放 contract-upgrade 原计划，'
+            '尚未开始归档的恢复日志也可显式放弃（--abort-pending），禁止节点执行',
+            hint='novel.cli contract-upgrade <sid> --base <Output> --apply ... '
+                 '（同一 subject）或 --abort-pending')
     try:
         record = workflow_from_disk(repository.read(WORKFLOW_REL))
     except FileNotFoundError:

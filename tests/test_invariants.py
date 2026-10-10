@@ -295,12 +295,18 @@ def test_write_effects_only_names_current_flags():
 
 
 def test_partial_rewrite_flags_are_current_free_paths():
-    """F8a：旧链的局部改写旗标随旧链退役，`PARTIAL_REWRITE_FLAGS` 为空表。
+    """局部改写旗标 ⊆ 免费路（F8a 空表期后重新出现内部路径，闭集登记）。
 
-    不变量本身保留：将来若重新出现局部改写路，它必须 ⊆ `FREE_ENTRIES` 且不得
-    借 `--revalidate`（提升路改的是状态，不是内容）。空表是诚实的现状。
+    CLI 旗标形态的局部改写仍须 ⊆ `FREE_ENTRIES` 且不得借 `--revalidate`
+    （提升路改的是状态，不是内容）。内部零调用路径（`free-recheck`：候选链
+    免费重验局部改写付费回执）不是 CLI 旗标，其免费性由唯一铸造口
+    `CandidateRunContext.rewrite_provenance` 结构保证（本次零调用，生成事实
+    只继承不现造）；闭集在此显式对账，新增成员必须同时扩这里的白名单。
     """
-    assert set(inv.PARTIAL_REWRITE_FLAGS) <= set(inv.FREE_ENTRIES)
+    cli_flags = {f for f in inv.PARTIAL_REWRITE_FLAGS if f.startswith('--')}
+    internal = set(inv.PARTIAL_REWRITE_FLAGS) - cli_flags
+    assert cli_flags <= set(inv.FREE_ENTRIES)
+    assert internal <= {'free-recheck'}, '内部零调用局部改写路径闭集在此对账'
     assert '--revalidate' not in inv.PARTIAL_REWRITE_FLAGS
 
 

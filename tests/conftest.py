@@ -50,6 +50,10 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_api_edits.py',
     'tests/test_appendlog.py',
     'tests/test_commander_admission.py',
+    # 含 agent 线程（test_operator_and_agent_resume_same_root_to_delivery）与真实
+    # CLI 子进程（test_cli_subprocess_preview_and_apply_are_free_and_reachable），
+    # 与 test_str06_product_entry 同类：全局 _service 面不得与他模块并行。
+    'tests/test_contract_upgrade.py',
     'tests/test_final_approval_workpacks.py',
     'tests/test_llm.py',
     'tests/test_model_slots.py',

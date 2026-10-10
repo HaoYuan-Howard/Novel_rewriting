@@ -271,6 +271,8 @@ def _parser() -> argparse.ArgumentParser:
     upgrade.add_argument('sid')
     upgrade.add_argument('--base', required=True)
     upgrade.add_argument('--apply', action='store_true')
+    upgrade.add_argument('--abort-pending', action='store_true',
+                         help='显式放弃尚未归档任何文件的升级恢复日志')
     upgrade.add_argument('--subject-sha256')
     upgrade.add_argument('--actor')
     upgrade.add_argument('--reason')
@@ -1311,14 +1313,27 @@ def _cmd_contract_upgrade(a: argparse.Namespace) -> int:
     from novel import prov
     from novel.store import Str06Repository
     from novel.stages.chain import load_stage1_chapters
-    from novel.orchestrator.contract_upgrade import preview, apply, digest
+    from novel.orchestrator.contract_upgrade import (
+        abort_pending, preview, apply, digest,
+    )
+    from novel.orchestrator.work_unit_evidence import rebuild_budget_views
 
     repo = Str06Repository(paths.resolve_novel_dir(a.base, a.sid))
     source = load_stage1_chapters(a.base, a.sid)
     code = prov.code_version()
     if code == prov.CODE_UNKNOWN:
         raise TerminalState('代码身份未知，不能规划契约升级')
-    if a.apply:
+    if a.abort_pending:
+        if a.apply:
+            raise TerminalState('--abort-pending 与 --apply 互斥')
+        if a.subject_sha256:
+            raise TerminalState('--abort-pending 不接受 --subject-sha256')
+        if not all((a.actor, a.reason)):
+            raise TerminalState('--abort-pending 必须给 --actor 和 --reason')
+        result = abort_pending(repo, base=Path(a.base), sid=a.sid,
+                               source_identity=source.source_identity,
+                               code_version=code, actor=a.actor, reason=a.reason)
+    elif a.apply:
         if not all((a.subject_sha256, a.actor, a.reason)):
             raise TerminalState('--apply 必须给 --subject-sha256、--actor 和 --reason')
         result = apply(repo, base=Path(a.base), sid=a.sid, source_identity=source.source_identity,
@@ -1330,6 +1345,11 @@ def _cmd_contract_upgrade(a: argparse.Namespace) -> int:
         plan = preview(repo, source_identity=source.source_identity, code_version=code)
         result = {'subject_sha256': digest(plan.model_dump(mode='json')),
                   'plan': plan.model_dump(mode='json')}
+        # 额度是易变状态，只随预览展示、不进计划（进 subject_sha256 会让
+        # 节点一跑预览就漂移）。应用前核对：额度耗尽的重建节点第一步就会
+        # WorkUnitBudgetExhausted，须先对账/追加再 apply。
+        result['rebuild_budgets'] = rebuild_budget_views(
+            a.base, repo.root.name, plan.rebuild_nodes)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
@@ -1528,7 +1548,7 @@ def _execution_context_control_mutation(a: argparse.Namespace) -> bool:
     if a.cmd in ('queue-cancel', 'queue-resume'):
         return True
     if a.cmd in ('issue-correction', 'contract-upgrade'):
-        return bool(a.apply)
+        return bool(a.apply) or bool(getattr(a, 'abort_pending', False))
     if a.cmd != 'reconcile':
         return False
     admission_inspect = bool(

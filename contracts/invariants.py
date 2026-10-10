@@ -597,9 +597,11 @@ FREE_ENTRIES: Final = {
 PAID_FLAGS: Final = {}
 
 
-#: 部分改写旗标（旧链 trim／recheck 面）随 Stage5 人工闸退役删除；新链的精确
-#: 重做范围由章回执链与 IR 身份机械推导，不靠旗标声明。
-PARTIAL_REWRITE_FLAGS: Final = ()
+#: 部分改写旗标。旧链 trim／recheck 面随 Stage5 人工闸退役删除；新链的精确
+#: 重做范围由章回执链与 IR 身份机械推导。`free-recheck` 是唯一现役档：
+#: 免费重验局部改写付费章回执，生成事实经 partial_rewrite 留痕继承
+#: （`_common.md` §5.1b 同一语义；一条会花钱的路不叫局部改写）。
+PARTIAL_REWRITE_FLAGS: Final = ('free-recheck',)
 
 #: 带值 flag：值说的是「这个值是什么」。F8a 后收录新链工具驱动
 #: （`novel/stages/chain.py`）的入口级取值旗标——它们进 argv，因此

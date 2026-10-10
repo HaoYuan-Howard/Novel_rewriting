@@ -110,6 +110,24 @@ def _failed_candidate_root(tmp_path) -> Path:
 
 # ─────────────────────────────── views 纯函数 ───────────────────────────────
 
+def test_design_view_survives_pre_upgrade_hook_shape(base):
+    """未升级旧根的 hook 早于当前契约形状：只读视图不 500，说明如实标不可推导。
+
+    选择本身（人称／聚焦／材料引用）原样投影；组织说明是 HookDesign 派生面，
+    读不出就说不读出，不猜内容。
+    """
+    name = 'cand'
+    graph_path = base / name / 'run' / 'stage4' / 'design' / 'presentation_graph.json'
+    raw = json.loads(graph_path.read_text(encoding='utf-8'))
+    raw['hook']['reader_expectation'] = {'kind': 'legacy'}   # 旧形状缺 focus
+    graph_path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
+    design = views.design_view(base, name)
+    assert design.present and design.hook is not None
+    assert design.hook.person == 'first'
+    assert list(design.hook.materials), '选择本身原样投影'
+    assert '不可推导' in design.hook.design_brief
+
+
 def test_views_cover_the_whole_delivered_chain(base):
     name = 'cand'
     chars = views.characters_view(base, name)

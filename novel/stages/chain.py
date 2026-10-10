@@ -2023,13 +2023,18 @@ def _packet_identities(writer_ir) -> dict[int, 'ChapterIdentities']:
 
 def _committed_set(repository, identities: dict[int, 'ChapterIdentities'],
                   target: tuple[int, ...], *, writer_ir=None):
-    """集合恢复：逐章独立装载有效提交（回执＋正文＋章包摘要三方绑定）。
+    """集合恢复：逐章独立核对有效提交（回执＋正文＋章包摘要三方绑定）。
 
     各章互不依赖（D2）：某章缺失、章包过期或正文脱钩只使**该章**回到待补
     集合，其余章的合法提交原样保留（I-31）——已完成 1、2、4、6 章时只补
     3、5。崩溃窗口（正文已写、回执未写）按「无有效回执」处理：本章重做，
     同请求身份免费重放闭合（`R-7.4`）。`target` 是本次目标章集合（W1 选章；
     不在集合内的章既不装载也不触碰）。
+
+    除装载外还会**发布**：写作输入未变、仅验证规则变化时，先在原章稿上免费
+    重验并经 `publish_chapter_recheck` 发布新回执（生成事实继承原付费账），
+    再按新回执判定；记录损坏由 `sealed_commit_bundles` 关闭式上抛，不吞成
+    「本章无提交」。
 
     回执装载走 `inspect`（不记来源边、不做输入新鲜度）：章包摘要
     （写手视图与验证输入摘要）是比输入边新鲜度更强的逐章绑定——章回执的合法输入只有
@@ -2762,13 +2767,15 @@ def frozen_concurrency(cfg: Config) -> dict[str, Any]:
 
 
 def execute(args) -> None:
-    """独立 CLI 的整次书执行与升级共用跨进程锁；付费在飞时不失效正式位。"""
+    """独立 CLI 的整次书执行与升级共用跨进程锁；付费在飞时不失效正式位。
+
+    base／run-dir 的合法性由 `_execute` 的同一道校验回答（那边的报错带
+    `NOVEL_OUTPUT` 语义）；这里只取锁，不另立一份措辞更含糊的预检。
+    """
     from novel.appendlog import path_transaction_lock
-    base = getattr(args, 'base', None) or os.environ.get('NOVEL_OUTPUT')
-    if not base or not Path(args.run_dir).resolve().is_relative_to(Path(base).resolve()):
-        raise ValueError('--run-dir 必须位于显式输出根下')
+    from novel.llm.paid_requests import WORKFLOW_REL
     repository = Str06Repository(Path(args.run_dir))
-    with path_transaction_lock(repository.path('runtime/candidate_workflow.json')):
+    with path_transaction_lock(repository.path(WORKFLOW_REL)):
         _execute(args)
 
 

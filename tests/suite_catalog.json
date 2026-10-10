@@ -666,7 +666,9 @@
         "test_recompile_changes_only_one_chapter_and_keeps_other_commit": "stage",
         "test_unknown_call_and_accumulated_budget_survive_upgrade": "stage",
           "test_operator_and_agent_resume_same_root_to_delivery": "stage",
-        "test_validation_only_change_rechecks_original_prose_and_preserves_adoption": "stage"
+        "test_validation_only_change_rechecks_original_prose_and_preserves_adoption": "stage",
+        "test_ir_upstream_stale_keeps_overview_alive_and_points_to_compile": "stage",
+        "test_open_hook_design_issue_is_resolved_when_product_archived": "stage"
       }
     },
     "tests/test_str06_body.py": {

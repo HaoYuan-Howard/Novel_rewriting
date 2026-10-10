@@ -269,9 +269,14 @@ def _delivery_preview(repository, owner, candidate, chars) -> dict:
         packet = project_chapter_packet(ir, n)
         prose[n] = candidate['prose']
         errors = chapter_prose_validator(packet)(prose[n])
+        # 合成回执按**本次重验**的尺子记版本：沿盘上旧值会在下一次换版后
+        # 把刚验证过的候选稿误报成「须先免费重验」（假红）。
+        from contracts.schema.receipt import BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION
         receipts[n] = {**receipts[n], 'prose_sha256': sha256_text(prose[n]),
                        'writer_view_sha256': identities[n].writer_view_sha256,
                        'validation_sha256': identities[n].validation_sha256,
+                       'validator_version': BODY_VALIDATOR_VERSION,
+                       'mechanical_checks': list(BODY_MECHANICAL_CHECKS),
                        'status': 'accepted' if not errors else 'rejected'}
     errors.extend(verify_chapter_receipts(receipts, prose, identities_by_ordinal=identities))
     replacements, name_errors = compile_surface_replacements(chars, name_map)

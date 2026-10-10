@@ -41,11 +41,17 @@ if TYPE_CHECKING:
 
 
 def sealed_commit_bundles(root: Path) -> list[tuple[Path, CommitBundleV1]]:
-    """候选根 ``runtime/commit/`` 的全部已封存提交记录（seal 不符即关闭式拒绝）。
+    """候选根 ``runtime/commit/`` 的全部已封存提交记录（损坏即关闭式拒绝）。
 
     **采用状态从 seal 派生**（B1）：恢复路径据此判断哪些内容轮已被正式提交
-    采用；记录损坏不是「当它不存在」，而是显式停止。
+    采用；记录损坏不是「当它不存在」，而是显式停止。形状不合约与 seal 不符
+    同走 `ProvenanceRefused`——此前形状错以裸 `ValidationError` 冒出，被
+    `chain._committed_set` 的逐章 except 吞成「本章无提交」，把全局记录损坏
+    扩大成全书待补集合（2026-10-10 审阅实证）。要么整份记录可信，要么整个
+    恢复面停下，不存在「跳过坏记录继续」的中间档。
     """
+    from pydantic import ValidationError
+
     from novel.errors import ProvenanceRefused
 
     commit_dir = Path(root) / 'runtime' / 'commit'
@@ -56,7 +62,12 @@ def sealed_commit_bundles(root: Path) -> list[tuple[Path, CommitBundleV1]]:
         payload = _read_json_dict(path)
         if commit_bundle_seal(payload) != payload.get('seal'):
             raise ProvenanceRefused(f'CommitBundle 记录 seal 不符：{path}')
-        found.append((path, CommitBundleV1.model_validate(payload)))
+        try:
+            found.append((path, CommitBundleV1.model_validate(payload)))
+        except ValidationError as exc:
+            raise ProvenanceRefused(
+                f'CommitBundle 记录形状不合约：{path}'
+                f'（{exc.errors(include_url=False)}）') from exc
     return found
 
 

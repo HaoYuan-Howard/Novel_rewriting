@@ -87,6 +87,25 @@ def cost_evidence(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2) -
         missing_usage_calls=usage.missing_usage_calls), selected, owners
 
 
+def rebuild_budget_views(base: str | Path, ledger_sid: str,
+                         nodes: tuple[str, ...]) -> list[dict]:
+    """指定节点在本书的工作单元内容轮额度投影（`unit_view` 同一把尺；无账空表）。
+
+    升级预览用它在应用前回答「重建第一步会不会撞额度」：额度是易变状态，
+    只随预览展示、不进被 subject_sha256 覆盖的计划（否则节点一跑预览就漂移）。
+    """
+    units_dir = paths.work_units_dir(base, ledger_sid)
+    if not units_dir.is_dir():
+        return []
+    out: list[dict] = []
+    wanted = set(nodes)
+    for ledger_file in sorted(units_dir.glob('*/ledger.json')):
+        ledger = work_units._read(base, ledger_file, WorkUnitLedgerV2)
+        if ledger.node in wanted:
+            out.append(work_units.unit_view(ledger))
+    return out
+
+
 def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2,
                  owners: set[str], cost_rows: list[dict]) -> dict:
     """追加额度前的 owner 停止证明（R8a-5 重写归属轴）。

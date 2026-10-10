@@ -22,6 +22,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from contracts.schema.api import (
     Str06AssemblyOutcomeView, Str06AssemblyReportView,
     Str06BlueprintBeatView, Str06BlueprintChapterView, Str06BlueprintView,
@@ -273,14 +275,21 @@ def design_view(base: str | os.PathLike[str], candidate: str) -> Str06DesignView
                                scene_ids=tuple(c['scene_ids']))
         for c in graph.get('chapters') or ())
     hook_payload = graph.get('hook')
-    hook = (Str06DesignHookView(
-        person=hook_payload['pov']['person'],
-        focalizers=tuple(hook_payload['pov']['focalizers']),
-        materials=tuple(m['beat_ref'] for m in hook_payload['materials']),
-        concealed=tuple(hook_payload.get('concealed') or ()),
-        forbidden_reveals=len(hook_payload.get('forbidden_reveals') or ()),
-        design_brief=hook_organization_summary(HookDesign.model_validate(hook_payload)))
-        if hook_payload else None)
+    hook = None
+    if hook_payload:
+        try:
+            brief = hook_organization_summary(HookDesign.model_validate(hook_payload))
+        except ValidationError:
+            # 未升级旧根上的 hook 早于当前契约形状：只读视图不因此 500——
+            # 选择本身原样投影，组织说明如实标「不可推导」，不猜内容。
+            brief = '（盘上 Hook 形状早于当前契约，组织说明不可推导；经登记升级重建后恢复）'
+        hook = Str06DesignHookView(
+            person=hook_payload['pov']['person'],
+            focalizers=tuple(hook_payload['pov']['focalizers']),
+            materials=tuple(m['beat_ref'] for m in hook_payload['materials']),
+            concealed=tuple(hook_payload.get('concealed') or ()),
+            forbidden_reveals=len(hook_payload.get('forbidden_reveals') or ()),
+            design_brief=brief)
     binding_payload = _inspect(run, 'stage4/grounding/semantic_binding.json')
     binding = (Str06DesignBindingView(
         obligations=len(binding_payload.get('obligations') or ()),

@@ -5,12 +5,14 @@ import pytest
 
 from contracts.contract_upgrades import HOOK_UPGRADE
 from novel import prov
-from novel.errors import ProvenanceRefused
+from novel.errors import ProvenanceRefused, TerminalState, UpgradeRefused
 from novel.llm.paid_requests import (
     WORKFLOW_REL, digest, init_or_resume_candidate_workflow,
     open_candidate_workflow, workflow_from_disk, workflow_to_disk,
 )
-from novel.orchestrator.contract_upgrade import PENDING_REL, apply, preview
+from novel.orchestrator.contract_upgrade import (
+    PENDING_REL, abort_pending, apply, preview,
+)
 from novel.store import Str06Repository
 from tests.str06_facilities import candidate_epoch
 from tests.test_str06_body import _make_session, _run, _full_chain_wires
@@ -51,12 +53,20 @@ def test_plan_is_deterministic_readonly_and_unregistered_drift_refused(tmp_path)
     before = {p: p.read_bytes() for p in repo.root.rglob('*') if p.is_file()}
     assert _preview(repo) == _preview(repo)
     assert before == {p: p.read_bytes() for p in repo.root.rglob('*') if p.is_file()}
-    with pytest.raises(ProvenanceRefused, match='源身份'):
+    with pytest.raises(UpgradeRefused, match='源身份'):
         preview(repo, source_identity='b' * 64, code_version=prov.code_version())
     raw = repo.inspect(WORKFLOW_REL)
     raw['contract_identity'] = '0' * 64
     repo.write(WORKFLOW_REL, raw)
-    with pytest.raises(ProvenanceRefused, match='未登记'):
+    with pytest.raises(UpgradeRefused, match='未登记'):
+        _preview(repo)
+
+
+def test_already_upgraded_root_refuses_preview_as_up_to_date(tmp_path):
+    repo = _minimal(tmp_path)
+    plan = _preview(repo)
+    _apply(repo, plan)
+    with pytest.raises(UpgradeRefused, match='无需升级'):
         _preview(repo)
 
 
@@ -79,19 +89,30 @@ def test_apply_archives_original_bytes_keeps_body_and_is_idempotent(tmp_path):
 
 
 def test_stale_preview_and_live_owner_refuse_before_invalidation(tmp_path):
+    """预览漂移与 live AgentRun owner 都在失效前拒绝；探测的是生产真实持锁身份。"""
+    from contracts.schema.orchestration import AgentRunEvent, AgentRunStart
+    from novel.orchestrator import agent
     from novel.orchestrator.admission import owner_lease
-    from novel.errors import TerminalState
     repo = _minimal(tmp_path)
     plan = _preview(repo)
     repo.write_text('stage5/body/ch01.txt', '变化的章稿。')
-    with pytest.raises(ProvenanceRefused, match='预览已漂移'):
+    with pytest.raises(UpgradeRefused, match='预览已漂移'):
         _apply(repo, plan)
     plan = _preview(repo)
-    with owner_lease(repo.root.parent, candidate_epoch().session_run_id):
+    # 生产里持有 owner lease 的是 AgentRun 的 run_id；账上未结束的 run 必须
+    # 被探到（候选根 epoch 会话 id 不再误当 owner）。
+    agent.append(repo.root.parent, AgentRunEvent(
+        run_id='live-book-owner', kind='started', ts=1759000000,
+        start=AgentRunStart(sid=repo.root.name, base=str(repo.root.parent),
+                            authorized=True, egress_authorized=True)))
+    with owner_lease(repo.root.parent, 'live-book-owner'):
         with pytest.raises(TerminalState, match='owner'):
             _apply(repo, plan)
-    assert repo.path('stage5/hook/hook.txt').exists()
-    assert not repo.path(PENDING_REL).exists()
+    # 候选根 epoch 会话即使真被人拿锁，也不再被当作这本书的 owner 证据。
+    with owner_lease(repo.root.parent, candidate_epoch().session_run_id):
+        receipt = _apply(repo, plan)
+    assert repo.read_text(f'runtime/upgrades/{receipt["subject_sha256"]}/files/'
+                          f'stage5/hook/hook.txt') == '原楔子证据。'
 
 
 def test_frozen_output_root_refuses_upgrade_without_any_write(tmp_path):
@@ -162,13 +183,61 @@ def test_interrupted_upgrade_blocks_nodes_and_replays_same_plan(tmp_path, monkey
     with pytest.raises(OSError, match='模拟'):
         _apply(repo, plan)
     assert repo.path(PENDING_REL).exists()
-    with pytest.raises(ProvenanceRefused, match='尚未完成'):
+    with pytest.raises(UpgradeRefused, match='尚未完成'):
         init_or_resume_candidate_workflow(repository=repo, base=repo.root.parent,
             code=prov.code_version(), root_sha1='a' * 40, source_identity=SOURCE,
             task_id='task-1', created_at=1759000001)
     _apply(repo, plan)
     assert not repo.path(PENDING_REL).exists()
     assert workflow_from_disk(repo.inspect(WORKFLOW_REL)).epoch.ordinal == 2
+
+
+@pytest.mark.parametrize('window', ['pending', 'archive'])
+def test_abort_pending_only_before_any_archive(tmp_path, monkeypatch, window):
+    """未归档任何文件的恢复日志可显式放弃；已开始归档的必须重放至完成。"""
+    repo = _minimal(tmp_path)
+    plan = _preview(repo)
+    original_archive, original_write = repo.archive_upgrade_file, repo.write
+    interrupted = False
+
+    def write(rel, *args, **kwargs):
+        nonlocal interrupted
+        result = original_write(rel, *args, **kwargs)
+        if window == 'pending' and rel == PENDING_REL and not interrupted:
+            interrupted = True
+            raise OSError('模拟恢复日志写盘后、归档前中断')
+        return result
+
+    def archive(*args):
+        nonlocal interrupted
+        original_archive(*args)
+        if window == 'archive' and not interrupted:
+            interrupted = True
+            raise OSError('模拟首个对象归档后中断')
+
+    monkeypatch.setattr(repo, 'write', write)
+    monkeypatch.setattr(repo, 'archive_upgrade_file', archive)
+    with pytest.raises(OSError, match='模拟'):
+        _apply(repo, plan)
+    assert repo.path(PENDING_REL).exists()
+
+    if window == 'pending':
+        result = abort_pending(repo, base=repo.root.parent, sid=repo.root.name,
+                               source_identity=SOURCE, code_version=prov.code_version(),
+                               actor='测试', reason='代码身份漂移后重新规划')
+        assert result['status'] == 'aborted'
+        assert not repo.path(PENDING_REL).exists()
+        assert repo.path('stage5/hook/hook.txt').exists()
+        # 放弃后可按当前身份重新规划；旧计划不再是唯一出路。
+        assert _preview(repo).archive == plan.archive
+    else:
+        # 第一个归档对象已退出正式位：没有「放弃」出路，只能重放至完成。
+        with pytest.raises(UpgradeRefused, match='不能放弃'):
+            abort_pending(repo, base=repo.root.parent, sid=repo.root.name,
+                          source_identity=SOURCE, code_version=prov.code_version(),
+                          actor='测试', reason='试图半途放弃')
+        _apply(repo, plan)
+        assert not repo.path(PENDING_REL).exists()
 
 
 @pytest.mark.parametrize('window', ['none', 'archive', 'workflow', 'receipt'])
@@ -246,6 +315,13 @@ def test_validation_only_change_rechecks_original_prose_and_preserves_adoption(t
     assert repo.path('stage5/body/ch01.txt').read_bytes() == before
     assert renewed['request_identity'] == original['request_identity']
     assert renewed['validator_version'] == 'str06-body-mechanical-v2'
+    # 免费重验不丢生成事实：回执继承原付费来源账（model/prompts/usage 原样，
+    # inputs 换成本次验证真读到的），partial_rewrite 留痕。
+    inherited = renewed['_provenance']
+    assert inherited['model'] == original['_provenance']['model']
+    assert inherited['prompts'] == original['_provenance']['prompts']
+    assert inherited['usage'] == original['_provenance']['usage']
+    assert inherited['partial_rewrite'] == 'free-recheck'
     bundles = [b for _, b in sealed_commit_bundles(repo.root)
                if any(o.key == rel and o.sha256 == repo.file_sha256(repo.path(rel)) for o in b.outputs)]
     assert bundles and bundles[0].adoptions
@@ -312,6 +388,150 @@ def test_recompile_changes_only_one_chapter_and_keeps_other_commit(tmp_path, mon
     assert report['assembly']['status'] == 'ready'
 
 
+def test_ir_upstream_stale_keeps_overview_alive_and_points_to_compile(tmp_path, monkeypatch):
+    """回归：盘上正文 + IR 上游已变时，只读完成度不得抛 UpstreamStale。
+
+    IR 只记 reconstruction_brief 一条边：Preserve 重做（回派修订正是这种情形）
+    后 IR 待重编译，逐章核对须落 unknown/consumed_unresolved，planner 排出
+    compile，而不是让 artifact_state → overview → next_action 整条链崩溃。
+    """
+    from novel import paths
+    from novel.cli import main as cli
+    from novel.config import Config
+    from contracts.invariants import NODES
+    from novel.orchestrator import operator
+    from novel.orchestrator.nodes import build_steps
+    from novel.stages.chain import NODE_ORDER
+    from tests.test_str06_product_entry import (
+        FILENAME, SOURCE_TEXT, _profiles, _install_fake_transport,
+    )
+    from tests.test_str06_hook import _full_chain_wires as entry_wires
+
+    base = tmp_path / 'out'
+    from novel.work_units import initialize_workflow
+    initialize_workflow(base)
+    source = tmp_path / FILENAME
+    source.write_text(SOURCE_TEXT, encoding='utf-8')
+    assert cli.main(['run', 'stage0.remove', '--source', str(source), '--base', str(base)]) == 0
+    assert cli.main(['run', 'stage1.partition', '9001', '--base', str(base)]) == 0
+    monkeypatch.setattr('novel.stages.chain.load_config', lambda: Config(
+        model='deepseek-v4-pro', thinking_mode='on'))
+    _install_fake_transport(monkeypatch, entry_wires())
+    profiles = _profiles()
+    for node in NODE_ORDER:
+        for step in build_steps(node, '9001', base=base,
+                                executor_backend=profiles.executor_default if NODES[node].paid else None,
+                                egress_authorized=True if NODES[node].paid else None):
+            assert cli.main(step.argv[step.argv.index('run'):]) == 0
+    assert operator.next_action(base, '9001').state == 'pipeline_complete'
+    # 让 IR 记录的上游（reconstruction_brief）字节变化 ⇒ IR 待重编译。
+    novel_dir = paths.resolve_novel_dir(base, '9001')
+    brief = novel_dir / 'stage4' / 'grounding' / 'reconstruction_brief.json'
+    raw = brief.read_text(encoding='utf-8')
+    brief.write_text(raw + '\n', encoding='utf-8', newline='\n')
+    # 回归点：这条只读链不再抛 UpstreamStale；planner 能点名待重建的 stage4
+    # 节点（brief 同时被 presentation_graph 与 IR 消费，最靠前的 stale 节点
+    # 先被选中）。人工改字节（无 open 回派账）按设计停在待决策——真实触发
+    # （Preserve 回派修订级联）经 revision cascade 以默认 flags 放行为 ready。
+    next_action = operator.next_action(base, '9001')
+    assert next_action.action is not None
+    assert next_action.action.node in ('str06.stage4.hook_design',
+                                       'str06.stage4.compile')
+    from novel.orchestrator.state import overview_at
+    overview = overview_at(novel_dir, prov.code_version())
+    chapter = next(a for stage in overview.stages for a in stage.artifacts
+                   if a.rel == 'stage5/body/ch01.txt')
+    assert chapter.freshness == 'unknown' and chapter.reason == 'consumed_unresolved'
+
+
+def test_corrupt_commit_bundle_shape_stops_recovery_instead_of_rebuying(tmp_path):
+    """回归：CommitBundle 形状损坏是全局事实，不得被吞成「全书章稿无提交」。
+
+    2026-10-10 审阅：形状错以裸 ValidationError 冒出时，`_committed_set` 的
+    逐章 except 把每章都判成待补——全书进入重购集合。关闭式上抛才是正解。
+    """
+    import json as _json
+
+    from novel.errors import ProvenanceRefused
+    from novel.stages import chain
+    from novel.work_units import sealed_commit_bundles
+    repo, session, _ = _make_session(tmp_path, _full_chain_wires())
+    _run(repo, session)
+    writer_ir = repo.read_model('stage4/ir/writer_book_ir.json')
+    identities = chain._packet_identities(writer_ir)
+    path = next(iter(sorted((repo.root / 'runtime' / 'commit').rglob('*.json'))))
+    payload = _json.loads(path.read_text(encoding='utf-8'))
+    payload['node'] = 12345                      # seal 一致但形状不合约
+    from contracts.schema.workflow import commit_bundle_seal
+    payload['seal'] = commit_bundle_seal(payload)
+    path.write_text(_json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+    with pytest.raises(ProvenanceRefused, match='形状不合约'):
+        sealed_commit_bundles(repo.root)
+    with pytest.raises(ProvenanceRefused, match='形状不合约'):
+        chain._committed_set(repo, identities, (1, 2), writer_ir=writer_ir)
+
+
+def test_workflow_lock_contention_is_a_terminal_stop_with_zero_writes(tmp_path):
+    """升级撞上在跑执行：显式终态（非 exit 70 崩溃），本次不写任何字节。"""
+    from novel.appendlog import path_transaction_lock
+
+    repo = _minimal(tmp_path)
+    plan = _preview(repo)
+    before = {p: p.read_bytes() for p in repo.root.rglob('*') if p.is_file()}
+
+    class _Busy:
+        def __enter__(self):
+            raise TimeoutError('timed out locking shared append log')
+
+        def __exit__(self, *args):
+            return False
+
+    import novel.orchestrator.contract_upgrade as cu
+    original = path_transaction_lock
+    (repo.root.parent / '_service').mkdir(exist_ok=True)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(cu, 'path_transaction_lock', lambda _p: _Busy())
+        with pytest.raises(UpgradeRefused, match='争用|超时|正在进行'):
+            _apply(repo, plan)
+    assert before == {p: p.read_bytes() for p in repo.root.rglob('*') if p.is_file()}
+    assert not repo.path(PENDING_REL).exists()
+
+
+def test_open_hook_design_issue_is_resolved_when_product_archived(tmp_path):
+    """升级归档 presentation_graph 时，锚定它的 open 回派账一并收口。
+
+    留着 open 记录的话，run_hook_design 会去读已归档的上一版当修订模板
+    （FileNotFoundError / exit 70）；收口后按无 open 记录首跑重建，typed
+    问题与轮数在 resolved 记录里留账。
+    """
+    from contracts.schema.workflow import OwnerIssueV1
+    from novel.stages.owner_revision import (
+        OwnerRevisionRequired, discover_owner_issues, read_owner_issue_file,
+    )
+    repo, session, transport = _make_session(tmp_path, _full_chain_wires())
+    _run(repo, session)
+    with pytest.raises(OwnerRevisionRequired):
+        discover_owner_issues(
+            repo, raised_by='str06.stage4.compile', owner='hook_design',
+            node='str06.stage4.hook_design',
+            issues=[OwnerIssueV1(code='hook_combination', item='materials',
+                                 message='组合检查不闭合（测试回派）')])
+    assert read_owner_issue_file(repo, 'hook_design').status == 'open'
+    _old_workflow(repo)
+    _apply(repo, _preview(repo))
+    resolved = read_owner_issue_file(repo, 'hook_design')
+    assert resolved.status == 'resolved'
+    assert resolved.raised_by == 'contract-upgrade:hook-rc22-rc23'
+    # 收口后重建按首跑路径走：修订 prompt 不再读已归档的上一版（原缺陷是
+    # FileNotFoundError / exit 70）。请求身份未变时按 R-7.4 免费重放——
+    # 零新购、图按 rc23 重新发布，正是「不能把旧 Hook 补成新版」的正路。
+    calls = len(transport.calls)
+    _run(repo, session, node_filter=('str06.stage4.hook_design', 'str06.stage4.compile'))
+    assert len(transport.calls) == calls
+    graph = repo.inspect('stage4/design/presentation_graph.json')
+    assert graph['contract_version'] == 'str06-rc23'
+
+
 def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
     from novel.llm.paid_requests import ask_json, ExecutionError, PaidRequestSession
     from novel.llm.transport import ChatRequest
@@ -332,6 +552,13 @@ def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
     old_ledger = unit._read()
     old_budget = read_book_budget(repo.root.parent, 'run')
     assert old_ledger.turns[-1].state == 'unknown'
+    # 预览附带的重建额度投影与账面一致：应用前就能看见「第一步会不会撞额度」。
+    from novel.orchestrator.work_unit_evidence import rebuild_budget_views
+    hook_view = next(v for v in rebuild_budget_views(
+        repo.root.parent, 'run', HOOK_UPGRADE['rebuild_nodes'])
+        if v['node'] == 'str06.stage4.hook_design')
+    assert hook_view['content_used'] == len(old_ledger.turns)
+    assert hook_view['content_remaining'] == hook_view['content_limit'] - len(old_ledger.turns)
     _old_workflow(repo)
     _apply(repo, _preview(repo))
     assert unit._read() == old_ledger
