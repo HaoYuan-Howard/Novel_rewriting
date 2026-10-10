@@ -116,7 +116,7 @@ __all__ = [
     'PaidRequestSession', 'PatchBaseline', 'PatchLocate', 'PatchTarget', 'PatchedAnswer',
     'PurchaseRequired', 'RUNTIME_PHASES', 'UpstreamOwned', 'WORKFLOW_REL',
     'accept_patch_answer', 'ask_json', 'ask_text_once', 'candidate_artifact',
-    'candidate_contract_identity', 'format_json_path',
+    'candidate_contract_identity', 'format_json_path', 'normalize_patch_targets',
     'candidate_node', 'check_candidate_workflow', 'digest',
     'init_or_resume_candidate_workflow', 'open_candidate_epoch',
     'open_candidate_workflow', 'patch_user_prompt', 'revision_user_prompt',
@@ -1066,8 +1066,9 @@ class PaidRequestSession:
           字节一致（采用链可验），原购买根的逐请求账未持久（F2b 批次证据），
           成本只到批次口径；
         · 都没有（`unverified`）：仅形状校验，采用记录如实标注。
-        `allow_patch` 接受 owner patch 链：wire 与已购内容不一致，但调用方已核验
-        patch note 的 base 身份与当前请求相等（修订来源保留）。不同版本接续须
+        `allow_patch` 接受显式 owner patch 链：调用方已核验 patch note 的基线与
+        当前应用身份（修订来源保留）。内容未变的跨身份免费重验也属于显式采用，
+        不能因 wire 等于原回答而丢掉这项声明。不同版本接续须
         由调用方先核验上一份耐久修订及当前正式产物，传入 previous_patch_sha256
         精确匹配源根的旧采用记录；历史归档由 stage_revision 再次复验后执行。
         无上述证明时，已有采用记录仍须与本 wire 字节相符。
@@ -1097,6 +1098,7 @@ class PaidRequestSession:
                     f'{owner} 采用源 {root} 缺原成本关联；付费状态未知，拒绝采用')
             if _same_json_payload(wire_path, row.get('content') or ''):
                 return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
+                        **({'owner_patch': True} if allow_patch else {}),
                         'source_root': str(root.resolve()),
                         'source_rel': f'runtime/request_{identity}.json',
                         'identity': identity, 'attempt_id': row['attempt_id'],
@@ -1138,6 +1140,7 @@ class PaidRequestSession:
                      'reasoning_tokens': cost.get('reasoning_tokens')}
             if _same_json_payload(wire_path, response.get('content') or ''):
                 return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
+                        **({'owner_patch': True} if allow_patch else {}),
                         'source_root': str(root.resolve()),
                         'source_rel': evidence['blob_rel'],
                         'identity': identity,
@@ -1380,6 +1383,27 @@ class PatchTarget(NamedTuple):
     path: tuple[str | int, ...]
     issues: tuple[str, ...]
     optional: bool = False
+
+
+def normalize_patch_targets(targets: Sequence[PatchTarget]) -> list[PatchTarget]:
+    """合成复核与错误定位目标后收口为无重叠的替换集合（R-5.5）。
+
+    只折叠集合中已经授权的父路径，不新建编辑范围；父目标承接全部子问题，
+    任一被合并目标必选则父目标必选。按首次涉及该父路径的顺序返回，输入不变。
+    定位器各自无重叠并不足够：两个合法集合合并后仍可能出现整拍与 know 子项，
+    父替换合法省略可选字段时会令后续子替换失效，因此在请求组装前统一收口。
+    """
+    requested = {target.path for target in targets}
+    grouped: dict[tuple[str | int, ...], list[PatchTarget]] = {}
+    for target in targets:
+        outer = next((target.path[:length] for length in range(len(target.path) + 1)
+                      if target.path[:length] in requested), target.path)
+        grouped.setdefault(outer, []).append(target)
+    return [PatchTarget(
+        path=path,
+        issues=tuple(dict.fromkeys(issue for target in items for issue in target.issues)),
+        optional=all(target.optional for target in items))
+        for path, items in grouped.items()]
 
 
 class BaselineAttempt(NamedTuple):
@@ -1898,19 +1922,11 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
                 for entry in located:
                     path, issues = tuple(entry[0]), entry[1]
                     optional = bool(entry[2]) if len(entry) > 2 else False
-                    hit = next((t for t in round_targets if t.path == path), None)
-                    if hit is None:
-                        round_targets.append(PatchTarget(
-                            path=path, issues=tuple(issues), optional=optional))
-                        continue
-                    # 同一路径既有复核目标又有错误定位：合并问题、必选优先
-                    # （必选须覆盖；不静默丢掉任一侧的问题列表）。
-                    merged = PatchTarget(
-                        path=path,
-                        issues=tuple(dict.fromkeys((*hit.issues, *issues))),
-                        optional=hit.optional and optional)
-                    round_targets[round_targets.index(hit)] = merged
-        targets = round_targets or None
+                    round_targets.append(PatchTarget(
+                        path=path, issues=tuple(issues), optional=optional))
+        # 复核目标与定位器结果各自合法，合成后仍须折叠同路径及祖孙路径；
+        # 必选子项的问题并入完整父项，不能靠响应顺序或容忍缺键掩盖冲突。
+        targets = normalize_patch_targets(round_targets) or None
         force_full = False
         if targets:
             narrow_context = narrow(wire_dict, targets) if narrow is not None else None

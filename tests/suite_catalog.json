@@ -1129,7 +1129,8 @@
         "stage7"
       ],
       "cases": {
-        "test_explicit_cross_identity_patch_replays_and_activates_with_original_cost": "stage"
+        "test_explicit_cross_identity_patch_replays_and_activates_with_original_cost": "stage",
+        "test_equal_wire_cross_identity_owner_patch_stages_and_replays": "stage"
       }
     },
     "tests/test_str06_a1_semantics.py": {
@@ -1199,7 +1200,12 @@
       "stages": [
         "stage2",
         "stage4"
-      ]
+      ],
+      "cases": {
+        "test_patch_targets_fold_descendants_and_preserve_requiredness": "unit_contract",
+        "test_patch_targets_keep_disjoint_authority_and_merge_duplicate_paths": "unit_contract",
+        "test_ask_json_closes_review_parent_and_located_child_before_narrowing": "unit_contract"
+      }
     },
     "tests/test_repair_rounds.py": {
       "layer": "unit_contract",

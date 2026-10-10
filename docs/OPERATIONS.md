@@ -313,6 +313,8 @@ patch-preview --owner chNN --candidate <wire文件> --request-profile <原请求
 生成提示或协议改变后，预检显式给 `--baseline-request-sha256 <已购摘要>`，仍捕获
 当前生产请求与完整接受闸；patch note 同时登记预检返回的 `applies_to_request_sha256`。
 未给当前应用摘要的旧 note 仍只允许同身份采用，不能伪造旧请求或暗改协议。
+显式双身份 note 也可用于内容未改的已购回答：核验原请求、响应与成本并通过当前完整
+接受闸后，以 owner patch 记录免费采用，不能因内容与原响应相同丢掉修订声明。
 `cross_cause` 预检还须给 `--upstream-associate-candidate <本轮身份wire>`，不拿旧
 盘面冒充本轮前置答案。章预检与生产共用包含真实回派范围的请求；Preserve 预检
 在 checkpoint 尚未发布时仍验证候选、姓名与 Brief，并分别报告冲突和 Design 未运行。

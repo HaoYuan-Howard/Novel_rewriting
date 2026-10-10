@@ -50,6 +50,153 @@ def _baseline(tmp_path, owner='preserve'):
     return repo, session, transport, answer, baseline
 
 
+def _equal_wire_adoption(tmp_path, evidence_kind):
+    """同一 fake 实购回答分别留作工作单元或请求行证据，不伪造购买结论。"""
+    from novel.llm.ledger import ledger_path
+    from novel.llm.paid_requests import digest
+    from tests.test_str06_target import _preserve_wire
+
+    wire = _preserve_wire()
+    content = json.dumps(wire, ensure_ascii=False)
+    transport = _ScriptedTransport([content])
+    source_base, source_repo, source_session = _json_session(tmp_path, transport, 'source')
+    request = _request('原合同下的 Preserve 请求')
+    _wire, answer = ask_json(source_session, 'preserve', request, lambda w: [])
+    root = source_repo.root
+    if evidence_kind == 'request_record':
+        # 历史 request 行沿用同一实购 attempt 和成本原字节；此根没有工作单元，
+        # 让 bind 和 purchased_baseline 都实际走请求行消费面。
+        historical_base = tmp_path / 'source-request'
+        root = historical_base / 'run'
+        (root / 'runtime').mkdir(parents=True)
+        source_ledger = ledger_path(source_base)
+        target_ledger = ledger_path(historical_base)
+        target_ledger.parent.mkdir(parents=True, exist_ok=True)
+        target_ledger.write_bytes(source_ledger.read_bytes())
+        row = {'identity': answer.request_sha256, 'status': 'answered',
+               'attempt_id': answer.attempt_id, 'provider': 'fake',
+               'request': request.cache_payload(), 'content': content,
+               'content_sha256': digest(content), 'model': answer.model,
+               'usage': answer.usage}
+        (root / 'runtime' / f'request_{answer.request_sha256}.json').write_text(
+            json.dumps(row, ensure_ascii=False), encoding='utf-8')
+    else:
+        assert evidence_kind == 'work_unit'
+        assert not list((root / 'runtime').glob('request_*.json'))
+    empty_transport = _ScriptedTransport([])
+    candidate_base, repo, session = _json_session(tmp_path, empty_transport, 'candidate')
+    session.adopt_roots = (root,)
+    session.yes = False
+    wire_path = candidate_base / 'preserve_wire.json'
+    # 序列化不同仍是同一 JSON 内容；不靠修改模型字段绕过 exact-payload 分支。
+    wire_path.write_text(json.dumps(wire, ensure_ascii=False, indent=2), encoding='utf-8')
+    return root, repo, session, wire_path, wire, request, answer, transport, empty_transport
+
+
+@pytest.mark.stage_scope('stage4')
+@pytest.mark.parametrize('evidence_kind', ['request_record', 'work_unit'])
+def test_equal_wire_cross_identity_owner_patch_stages_and_replays(tmp_path, evidence_kind):
+    from dataclasses import replace
+    from contracts.schema.workflow import STAGE4_PRESERVE_POLICY_VERSION
+    from novel.llm.ledger import ledger_path, read_cost_snapshot
+    from novel.llm.paid_requests import AdoptionRef, digest
+    from novel.stages.revisions import owner_patch_identity, registered_owner_patch
+    from novel.stages.stage4 import assemble_preserve
+    from tests.test_str06_target import _source_pair
+
+    root, repo, session, path, wire, request, answer, bought, replay_transport = (
+        _equal_wire_adoption(tmp_path, evidence_kind))
+    original_ledger = ledger_path(root.parent).read_bytes()
+    current_request = replace(request, user=request.user + '；现合同完整重验')
+    current = digest({'owner': 'preserve', 'provider': 'fake',
+                      'request': current_request.cache_payload()})
+    assert current != answer.request_sha256
+    note = {'base_response_identity': answer.request_sha256,
+            'applies_to_request_sha256': current, 'reason': '等内容按现合同免费复验'}
+    baseline_identity, reason = owner_patch_identity('preserve', note, current)
+    bound = session.bind_wire_adoption('preserve', baseline_identity, path, allow_patch=True)
+    assert bound['owner_patch'] is True and bound['cost_link'] == 'ledger-row'
+    assert bound['identity'] == answer.request_sha256 and bound['attempt_id'] == answer.attempt_id
+    assert ('work_units' in bound['source_rel']) == (evidence_kind == 'work_unit')
+    baseline = purchased_baseline(root, 'preserve', baseline_identity)
+    chars, blueprint = _source_pair()
+    def compile_current(candidate):
+        return assemble_preserve(candidate, policy_id='preserve-default',
+            policy_version=STAGE4_PRESERVE_POLICY_VERSION,
+            characters=chars, blueprint=blueprint, provider='fake', model=answer.model,
+            request_sha256=current)
+    def validate(candidate):
+        return compile_current(candidate)[1]
+    preview = preview_owner_patch(owner='preserve', identity=baseline_identity,
+        candidate=wire, baseline=baseline, validate=validate,
+        dry_run=lambda _w: {'status': 'not_run', 'reason': '本例只验 Preserve 恢复'})
+    assert not preview['owner_errors'] and not preview['id_changes'] and not preview['text_changes']
+    record = stage_revision(repo, owner='preserve', identity=baseline_identity, baseline=baseline,
+        raw_bytes=path.read_bytes(), preview=preview, reason=reason,
+        applies_to_request_sha256=current)
+    checkpoint, errors = compile_current(wire)
+    assert checkpoint is not None and not errors
+    repo.context.enter_node(record.node)
+    ref = AdoptionRef(owner='preserve', model=answer.model,
+        prompts={'system': current_request.system, 'user': current_request.user},
+        sid='run', request_sha256=current, historical=bound,
+        patch={'candidate_sha256': record.candidate_sha256,
+               'baseline_request_sha256': baseline_identity, 'reason': reason})
+    repo.write(record.product_rel, checkpoint, owners=('preserve',), refs=(ref,))
+    activate_node_revisions(repo, record.node)
+    assert registered_owner_patch(repo, 'preserve', current)
+    assert repo.read_model(record.product_rel).request_sha256 == current
+    data, replay, paid = adopted_patch(repo, 'preserve', current, validate)
+    assert data == wire and replay.applies_to_request_sha256 == current
+    assert paid['attempt_id'] == answer.attempt_id
+    assert adopted_patch(repo, 'preserve', digest('另一个未登记请求'), validate) is None
+    assert ledger_path(root.parent).read_bytes() == original_ledger
+    rows, tail = read_cost_snapshot(repo.root.parent, readonly=True)
+    assert not tail and not [r for r in rows if not r.get('cached')]
+    assert len(bought.calls) == 1 and not replay_transport.calls
+
+
+@pytest.mark.stage_scope('stage4')
+@pytest.mark.parametrize('evidence_kind', ['request_record', 'work_unit'])
+def test_equal_wire_without_patch_note_keeps_historical_adoption(tmp_path, evidence_kind):
+    root, repo, session, path, _wire, _request_row, answer, bought, replay_transport = (
+        _equal_wire_adoption(tmp_path, evidence_kind))
+    bound = session.bind_wire_adoption('preserve', answer.request_sha256, path, allow_patch=False)
+    assert bound['mode'] == 'historical-adoption' and bound['cost_link'] == 'ledger-row'
+    assert not bound.get('owner_patch') and bound['attempt_id'] == answer.attempt_id
+    assert purchased_baseline(root, 'preserve', answer.request_sha256)['content'] == answer.content
+    assert not repo.path('runtime/revisions/active/preserve.json').exists()
+    assert len(bought.calls) == 1 and not replay_transport.calls
+
+
+@pytest.mark.stage_scope('stage4')
+@pytest.mark.parametrize('evidence_kind', ['request_record', 'work_unit'])
+@pytest.mark.parametrize('fault', ['unknown_cost', 'response_hash_drift'])
+def test_equal_wire_patch_refuses_broken_purchase_evidence(tmp_path, monkeypatch, evidence_kind, fault):
+    from novel.llm import paid_requests
+    root, repo, session, path, _wire, _request_row, answer, bought, replay_transport = (
+        _equal_wire_adoption(tmp_path, evidence_kind))
+    bound = session.bind_wire_adoption('preserve', answer.request_sha256, path, allow_patch=False)
+    if fault == 'unknown_cost':
+        monkeypatch.setattr(paid_requests, 'read_cost_snapshot', lambda *_a, **_kw: ([], False))
+        message = '成本'
+    else:
+        evidence = (root / bound['source_rel'] if evidence_kind == 'request_record'
+                    else root.parent / bound['source_rel'])
+        payload = json.loads(evidence.read_text(encoding='utf-8'))
+        if evidence_kind == 'request_record':
+            payload['content'] += '被改'
+        else:
+            # 不重签 blob/hash；真实最低读取边界应拒绝响应证据漂移。
+            payload['payload']['response']['content'] += '被改'
+        evidence.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+        message = '内容损坏|响应证据身份漂移'
+    with pytest.raises(ValueError, match=message):
+        session.bind_wire_adoption('preserve', answer.request_sha256, path, allow_patch=True)
+    assert not repo.path('runtime/revisions/active/preserve.json').exists()
+    assert len(bought.calls) == 1 and not replay_transport.calls
+
+
 def test_purchased_baseline_rejects_response_cost_hash_drift_with_coordinates(tmp_path, monkeypatch):
     from novel.llm import paid_requests
     from novel.stages.revisions import RevisionEvidenceStop

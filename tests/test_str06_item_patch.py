@@ -19,7 +19,7 @@ import pytest
 
 from novel.llm.paid_requests import (
     PatchedAnswer, accept_patch_answer, ask_json, format_json_path,
-    patch_user_prompt, _as_adoption_refs, _merge_patches,
+    normalize_patch_targets, patch_user_prompt, _as_adoption_refs, _merge_patches,
 )
 from novel.llm.transport import ChatResponse
 from tests.test_str06_r3_selfheal import _ScriptedTransport, _json_session, _request
@@ -53,6 +53,46 @@ def test_merge_patches_refuses_unknown_path():
         'beats': [], 'nope': [{'ex_id': 'ex_01'}]}
     with pytest.raises(KeyError):
         _merge_patches({'beats': []}, [(('beats', 'nope', 0), {})])
+
+
+@pytest.mark.parametrize('parent_optional,child_optional', [
+    (False, False), (False, True), (True, False), (True, True)])
+@pytest.mark.parametrize('child_first', [False, True])
+def test_patch_targets_fold_descendants_and_preserve_requiredness(
+        parent_optional, child_optional, child_first):
+    """已有父目标承接子问题；任一必选则父项必选，结果不依赖祖孙输入顺序。"""
+    from novel.llm.paid_requests import PatchTarget
+
+    parent_path = ('scenes', 3, 'beats', 3)
+    parent = PatchTarget(parent_path, ('复核本拍', '共享问题'), parent_optional)
+    child = PatchTarget(parent_path + ('know',),
+                        ('共享问题', '知情引用失效'), child_optional)
+    targets = [child, parent] if child_first else [parent, child]
+    before = list(targets)
+    folded = normalize_patch_targets(targets)
+    assert len(folded) == 1 and folded[0].path == parent_path
+    assert folded[0].optional is (parent_optional and child_optional)
+    assert set(folded[0].issues) == {'复核本拍', '共享问题', '知情引用失效'}
+    assert len(folded[0].issues) == 3, '共享问题不重复、子问题不丢失'
+    assert targets == before, '归并只产生新集合，不改输入（I-24）'
+
+
+def test_patch_targets_keep_disjoint_authority_and_merge_duplicate_paths():
+    """无授权父项的兄弟目标仍独立，1/10 索引不误合；同路径合并问题和必选性。"""
+    from novel.llm.paid_requests import PatchTarget
+
+    first = ('scenes', 0, 'beats', 1)
+    targets = [
+        PatchTarget(first + ('know',), ('知情问题',), True),
+        PatchTarget(first + ('state',), ('状态问题',), True),
+        PatchTarget(('scenes', 0, 'beats', 10), ('另一拍',)),
+        PatchTarget(first + ('know',), ('知情问题', '必修引用'), False),
+    ]
+    folded = normalize_patch_targets(targets)
+    assert [target.path for target in folded] == [target.path for target in targets[:3]]
+    assert folded[0].issues == ('知情问题', '必修引用') and not folded[0].optional
+    assert folded[1:] == targets[1:3]
+    assert normalize_patch_targets([]) == []
 
 
 # ───────────────────────── patch 提示词与接受闸 ─────────────────────────
@@ -247,6 +287,56 @@ def test_ask_json_baseline_start_merges_baseline_errors_with_review_targets_in_o
     with pytest.raises(ValueError, match='必须给出窄复核目标'):
         ask_json(refused, 'ch01', _request(), validate, patch=_locate, baseline=baseline)
     assert not idle.calls, '拒绝发生在任何付费请求之前'
+
+
+@pytest.mark.parametrize('parent_optional', [False, True])
+def test_ask_json_closes_review_parent_and_located_child_before_narrowing(
+        tmp_path, parent_optional):
+    """复核整拍＋定位 know 合成后只请求整拍；完整替换可合法删除可选 know。"""
+    from copy import deepcopy
+    from novel.llm.paid_requests import (
+        NarrowPatchRequest, PatchBaseline, PatchTarget, digest,
+    )
+
+    wire = {'protocol_version': 'v', 'scenes': [{'beats': [
+        {'ev': '旧事件', 'know': [{'ref': 'obsolete'}]}, {'ev': '未涉及拍'}]}]}
+    original = deepcopy(wire)
+    parent_path = ('scenes', 0, 'beats', 0)
+    error = '知情引用失效'
+    transport = _ScriptedTransport([json.dumps({'patches': [
+        {'path': 'scenes[0].beats[0]', 'value': {'ev': '修订事件'}}]},
+        ensure_ascii=False)])
+    _base, _repo, session = _json_session(tmp_path, transport)
+    sliced_targets = []
+    checked_wires = []
+
+    def validate(candidate):
+        checked_wires.append(deepcopy(candidate))
+        return [error] if candidate['scenes'][0]['beats'][0].get('know') else []
+
+    def narrow(candidate, targets):
+        assert candidate == original
+        sliced_targets.extend(targets)
+        return NarrowPatchRequest(rules='协议', dependency='最小依赖', legal_values='闭集')
+
+    data, answer = ask_json(
+        session, 'design', _request(), validate,
+        patch=lambda candidate, errors: [(parent_path + ('know',), errors)],
+        baseline=PatchBaseline(wire=wire, digest=digest(wire)),
+        review_targets=[PatchTarget(parent_path, ('上游变化：复核本拍',), parent_optional)],
+        narrow=narrow)
+
+    assert sliced_targets == [PatchTarget(parent_path, ('上游变化：复核本拍', error))], \
+        '收口发生在依赖切片之前，必选子项令可选父项成为必选'
+    request = transport.calls[0].user
+    assert '- 路径 scenes[0].beats[0]：' in request
+    assert '- 路径 scenes[0].beats[0].know：' not in request
+    assert len(transport.calls) == 1, '一个无重叠请求即可修复，不退整份重购'
+    assert data['scenes'][0]['beats'][0] == {'ev': '修订事件'}
+    assert data['scenes'][0]['beats'][1] == original['scenes'][0]['beats'][1]
+    assert checked_wires == [original, data], '合并后仍校验完整 wire'
+    assert wire == original, '基底不被修改'
+    assert isinstance(answer, PatchedAnswer) and len(answer.patches) == 1
 
 
 def test_no_progress_judges_root_cause_tasks_not_candidate_bytes(tmp_path):

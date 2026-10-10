@@ -1325,12 +1325,12 @@ def run_body_design(ctx: ChainContext) -> dict:
     #: 都以此登记谱系——否则被回派的候选永远没有「生成时的上游版本」，上游修好后
     #: 免费沿用对它不可达（RC-52：登记全部已购候选）。
     produced: dict[str, dict] = {}
-    expected_protocol = STAGE4_DESIGN_WIRE_PROTOCOL
+    accepted_protocols = {STAGE4_DESIGN_WIRE_PROTOCOL}
 
     def validate(w):
         nonlocal last_inspection
-        if isinstance(w, dict) and w.get('protocol_version') != expected_protocol:
-            return [design_issue(f'本请求 wire 协议必须是 {expected_protocol}',
+        if isinstance(w, dict) and w.get('protocol_version') not in accepted_protocols:
+            return [design_issue(f'本请求 wire 协议必须属于 {sorted(accepted_protocols)}',
                                  code='design_protocol_literal',
                                  location=('protocol_version',))]
         last_inspection = inspection = inspect(w)
@@ -1388,6 +1388,10 @@ def run_body_design(ctx: ChainContext) -> dict:
     reuse_plan, _assessments = _design_reuse_plan(
         ctx, checkpoint=checkpoint, chars=chars, brief=brief,
         obligation_index=obligation_index, constraints=constraints, inspect=inspect)
+    if reuse_plan is not None and reuse_plan.action in ('carry_forward', 'narrow_review'):
+        # 只有经兼容性检查和当前完整预检评估选中的已购候选提供历史协议权限。
+        # 免费沿用因显式修订优先让位时，修订重放也使用同一兼容接受闸。
+        accepted_protocols.add(reuse_plan.candidate['wire']['protocol_version'])
     review_targets = ()
     carried = None
     if (reuse_plan is not None and reuse_plan.action == 'carry_forward'
@@ -1423,7 +1427,9 @@ def run_body_design(ctx: ChainContext) -> dict:
         # 判定已对它做过完整预检，不再整份新购一轮；基底 attempt 的引用经
         # `PatchBaseline.attempt` 由付费边界解析进 provenance（成本链分别聚合）。
         candidate = reuse_plan.candidate or {}
-        expected_protocol = candidate['wire']['protocol_version']
+        # 已购基底的窄请求保留原协议；无法窄修时整份兜底仍使用当前协议。
+        # 两种形状都进当前完整预检（含集中兼容解码），不能把基底的协议字面
+        # 固定到整个接受循环，误拒当前 schema 的整份回答。普通新购仍只收当前版。
         baseline = PatchBaseline(
             wire=candidate['wire'], digest=candidates.wire_sha256(candidate['wire']),
             summary=f"已购候选第 {candidate.get('ordinal')} 轮（turn {candidate.get('turn_id')}）",

@@ -361,6 +361,89 @@ def _ledger_rows(repo, purpose='design'):
             if line.strip() and _json.loads(line).get('purpose') == purpose]
 
 
+@pytest.mark.stage_scope('stage4')
+def test_purchased_v9_narrow_failure_accepts_current_v10_full_fallback(tmp_path):
+    """旧候选窄修失败后，整份兜底的请求和完整接受闸使用当前协议。"""
+    import json
+    import re
+
+    from novel.stages import candidates
+    from novel.stages.chain import _record_design_candidates
+    from novel.stages.common import design_rules, pack_prompt
+    from novel.stages.stage4 import preserve_revision_wire, project_design_input
+    from tests.test_str06_body import _RoutingTransport
+
+    ctx, wires, transport, args = _prepare(tmp_path)
+    repo = ctx.repository
+    current = deepcopy(wires['design'])
+    wires['design']['protocol_version'] = 'stage4-design-v9'
+    prompt = pack_prompt(design_rules(protocol='stage4-design-v9'),
+                         brief=project_design_input(args['brief'], args['obligations'],
+                                                    protocol='stage4-design-v9'))
+    wire, _ref = ctx.ask('design', prompt, lambda w: list(inspect_design_candidate(w, **args).errors))
+    inspection = inspect_design_candidate(wire, **args)
+    assert inspection.passed
+    _record_design_candidates(ctx, produced={candidates.wire_sha256(wire): inspection.report()},
+        upstream_wire=preserve_revision_wire(repo.read_model('runtime/preserve_checkpoint.json')))
+    republish_checkpoint(repo, lambda cp: cp.model_copy(update={
+        'obligations': tuple(o.model_copy(update={'statement': o.statement + '，且夫君许诺必归'})
+                             for o in cp.obligations)}))
+
+    class FallbackTransport(_RoutingTransport):
+        def __init__(self):
+            super().__init__(wires)
+            self.requests = []
+
+        def send(self, request):
+            assert self._owner(request) == 'design'
+            self.calls.append('design')
+            self.requests.append(request.user)
+            # 闭集必选目标漏答会退整份，不绕过补丁协议来模拟成功。
+            answer = {'patches': []} if len(self.requests) == 1 else current
+            return ChatResponse(content=json.dumps(answer, ensure_ascii=False), finish_reason='stop',
+                                usage={'prompt_tokens': 10, 'completion_tokens': 10}, model='fake')
+
+    fallback = FallbackTransport()
+    result = run_body_design(_design_ctx(ctx, _reopened_session(repo, fallback)))
+    assert result['reuse']['action'] == 'narrow_review'
+    assert len(fallback.requests) == 2
+    assert '【窄返修】' in fallback.requests[0]
+    assert re.search(r'"const"\s*:\s*"stage4-design-v9"', fallback.requests[0])
+    assert '【修订要求】' in fallback.requests[1]
+    assert re.search(r'"const"\s*:\s*"stage4-design-v10"', fallback.requests[1])
+    assert result['candidate_preflight']['passed'] is True
+    assert repo.read_model('stage4/design/body_design.json').scenes
+    assert repo.read_model('stage4/grounding/semantic_binding.json').entries
+    registry = candidates.load_registry(repo, 'design')
+    assert any(e['wire_sha256'] == candidates.wire_sha256(current)
+               and e['last_preflight']['passed'] and e['upstream_version'] for e in registry.candidates)
+
+
+@pytest.mark.stage_scope('stage4')
+def test_fresh_design_request_still_rejects_v9_response(tmp_path):
+    """没有已购兼容基底时，普通当前请求仍只接受当前 wire。"""
+    import json
+
+    from tests.test_str06_body import _RoutingTransport
+
+    ctx, wires, _transport, _args = _prepare(tmp_path)
+
+    class FreshTransport(_RoutingTransport):
+        def send(self, request):
+            assert self._owner(request) == 'design'
+            self.calls.append('design')
+            answer = deepcopy(wires['design'])
+            if len(self.calls) == 1:
+                answer['protocol_version'] = 'stage4-design-v9'
+            return ChatResponse(content=json.dumps(answer, ensure_ascii=False), finish_reason='stop',
+                                usage={'prompt_tokens': 10, 'completion_tokens': 10}, model='fake')
+
+    transport = FreshTransport(wires)
+    result = run_body_design(_design_ctx(ctx, _reopened_session(ctx.repository, transport)))
+    assert transport.calls == ['design', 'design'], '旧版首答应被拒，并请求当前版整份修订'
+    assert result['candidate_preflight']['passed'] is True
+
+
 def _lineage_only_mutation(checkpoint):
     """只改 lineage.character_ids（去掉 fu_jun）：设计 prompt 的 participants 变
     （请求身份变），修订对照 wire 的条目（kind/statement/anchors/must/satisfaction/
