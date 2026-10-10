@@ -62,7 +62,6 @@ from novel.core.name_materials import expand_surface_releases, family_form_liter
 from novel.core.text import count_non_whitespace_chars, kp_statement
 from novel.core.material_trace import (
     MaterialIssue, MaterialLines, MaterialPart, MaterialSource, NameProjectionHit,
-    ProjectionBlock,
 )
 from novel.core.validation import ValidationMessage
 
@@ -191,26 +190,11 @@ def positive_material_issues(
     return tuple(issues)
 
 
-#: 句末标点（含分句与换行）：无损性守卫的「一句」边界（RC-60）。
-_SENTENCE_END = re.compile(r'[。！？；…!?\n;]')
-
-
-def _sentence_span_of(text: str, position: int) -> int:
-    """位置 → 所属句的序号（按句末标点切分；守卫的分组键，不切文本）。"""
-    sentence = 0
-    for match in _SENTENCE_END.finditer(text):
-        if match.end() <= position:
-            sentence += 1
-        else:
-            break
-    return sentence
-
-
 def project_withheld_names(
     text: str, *, bindings: Iterable['WithheldNameBinding'], display: Mapping[str, str],
-) -> tuple[str, tuple[NameProjectionHit, ...], tuple[ProjectionBlock, ...]]:
+) -> tuple[str, tuple[NameProjectionHit, ...]]:
     """正向材料行里的**完整登记称谓**按显示面确定性投影（CS-F2，RC-40/41；
-    CS-H H3 补同位语折叠与无损性守卫，RC-60）。
+    CS-H H3 补同位语折叠，RC-60）。
 
     只处理 `bindings`（已证明唯一绑定人物的完整登记称谓）。扫描沿用字面扫描的
     同一语义：绑定字面与包含它们的更长称谓（`enclosing`）一起长名优先认领，只替换
@@ -218,17 +202,14 @@ def project_withheld_names(
     显示面（`display` 无值）时保持原样，由后续字面检查如实报告缺口。短姓、关系
     称呼、未登记表达、源引文均不在绑定表内，绝不替换。纯函数：相同输入恒同输出。
 
-    两条文本规则（RC-60「投影」）：
-
-    · **同位语折叠**——替换后会与紧邻的同一字面连成重复（「表弟裴书远」投影为
-      「表弟」）时，丢弃该次替换、保留邻接的称谓，不再输出「表弟表弟」；
-    · **无损性守卫**——同一句里同一人物两个**不相邻的不同**绑定称谓都将换成同一
-      显示面时，视为不可投影：该人物在此句的投影全部拦下（`ProjectionBlock`
-      留痕），原文保留，归 owner 修（Design 挪拍位或改指称），不静默压缩。
+    已证明同一人物的不同称谓逐次替换，保留每次提及与其间的行动、对白和关系文本；
+    不用称谓共现或句式猜测揭名。必保揭名由正式证据和释放闸保护，已释放字面不在
+    绑定表中。同位语折叠仅消除原文已有的紧邻显示面（「表弟裴书远」→「表弟」），
+    不把前次替换生成的显示面当作原文，也不合并重复呼唤或隔着其他文本的提及。
     """
     table = {b.literal: b for b in bindings}
     if not table or not text:
-        return text, (), ()
+        return text, ()
     literals = set(table)
     for binding in table.values():
         literals.update(binding.enclosing)
@@ -238,60 +219,49 @@ def project_withheld_names(
                    for claim in claims
                    if claim.literal in table
                    and display.get(table[claim.literal].char_id, '')}
-    # 无损性守卫：按句分组，同一人物两个不相邻的不同称谓都将被替换 → 整句拦下。
-    blocked_starts: set[int] = set()
-    by_sentence: dict[int, list[tuple]] = {}
-    for claim in claims:
-        if claim.start not in replaceable:
-            continue
-        by_sentence.setdefault(_sentence_span_of(text, claim.start), []).append(
-            (claim.start, claim.end, claim.literal, replaceable[claim.start]))
-    for members in by_sentence.values():
-        by_char: dict[str, list[tuple]] = {}
-        for row in members:
-            by_char.setdefault(row[3], []).append(row)
-        for rows in by_char.values():
-            if len({row[2] for row in rows}) < 2:
-                continue
-            ordered = sorted(rows)
-            if any(b[0] - a[1] != 0 for a, b in zip(ordered, ordered[1:])):
-                blocked_starts.update(row[0] for row in rows)
+
+    def original_display(start: int, end: int, face: str, neighbor: Claim | None) -> bool:
+        """原文中的完整邻接显示面；另一已认领姓名内部的后缀不算同位语。"""
+        if start < 0 or end > len(text) or text[start:end] != face:
+            return False
+        if neighbor is None or neighbor.end <= start or end <= neighbor.start:
+            return True
+        return (neighbor.start == start and neighbor.end == end
+                and neighbor.literal not in table)
+
     out: list[str] = []
-    emitted = ''
     hits: list[NameProjectionHit] = []
-    blocks: list[ProjectionBlock] = []
     cursor = 0
-    for claim in claims:
+    for index, claim in enumerate(claims):
         if claim.start not in replaceable:
             continue
         char_id = replaceable[claim.start]
         replacement = display.get(char_id, '')
-        if claim.start in blocked_starts:
-            blocks.append(ProjectionBlock(claim.literal, char_id))
-            continue
         gap = text[cursor:claim.start]
-        # 同位语折叠：替换结果与紧邻的原文同面重复时丢弃替换，保留邻接称谓——
-        # 「表弟裴书远」投影为「表弟」，不输出「表弟表弟」。
-        if (emitted + gap).endswith(replacement) or text[claim.end:].startswith(replacement):
+        # 只折叠原文中已有的紧邻显示面；前次投影结果不提供同位语证据，否则
+        # 「陆大哥陆大哥，快来」会被吞成一次呼唤。长名认领也保护姓名内的后缀，
+        # 如「陆老爷陆兄」里的「老爷」仍属于前一姓名，不是独立的原文显示面。
+        before = claims[index - 1] if index else None
+        after = claims[index + 1] if index + 1 < len(claims) else None
+        if (original_display(claim.start - len(replacement), claim.start, replacement, before)
+                or original_display(claim.end, claim.end + len(replacement), replacement, after)):
             out.append(gap)
-            emitted += gap
             hits.append(NameProjectionHit(claim.literal, char_id, replacement))
             cursor = claim.end
             continue
         out.append(gap)
         out.append(replacement)
-        emitted += gap + replacement
         cursor = claim.end
         hits.append(NameProjectionHit(claim.literal, char_id, replacement))
     out.append(text[cursor:])
-    return ''.join(out), tuple(hits), tuple(blocks)
+    return ''.join(out), tuple(hits)
 
 
 
 def _hook_projection(context: HookContext):
     """Hook 渲染期的确定性称谓投影（CS-F2，rc16；CS-H H3 起显示面走 RC-60
-    解析）：与正文章包同一把尺（`project_withheld_names`，含同位语折叠与
-    无损性守卫）。绑定表随上下文携带（compile 按 Hook 自选的 surface_releases
+    解析）：与正文章包同一把尺（`project_withheld_names`，逐次投影与同位语折叠）。
+    绑定表随上下文携带（compile 按 Hook 自选的 surface_releases
     算好）；显示面＝该人物的 Hook 释放面首个——尚无释放的非 concealed 人物
     用 compile 期附带的回落纯称谓（concealed 不回落），第一人称聚焦人物用
     角色词「我（叙述者）」。"""
@@ -306,7 +276,7 @@ def _hook_projection(context: HookContext):
         return row[0] if row else ''
 
     def project(text: str):
-        projected, hits, _blocked = project_withheld_names(
+        projected, hits = project_withheld_names(
             text, bindings=context.withheld_bindings,
             display={b.char_id: display(b.char_id)
                      for b in context.withheld_bindings})
@@ -919,7 +889,7 @@ _PRESERVE_KIND_LINES = '\n'.join(
     f'- {kind}：{definition}' for kind, definition in PRESERVE_KIND_DEFS.items())
 
 PRESERVE_RULES = f"""任务：从源证据投影视图选择改写不可丢失的最小语义义务
-（保存策略 v9；wire 协议 stage4-preserve-v5）。
+（保存策略 v10；wire 协议 stage4-preserve-v5）。
 
 【输入的形状（源证据投影视图，R10a a2）】视图按「书级初态 → 世界约束 →
 逐章逐拍」给出源真值的原子，每原子一行：方括号内是**投影句柄**（书级初态
@@ -943,17 +913,17 @@ source_refs 所指窗口；邻句只供上下文，不能借它添加事件内�
 - event_core／character_arc／causal：写变化或关系（谁对谁从什么变成什么）；
 - reveal：写命题（谁在何时确认了什么）；
 - identity／world_fact／initial_state：写成立的事实；
-- statement 与 satisfaction 同时保留主客体、必要动机、公开说辞和真实想法的差别：
-  公开说辞与真实动机不一致时，两者都写。
+- statement、satisfaction 与 requires 合起来保留主客体、必要动机及公开说辞与真实
+  想法的差别；各字段按职责分工，不要求重复完整对白或同一条因果。
 
 【义务文本的称呼（statement／satisfaction／details.text）】
 人物使用人物表中的完整姓名或已登记且唯一归属的称谓；不要自行缩成裸姓、
 多人的姓氏并列或未登记别名。重复提及也写完整称呼，或使用主客体明确的无姓名表述。
 裸姓及多义带名面无法在写手材料中确定性投影，会被机械校验拒收。
-身份与别名映射只读人物表，不在义务里重复写“甲/乙指丙”的别名说明；
-statement／satisfaction 只写谁与谁的关系、行动、动机和验收条件。
-同一句不混用同一人物的不同带名称谓；改用统一的登记称谓或主体明确的纯关系称呼，
-使义务在姓名尚未揭示的目标位置也能无损呈现。源证据明确要求揭名时保留揭示事实与时点。
+身份与别名登记只读人物表，不在义务里另建一份映射；源情节中的正式揭名、身份
+揭示与人物关系仍按相应 kind 保留。statement／satisfaction 写关系、行动、动机和验收条件。
+同一人物的不同完整登记称谓可以自然混用，叙述与对白按交往关系选称呼；只要唯一归属
+明确，送达时逐次投影，不因同句共现拒收。源证据明确要求揭名时保留揭示事实与时点。
 家族集体指称照常保留，不改人物身份与称谓关系；源引文只读，不为此改写证据。
 
 【必须保住的两类反差】
@@ -967,22 +937,25 @@ statement／satisfaction 只写谁与谁的关系、行动、动机和验收条�
   owner 核实；不通过 satisfaction 补造知情、另编答案或要求目标设计迁就矛盾。
 
 【satisfaction 写页面上可核对的事实条件】
-写触发、行动、必要动机、公开说辞与真实想法的区别、后果及何时由谁获知。
+写改写后必须成立的条件；与 statement 及 requires 所指义务合起来，保住触发、行动、
+必要动机、公开说辞与真实想法的区别、后果及何时由谁获知，不重复已有的完整前提。
 用具体条件保住反差，不给人物强加“羞辱、悲凉、控制”等主题或情绪解释；语域由表达机制决定。
 可替换的道具、动作或台词形状放进可改写 details，不升成必保字面。
-必要铺垫与后果仍须独立成为条件，不能降成可选细节。重复行为分别保各次实例，
+必要铺垫与后果仍是正式保存条件，不能降成可选细节。重复行为分别保各次实例，
 需要回顾时另列回顾义务并明确它涵盖的实例，不把未来实例写进当前认知。
 loop 未收束的问题与 close 时的 resolution：悬念的铺设与兑现方式进 satisfaction。
 
-【源盲交接必须自足（v9）】
+【源盲交接保住必要骨架（v10）】
 Design 只收到 statement／satisfaction／requires／details 和锁，不会看到你选中的
-事件原文、引文或 anchors。选中锚点不等于已交接其必要语义：逐项核对删掉哪个
-直接前件会让所保响应、改口、决定或揭示无法成立，将该前件写进满足条件。
+事件原文、引文或 anchors。选中锚点不等于已交接其必要语义：必要触发、响应与结果
+须在正式交接材料合起来可理解；已经写进 statement 或 requires 所指义务的前提，
+不必在 satisfaction 再重复。保住具体骨架与必要因果，让 Design 组织连贯的目标故事。
 - 失言与答话：保住是谁对谁提出什么、对方回应什么，不能只保“失言、脸红、否认”；
 - 人物转变：保住源文明示的刺激、限制或权衡及新选择，不能只保“他终于答应”；
 - 突然出现与转场：保住已成立的位置、离开／返回、观察渠道与必要时间关系，不能
   将“某人以为已离开”改成“某人客观一直在异地”，也不替缺失过程编造解释。
-同一时点、同一作用的触发和响应合成一处可核对的条件，不为每句对白另造义务。
+自然概括允许省去不改变骨架、因果和知情边界的过程；不为每句对白、眼神或藏身路线
+另造义务，也不为解释突现机关而提前揭底。同一时点、同一作用的触发和响应可合写。
 较早且不可省的独立前提另用 requires 连接；可改写措辞与动作形状才放 details。
 例如“被拒绝完整合作后接受有限合作”须保住拒绝及接受的条件；具体拒绝台词可改写。
 必要因果不因原句可改写而降成软材料，软画面也不因入选而升成硬义务。
@@ -1175,7 +1148,8 @@ character_voices 声明，不举后段具体情节。
 【可改写细节（details）】
 requirements.details 给出 obNN.dNN 短引用与提示；拍上 details:["obNN.dNN",…]
 选择对该拍有用的机关、动作或台词形状。可以换道具、换措辞或省略；不因此新增
-必保条件，也不降低 satisfaction 中必要动机与铺垫的强度。提示只用于创作，不复述成说明句。
+必保条件，也不降低 statement／satisfaction／requires 联合交接的必要动机与铺垫。
+提示只用于创作，不复述成说明句。
 
 【场景与拍】
 场景是连续行动的控制单元，不能只按义务分组。明显跳时、切换地点或另起一轮互动时，
@@ -1511,8 +1485,8 @@ HOOK_WRITER_SYSTEM = """你是小说楔子写手。把已设计的冲突单元�
 BODY_WRITER_SYSTEM = """你是小说正文写手（prose realizer）。故事事实与连接性设计由 Stage4 负责，
 你的唯一职责是把给定章节写成高质量的小说正文。
 
-规则（违反任何一条即报废）：
-1. 你是 prose realizer，不是故事设计师：事实、事件、知情、义务与释放位置以输入为准，不新增、删除、替换；输入没写的背景、人物前史与后续伏笔一律不补造。
+写作约定：
+1. 保持输入的情节骨架、关键事件及其条件和结果、行为主体、动机、关系、知情、义务与释放位置。可按下文补充呈现所需的自然移步、短转场和即时动作；新的情节、沟通、决定、信息获得与后文依赖由设计给出，输入未给的背景、人物前史与后续伏笔不补造。
 2. 输入的用法分三类：「必须写出」在正文里实际完成（条目可拆开融入叙述，不逐条宣布、不要求逐条对应句子或段落）；「不可违背」「承接」「背景」遵守即可、不必复述成说明；「导演说明」之内是你的呈现自由。事实约束与导演说明冲突时以事实约束为准。
 3. 场景是控制单元：每场完成自己的拍序与结果即可，不要求每场独立铺背景、独立收束或总结。
 4. 只使用已释放的称谓面与已获准知道的信息；未释放的专名字面与提前知情一律不得出现。已释放只表示字面可用，不表示任何人都能这样称呼；叙述、人物自称及对他人的称呼须符合当前说话人和对象的关系。
@@ -1524,6 +1498,9 @@ BODY_WRITER_SYSTEM = """你是小说正文写手（prose realizer）。故事事
 呈现自由（你的创意只在这里发挥）：在导演说明边界内组织场景节奏、展开与压缩，写具体的对白、动作、停顿与即时反应。
 已给出的触发、回应、权衡与选择要让读者在场景中看懂，不能只用“终于答应”“心里一动”
 交代转变。动作按已确定的位置、时点与感知通道衔接，直接延续已发生的答话和反应。
+可补自然移步、短转场和即时动作来呈现既定行动；涉及新的沟通、决定、信息获得或
+后文依赖的情节则以设计为准。补出的时间措辞须符合事件先后：先得到安排再行动，
+出发不能早于触发决定；确有回溯须明确标记。未定的具体钟点无需强行补写。
 即时反应可以展开，不能由脸红推成爱情、由沉默推成同意或由猜测推成幕后真相。
 篇幅优先留给核心冲突和决定过程，重复行为与既成背景可以简写；不以删去必要前件换取简洁。
 输出前核对本章事件、决定、转场、知情和称呼是否保持输入的条件与结果；只交正文，不输出核对过程。
@@ -2320,13 +2297,14 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 #: v10（2026-10-04 CS-F2，称谓投影）：正向材料行里已证明唯一绑定人物的完整登记称谓
 #: 按本场已释放称谓确定性投影（`project_withheld_names`）；短姓、关系称呼与未登记表达
 #: 不投影，仍按字面检查回派 owner。
-RENDERER_VERSION = 'str06-render-v11'
+#: v12：已证明同人的自然混称逐次投影，保持各次提及与中间文本；不以共现模拟揭名。
+RENDERER_VERSION = 'str06-render-v12'
 
 #: 整书写作约定与自由度（Writer 协议，固定文本）。v7 按三类身份重写（必须写出／
 #: 必须遵守不必复述／写手自由）：场景是控制单元、反差不写成总结句、知情与
 #: 时态按输入措辞——「事实全对、处处交代」的对症条款。分区名用「」引用
 #: （阅读面的节标题用【】，二者不冲突）。v8明确逐拍结果与状态的有效时点。
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v10'
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v11'
 WRITER_PROTOCOL = """\
 可补措辞、对白、即时反应和局部动作；不得新增或改变动机、行为主体、关系、历史、时序、知情条件或后文依赖的前件。\n本章写作输入按六个分区给出，归三类用法：
 【必须写出】在正文里实际完成：拍的事件、承载的义务满足条件、表达任务、线索的推进或收束。化进情节写出——不是提到关键词，也不逐条宣布；条目可拆开融入叙述，不要求逐条对应句子、段落或独立场景。
@@ -2336,7 +2314,9 @@ WRITER_PROTOCOL = """\
 知情与时态按输入措辞：怀疑不写成确知、听说不写成相信、计划与预计不写成已发生、输入未确定的（尤其禁区所列未回答的悬念）不补答案。
 反差与幽默通过话语、动作与内心反应的落差呈现，不写成解释性总结句。
 决定转折按已给的触发、回应、权衡和选择展开；瞬时表情不能替代转变依据。场景衔接
-按已定时间、位置与感知通道表现，不另编前史、幕后沟通或新的行动来修补设计。
+按已定时间、位置与感知通道表现，可补自然移步、短转场与即时动作，不另编前史、
+幕后沟通、决定或信息获得。补写的具体时点不能倒置触发与行动的先后；回溯须明示，
+未定钟点无需补写。
 篇幅优先给核心冲突和决策过程，重复过程与背景可以简写，必要前件和结果不能省略。
 「禁区」绝不触碰：未到时点的读者确认——既不提前兑现，也不主动向读者提起或提醒；受保护的未决问题不回答、不点破。
 会改变时间线、身份、前史或后续因果的设定：输入没给的不新增、不写具体；已给的保持原精度，不把两条独立事实合成新的前史。
@@ -2494,7 +2474,7 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
     # 显示面即取首个已释放称谓）。三类取位：书级行＝章首；场级说明行＝场末；
     # 拍行＝拍前缀（含本拍释放，拍前不可用）。第一人称叙述的聚焦人物用角色词
     # 「我（叙述者）」。投影仍只作用于章 IR 已证明唯一绑定人物的完整登记称谓，
-    # 来源文本保持原字段原样（CS-F2）；同位语折叠与无损性守卫见投影函数。
+    # 来源文本保持原字段原样（CS-F2）；逐次投影与同位语折叠见投影函数。
     first_person = brief.narration.person == 'first'
     focalizers = set(brief.narration.focalizers)
     carry = {r.char_id: r.surfaces for r in chapter.display_prefix}
@@ -2520,7 +2500,7 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
         return faces[0] if faces else fallback_face.get(char_id, '')
 
     def project(text: str):
-        projected, hits, _blocked = project_withheld_names(
+        projected, hits = project_withheld_names(
             text, bindings=chapter.withheld_bindings,
             display={b.char_id: _name(b.char_id) for b in chapter.withheld_bindings})
         return projected, hits

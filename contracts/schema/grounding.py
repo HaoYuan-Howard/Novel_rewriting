@@ -106,7 +106,8 @@ class ObligationAnchor(StrictModel):
 class ObligationDetail(StrictModel):
     """Preserve wire 的可改写细节：语义转述与正式源原子的投影句柄。
 
-    细节是可用材料；必要动机、铺垫与后果仍归 satisfaction。编号和完整源锚
+    细节是可用材料；必要动机、铺垫与后果由 statement/satisfaction/requires
+    联合交接，不降成可选细节。编号和完整源锚
     不由模型输出，compiler 解析后发布 SourceDetail。
     """
 

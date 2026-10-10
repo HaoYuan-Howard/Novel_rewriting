@@ -43,7 +43,8 @@ __all__ = ['ChapterLengthDisclosure', 'ChapterReceipt',
 
 #: 机械规则的独立版本轴；规则变化必须换版，消费者先免费重验原章稿。
 #: v2（CS-H H3，RC-61）增加 required_literals：必保揭名承载章须出现称谓字面。
-BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v2'
+#: v3：标题词须有标题边界，正文首句“尾声未尽”等自然用语不作包装标题。
+BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v3'
 #: 回执宣告通过的机械检查项闭集。
 BODY_MECHANICAL_CHECKS = (
     'non_empty', 'encoding', 'no_wrapper', 'withheld_literals', 'required_literals', 'length_band',

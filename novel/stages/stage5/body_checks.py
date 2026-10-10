@@ -37,7 +37,8 @@ MAX_BODY_REWRITES = 2
 
 _CONTROL = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
 _CHAPTER_TITLE = re.compile(
-    r'^(第[0-9一二三四五六七八九十百千零两]+章|楔子|引子|序章|尾声|prologue|epilogue|chapter)\s*[:：、.．]?\s*',
+    r'^(?:第[0-9一二三四五六七八九十百千零两]+章|楔子|引子|序章|尾声|prologue|epilogue|chapter)'
+    r'(?:$|[ \t:：、.．])',
     re.IGNORECASE)
 
 

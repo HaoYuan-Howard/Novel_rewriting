@@ -992,7 +992,7 @@ def run_preserve(ctx: ChainContext) -> dict:
                                                request_sha256=ctx.digest(preserve_prompt))
         # CS-H H3（RC-64）自闸：义务文本里的裸姓／未登记别名在本接受循环里被
         # 逐条定位（与下游材料归因同一把尺），不再等跨节点回派。
-        return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars, blueprint)
+        return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars)
 
     def locate_preserve_patches(wire, errors):
         """Preserve 自闸按义务或完整细节对象定位；其余问题沿用整份修订。"""
@@ -1352,8 +1352,7 @@ def run_body_design(ctx: ChainContext) -> dict:
         gated = {issue.location[-1] for issue in inspection.errors
                  if isinstance(issue, _ValidationIssue)
                  and issue.code in ('positive_material_leak', 'internal_id_leak',
-                                    'design_unreleased_reference',
-                                    'design_projection_lossy')}
+                                    'design_unreleased_reference')}
         mirrored = [ValidationMessage(r.issue.message, r.issue.context['material_identity'])
                     for r in repairs
                     if not (r.owner == 'design' and r.action != 'stop'

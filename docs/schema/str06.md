@@ -110,9 +110,9 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 退役后 13），运行配置未变。
 book 观察 `stage2-book-v7`、chapters 独立 `stage2-chapters-v7`、names 独立
 `stage2-names-v4`、associate `stage2-associate-v5`（输入投影变经 RC 表换身份）；
-Preserve 当前 `stage4-preserve-v5`＋policy 9、Design 内部展开 `stage4-design-v5`
+Preserve 当前 `stage4-preserve-v5`＋policy 10、Design 内部展开 `stage4-design-v5`
 （瘦 wire 现役 v10）；
-Hook Design 为 `stage4-hook-design-v3`；正式输入／呈现协议显式换身份。当前正文 renderer v11／写手协议 v10（2026-10-10 有限补桥归 Design、写手仅呈现；可选细节与前情送达；历史 R10b 升 v7）。
+Hook Design 为 `stage4-hook-design-v3`；正式输入／呈现协议显式换身份。当前正文 renderer v12／写手协议 v11（2026-10-10 自然混称逐次投影、必要骨架联合交接；有限情节补桥归 Design，写手呈现自然移步与转场；历史 R10b 升 v7）。
 
 **章观察瘦 wire（CS-2 第一步，2026-10-03）**：`str06.stage2.chapters` 的
 LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模型：
@@ -201,7 +201,8 @@ contract_version；policy 升 6，请求输入变更会换身份。旧根与已�
 
 **创作材料交接（2026-10-09，用户批准方向；R-5.23／R-5.24）**：
 
-Preserve 以单一时点可核对的原子事实写 satisfaction，必要动机、铺垫与后果仍是保存条件；
+Preserve 以可核对的阶段条件写 satisfaction，与 statement／requires 联合交接必要
+动机、铺垫与后果，不要求每字段重复完整因果；
 主题／情绪解释不能代替页面条件。可选 details 用源投影 anchor＋可改写文本，compiler
 生成 dt 盲身份，Brief 删除源坐标。Design 的拍上可用 details:[obNN.dNN] 引用；选中
 文本仅进该拍 creative_guidance，允许改写或省略，没有细节也可完成设计。来源身份和
@@ -215,7 +216,8 @@ series.summaries 显式给 member/covers，Brief 派生 summarizes_cores；Bindi
 不推导知情，引文不推导说话人。全书表达机制逐场默认送达，拍上 ex 引用只说明重点。
 
 **目标故事有限补桥（2026-10-10，用户裁决）**：源证据已经支持的必要对话触发、
-行动衔接和决策条件由 Preserve 写进 statement/satisfaction，不能只存在于审计
+行动衔接和决策条件由 Preserve 通过 statement/satisfaction/requires 联合交接，不要求
+各字段重复同一因果或完整对白，不能只存在于审计
 anchors.event_statement，也不能成为可省略 details；Brief 继续确定性、源盲投影。
 原文未交代的局部行动、沟通和决策可由 Design 设计，使已定骨架在目标故事中连贯；
 情节骨架、关键事实、结局、必保条件、锁、知情授权和刻意未知均不可改。桥梁不反写
@@ -230,8 +232,9 @@ SourceTruth，不把猜测当原文事实，不新增重大前史、身份、人
 能完整表达当前反例，新增结构尚无独立闭包消费者；schema 完整不代签文学合理性。
 先组织目标故事，再附承载标注，原子条件仍不与自然叙事拍一一对应。
 
-Preserve policy 升 9；各 canonical/wire 形状和正文 renderer v11 保持，写手协议升
-v10。旧 checkpoint 仍绑定旧 policy，不静默套用新版交接判据；修订、采用和下游
+现役 Preserve policy v10、正文 renderer v12、写手协议 v11；各 canonical/wire 形状
+保持。自然概括、局部视角省略和藏身突现不自动视为事实错误，既有锁与知情边界仍
+不可越过。旧 checkpoint 仍绑定旧 policy，不静默套用新版交接判据；修订、采用和下游
 恢复沿现役身份、材料变化与完整预检闭合。首答完整可用率、设计阅读效果、正文质量
 与成本仍待真实验证；本批工程验证零付费，不新增语义 Judge 或节点。
 
@@ -275,7 +278,7 @@ v10。旧 checkpoint 仍绑定旧 policy，不静默套用新版交接判据；�
   的人物来自 participants。三类转移全空的事件也可成为义务或细节来源；不补造
   effect/cognition，不生成状态、知情、时态锁。锁仍只消费各自原子。
   Brief 只投影义务条件与细节文本，Design 继续以 real/details 选择承载，IR
-  保留事件证据供审计，写手只收到已选文本。renderer v11/写手 v9 不变。
+  保留事件证据供审计，写手只收到已选文本。
   checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR
   同批 rc22；v4/rc21 拒读，不补字段或自动改版本。源 schema 和节点集合不变。
 - **证据冲突回派（a3）**：Preserve 报 `evidence_conflicts` 时 checkpoint 不
@@ -491,7 +494,7 @@ renderer 在正向材料行（含禁区行）把这类字面换成本场已释�
 按 `delivery_mode` 分节、全部自然语言条目、不带内部 ID 与字段名（`sc01#b02` 式
 引用、`th{nn}`、工程字段名出现在任何分区即构造期拒），六个分区全部必填、空分区
 合法（I-14/I-42）；从不落盘（派生视图，I-16），其渲染字节进章回执的写手视图摘要。
-由确定性 renderer v11（`novel/stages/common.py::build_writer_packet`）从 Machine IR
+由确定性 renderer v12（`novel/stages/common.py::build_writer_packet`）从 Machine IR
 加送达登记生成；`render_chapter_packet` 渲染六分区——必须写出／不可违背／承接／
 导演说明／背景／禁区——不再把 VerificationIR 以 JSON 倾倒进 prompt。Hook 渲染
 （`novel/stages/stage4/hook_context.py` 与 Hook 写手协议）同规则分层：材料是
@@ -782,7 +785,7 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 
 | 模块 | 承载 | 关键不变量（构造期表达） |
 |---|---|---|
-| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v9）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
+| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v10）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
 | `contracts/schema/grounding.py` | `SourceObligation` / `PreserveCheckpoint` / `ReconstructionBrief` / `IdentityProjection` / `OutputConstraints` / `SemanticBinding` | 必保义务必有非空 `satisfaction`；checkpoint 无 Design/Bind 字段；Brief 无源章/源拍/叙述顺序/证据定位字段；Binding 是完整 snapshot |
 | `contracts/schema/design.py` | `BodyDesign`（rc11：narration、expression_decisions、可定位 entry；保留拍上线程、world_rules）／`PresentationGraph(BodyDesign)+hook` | source-blind；章号连续 1..N、场景全覆盖；POV 服从正文人称许可；表达决定恰好覆盖；entry 锚满足分支条件；hook 引用与线程生命周期闭合 |
 | `contracts/schema/hook.py` | `HookDesign`／`HookContext`／`HookReceipt` | 有序材料组织与阅读期待显式选择；起笔事实只引用已建立目标事实；声线同源；first 恰一人且非 narrator；篇幅包络按章预算派生（目标区间不拒稿、硬上限机械拒收），回执 semantic 恒 unverified |
@@ -834,7 +837,7 @@ Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契约与�
 
 旧形态（完整 WriterBookIR＋全部有效前文进请求，章级 prompt 53.9k–60.9k 线性增长）
 已由 D2 章包三件套取代（2026-09-27，rc8）。现役：每章运行时从完整 `WriterBookIR`
-确定性投影章包（`project_chapter_packet`），renderer v11＝`build_writer_packet` 六分区
+确定性投影章包（`project_chapter_packet`），renderer v12＝`build_writer_packet` 六分区
 阅读面（必须写出／不可违背／承接／导演说明／背景／禁区，R2 落地；见「两层 IR 与
 送达方式」节），请求只含当前章包；回执按 rc6 身份拆分绑定写手视图摘要与验证输入
 摘要（Machine 摘要仅审计）。

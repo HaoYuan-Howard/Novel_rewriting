@@ -13,12 +13,34 @@ Design 是 source-blind 的：实际输入只有 Preserve 投影（`project_brie
 源章重组，输出章仍与源章一一同号（`R-5.2`）。
 孪生（typed witness）后 fail-fast，同指纹不重购。
 
+Stage2 是源约束下的结构化观察：原文是证据，事件、认知和关系的抽取仍包含 LLM
+理解；Preserve 再由 LLM 选择应保骨架及必要条件，义务并非逐字摘要，也不保证每条
+源观察都变成必保要求。compiler 只按正式选择派生引用与消费材料，不补做语义判断。
+
+Preserve 现役保存策略为 v10，wire 仍为 `stage4-preserve-v5`。源盲交接的必要触发、
+答话、限制、权衡与选择须在 statement、satisfaction 及 requires 所指义务的联合材料中
+可理解；已经明确的前提不要求在 satisfaction 再抄一遍。同一时点、同一作用的触发与
+响应可以合写，不同时点的必要前提仍分别承载。可改写动作进可选 details，源文未给的
+桥梁不补猜；Design 可在既有约束内用事件、realization_brief 与 entry 组织目标演法。
+源 anchors 只证明来处，不会把其原文自动送给 Design 或写手，compiler 不从原文另作
+语义补全。这是材料与生成规则，因果自洽、人物转变自然与场景承接仍需阅读验收。
+
+同一人物的多个已登记称谓可以自然共现。唯一绑定成立时逐次投影，保留各次提及及
+中间行动、对白，不因同句混称拒收。只有原文独立邻接的显示面可折叠同位语；前次
+替换生成的显示面及另一登记称谓内部的相同字面都不能吞掉重复提及。普通称谓共现
+不构成揭名，正式必保揭名仍由下述三项类型化信号合取派生并受释放闸保护。
+
 ## 现役 JSON 产物
 
 本层产物**都是 schema v1**（三级路径是切换时新建的命名空间；形状破坏史由模型
 `contract_version` 字面量与候选产物表的 RC 标签承载，见 `docs/BACKEND_CONTRACT.md`
 `R-2.5`／`R-5.11b`）。`runtime/preserve_checkpoint.json` 是已购 canonical 证据，
 例外登记在候选产物表。
+
+`obNN` 是 compiler 按当前义务列表派发的快照内编号，不是跨 Preserve 版本的稳定
+身份。checkpoint／Brief 更新后，旧 Design／Binding 及 IR／Plan 按各自正式输入身份
+判新鲜度，不能仅换义务编号就沿用；历史候选须经已有修订谱系、完整差异与当前输入
+预检决定免费沿用或受影响拍窄复核，原响应、费用与累计轮数保留。
 
 | 路径 | 模型 | 生产节点 | 内容 |
 |---|---|---|---|
@@ -52,6 +74,11 @@ compiler 展开为 `{ref,address}`；action／relationship 引用后续发展拍
 答案。引用存在和时序合法不证明期待与依据的语义匹配或悬念吸引力。
 独立显式选择的 `forbidden_reveals` 仍按现役规则投影为负向禁区，阅读期待的引用
 不自动加入其中，也不自动把未来发展全文发给写手。
+整拍禁揭仍禁止选用该拍；缩小到具体事实地址的禁揭允许使用同拍其他材料，但必须
+在每一条选中该拍的材料上，用 withheld 隐藏该完整事实地址，或用 presentation
+替代整拍投影。其他地址的 withheld 不代替此遮罩，整拍禁揭也不能靠事实遮罩绕过。
+免费重建与初答共用守卫，不能因材料遮罩放行起笔事实、阅读期待或其他条目的泄漏；
+presentation 的文学呈现与语义保真仍保持未评披露。
 
 Context 从同一 BodyDesign 投影 `book_style`、出场 `character_voices` 与材料场的
 `scene_voices`，以及正式 `expression_decisions` 的已选机制 statement；表达决定的
@@ -88,7 +115,7 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `chapter_plan_shape` | hard | 目标章数等于源章数、章序 1..N 连续非空；允许跨章重构 |
 | `length_budget_conserved` | hard | 章预算 largest-remainder 分配、总和守恒 |
 | `preserve_compile` | hard | Preserve checkpoint 编译闭合 |
-| `preserve_name_literal_gate` | hard | Preserve 自闸：statement／satisfaction／details[].text 的不可投影姓名带义务或细节条目路径窄修，与下游归因同一把尺 |
+| `preserve_name_literal_gate` | hard | Preserve 自闸：statement／satisfaction／details[].text 的裸姓、未登记别名等无法唯一认领的字面带义务或细节条目路径窄修；唯一绑定的自然混称合法，不推断揭名 |
 | `binding_mechanical` | hard | CS-3：binding 派生错误并入 body_design 的 ask 同节点修订轮（≤2）；real 覆盖闸漏标即拦；耗尽/无进展 fail-fast |
 | `hook_design_mechanical` | hard | Hook 设计机械校验＋graph 唯一发布 |
 | `design_semantics_unver` | unver | 目标故事与导演说明的语义质量未评 |
@@ -108,7 +135,7 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `preserve_anchor_closure` | hard | 义务 anchors 与可选 details.anchor 在源投影闭集，lineage／detail_id 由 compiler 派生；series 与 summaries/covers 同组闭集；evidence_conflicts 引用闭合 |
 | `source_evidence_conflict_routing` | hard | R10a a3：源证据冲突按锚点句柄回派 Stage2 owner（拍句柄→逐章、书级→book、不可解析即停）；三分支恢复＝修订／保留解释（revise_self 恢复输入）／未决停止；同指纹不二次回派 |
 | `design_lock_acceptance` | hard | R10a a4：Brief 锁定项（kp 命题登记＋知情锁唯一映射＋kf 事实锁）与 Design v5 锁规则——kp 键持有者须有锁且模式被授权（known 只能来自 known 锁）、读者确认须有 reader known 锁、kf 时态锁按锁 modality 承载、值未知/原文未回答不得 set、必保锁兑现 |
-| `design_requires_released_gate` | hard | CS-H H3（RC-61）必保揭名：三项类型化信号合取派生 `requires_released` 随 Brief 认知变化携带；该 know 所在拍必须已释放所列称谓（同拍合法），违例带 know 行路径可窄修 |
+| `design_requires_released_gate` | hard | CS-H H3（RC-61）必保揭名：必保 identity／reveal 引用、源证据为带名称谓首现句段、命题含该称谓三项合取派生 `requires_released`；该 know 所在拍必须已释放所列称谓（同拍合法），违例带 know 行路径可窄修；普通混称不触发 |
 | `binding_series_collapse` | hard | 同一 series 的离散实例接受拍不同；显式 summary 不计作实例，可与最后实例同拍；必保漏标由 real 覆盖闸拦 |
 | `binding_series_summary` | hard | 已采用 summary 覆盖的实例须已采用且不晚于概括；可重排实例、同拍概括。目标实例前情在概括拍送达，早于／未承载均有 Design 窄修与免费重编译 |
 | `design_detail_ref_closure` | hard | 拍上细节只从正式 Brief 闭集引用；选中提示只进 creative_guidance，不选合法；悬空引用 typed 拒绝，可窄修并免费重验 |

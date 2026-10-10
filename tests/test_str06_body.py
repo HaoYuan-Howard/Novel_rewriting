@@ -447,6 +447,24 @@ def test_withheld_literals_follow_release_schedule():
     assert '陆家' not in withheld1
 
 
+@pytest.mark.parametrize('opening', ['尾声未尽，锣鼓又响起来了。',
+                                     '引子引出了她心中藏着的疑问。',
+                                     'chapterhouse 的灯火照亮了长街。'])
+def test_title_words_in_a_natural_opening_are_not_wrappers(opening):
+    assert validate_chapter_prose(
+        opening, withheld_literals=(), released_surfaces=(),
+        target_chars=30, band_low=1, band_high=100) == []
+
+
+@pytest.mark.parametrize('heading', ['第一章 开端', '第1章：开端', '尾声',
+                                     '尾声：归来', 'Epilogue', 'Chapter 1'])
+def test_actual_heading_wrappers_are_still_rejected(heading):
+    errors = validate_chapter_prose(
+        heading + '\n锣鼓又响起来了。', withheld_literals=(), released_surfaces=(),
+        target_chars=30, band_low=1, band_high=100)
+    assert any('[no_wrapper]' in error for error in errors)
+
+
 def test_validate_chapter_prose_all_branches():
     withheld = _withheld(1)
     released = tuple(sorted(chapter_surface_releases(_green_design(), 1)))

@@ -175,7 +175,7 @@ _hard('design_lock_acceptance', 'stage4',
 _hard('preserve_name_literal_gate', 'stage4',
       'Preserve 自闸（RC-64）：义务 statement／satisfaction／details.text 里的裸姓／'
         '多义带名面（未登记别名因含裸姓成分同被查出）在 Preserve 接受循环被逐条定位，'
-        '同句不同登记称谓的无损投影阻断同样前置（含组合材料行），必保揭名保留；'
+        '唯一归属的完整登记称谓可自然混用并逐次投影，必保揭名保留；'
       '带 obligations[i] 条目路径走条目返修；同一把尺与下游材料归因共用', 'R-5.22')
 _hard('design_requires_released_gate', 'stage4',
       '必保揭名（RC-61）：requires_released 的 know 所在拍必须已释放所列称谓'
@@ -333,7 +333,6 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'material_name_leak': 'stop',             # 材料归因回派（route_owner_issue）
     # CS-H H3（RC-64）：Preserve 自闸——义务文本里的裸姓／未登记别名。
     'preserve_name_literal': 'locate',        # obligations[i] 条目返修（最小可替换单元）
-    'preserve_name_projection': 'locate',     # 同句称谓投影阻断，义务/细节条目窄修
     'preserve_event_evidence': 'locate',      # 完整事件证据缺口，保留义务条目定位
     'preserve_detail_shape': 'locate',        # 可改写细节形状；只修出错条目
     'preserve_detail_anchor': 'locate',       # 细节须引用源投影视图的正式锚点
@@ -342,7 +341,6 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'series_summary_early': 'locate',         # 显式回顾早于覆盖实例；两侧承载拍窄修
     # CS-H H3（RC-60「投影后的残余归属」）：Design 原文闸先投影再查的残余三态。
     'design_unreleased_reference': 'locate',  # 已绑定称谓但该位置无显示面：补释放／挪承载位／改指称
-    'design_projection_lossy': 'locate',      # 无损性守卫触发：不可投影残余归 Design
     # CS-H H3（RC-61 必保揭名）：know 拍位必须已释放所列称谓（同拍合法）。
     'design_requires_released': 'locate',     # 挪 know 拍位或提前释放（know 行路径）
 

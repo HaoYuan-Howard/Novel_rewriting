@@ -688,7 +688,9 @@
         "test_body_chapters_does_not_enter_request_or_receipt_identity": "stage",
         "test_chapter_failure_keeps_other_legal_commits_and_stops_truncated": "stage",
         "test_summary_packet_carries_target_instances_and_only_summary_gets_the_recall": "stage",
-        "test_series_recall_changes_summary_packet_and_leaves_unrelated_future_packet_unchanged": "stage"
+        "test_series_recall_changes_summary_packet_and_leaves_unrelated_future_packet_unchanged": "stage",
+        "test_title_words_in_a_natural_opening_are_not_wrappers": "unit_contract",
+        "test_actual_heading_wrappers_are_still_rejected": "unit_contract"
       }
     },
     "tests/test_canary_chapters.py": {
@@ -712,7 +714,8 @@
         "stage7"
       ],
       "cases": {
-        "test_candidate_registry_is_a_rebuildable_index_of_the_unit_account": "stage"
+        "test_candidate_registry_is_a_rebuildable_index_of_the_unit_account": "stage",
+        "test_mention_count_changes_reach_real_design_reuse_consumer": "stage"
       }
     },
     "tests/test_str06_cli_dispatch.py": {
@@ -1332,7 +1335,7 @@
       "cases": {
         "test_one_obligation_repair_sends_only_that_item_and_keeps_others_intact": "stage",
         "test_optional_details_use_same_name_gate_and_detail_item_paths": "unit_contract",
-        "test_preserve_projection_block_is_reported_without_mutating_evidence": "unit_contract"
+        "test_preserve_registered_forms_are_accepted_without_mutating_evidence": "unit_contract"
       }
     },
     "tests/test_str06_required_released.py": {

@@ -36,8 +36,8 @@ REPO = Path(__file__).resolve().parents[1]
 #: 共用发射面：`read_closure.py`（读取闭合码）、`fact_bindings.py`（事实锁码）、
 #: `common.py`（材料泄漏码）、`repair.py`（材料归因码）。`epistemic_lock_order` 由
 #: `chain._backfill_epistemic_lock_order` 以 OwnerIssueV1 码发出（compile 回派面）。
-#: `materials.py`（CS-H H3 起）是 Design 原文闸的残余三态产地——先投影再查后，
-#: `design_unreleased_reference`／`design_projection_lossy` 在此发出并带站点路径。
+#: `materials.py` 是 Design 原文闸的不可绑定与无显示面产地——先逐次投影再查，
+#: `design_unreleased_reference` 带站点路径；自然混称不作为残余错误。
 JUDGMENT_MODULES: tuple[str, ...] = (
     'novel/stages/stage4/design.py',
     'novel/stages/stage4/grounding.py',

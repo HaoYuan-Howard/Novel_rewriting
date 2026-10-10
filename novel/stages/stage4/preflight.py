@@ -239,7 +239,7 @@ def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, ch
         in withheld_name_bindings(withheld, structure, released))
 
     def project(text: str) -> str:
-        projected, _hits, _blocked = project_withheld_names(
+        projected, _hits = project_withheld_names(
             text, bindings=bindings,
             display={b.char_id: display(b.char_id) for b in bindings})
         return projected

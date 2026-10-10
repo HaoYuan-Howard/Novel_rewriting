@@ -425,7 +425,7 @@ def test_identity_change_without_entry_change_carries_forward_with_zero_calls(tm
 
 
 def test_changed_entry_with_equal_canonical_form_carries_forward_with_zero_calls(tmp_path):
-    """② 变化条目的称谓规范形相等 → 同样零调用采用（换登记称谓／同位语不算语义变化）。"""
+    """② 变化条目的称谓规范形相等 → 同样零调用采用（只换登记称谓，保留提及次数）。"""
     ctx, wires, transport, _ = _prepare(tmp_path)
     repo = ctx.repository
     session = _reopened_session(repo, transport)

@@ -260,7 +260,7 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v5',
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v5',
     # 2026-10-10 用户授权有限补桥：必要源因果完整交接，形状与 wire 不变。
-    'STAGE4_PRESERVE_POLICY_VERSION': 9,
+    'STAGE4_PRESERVE_POLICY_VERSION': 10,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
     'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v3',
     # CS-3（2026-10-03）：bind 协议随节点退役——wire 面由 design v6 的 real

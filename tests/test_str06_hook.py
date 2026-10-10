@@ -357,6 +357,142 @@ def test_partial_disclosure_single_beat():
     assert material.deltas == ()  # 该拍唯一 delta 被 withheld：单拍部分披露
 
 
+def _same_beat_forbidden_fixture():
+    """同拍有两条事实：只禁旧约，灯盏状态仍可作为 Hook 材料。"""
+    body_wire = _body_wire()
+    body_wire['scenes'][0]['beats'][1]['target_delta'].append({
+        'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
+        'key': 'lamp_status', 'op': 'set', 'modality': 'actual',
+        'value': '灯盏已燃尽', 'scope': 'book'})
+    body, errors = assemble_body_design(
+        body_wire, known_char_ids={'fu_jun', 'yun_niang'},
+        expression_requirements=sample_requirements(), source_narration=sample_narration())
+    assert body is not None and not errors, errors
+    forbidden_address = {
+        'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
+        'key': 'agreement'}
+    wire = _hook_wire(concealed=[])
+    wire['opening_facts'] = [wire['opening_facts'][0]]
+    wire['materials'] = [{
+        'beat_ref': {'scene': 'sc01', 'beat': 'b02'},
+        'emphasis': 'develop', 'transition': 'start',
+        'withheld': [], 'presentation': None}]
+    wire['forbidden_reveals'] = [{
+        'ref': {'scene': 'sc01', 'beat': 'b02'}, 'address': forbidden_address}]
+    return body, wire, forbidden_address
+
+
+@pytest.mark.parametrize('mask', ['withheld', 'presentation'])
+def test_same_beat_forbidden_fact_mask_reaches_hook_writer(mask):
+    body, wire, address = _same_beat_forbidden_fixture()
+    if mask == 'withheld':
+        wire['materials'][0]['withheld'] = [address]
+    else:
+        wire['materials'][0]['presentation'] = '烛火熄了，两人仍在桌边相对而坐。'
+    wire_before = deepcopy(wire)
+    body_before = body.model_dump(mode='json')
+    hook, errors = _assemble_coordinate_fixture(
+        wire, body=body, known_char_ids={'fu_jun', 'yun_niang'},
+        name_projection=_projection())
+    assert hook is not None and not errors, errors
+    assert wire == wire_before and body.model_dump(mode='json') == body_before
+    if mask == 'withheld':
+        assert hook.forbidden_reveals[0].address.address() == hook.materials[0].withheld[0].address()
+    else:
+        assert hook.materials[0].presentation == wire['materials'][0]['presentation']
+    graph = publish_graph(body, hook)
+    # 正式 canonical 读回复验与初答共用守卫，免费重编不能再误拒该遮罩。
+    graph = type(graph).model_validate_json(graph.model_dump_json())
+    context, errors = compile_hook_context(graph, _projection(), total_budget=2000)
+    assert context is not None and not errors, errors
+    material = context.materials[0]
+    if mask == 'withheld':
+        assert material.event == '洞房夜夫君立约' and material.presentation is None
+        assert len(material.deltas) == 1 and '灯盏已燃尽' in material.deltas[0]
+    else:
+        assert material.presentation == wire['materials'][0]['presentation']
+        assert material.event is None and material.deltas == ()
+    assert len(context.forbidden_reveals) == 1
+    assert '夫君身负报恩之约' in context.forbidden_reveals[0]
+    prompt = build_hook_user_prompt(context)
+    positive, forbidden_tail = prompt.split('【禁止提前兑现】', 1)
+    forbidden, organization = forbidden_tail.split('【叙述与组织】', 1)
+    assert '夫君身负报恩之约' not in positive + organization
+    assert '夫君身负报恩之约' in forbidden
+    assert ('灯盏已燃尽' if mask == 'withheld'
+            else wire['materials'][0]['presentation']) in positive
+
+
+@pytest.mark.parametrize('mask', ['none', 'other_address'])
+def test_same_beat_forbidden_fact_requires_its_own_mask(mask):
+    body, wire, _ = _same_beat_forbidden_fixture()
+    if mask == 'other_address':
+        wire['materials'][0]['withheld'] = [{
+            'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
+            'key': 'lamp_status'}]
+    wire_before = deepcopy(wire)
+    hook, errors = _assemble_coordinate_fixture(
+        wire, body=body, known_char_ids={'fu_jun', 'yun_niang'},
+        name_projection=_projection())
+    assert hook is None and wire == wire_before
+    leaks = [error for error in errors if error.code == 'hook_forbidden_leak']
+    assert len(leaks) == 1, errors
+    assert leaks[0].context['wire_paths'] == [
+        ['forbidden_reveals', 0], ['materials', 0]]
+
+
+@pytest.mark.parametrize('mask', ['withheld', 'presentation'])
+def test_same_beat_forbidden_event_rejects_fact_masks(mask):
+    body, wire, address = _same_beat_forbidden_fixture()
+    wire['forbidden_reveals'][0]['address'] = None
+    if mask == 'withheld':
+        wire['materials'][0]['withheld'] = [address]
+    else:
+        wire['materials'][0]['presentation'] = '烛火熄了，两人仍在桌边相对而坐。'
+    hook, errors = _assemble_coordinate_fixture(
+        wire, body=body, known_char_ids={'fu_jun', 'yun_niang'},
+        name_projection=_projection())
+    assert hook is None
+    conflicts = [error for error in errors if error.code == 'hook_forbidden_conflict']
+    assert len(conflicts) == 1, errors
+    assert conflicts[0].context['wire_paths'] == [
+        ['forbidden_reveals', 0], ['materials', 0]]
+
+
+def test_canonical_hook_recheck_rejects_removed_fact_mask():
+    body, wire, address = _same_beat_forbidden_fixture()
+    wire['materials'][0]['withheld'] = [address]
+    hook, errors = _assemble_coordinate_fixture(
+        wire, body=body, known_char_ids={'fu_jun', 'yun_niang'},
+        name_projection=_projection())
+    assert hook is not None and not errors, errors
+    # 模拟盘上已可解码 Hook 丢了遮罩，Context 免费重建仍须重新挡住披露冲突。
+    hook = hook.model_copy(update={'materials': (
+        hook.materials[0].model_copy(update={'withheld': ()}),)})
+    context, errors = compile_hook_context(
+        publish_graph(body, hook), _projection(), total_budget=2000)
+    assert context is None
+    assert any(error.code == 'hook_forbidden_leak' for error in errors), errors
+
+
+@pytest.mark.parametrize('other_use', ['opening', 'expectation'])
+def test_same_beat_fact_mask_does_not_authorize_opening_or_answer(other_use):
+    body, wire, address = _same_beat_forbidden_fixture()
+    wire['materials'][0]['withheld'] = [address]
+    if other_use == 'opening':
+        wire['opening_facts'].append({
+            **deepcopy(wire['forbidden_reveals'][0]), 'audience': 'reader'})
+        expected_code = 'hook_opening_forbidden'
+    else:
+        wire['reader_expectation']['answer'] = deepcopy(wire['forbidden_reveals'][0])
+        expected_code = 'hook_expectation_horizon'
+    hook, errors = _assemble_coordinate_fixture(
+        wire, body=body, known_char_ids={'fu_jun', 'yun_niang'},
+        name_projection=_projection())
+    assert hook is None
+    assert any(error.code == expected_code for error in errors), errors
+
+
 # ───────────────────────── 事实渲染保留认知维度（A2） ─────────────────────────
 
 def _rendered_deltas(*, knowledge_mode: str, holder: str):
@@ -477,7 +613,7 @@ def test_forbidden_conflicts_with_material():
                              'emphasis': 'develop', 'transition': 'return',
                              'withheld': [], 'presentation': None})
     _, errors = _assemble(wire)
-    assert any('既是材料又禁止揭示' in e for e in errors)
+    assert any(e.code == 'hook_forbidden_leak' for e in errors)
 
 
 def test_withheld_must_belong_to_beat_delta():

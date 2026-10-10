@@ -5,7 +5,7 @@ CS-F1（RC-46/47）：每条泄漏问题在判定处带上**站点**（Design �
 只重写真正出问题的最小完整父项；本模块不读 wire、不猜路径、不解析错误文案。
 
 CS-H H3（RC-60「投影」「残余归属」）：**先投影再查**——每个分区文本按本章显示面
-把已绑定称谓确定性投影（同位语折叠与无损性守卫与正文／Hook 同一把尺），再对投影
+把已绑定称谓逐次确定性投影（同位语折叠与正文／Hook 同一把尺），再对投影
 后的文本查残余。
 
 **已释放按章判（2026-10-07 用户裁定，取代 H3 的按位置口径）**：写手拿到整章章包，
@@ -14,15 +14,13 @@ Design 的中间文本不该比它要指导的正文更严。章内后释放的�
 拍 2 才介绍的人物）不再算泄漏；本章及之前都没释放过的名字仍是泄漏（真正的提前
 披露）。已释放集与绑定表共用 `chapter_surface_releases`（与正文章包同一函数），
 闸与绑定表由构造一致。必保揭名（`design_requires_released`，按拍位）是独立的情节
-保真闸，不受影响。残余三态归因（规格「投影后的残余归属」表）：
+保真闸，不受影响。残余两态归因（规格「投影后的残余归属」表）：
 
 · `design_unreleased_reference`——已绑定称谓，但该人物在此处没有显示面
   （本章末仍无释放且无回落纯称谓）：补一行释放或挪承载位／改写该字段指称；
-· `design_projection_lossy`——无损性守卫触发（同一句同一人物两个不相邻的
-  不同称谓将压成一个）：挪 know 拍位或改写指称；
 · `positive_material_leak`——裸姓、未登记别名等不可投影字面：改该字段。
 
-三类都带路径（locate）；义务文本里的同类残余归 Preserve（自闸随 H3d 前置），
+两类都带路径（locate）；义务文本里的同类残余归 Preserve（自闸随 H3d 前置），
 不在本模块的 Design 分区出现。
 """
 from __future__ import annotations
@@ -143,14 +141,12 @@ def validate_design_materials(
         prefix = f'ch{chapter.chapter_ordinal:02d}/'
         # 显示面取章末（RC-60 第 2～4 条的解析不变，只是取位按章）。
         display = display_at(prefixes.chapter_end_faces(chapter.chapter_ordinal))
-        # 先投影再查：同位语折叠与无损性守卫之后，残余才进字面检查。
+        # 先投影再查：同一人物的各次提及分别投影，残余才进字面检查。
         projected: dict[str, MaterialPart] = {}
-        blocked: set[str] = set()
         for key, text in parts.items():
-            new_text, _hits, blocks = project_withheld_names(
+            new_text, _hits = project_withheld_names(
                 text, bindings=bindings, display=display)
             projected[prefix + key] = MaterialPart(new_text)
-            blocked.update(block.literal for block in blocks)
         # keep 的文本由 Brief 回填，直接重写场景不会改变它；诊断指出 wire
         # 中显式改写表达的入口，不替模型改语义，不扩大/缩小原判据。
         inherited = {item.ex_id for item in body.expression_decisions
@@ -170,11 +166,6 @@ def validate_design_materials(
                            '没有显示面（本章末仍无释放且无回落纯称谓）；补一行释放、'
                            '挪承载位，或改写该字段指称')
                 code = 'design_unreleased_reference'
-            elif issue.literal in blocked:
-                message = (f'{issue.message}——无损性守卫：同一句同一人物两个'
-                           '不相邻的不同称谓投影后将压成一个；挪拍位、'
-                           '改写指称或统一称谓')
-                code = 'design_projection_lossy'
             else:
                 # positive_material_leak / internal_id_leak：裸姓、未登记别名
                 # 等不可投影字面，改该字段。

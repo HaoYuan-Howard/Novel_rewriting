@@ -179,7 +179,7 @@ def test_optional_details_use_same_name_gate_and_detail_item_paths():
     assert issues[0].context['wire_paths'] == [['obligations', 0, 'details', 0]]
     allowed = changed.model_copy(update={'obligations': (
         obligation.model_copy(update={'details': (
-            detail.model_copy(update={'text': '陆大哥从床底钻出'}),)}),)})
+            detail.model_copy(update={'text': '陆大哥从床底钻出，陆兄拍去衣角'}),)}),)})
     assert preserve_name_issues(allowed, _characters()) == []
 
 
@@ -230,8 +230,8 @@ def test_preserve_real_entry_accepts_absent_optional_details(tmp_path):
     assert all(not obligation.details for obligation in checkpoint.obligations)
 
 
-def test_preserve_projection_block_is_reported_without_mutating_evidence():
-    """真实姓名映射反例：已登记别名仍可能触发下游无损性守卫。"""
+def test_preserve_registered_forms_are_accepted_without_mutating_evidence():
+    """已证明同人的多个登记面不因共现被拒；validator 保持条件、关系与证据。"""
     from novel.stages.stage4 import preserve_name_issues
     from tests.test_str06_display_surface import _characters
     from contracts.schema.source import CharactersArtifactV6
@@ -250,30 +250,48 @@ def test_preserve_projection_block_is_reported_without_mutating_evidence():
     checkpoint = checkpoint.model_copy(update={'obligations': (obligation,)})
     before = checkpoint.model_dump()
     issues = preserve_name_issues(checkpoint, chars)
-    assert any(i.code == 'preserve_name_projection' for i in issues), issues
-    assert all(i.context['wire_paths'] == [['obligations', 0]] for i in issues)
+    assert issues == [], issues
     assert checkpoint.model_dump() == before, 'validator 不改条件与源证据'
     fixed = checkpoint.model_copy(update={'obligations': (obligation.model_copy(update={
         'satisfaction': '此人物须以夫君表弟身份出现，表兄弟关系不得错配。'}),)})
     assert preserve_name_issues(fixed, chars) == []
 
 
-def test_projection_block_repairs_only_one_obligation_in_real_entry(tmp_path):
-    from novel.stages.chain import run_preserve
+def test_natural_mixed_names_reach_the_writer_packet_without_preserve_repair(tmp_path):
+    """首答自然混称经 Preserve 采用、Stage4 编译到真实写手面，不购买条目返修。"""
+    from novel.llm.ledger import read_cost_snapshot
+    from novel.stages.chain import run_preserve, run_workflow
+    from novel.stages.common import (
+        project_chapter_packet, render_chapter_packet, writer_material_issues,
+        writer_name_projections,
+    )
     from tests.test_str06_design_patch import PatchingTransport
     wires = _wires()
-    bad = deepcopy(wires['preserve'])
-    # fixture 登记“陆大哥／陆兄”两种带名面；在同一句中不能无损压成一面。
-    bad['obligations'][0]['statement'] = '陆大哥向娘子坦白，陆兄确有难言之隐'
-    transport = PatchingTransport(wires, bad, owner='preserve')
+    mixed = deepcopy(wires['preserve'])
+    # 叙述称谓与对白称呼已登记同人；每次提及及其间行动都应保留。
+    mixed['obligations'][0]['statement'] = '陆大哥向娘子坦白，陆兄确有难言之隐'
+    transport = PatchingTransport(wires, mixed, owner='preserve')
     ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires, transport=transport)
     run_preserve(ctx)
-    assert transport.calls.count('preserve') == 2
-    assert '- 路径 obligations[0]：' in transport.owner_requests[1]
+    assert transport.calls.count('preserve') == 1
+    assert len(transport.owner_requests) == 1, '首答可用，不发窄返修请求'
     checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
-    for index, item in enumerate(wires['preserve']['obligations']):
+    for index, item in enumerate(mixed['obligations']):
         assert checkpoint.obligations[index].statement == item['statement']
         assert [a.handle for a in checkpoint.obligations[index].anchors] == item['anchors']
+    run_workflow(
+        repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+        ask_body=ctx.ask_body, budget=ctx.budget, through='stage4')
+    ir = repo.read_model('stage4/ir/writer_book_ir.json')
+    packet = project_chapter_packet(ir, 1)
+    prompt = render_chapter_packet(packet)
+    assert '夫君向娘子坦白，夫君确有难言之隐' in prompt
+    assert '陆大哥向娘子坦白' not in prompt and '陆兄确有难言之隐' not in prompt
+    assert writer_material_issues(packet, internal_ids=set()) == ()
+    assert {(row['literal'], row['replacement']) for row in writer_name_projections(packet)} >= {
+        ('陆大哥', '夫君'), ('陆兄', '夫君')}
+    rows, _partial = read_cost_snapshot(repo.root.parent)
+    assert sum(not row['cached'] and row['purpose'] == 'preserve' for row in rows) == 1
 
 
 def test_normal_name_reveal_is_not_rewritten_by_preserve_portability_gate(tmp_path):
@@ -295,5 +313,5 @@ def test_normal_name_reveal_is_not_rewritten_by_preserve_portability_gate(tmp_pa
     assert checkpoint is not None and not errors, errors
     brief, _ = project_brief(checkpoint, chars.core_view(), blueprint, structure=chars.name_structure)
     assert set(brief.requirements[0].knowledge_changes[0].requires_released) == {'陆大哥', '陆兄'}
-    assert preserve_name_issues(checkpoint, chars, blueprint) == []
+    assert preserve_name_issues(checkpoint, chars) == []
     assert checkpoint.obligations[0].anchors[0].quotes

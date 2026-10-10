@@ -656,8 +656,8 @@ def test_r2_version_constants():
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
     assert STR06_RC_VERSION == 'str06-rc24'          # HookContext 篇幅包络独立升版；正文契约不变。
     assert 'str06-rc10' in STR06_RC_LABELS
-    assert RENDERER_VERSION == 'str06-render-v11'
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v10'
+    assert RENDERER_VERSION == 'str06-render-v12'
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v11'
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/design/body_design.json'] == 'str06-rc22'
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/design/presentation_graph.json'] == 'str06-rc23'
     # rc17（CS-H H3）：IR 因显示面分表（display_fallback）、必保揭名

@@ -328,7 +328,7 @@ def test_validation_only_change_rechecks_original_prose_and_preserves_adoption(t
     assert len(transport.calls) == calls
     assert repo.path('stage5/body/ch01.txt').read_bytes() == before
     assert renewed['request_identity'] == original['request_identity']
-    assert renewed['validator_version'] == 'str06-body-mechanical-v2'
+    assert renewed['validator_version'] == 'str06-body-mechanical-v3'
     # 免费重验不丢生成事实：回执继承原付费来源账（model/prompts/usage 原样，
     # inputs 换成本次验证真读到的），partial_rewrite 留痕。
     inherited = renewed['_provenance']

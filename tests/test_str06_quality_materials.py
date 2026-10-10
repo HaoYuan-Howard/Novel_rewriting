@@ -188,7 +188,8 @@ OPTIONAL_ACTION = '用摊开账册逐页清点的动作表现迟疑'
 DESIGN_COMMUNICATION_BRIDGE = '陈禾将缺页处指给周澄，当面说明自己先补账再出发'
 
 
-def _causal_material_wires(*, select_detail=False, invent_quantity=False):
+def _causal_material_wires(*, select_detail=False, invent_quantity=False,
+                          cause_in_statement=False):
     """两章商铺故事：Design 补局部沟通，源条件与未知货量保持，动作细节可选。"""
     from contracts.schema.grounding import _lock_id
     from tests.str06_expression_inputs import sample_book_expression
@@ -315,6 +316,10 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False):
                                                'followup_refs': [{'scene': 'sc02', 'beat': 'b01'}]},
                         'local_focus': '用克制的日常动作写出办事受阻的尴尬。'},
     }
+    if cause_in_statement:
+        cause = wires['preserve']['obligations'][1]
+        cause['statement'] = CAUSAL_CONDITION
+        cause['satisfaction'] = '陈禾暂缓取货，先补账再出发'
     return chapters, wires, quantity_lock
 
 
@@ -340,9 +345,11 @@ class _CausalMaterialTransport(_MaterialTransport):
                             usage={'prompt_tokens': 100, 'completion_tokens': 40}, model='fake')
 
 
-def _prepare_causal_materials(tmp_path, *, select_detail=False, invent_quantity=False):
+def _prepare_causal_materials(tmp_path, *, select_detail=False, invent_quantity=False,
+                              cause_in_statement=False):
     chapters, wires, quantity_lock = _causal_material_wires(
-        select_detail=select_detail, invent_quantity=invent_quantity)
+        select_detail=select_detail, invent_quantity=invent_quantity,
+        cause_in_statement=cause_in_statement)
     transport = _CausalMaterialTransport(wires)
     repo, session, _ = _make_session(tmp_path, wires, transport=transport)
     run_workflow(repository=repo, chapters=chapters, ask=_fake_ask(session),
@@ -350,6 +357,26 @@ def _prepare_causal_materials(tmp_path, *, select_detail=False, invent_quantity=
                  budget=2000, through='stage5', book_title='商铺取货',
                  length_band=(0.01, 0.2), concurrency=1)
     return repo, transport, wires, quantity_lock
+
+
+def test_trigger_in_statement_reaches_the_writer_without_repeating_it_in_satisfaction(tmp_path):
+    """必要因果以联合材料交接，实际消费者不要求两字段重复也不采购 Preserve 返修。"""
+    repo, transport, _, _ = _prepare_causal_materials(tmp_path, cause_in_statement=True)
+    checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
+    cause = checkpoint.obligations[1]
+    assert cause.statement == CAUSAL_CONDITION
+    assert '账页齐全' not in cause.satisfaction
+    brief = repo.read_model('stage4/grounding/reconstruction_brief.json')
+    requirement = next(r for r in brief.requirements if r.summary == CAUSAL_CONDITION)
+    assert requirement.satisfaction == cause.satisfaction
+    assert CAUSAL_CONDITION in transport.requests['design'][0]
+    ir = repo.read_model('stage4/ir/writer_book_ir.json')
+    writer = build_writer_packet(project_chapter_packet(ir, 1))
+    assert any(CAUSAL_CONDITION in line for line in writer.must_realize)
+    assert CAUSAL_CONDITION in transport.requests['body_ch01'][0]
+    assert cause.satisfaction in transport.requests['body_ch01'][0]
+    assert all(transport.calls.count(owner) == 1
+               for owner in ('preserve', 'design', 'body_ch01', 'body_ch02'))
 
 
 @pytest.mark.parametrize('select_detail', [False, True], ids=['omit_soft_action', 'select_soft_action'])

@@ -226,8 +226,9 @@ def validate_hook_payload(
                             'hook_presentation_leak', ('materials', k, char_id),
                             ('materials', k)))
 
-    # 禁止揭示：引用真实；与材料不冲突——同一拍不得既是材料又是禁 reveal；
-    # 材料若未以 presentation 或 withheld 隐藏被禁地址，即视为冲突。
+    # 禁止揭示：引用真实；无 address 是整拍禁区，同拍不得作为材料。
+    # 具体事实只禁止该地址；presentation 替代全拍投影，或 withheld 隐藏该地址
+    # 后仍可使用同拍其余材料，未隐藏的事实才与材料冲突。
     forbidden_refs: list[str] = []
     forbidden_addresses: list[tuple] = []
     for k, item in enumerate(wire.get('forbidden_reveals') or []):
@@ -250,7 +251,7 @@ def validate_hook_payload(
             errors.append(_issue(
                 f'禁止揭示引用不存在的拍：{ref}', 'hook_forbidden_ref',
                 ('forbidden_reveals', k), ('forbidden_reveals', k)))
-        if ref in material_refs:
+        if key is None and ref in material_refs:
             errors.append(_issue(
                 f'禁止揭示与材料冲突：同一拍 {ref} 既是材料又禁止揭示',
                 'hook_forbidden_conflict', ('forbidden_reveals', k, ref),
