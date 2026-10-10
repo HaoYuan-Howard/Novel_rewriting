@@ -270,7 +270,7 @@ function AssemblyReport({ report }: { report: Str06AssemblyReportView }) {
 function CharactersPane({ chars }: { chars: NonNullable<Monitor['characters']['data']> }) {
   return (
     <Panel>
-      <PaneHeader title={'Characters v4 · 源名称结构'} meta={<Mono>{chars.contract_version ?? 'unknown'}</Mono>} />
+      <PaneHeader title={'Characters · 源名称结构'} meta={<Mono>{chars.contract_version ?? 'unknown'}</Mono>} />
       <div className={'flex flex-col gap-12 px-18 py-16'}>
         {chars.characters.map((c) => (
           <div key={c.char_id} className={'flex flex-col gap-4'}>
@@ -294,7 +294,7 @@ function CharactersPane({ chars }: { chars: NonNullable<Monitor['characters']['d
 function BlueprintPane({ blueprint }: { blueprint: NonNullable<Monitor['blueprint']['data']> }) {
   return (
     <Panel>
-      <PaneHeader title={'Blueprint v13 · 源骨架'} meta={<Mono>{blueprint.chapters.length} 章</Mono>} />
+      <PaneHeader title={'Blueprint · 源骨架'} meta={<Mono>{blueprint.chapters.length} 章</Mono>} />
       <div className={'flex flex-col gap-12 px-18 py-16'}>
         {blueprint.chapters.map((chapter) => (
           <div key={chapter.chapter} className={'flex flex-col gap-6'}>

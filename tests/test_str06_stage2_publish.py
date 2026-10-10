@@ -1210,7 +1210,7 @@ def test_stage4_reads_only_canonical(tmp_path, synonymous):
     chars = repo.read_model('stage2/characters/characters.json')
     core = chars.core_view()
     blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
-    # Preserve 的输入材料 = canonical core view（人物表）＋ Blueprint v13。
+    # Preserve 的输入材料 = canonical core view（人物表）＋ Blueprint v17。
     preserve_prompt = pack_prompt(PRESERVE_RULES,
                                   characters=core.model_dump(mode='json'),
                                   blueprints=blueprint.model_dump(mode='json'))

@@ -1544,7 +1544,7 @@ class StageState(StrictModel):
     #: ⚠⚠ **`None` = 判不了**，与 `False`「没跑完」是两件事——
     #: 这是 `Q-2` 那个三态在完成度这一侧的样子，也是本项目一路在防的那个病
     #: （`FRESHNESS` / `JOB_STATE` 的 `unknown` 防的都是它）。
-    #: 实测就撞上了：stage5 的产物是**逐章**的（`stage5/chNN.json`），
+    #: 实测就撞上了：stage5 的产物是**逐章**的（`stage5/body/ch{nn}.txt`），
     #: 「该有几章」要去读 stage4 计划里的输出章；计划读不回来时，
     #: 盘上有 4 章这件事**既不能证明跑完了、也不能证明没跑完**。
     #: 压成 `False` 会让队列一次次去重跑一个可能已经写完的付费层——
@@ -1552,16 +1552,16 @@ class StageState(StrictModel):
     #:
     #: ⚠ **`.INVALID` 不计入已完成**，它进 inbox（`INBOX_KIND` 已有 `invalid` 这个值）。
     #: ⚠ 普通具名产物的 **`freshness == 'unknown'` 计入已完成**，这不是漏判：
-    #: 当前七层仍可能读到缺少 `consumed` 投影的早期产物；把它当未完成会让整条链
+    #: 当前六层仍可能读到缺少 `consumed` 投影的早期产物；把它当未完成会让整条链
     #: 永远跑不出第一步。
     #: 「不知道它新不新」与「它是旧的」是两件事——**后者才该挡路**。
     #: Stage5 是例外：它的 `done=True` 会直接让付费写作 SKIP，且退役 `draft.md`
     #: 后 canonical 章就是唯一证据，因此必须逐章达到 `fresh`；未知不能冒充当前。
     done: bool | None
 
-    #: 逐章类的层（stage5）：canonical `stage5/chNN.json` 已落盘的章。
-    #: **必须排除 `.INVALID.json`**——
-    #: `chNN.json` 的存在本身就是「过了写作时的落盘闸门」这个语义，
+    #: 逐章类的层（stage5）：canonical `stage5/body/ch{nn}.txt` 已落盘的章。
+    #: **必须排除 `.INVALID` 孪生等失败留证**——
+    #: 规范路径的存在本身就是「过了写作时的落盘闸门」这个语义，
     #: 把被拦下的那份数进去就把语义反过来了。
     chapters_done: list[int] = Field(default_factory=list)
 

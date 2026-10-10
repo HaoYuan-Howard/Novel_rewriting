@@ -248,9 +248,9 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def chapters_done(novel_dir: Path) -> list[int]:
-    """规范 `stage5/chNN.json` 已落盘的章号（`R-14.2`：续跑粒度是**章**）。
+    """规范 `stage5/body/ch{nn}.txt` 已落盘的章号（`R-14.2`：续跑粒度是**章**）。
 
-    ⚠⚠ **必须排除 `.INVALID.json` 与 `.rejected.json`。** `chNN.json` 的存在本身就是
+    ⚠⚠ **必须排除 `.INVALID` 孪生等失败留证。** 规范路径的存在本身就是
     「过了写作时的落盘闸门」这个语义（`_common.md` §5.1：先校验后落盘）——
     把被拦下的那一份数进去，就把这个语义**反过来**了：
     续跑会跳过一章**根本没写成的**稿子，而那一章的钱到时候还得花。

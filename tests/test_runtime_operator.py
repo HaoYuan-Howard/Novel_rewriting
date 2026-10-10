@@ -153,7 +153,7 @@ def _write_ready_next(path: Path, permit: ExecutionPermit) -> Path:
 
 def test_run_step_permit_file_preview_never_remints_or_revalidates(
         monkeypatch, tmp_path) -> None:
-    """完整 token 已冻结 preview；渲染步骤不能再跑七层 planner/CAS。"""
+    """完整 token 已冻结 preview；渲染步骤不能再跑六层 planner/CAS。"""
     runner = _operator_script('run_step')
     permit = _execution_permit(base=str(tmp_path.resolve()))
     token = _write_ready_next(tmp_path / 'operator-next.json', permit)

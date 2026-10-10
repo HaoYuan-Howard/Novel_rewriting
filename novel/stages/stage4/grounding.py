@@ -15,7 +15,7 @@ CS-3 bind LLM 退役）。
     Brief 投影全部类别及满足条件（去源坐标，引用改为不带源顺序的需求 ID）；
     Blueprint 的 world_constraints 机械填入 `book_constraints`（R2.5 世界
     约束通道——Design 侧决定沿用或改写成目标 world_rules）。
-    IdentityProjection 从 Characters v4 公共投影。
+    IdentityProjection 从 Characters v6 公共投影。
     Design 拿到的是这两份 + OutputConstraints，**读不到 checkpoint 内部**。
   • `derive_semantic_binding`：design 的 real 承载标注 → SemanticBinding
     （CS-3，2026-10-03）：bind LLM 退役——义务落在哪一拍由 design wire 的

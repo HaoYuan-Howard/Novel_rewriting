@@ -132,7 +132,7 @@ RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
 #:   | 类 | 例 | 占位符由谁决定 | 完成度落点 |
 #:   |---|---|---|---|
 #:   | 轮次编号 | `stage5/review_{n}.json` | 盘上有几份 | `rounds_done[节点]` |
-#:   | 逐章 | `stage5/ch{nn}.json` | 计划里有哪些章 | `chapters_done` |
+#:   | 逐章 | `stage5/body/ch{nn}.txt` | 计划里有哪些章 | `chapters_done` |
 #:   | **书级** | `stage7/{title}_rewriting.txt` | **这本书是谁** | `artifacts[]`（解析后是具名的） |
 #:
 #: ⚠⚠ **这张表存在的理由**：前两类问「盘上有几份」，第三类问「它叫什么名字」——

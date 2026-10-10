@@ -189,7 +189,7 @@ def list_candidates(base: str | os.PathLike[str]) -> Str06CandidateList:
 # ─────────────────────────────── Stage2 面 ───────────────────────────────
 
 def characters_view(base: str | os.PathLike[str], candidate: str) -> Str06CharactersView:
-    """Characters v4：人物条目（称谓时间窗）＋源名称结构。"""
+    """Characters v6：人物条目（称谓时间窗）＋源名称结构。"""
     run = _run_dir(base, candidate)
     if run is None:
         return Str06CharactersView(present=False)
@@ -217,7 +217,7 @@ def characters_view(base: str | os.PathLike[str], candidate: str) -> Str06Charac
 
 
 def blueprint_view(base: str | os.PathLike[str], candidate: str) -> Str06BlueprintView:
-    """Blueprint v13：世界约束＋逐章 beats（三类转移、场景边界与时间模式、场景分段）与因果边。"""
+    """Blueprint v17：世界约束＋逐章 beats（三类转移、场景边界与时间模式、场景分段）与因果边。"""
     run = _run_dir(base, candidate)
     if run is None:
         return Str06BlueprintView(present=False)

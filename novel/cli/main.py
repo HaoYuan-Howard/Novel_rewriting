@@ -778,7 +778,7 @@ def _require_execution_permit(
 
     # active-surface CAS 已由 canonical run_step 在 admission claim 成功后、
     # evidence/beacon/subprocess 之前执行。child 只核 active claim、完整 envelope、
-    # canonical step/index/argv；这里不得再调用 operator planner 做七层复检。
+    # canonical step/index/argv；这里不得再调用 operator planner 做六层复检。
 
 
 def _cmd_run(a: argparse.Namespace) -> int:

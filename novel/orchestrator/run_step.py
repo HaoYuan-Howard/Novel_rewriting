@@ -415,7 +415,7 @@ def _main(argv: list[str] | None = None) -> int:
             if args.execute and current_permit is not None:
                 # Commander 主路已在上方先取得 admission claim；这一步是首个
                 # evidence/beacon/subprocess 副作用前唯一一次 active-surface CAS。
-                # 它不运行 operator next / queue / 七层 check-only。
+                # 它不运行 operator next / queue / 六层 check-only。
                 permit_layer.revalidate_active_execution_surface(
                     current_permit, base=args.base, sid=args.sid,
                     node=args.node, flags=flags)

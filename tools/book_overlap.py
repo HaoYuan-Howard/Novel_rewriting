@@ -17,7 +17,7 @@ book_overlap.py —— **成书**与源章原文的 20 字窗口重合率，逐�
 
 【F8a 换新链坐标后的两处口径变化（如实登记，不与旧读数混批比较）】
 ① 回映射的表**由新链 compile 现场派生**：`stage7/naming/name_map.json`
-   （NameMapV5）＋`stage2/characters/characters.json`（Characters v4）经
+   （NameMapV5）＋`stage2/characters/characters.json`（Characters v6）经
    `novel/stages/stage7/naming.py::compile_surface_replacements` 得到替换表
    ——与 assembly 落成书用的是同一条派生路径，工具不自己重拼一份。
    逆向替换走 `novel/stages/common.py::apply_replacements`
@@ -160,7 +160,7 @@ def _read(p: Path) -> dict:
 
 
 def substitution_table(novel_dir: Path) -> dict:
-    """NameMap v5 + Characters v4 -> 反向替换表容器（compile 现场派生）。
+    """NameMap v5 + Characters v6 -> 反向替换表容器（compile 现场派生）。
 
     与 `str06.stage7.assemble` 落成书之前完全相同的一步：读两份 canonical
     产物、走 `compile_surface_replacements`。compile 侧报出的错误（同一源字面

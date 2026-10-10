@@ -58,14 +58,14 @@ def get_run(candidate: str, base: str = Depends(get_base)) -> Str06RunView:
 
 @router.get('/{candidate}/characters', response_model=Str06CharactersView)
 def get_characters(candidate: str, base: str = Depends(get_base)) -> Str06CharactersView:
-    """Characters v4：人物条目（称谓时间窗）与源名称结构。"""
+    """Characters v6：人物条目（称谓时间窗）与源名称结构。"""
     _require_candidate(base, candidate)
     return views.characters_view(base, candidate)
 
 
 @router.get('/{candidate}/blueprint', response_model=Str06BlueprintView)
 def get_blueprint(candidate: str, base: str = Depends(get_base)) -> Str06BlueprintView:
-    """Blueprint v12：世界约束、逐章 beats 与因果边。"""
+    """Blueprint v17：世界约束、逐章 beats 与因果边。"""
     _require_candidate(base, candidate)
     return views.blueprint_view(base, candidate)
 
