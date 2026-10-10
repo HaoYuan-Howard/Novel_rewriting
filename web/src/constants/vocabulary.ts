@@ -8,7 +8,7 @@
  *
  * 状态语言 = 色 + 形 + 文字，三者齐备。只靠颜色区分状态是不合格的。
  *
- * 取值域联合（Freshness / Badge / Severity / JobState / InboxKind /
+ * 取值域联合（Freshness / Badge / Severity / JobState /
  * FreshnessDisplay / StageId）单源自 types/backend.generated.ts（由
  * scripts/export_backend_types.py 从 contracts/invariants.py 生成，
  * tests/test_api_enums.py 对账）。此处只 re-export；Op、DotShape 等
@@ -18,13 +18,12 @@ import type {
   Badge,
   Freshness,
   FreshnessDisplay,
-  InboxKind,
   JobState,
   Severity,
   StageId,
 } from '../types/backend.generated'
 
-export type { Badge, Freshness, FreshnessDisplay, InboxKind, JobState, Severity }
+export type { Badge, Freshness, FreshnessDisplay, JobState, Severity }
 
 export type Op = 'keep' | 'compress' | 'amplify' | 'rewrite'
 
@@ -178,13 +177,6 @@ export const GATE = {
   warnLine: 'oklch(0.85 0.06 62)',
 } as const
 
-/** 剧透开关打开时的告警色。它不是「结论」，是一个危险动作的状态。 */
-export const SPOILER_ON = {
-  border: 'oklch(0.70 0.13 30)',
-  bg: 'oklch(0.97 0.03 30)',
-  dot: 'oklch(0.55 0.19 28)',
-} as const
-
 /** 中性弱化色（「这里没有值」而不是「这里是 0」） */
 export const MUTED = '#c4bdb2'
 
@@ -284,21 +276,6 @@ export const RAIL: RailItem[] = [
   { screen: 'stage1', n: '1', label: '分章报告' },
 ]
 
-/** stage → 它在 `/n/:sid` 下的主屏。新链 stage2/4/5/7 没有对应屏（监控在 `/str06/:candidate`）。 */
-export const STAGE_SCREEN: Record<string, ScreenName> = {
-  stage0: 'stage0',
-  stage1: 'stage1',
-}
-
-/** 每屏标题（缺样本屏与文档标题共用） */
-export const SCREEN_TITLE: Record<ScreenName, string> = {
-  corpus: '语料库',
-  settings: '设置',
-  run: '跑书进度',
-  stage0: '剔除番外 · stage0',
-  stage1: '分章报告 · stage1',
-}
-
 /** 字节数 → 人读的大小 */
 export function kb(bytes: number): string {
   if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + 'MB'
@@ -321,10 +298,6 @@ export function when(sec: number): string {
     ':' +
     p(d.getMinutes())
   )
-}
-
-export function chNo(n: number): string {
-  return 'ch' + String(n).padStart(2, '0')
 }
 
 export const DELIVERY_LABEL = {

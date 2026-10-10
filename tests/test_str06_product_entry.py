@@ -480,7 +480,7 @@ def test_legacy_book_is_refused_at_every_product_entry_face(base, monkeypatch, c
     err = capsys.readouterr().err
     assert 'invalid choice' in err and 'stage5.write' in err and 'Traceback' not in err
 
-    # ② 程序化面：`RETIRED_NODES` ⇒ legacy_incompatible 显式终态。
+    # ② 程序化面：非现役节点通则 ⇒ legacy_incompatible 显式终态。
     with pytest.raises(TerminalState, match='legacy_incompatible'):
         cli._cmd_run(SimpleNamespace(node='stage4.plan'))
 

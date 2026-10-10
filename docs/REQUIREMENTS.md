@@ -43,7 +43,7 @@ outputs/rc21_quality_20261009，同日用户要求整根转移至 E:/practice_gr
 一致、该章其他拍去除派生命题编号后的内容一致，账本仍为 12 次付费（本次新增 0）。
 Preserve 升独立 wire v4/policy 7：允许既有拍＋该拍证据报告遗漏，义务/details 原子锚点
 闭集不变；chapters 回派只修所报拍、保留其他章，普通空知情合法。没有新增字段、节点或
-Judge。回派整链反例另暴露节点间输入边串入上游修订，已按节点边界清空来源窗口；保留章只验封/版本/新鲜度、不记内容依赖。章执行、派单关闭、补丁激活均使用同一局部范围。真实 names/associate/compile 及后续节点仍未运行，等用户验收；强化提示能否改善
+Judge。回派整链反例另暴露节点间输入边串入上游修订，已按节点边界清空来源窗口；保留章只验封/版本/新鲜度、不记内容依赖。章执行、派单关闭、补丁激活均使用同一局部范围。names/associate/compile 及后续节点已随 2026-10-09 跑书全链执行并交付（13 个 str06 节点全执行，workflow_status=delivered、through=stage7，accepted_body=true，总字数 9084/9000）；强化提示能否改善
 首答漏抽率、成书阅读质量和整书成本仍待后续实测，不把机械回归当作语义检出率。
 
 本批定向验证（2026-10-09，HEAD 97fcf290 上工作树）：§9.5 五文件及受影响的
@@ -62,7 +62,9 @@ JUnit 分别为 .test_cache/missing-conflict-final.xml 与 missing-conflict-scop
 
 2026-10-09 用户确认独立事件锚点方案：现役版式 rc22、Preserve v5/policy 8，
 六类质量产物显式升版；冻结身份为 `9a7e1067bbbcca471d237f52ee2df63fc75020ed2166ff0aceb4272b2a51932d`。
-真实 Design/正文尚未新跑，首答成功率及成书阅读质量仍属下列 R7 待核；工程测试
+真实 Design/正文已随 2026-10-09 跑书在 rc22 版式下全链交付（13 节点全执行，
+workflow_status=delivered、through=stage7、accepted_body=true，总字数 9084/9000）；
+首答成功率及成书阅读质量仍属下列 R7 待核，工程测试
 和免费人工修订不代签这些结论。详细前后证据在本书 runtime/review/rc22_event_anchor_review.json。
 
 - **CS-A 证据寻址（RC-26～29，rc15）**：另两本《三人成行》《夫君不行但我有孕啦》在 rc15 根只完成 book 与章观察（17／22 章），

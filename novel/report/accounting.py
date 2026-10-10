@@ -34,7 +34,7 @@ class AccountingSpec:
 #: **每层声明自己有哪些记账键。** 唯一落点。
 #:
 #: ⚠ 空元组与「这一层不在表里」**不是一回事**：前者是「这层声明过，它没有记账键」，
-#: 后者会让 `build_accounting` 把该层的任何一笔账都判成未登记。当前七层都要有一行。
+#: 后者会让 `build_accounting` 把该层的任何一笔账都判成未登记。当前六层都要有一行。
 ACCOUNTING: dict[str, tuple[AccountingSpec, ...]] = {
     'stage0': (),
     'stage1': (),
@@ -109,7 +109,7 @@ def build_accounting(stage: str, recorded: dict[str, Any]) -> list[AccountingLin
     """
     if stage not in ACCOUNTING:
         raise AccountingKeyUnregistered(
-            f'{stage} 在 ACCOUNTING 里没有一行。当前七层都要有一行——'
+            f'{stage} 在 ACCOUNTING 里没有一行。当前六层都要有一行——'
             f'「这层没有记账键」要写成空元组，那与「这层没被声明过」不是一回事'
         )
     spec = ACCOUNTING[stage]

@@ -8,7 +8,8 @@
 `str06.stage2.book`／`chapters`／`names`／`associate`（付费观察与关联）＋
 `str06.stage2.compile`（免费确定性编译）；`str06.stage2.source`（book＋chNN
 联合抽取）退役。观察与关联协议在 `contracts/schema/observation.py`
-（三类观察 `stage2-observation-v1`；R1 起 associate 独立版本，CS-S Phase 3 起
+（三类观察分立字面量——book `stage2-book-v7`／chapters `stage2-chapters-v7`／
+names `stage2-names-v4`；R1 起 associate 独立版本，CS-S Phase 3 起
 `stage2-associate-v5`——**条目级窄 resolver**：候选由代码给出（确定性相似度＋
 结构投影）、逐候选恰答一次 verdict、无候选＝零调用；跨章因果独立窄调用
 `stage2-cross-cause-v1`（D-2 A：候选＝loop 配对拍对＋facts 流拍对，模型只选

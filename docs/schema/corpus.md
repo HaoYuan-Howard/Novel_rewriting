@@ -91,8 +91,9 @@ skip。
 
 ## TODO-21 边界
 
-截至当前活动待办，默认目标 docs/corpus/current_schema_manifest.json 尚未由隔离双书现役重跑生成，
-TODO-21 **未闭合**。因此：
+TODO-21 已于 2026-09-17 退出活动面（活动账见 [REQUIREMENTS.md](../REQUIREMENTS.md)；
+corpus 硬验收的操作与判据现役说明见 `tests/README.md`）。默认目标
+docs/corpus/current_schema_manifest.json 仍尚未由隔离双书现役重跑生成。因此：
 
 - 默认 pytest 或任何“非 corpus 回归”通过数字都不能称为“全量绿”；
 - 历史双臂 Stage5 的 31 章盘面、旧 schema 文件与旧 ledger 不能用来 build current manifest；

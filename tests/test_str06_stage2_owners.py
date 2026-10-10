@@ -25,7 +25,7 @@ from contracts.invariants import (
 )
 from contracts.schema.observation import (
     STAGE2_CHAPTERS_PROTOCOL, STAGE2_NAMES_PROTOCOL,
-    STAGE2_NAMES_WIRE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL,
+    STAGE2_NAMES_WIRE_PROTOCOL,
 )
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.paid_requests import PaidRequestSession

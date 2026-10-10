@@ -11,21 +11,6 @@ from contracts.schema.base import FrozenModel
 from contracts.schema.common import Sha256
 
 
-class PipelineArtifactVersionsV5(FrozenModel):
-    """Gate B 冻结快照；不能随新 producer 漂移。"""
-    characters: Literal[2] = 2
-    global_grounding: Literal[7] = 7
-    analyze_receipt: Literal[1] = 1
-    chapter_blueprints: Literal[10] = 10
-    knowledge_links: Literal[3] = 3
-    blind_candidate: Literal[5] = 5
-    blind_chapter_edit: Literal[3] = 3
-    evidence_binding: Literal[5] = 5
-    plan_chapters: Literal[6] = 6
-    plan_edit: Literal[6] = 6
-    writer_context: Literal[9] = 9
-
-
 class WorkflowTransitionRefV1(FrozenModel):
     transition_id: Sha256
     source_manifest_sha256: Sha256
@@ -36,7 +21,8 @@ class PipelineArtifactVersionsV7(FrozenModel):
 
     ``knowledge_links`` 不再是成员；Stage4 A/B/Context 与绑定闭包随知识消费
     退役各升一版。人物、Global 与 Blueprint 形状未变，不额外升版。
-    旧 manifest 的 knowledge_links 记录只随 V4/V5/V6 类解码，不迁移。
+    knowledge_links 只存在于比 V7 更早的已删旧类时代（V4/V5/V6 类均已删除），
+    现役解码面（V7/V8/V9）无该成员、不迁移。
     """
 
     characters: Literal[2] = 2

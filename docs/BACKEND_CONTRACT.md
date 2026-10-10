@@ -143,7 +143,8 @@ orchestrator 推进，semantic unit 生成；Stage 页只读监控。`HUMAN_NODE
 `stage2/compiled/book_extraction.json` 与 `stage2/compiled/input_snapshots.json`
 退役，Stage4 改读 canonical。观察与关联协议显式版本化
 （`contracts/schema/observation.py`；I-13，无运行时转换层，旧根只读，新协议下
-新根全量重购）：book／chapters／names 三类观察共用 `stage2-observation-v1`；
+新根全量重购）：三类观察各自独立版本——book `stage2-book-v7`、chapters
+`stage2-chapters-v7`、names `stage2-names-v4`；
 associate 独立版本 `stage2-associate-v5`（R1，2026-09-28 起独立；v2＝typed 作用对象
 显式序列化、状态句柄位置编码 `ch{nn}.b{拍}.e{效应序}.{key}`／`book.e{条目序}.{key}`；
 CS-H H4，2026-10-06 升 v3＝同维状态改配**维度句柄** `dim{nn}`；CS-S Phase 2，2026-10-07
@@ -196,14 +197,14 @@ rc15）：段文本是去掉首尾空白的原文一行，请求里一段一行�
 ### R-3 · 源名称结构（stage2 · str06.stage2.names）
 
 `str06.stage2.names` 是对源 core 的窄调用：编译名称结构（`NameStructure`：人物闭集、
-家族、称谓面）落观察 `stage2/observations/names.json`（B2 起，D9）；Characters v4
+家族、称谓面）落观察 `stage2/observations/names.json`（B2 起，D9）；Characters v6
 （`stage2/characters/characters.json`）由 `str06.stage2.compile` 合并名称结构后统一发布。
 姓氏构词探针（`surname_construction_probe`）只报告、不修复。专名面唯一：Stage5/7 与消费投影全部走
 名称投影（`name_projection`），旧 `name_distinctiveness` 消费者已随旧链退役。
 
 | # | 要求 | 谁在查 |
 |---|---|---|
-| R-3.1 | Characters v4 名称结构编译闭合：人物闭集、家族与称谓面合法；names v2 对源姓名异写提供原字面、same／unresolved、人物与已登记称谓、原句证据和理由。compiler 仅在声明的证据局部归一语义文本，保留原文及引文；未决或冲突在关联购买与双产物发布前停止，下游不得私改命题；编译错误 fail-fast。 | `HARD`（`novel/stages/stage2/names.py::compile_name_structure`） |
+| R-3.1 | Characters v6 名称结构编译闭合：人物闭集、家族与称谓面合法；names v2 对源姓名异写提供原字面、same／unresolved、人物与已登记称谓、原句证据和理由。compiler 仅在声明的证据局部归一语义文本，保留原文及引文；未决或冲突在关联购买与双产物发布前停止，下游不得私改命题；编译错误 fail-fast。 | `HARD`（`novel/stages/stage2/names.py::compile_name_structure`） |
 | R-3.2 | 应改名集合覆盖源名称结构：名称位一致、无漏标、纯称谓不进应改名集；`merge_name_structure` 保持稳定 ID。 | `HARD`（`novel/stages/stage2/names.py::merge_name_structure`） |
 | R-3.3 | 源语义（归因、因果、揭示）未经语义审阅，保持未评披露；不产生审批待办。 | `INFO`（`source_semantics_unver` 明示 `UNVER`）；逐章与全书抽取的语义盲区见 `B-07`／`B-08`，设定块剧透见 `B-16` |
 | R-3.4 | 姓氏构词探针只读报告（同姓亲属、复姓、独立化名的构词读数），不自动替换、不首字猜姓。 | `结构`（`novel/stages/stage2/names.py::surname_construction_probe`） |
@@ -244,7 +245,7 @@ Stage4 的三个付费节点按固定序推进：`preserve`（保存策略义务
 承载位由 design wire 的 real 标注派生）→ `hook_design`（Hook 必要选择
 并经 `publish_graph` 唯一发布 PresentationGraph），之后由免费 `str06.stage4.compile`
 确定性编译（`R-6`）。Design 是 source-blind 的：实际输入
-只有 Preserve 投影（`project_brief`）、身份投影与 Characters v4，源叙述拓扑不进 prompt。
+只有 Preserve 投影（`project_brief`）、身份投影与 Characters v6，源叙述拓扑不进 prompt。
 章数恒等于源章数；跨章重构合法——场景可跨源章重组，输出章仍与源章一一同号。
 
 | # | 要求 | 谁在查 |

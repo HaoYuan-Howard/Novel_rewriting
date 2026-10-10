@@ -104,9 +104,6 @@ STR06_CONSUMPTION_PROJECTIONS: dict[str, ProjectionFamilySpec] = {
         coordinate=ProjectionCoordinate.DUAL),
 }
 
-#: 坐标枚举的闭环自检材料：六个族必须全部有坐标域。
-PROJECTION_COORDINATES = ProjectionCoordinate
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 字段级送达登记（R0）：delivery_mode 七档、消费者五类、章范围六则。

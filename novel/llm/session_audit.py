@@ -618,28 +618,6 @@ def append_provider_turn(
     return _append_claimed_provider_turn(base, event, role='executor')
 
 
-def reconcile_executor_turn(
-    base: str | os.PathLike[str], event: AgentSessionEvent,
-) -> None:
-    """按已保存的原事件补 Executor 回答尾账；不重复 turn，不接管 provider。"""
-    if event.kind != 'turn' or event.role != 'executor' or not event.attempt_id:
-        raise ValueError('Executor 补账只接受有原 attempt 身份的 turn')
-    path = audit_path(base)
-    with _AUDIT_TRANSACTION_LOCK, process_append_lock(path):
-        events = read_events(base)
-        matches = [row for row in events
-                   if row.kind == 'turn' and row.attempt_id == event.attempt_id]
-        if matches:
-            if len(matches) != 1 or matches[0] != event:
-                raise ValueError('原 Executor turn 已存在但与持久 receipt 不一致')
-            fold(events)
-            return
-        # fold 同时验证静态身份、首轮stdin、原provider所有权及未ended；
-        # 所有约束先成立才能补行，不通过时不能留下半次“修复”。
-        fold([*events, event])
-        append_line_under_process_lock(path, _encoded_event(event))
-
-
 def reconcile_commander_event(
     base: str | os.PathLike[str], event: AgentSessionEvent,
     *, read_only: bool = False,

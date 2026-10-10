@@ -9,7 +9,7 @@ design wire 的 real 标注派生）→ `str06.stage4.hook_design`
 `executor_content_limit=0` 结构性禁付）。
 
 Design 是 source-blind 的：实际输入只有 Preserve 投影（`project_brief`）、身份投影
-与 Characters v4，源叙述拓扑不进 prompt。章数恒等于源章数；跨章重构合法——场景可跨
+与 Characters v6，源叙述拓扑不进 prompt。章数恒等于源章数；跨章重构合法——场景可跨
 源章重组，输出章仍与源章一一同号（`R-5.2`）。
 孪生（typed witness）后 fail-fast，同指纹不重购。
 

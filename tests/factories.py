@@ -3,7 +3,7 @@
 """Small, deterministic builders for tests that do not need the local corpus.
 
 【F8c 清理】原 `stage5_book()` 造的是旧 Stage5 `Book`（`novel/stages/stage5/measure.py`），
-随旧 Stage2/4/5/7 链整体退役（`contracts/schema/retirement.py`）；本仓无隐式
+随旧 Stage2/4/5/7 链整体退役；本仓无隐式
 迁移，旧形状不冒充新链（I-52）⇒ 整函数删除，**不在这里为新链重抄一份 builder**：
 新链的确定性构造器唯一家在 `tests/str06_facilities.py`（候选上下文与付费边次），
 各能力样例在 `tests/test_str06_*.py` 与 `tests/hard_cases.py`。

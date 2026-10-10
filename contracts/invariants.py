@@ -650,7 +650,7 @@ NODE_WRITE_EFFECTS: Final = {}
 #: AgentRun 单步 operator 可登记的自动 REDO 策略（取值面，闭集）。
 #: ⚠ F8c 收敛：`stale_chapters`（旧 `stage5.write --chapters` 的章行导出）与
 #: `review`（Stage5 Review 轮次面）两个策略随旧链退役删除，其使用者（旧节点键）
-#: 已整体移入 `RETIRED_NODES`。R3（2026-09-28）为跨节点回派新增 `owner_revision`
+#: 一并退役——非现役节点按 `legacy_incompatible` 通则拒识。R3（2026-09-28）为跨节点回派新增 `owner_revision`
 #: ——只允许由**盘上 open 的 typed issue 记录**（`runtime/issues/<owner>.json`）
 #: 证明的修订重跑；它与 `canonical` 一样只经默认 flags 重跑本节点，不猜参数。
 #: 多留一个没人登记的名字，就是给「猜一组 flags」留一道门（判据 32：没人用的
@@ -704,8 +704,9 @@ class NodeLifecycleSpec(NamedTuple):
     ``approval_bindings`` 把审批 blocker 映射到 (属主节点, scope)：它登记
     「这道闸属于哪个节点的工作面」，供历史 reviewer 工作单元只读解码使用。
     Stage4 四道闸、Stage5 写作授权/闭合回执、stage6.prepare 接受闸与
-    stage7.approve 已随 2026-09-15 全自动裁决（批次 B2/B3/B4）整体退役——
-    现役 ``NODES`` 只保留 stage6.approve 的人工改选面（不阻塞下游）。
+    stage7.approve 已随 2026-09-15 全自动裁决（批次 B2/B3/B4）整体退役；
+    Stage6 整层亦随 F8a 退役（RETIRED_STAGES 登记）——非现役节点一律按
+    `legacy_incompatible` 通则拒识，现役 ``NODES`` 不含任何人工改选面。
     """
 
     unit_kind: str
@@ -780,8 +781,9 @@ class NodeSpec(NamedTuple):
 #: ⇒ `stage4.context` / `stage7.assemble` 空：它们**本身**就是那个动作，
 #:   `stage4.context` / `stage7.assemble` 本身就是动作，因此没有同义 flag。
 #: ⇒ 三层 `*.approve` 的结论不一样：`stage6.approve` 确实有一个
-#:   候选序号 ⇒ F1 补成 `('--pick',)`；`stage7.approve` 已退役（移入
-#:   RETIRED_NODES）：机械校验通过后由 rename producer auto seal。
+#:   候选序号 ⇒ F1 曾补成 `('--pick',)`（Stage6 整层随 F8a 退役，
+#:   RETIRED_STAGES 登记）；`stage7.approve` 已退役：机械校验通过后由
+#:   rename producer auto seal。
 #:   `stage0.approve` 同样已退役。
 #:
 #: 未登记的 flag 会由命令构造器直接拒收，节点表只描述当前真实入口。
@@ -800,15 +802,17 @@ class NodeSpec(NamedTuple):
 #: ⚠ 值里带 `{}` 的是**逐份不定**的（stage5 逐章 / 验收轮次），存在性不能靠一次 `is_file()`
 #: ——原型正因如此把 stage5 整个排除在它那张完成度表之外，代价是
 #: 「有没有陈旧产物」那个徽章**不覆盖成稿**。这里不排除它，改成逐章数。
-#: ⚠ 同一份产物可以被两个节点写（`stage6.hook` 产候选、`stage6.approve` 落定稿），
+#: ⚠ 同一份产物可以被两个节点写（历史例：`stage6.hook` 产候选、
+#:   `stage6.approve` 落定稿——Stage6 整层已随 F8a 退役），
 #: 这不是重复登记：**一层要哪几份**取的是本层各节点的并集。
 #: 全部作业单元。⚠ 顺序即处理链顺序，队列与断点续跑都按它排。
 #:
 #: 【F8a 翻转：候选链成为唯一现役链】本表由 `contracts/schema/workflow.py`
 #: 的候选节点表**原样激活**（F7e 冻结基线，`tests/test_str06_f7e_freeze.py` 钉住）：
 #: `str06.` 前缀节点取代旧 Stage2/4/5/6/7 全部节点键；B2 起现役面为 14 个节点
-#: （CS-3 bind 退役后 13 个）。旧键整体移入
-#: `RETIRED_NODES` 只供 append-only 作业历史解码，不 preview、不调度、不建新队列。
+#: （CS-3 bind 退役后 13 个）。旧键整体退役（非现役节点按
+#: `legacy_incompatible` 通则拒识，append-only 作业历史只读解码），
+#: 不 preview、不调度、不建新队列。
 #: Stage6 整层退役（`STAGES` 不再含 `stage6`，`RETIRED_STAGES` 登记）。
 #: 【B2 五节点重建（2026-09-27，D9）】`str06.stage2.source` 退役，Stage2 扩为
 #: book／chapters／names／associate／compile 五 owner，公开节点 11→14；冻结
@@ -830,7 +834,8 @@ class NodeSpec(NamedTuple):
 NODES: Final[dict[str, NodeSpec]] = {
     # Stage0 只有一个 JSON 权威和一个正文投影；运行时报告不落盘。
     # ⚠ `stage0.approve` / `stage0.edit` 已随 2026-09-15 全自动裁决退役
-    #   （移入 RETIRED_NODES）：机械校验通过即由 producer 写入 auto 批准
+    #   （非现役节点按 `legacy_incompatible` 通则拒识）：机械校验通过即由
+    #   producer 写入 auto 批准
     #   （`system:stage0-auto`）；剔除的语义正确性（番外盲区）随交付披露。
     'stage0.remove':    NodeSpec('stage0', 'R-0',  False, 'stage0 非正文剔除',
                                   lifecycle=NodeLifecycleSpec('book', '原始文本', 'deterministic', 'none', '机械校验通过即自动接受', ('recompute',), ('stage0.remove',), 'none', ('--check-only',), 0),
@@ -921,7 +926,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         produces=('runtime/preserve_checkpoint.json',
                   'stage4/grounding/reconstruction_brief.json'),
         lifecycle=NodeLifecycleSpec(
-            'book', '源 core 与 Blueprint v13', 'executor', 'none',
+            'book', '源 core 与 Blueprint v17', 'executor', 'none',
             '机械校验通过即自动接受',
             ('stop',), ('str06.stage4.preserve',), 'executor:book',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
@@ -933,7 +938,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         produces=('stage4/design/body_design.json',
                   'stage4/grounding/semantic_binding.json'),
         lifecycle=NodeLifecycleSpec(
-            'book', 'Preserve checkpoint、身份投影与 Characters v4', 'executor', 'none',
+            'book', 'Preserve checkpoint、身份投影与 Characters v6', 'executor', 'none',
             '机械校验通过即自动执行；CS-3 bind 退役——承载位由 wire 的 real '
             '标注派生，双产物同组发布（semantic_binding 唯一 writer）',
             ('stop',), ('str06.stage4.body_design',), 'executor:book',
@@ -944,7 +949,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         operator_redo='owner_revision',
         produces=('stage4/design/presentation_graph.json',),
         lifecycle=NodeLifecycleSpec(
-            'book', 'BodyDesign、Characters v4 与身份投影', 'executor', 'none',
+            'book', 'BodyDesign、Characters v6 与身份投影', 'executor', 'none',
             '机械校验通过即自动执行；graph 唯一 publisher',
             ('stop',), ('str06.stage4.hook_design',), 'executor:book',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
@@ -958,7 +963,7 @@ NODES: Final[dict[str, NodeSpec]] = {
                   'stage4/ir/writer_book_ir.json'),
         operator_redo='canonical',
         lifecycle=NodeLifecycleSpec(
-            'book', 'PresentationGraph、SemanticBinding 与 Characters v4',
+            'book', 'PresentationGraph、SemanticBinding 与 Characters v6',
             'deterministic', 'none', 'Guard M1–M8 写前机械校验；零错误才放行',
             ('recompute', 'stop'), ('str06.stage4.compile',), 'none',
             ('deterministic_replay',), 0)),
@@ -994,7 +999,7 @@ NODES: Final[dict[str, NodeSpec]] = {
         operator_redo='canonical',
         produces=('stage7/naming/name_map.json',),
         lifecycle=NodeLifecycleSpec(
-            'book', 'Characters v4 名称结构与 Blueprint v13', 'executor', 'none',
+            'book', 'Characters v6 名称结构与 Blueprint v17', 'executor', 'none',
             '机械校验通过即 auto 定稿；ApplyNames 是替换唯一应用者',
             ('stop',), ('str06.stage7.naming',), 'executor:book',
             ('saved_response', 'historical_adoption', 'owner_patch'), 4)),

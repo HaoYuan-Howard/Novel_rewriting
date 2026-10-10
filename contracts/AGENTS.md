@@ -12,7 +12,7 @@
 | 机械判据与修复路由 | `contracts/judges/`、同一 R 编号的全部守卫及反例 |
 | R/Q/B 定义或覆盖关系 | `docs/BACKEND_CONTRACT.md`、`contracts/requirements.py` |
 
-`stage` 是产物层，`node` 是作业 id；Stage3 已退役，复检用 `--check-only`，不另造 check 节点。
+`stage` 是产物层，`node` 是作业 id；Stage3／Stage6 已退役，复检用 `--check-only`，不另造 check 节点。
 BACKEND_CONTRACT 的 R 标题、三列表格、Q/B 形状和“谁在查”记号是解析接口；按稳定编号读取相关条目。
 
 ## 变更边界

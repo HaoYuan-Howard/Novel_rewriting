@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Stage2 Reviewer/Blueprint 跨进程总并发槽的零网络回归。"""
+"""直连 LLM 与 str06 链跨进程总并发槽的零网络回归。"""
 from __future__ import annotations
 
 import threading

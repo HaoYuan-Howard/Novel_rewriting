@@ -17,9 +17,9 @@ owner；`execute` 只剩参数、设施装配与计划推进（薄驱动）。
 【B2 五节点重建（2026-09-27，D9）】Stage2 由联合抽取 `str06.stage2.source`
 改为 book／chapters／names／associate／compile 五 owner：book 与 chapters
 产出观察（`stage2/observations/*.json`），names 重挂到书级观察输入，
-associate 与 compile 的 runner 由 B2 后续提交落地（compile 是 Characters＋
-Blueprint 双真源唯一 writer）。`run_source` 与派生输入
-`stage2/compiled/book_extraction.json` 随之退役（D3/D9）。
+associate 与 compile 的 runner 已随 B2 第三步接线（compile 是 Characters＋
+Blueprint 双真源唯一 writer），本序与 `NODE_RUNNERS` 双向闭合。`run_source`
+与派生输入 `stage2/compiled/book_extraction.json` 随之退役（D3/D9）。
 
 【输入闭合边界（F7b 已知限制，F7c 收口）】源章仍由调用方经 `ChainContext.chapters`
 传入（F7c 起改读正式 Stage1 章数组）；其余输入一律从盘面读——单节点重放因此可能。
@@ -61,7 +61,6 @@ from contracts.invariants import (
 from contracts.schema.grounding import OutputConstraints, PreserveCheckpoint
 from contracts.schema.hook import HookConstraints, HookReceipt
 from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
-from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
 from contracts.schema.workflow import (
     OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1,
     STAGE4_PRESERVE_POLICY_VERSION, STAGE4_PRESERVE_PROTOCOL,
@@ -91,7 +90,7 @@ from novel.stages.common import (
 from novel.stages import candidates
 from novel.stages.stage2 import (
     chapter_revision_scope_issues, slim_chapter_wire,
-    NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
+    NamesObservation, book_observation_prompt,
     book_patch_locate, chapter_observation_prompt, chapter_patch_locate,
     character_core_view, names_patch_locate,
     compile_associate_observation, associate_candidates_prompt,
@@ -156,8 +155,9 @@ __all__ = [
 ]
 
 #: 执行序（stage2 → stage4 → stage5 → stage7；与 --through 的腿边界一致）。
-#: B2 五节点重建（D9）：Stage2 的 associate／compile runner 由 B2 后续提交
-#: 落地；届时本序与 NODE_RUNNERS 双向闭合。
+#: B2 五节点重建（D9）：Stage2 五 owner（book／chapters／names／associate／
+#: compile）runner 已全部落地，本序与 NODE_RUNNERS 双向闭合
+#: （对账在 `tests/test_str06_candidates.py`）。
 NODE_ORDER: tuple[str, ...] = (
     'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
     'str06.stage2.associate', 'str06.stage2.compile',

@@ -73,19 +73,6 @@ export function FreshnessSymbol({ f, size = 9 }: { f: FreshnessDisplay; size?: n
   )
 }
 
-export function FreshnessTag({ f }: { f: FreshnessDisplay }) {
-  const m = freshToken(f)
-  return (
-    <span
-      className="whitespace-nowrap rounded-[3px] px-5 py-1 text-micro"
-      style={{ color: m.color, background: m.bg }}
-      title={m.desc}
-    >
-      {m.label}
-    </span>
-  )
-}
-
 /** 点 + 文字一体。能用这个就别单独用 dot。 */
 export function FreshnessBadge({ f, size = 9 }: { f: FreshnessDisplay; size?: number }) {
   const m = freshToken(f)
@@ -93,18 +80,6 @@ export function FreshnessBadge({ f, size = 9 }: { f: FreshnessDisplay; size?: nu
     <span className="inline-flex items-center gap-6 whitespace-nowrap text-tag" title={m.desc}>
       <FreshnessDot f={f} size={size} />
       <span style={{ color: m.color }}>{m.label}</span>
-    </span>
-  )
-}
-
-/** 形状图例。四态放一起，让人知道形状本身在说话。 */
-export function FreshnessLegend() {
-  const all: FreshnessDisplay[] = ['fresh', 'stale', 'unknown', 'missing']
-  return (
-    <span className="inline-flex flex-wrap items-center gap-12">
-      {all.map((f) => (
-        <FreshnessBadge key={f} f={f} />
-      ))}
     </span>
   )
 }

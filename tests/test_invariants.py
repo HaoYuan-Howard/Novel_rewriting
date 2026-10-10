@@ -164,7 +164,8 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
     # R8a 起 `str06.stage4.compile`／`str06.stage2.compile` 等确定性节点也登记
     # canonical：修订级联需要它们可派发（免费确定性重发布，零付费风险）；级联
     # 外的 file_changed 仍关闭式（见 state._revision_cascade_surface）。
-    # 旧链节点键已整体移入 RETIRED_NODES，不再出现在 NODES。
+    # 非现役节点按 legacy_incompatible 通则拒识（RETIRED_NODES 名册已随
+    # 2026-10-03 关闭批删除），不再出现在 NODES。
     for retired in ('stage7.approve', 'stage6.approve', 'stage5.write'):
         assert retired not in inv.NODES
 

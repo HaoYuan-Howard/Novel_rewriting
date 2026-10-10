@@ -130,7 +130,7 @@ F8c 起旧链读屏（`read/:o`、`global`、`stage4/:o`、`stage5/:o`、`stage7
 
 | 编号 | 规则 |
 |---|---|
-| U-00 | 不知道、未运行、缺失、合法空值和没问题分别表达；`EmptyIsSuspicious` 与 `EmptyIsGood` 不合并 |
+| U-00 | 不知道、未运行、缺失、合法空值和没问题分别表达，空态组件不得合并语义 |
 | U-01 | freshness 保留 fresh/stale/unknown，missing 独立显示；问号与空集符号不能冒充 fresh。状态兼有文字和形状，紧凑矩阵也要同屏图例及 title/aria-label |
 | U-02 | pass/amber/fail 分开；amber 明示存在未验证项，不表示已证明没问题 |
 | U-03 | hard/info/metric/unver 分开；metric 是读数，不使用警告色或警告语义 |

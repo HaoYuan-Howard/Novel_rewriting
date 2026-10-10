@@ -75,12 +75,6 @@ STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
 
 #: 横向规则（作用于所有行）：guard/judge 不写 canonical；shared/repository 不反依赖
 #: Stage 业务。AST 守卫无法静态证明「不写」，以行为测试落实（F1）。
-STR06_CROSS_CUTTING_RULES: Final[tuple[str, ...]] = (
-    'guard/judge 只读验证输入、只写报告出口；禁止写 canonical semantic truth',
-    'shared/repository 禁止反向依赖具体 Stage 业务',
-    'contracts 层禁止 import novel（contracts/AGENTS.md 既有铁律，本表复述）',
-)
-
 
 # ───────────────── F8c：per-stage 模块的真实依赖规则 ─────────────────
 #
@@ -89,21 +83,6 @@ STR06_CROSS_CUTTING_RULES: Final[tuple[str, ...]] = (
 # 并由 AST 测试对真实文件执行（tests/test_str06_hook.py）；规则不是文档，违例即红。
 # F8c 分流后模块落进正式 per-stage 包，本表随同改用**正式模块路径**——迁移包
 # 本身已删除，迁移包路径不再有执行对象。
-
-#: per-stage 真实模块 → 语义 owner（families.writer_owner 的模块级落点）。
-#: B3 后半：hook／hook_context 按节点所属 Stage 归位 Stage4 包。
-STR06_MIGRATION_MODULE_OWNERS: Final[dict[str, str]] = {
-    'novel.stages.common': 'shared.compiler',
-    'novel.stages.stage2.names': 'stage2.names',
-    'novel.stages.stage4.hook': 'stage4.hook_design',
-    'novel.stages.stage4.hook_context': 'stage4.context',
-    'novel.stages.stage5.hook_writer': 'stage5.hook_writer',
-    'novel.stages.stage7.naming': 'stage7.naming',
-    'novel.stages.stage7.assembly': 'stage7.assembly',
-}
-#: `novel.stages.stage4.hook_validation` 刻意不在本表：它是 hook_design 与
-#: context 共用的纯结构判据臂（封闭 allows 见 STR06_MIGRATION_DEPENDENCY_RULES），
-#: 不是 writer_owner 的模块级落点；本表只登记语义 owner 模块。
 
 #: Stage2/4/5/7 各语义模块的集合缩写（跨 stage 禁入面）。
 _STAGE457 = (

@@ -319,10 +319,6 @@
         "stage7"
       ]
     },
-    "tests/test_archive_stage3_v1_books.py": {
-      "layer": "unit_contract",
-      "stages": []
-    },
     "tests/test_artifact_versions.py": {
       "layer": "unit_contract",
       "stages": []
@@ -638,13 +634,6 @@
       ]
     },
     "tests/test_stage2_global_agent.py": {
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
-    "tests/test_stage2_node_lifecycle.py": {
-      "cases": {},
       "layer": "unit_contract",
       "stages": [
         "stage2"

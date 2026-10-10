@@ -110,8 +110,6 @@ Stage3 文风迁移、Stage6 旧定性包 A/B 与 Stage2 旧五轮实验退出�
 
 选测修订（2026-09-24）只校准目录登记：Stage0 状态反例与 Characters v3 用例名按现存代码同步，
 不存在的旧 `cases` 键移除，未删除任何测试函数；现役 Characters producer／编辑用例纳入 stage 层。
-补登记既存 `test_stage4_agent_boundary.py` 为 unit/contract，使无关范围可在导入前排除它；
-该文件仍依赖已退役 `novel.agents`，完整收集的既存失败保持暴露，登记不证明旧流程重新成为现役。
 
 后续新增测试须说明它保护的现役约定、失败机制或结果要求。bug 优先缩成最小可失败样例，
 先让旧行为失败，再确认修复通过；若风险只在进程、并发、恢复或整链组合时出现，保留对应集成证据。
@@ -145,7 +143,7 @@ conda run -n novel_refactor python -m pytest -n 0 --test-layer stage --test-stag
 conda run -n novel_refactor python -m pytest -n 0 --test-layer stage --test-stage stage4 --collect-only --selection-report .test_cache/stage4-selection.json
 
 # 定向回归复用原用例，不另建回归副本
-conda run -n novel_refactor python -m pytest -n 0 --test-layer regression --changed novel/stages/stage7/rename.py
+conda run -n novel_refactor python -m pytest -n 0 --test-layer regression --changed novel/stages/stage7/naming.py
 
 # 隔离迁移：登记范围补充导入消费者；先查看实际收集，再去掉 --collect-only 执行
 conda run -n novel_refactor python -m pytest -n 0 --changed novel/stages/stage5/hook_context.py --collect-only --selection-report .test_cache/str06-selection.json

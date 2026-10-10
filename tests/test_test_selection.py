@@ -66,7 +66,7 @@ def test_mixed_stage_module_keeps_pure_contract_out_of_stage_layer():
     assert S.case_layer('tests/test_paths.py::test_dirname_survives_a_title_that_looks_like_a_platform_prefix', catalog)[0] == 'unit_contract'
     # 混合模块里逐例登记成 unit_contract 的那一例，不跟着模块的 stage 面升级。
     assert S.case_layer('tests/test_str06_cli_dispatch.py::test_build_argv_keeps_the_run_shape_for_str06_nodes', catalog)[0] == 'unit_contract'
-    assert catalog['modules']['tests/test_stage2_node_lifecycle.py']['stages'] == ['stage2']
+    assert catalog['modules']['tests/test_str06_phase2_facts.py']['stages'] == ['stage2']
 
 
 def test_regression_reuses_both_layers_and_keeps_cross_stage_integration():

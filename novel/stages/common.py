@@ -563,17 +563,6 @@ def check_chapter_receipt(
     return problems
 
 
-def affected_chapters(
-    directly_affected_scenes: Iterable[str], graph: BodyDesign,
-) -> set[int]:
-    """场景级窄修复 → 章级失效范围：受影响场景所在的目标章。
-
-    第 k 章内任何场景输入变化 ⇒ 重编译后第 k 章章包变化 ⇒ 该章回执失效
-    （D2 章包绑定；无前文链传导，见 check_chapter_receipt）。"""
-    scene_chapter = {sid: ch.chapter_ordinal for ch in graph.chapters for sid in ch.scene_ids}
-    return {scene_chapter[sid] for sid in directly_affected_scenes if sid in scene_chapter}
-
-
 def directly_affected(
     changed_obligation_ids: Iterable[str],
     slices: Mapping[str, ExecutionSlice],

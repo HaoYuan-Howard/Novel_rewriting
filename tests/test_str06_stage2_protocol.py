@@ -24,7 +24,6 @@ from contracts.schema import (
 )
 from contracts.schema.observation import (
     STAGE2_ASSOCIATE_PROTOCOL, STAGE2_BOOK_PROTOCOL, STAGE2_CHAPTERS_PROTOCOL,
-    STAGE2_OBSERVATION_PROTOCOL,
 )
 from contracts.schema.source import FamilyEntry, NameStructure, PersonNameStructure
 from contracts.schema.workflow import STR06_RC_LABELS, STR06_RC_VERSION
@@ -292,7 +291,6 @@ def test_associate_protocol_is_independently_versioned():
     输入材料已变，旧回答不做句柄替换后继续采用（首版 PLAN.md R1，Git 2fc03832；A1.5 出自被它吸收的提案）。
     """
     assert STAGE2_ASSOCIATE_PROTOCOL == 'stage2-associate-v5'
-    assert STAGE2_OBSERVATION_PROTOCOL == 'stage2-observation-v1'
     empty = {'same_proposition': [], 'loop_pairing': [],
              'cross_chapter_cause': [], 'scene_continuation': []}
     obs = AssociateObservation.model_validate(

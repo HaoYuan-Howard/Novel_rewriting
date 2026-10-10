@@ -177,9 +177,6 @@ STR06_STAGE2_OBS_ASSOCIATE = artifact_rel('stage2/observations/associate.json')
 STR06_STAGE2_BLUEPRINTS = artifact_rel('stage2/blueprints/chapter_blueprints.json')
 STR06_STAGE2_FOLD = artifact_rel('stage2/acceptance/fold.json')
 STR06_STAGE2_CHARACTERS = artifact_rel('stage2/characters/characters.json')
-# ⚠ B2 退役派生输入（2026-09-27，D3/D9）：只能识别与拒绝，不再提供读写。
-STR06_STAGE2_BOOK_EXTRACTION = RETIRED_ARTIFACT_PATHS['stage2.compiled.book_extraction']
-STR06_STAGE2_INPUT_SNAPSHOTS = RETIRED_ARTIFACT_PATHS['stage2.compiled.input_snapshots']
 STR06_PRESERVE_CHECKPOINT = artifact_rel('runtime/preserve_checkpoint.json')
 STR06_RECONSTRUCTION_BRIEF = artifact_rel('stage4/grounding/reconstruction_brief.json')
 STR06_SEMANTIC_BINDING = artifact_rel('stage4/grounding/semantic_binding.json')

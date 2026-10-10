@@ -127,30 +127,3 @@ def same_body_source(store, source_root: str, *, node: str | None, inputs: dict)
         return revision_proof(store, source_root).body_unchanged
     except (TerminalState, ProvenanceRefused, ValueError, OSError):
         return False
-
-
-def artifact_body_root(store, rel: str) -> str:
-    """当前正文产物的历史根，用于稳定盲句柄/审批依据；不改变写盘 root。
-
-消费者仍要绑定同一产物与业务投影。源根只有经过完整 freshness 及本模块的
-同正文证明才能沿用；缺失、过期、未知来源一律拒绝，不回退当前全书根猜 seed。
-"""
-    from novel.errors import UpstreamUnproven, UpstreamStale
-    with store.ctx.validation_reads():
-        spec = artifact_spec(rel)
-        if spec is None or body_owner(rel) not in BODY_OWNERS:
-            raise ProvenanceRefused('稳定正文根要求已登记的 typed 产物')
-        artifact = store.read_own(spec.model, rel)[0]
-        source = store._provenance_of(artifact)
-        if source is None:
-            raise ProvenanceRefused('稳定正文根缺少原来源')
-        # 身份不明不是可重审的业务过期。先拒 foreign 根，再沿原输入核 freshness；
-        # 否则其 file_changed 会把损坏的人审回执伪装成一个新的待审席位。
-        root = source.root_clean_sha1
-        if root != store.ctx.root_clean_sha1 and not store.equivalent_body_root(rel, root, source=source):
-            raise ProvenanceRefused('稳定正文根未取得同源正文证明')
-        fresh = store.freshness(rel)
-        if fresh.state != 'fresh':
-            error = UpstreamStale if fresh.state == 'stale' else UpstreamUnproven
-            raise error(f'{rel} 不能证明稳定正文根：{fresh.state}/{fresh.reason}')
-        return root

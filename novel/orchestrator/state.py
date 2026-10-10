@@ -96,10 +96,6 @@ def _resolve_book_scoped(rel: str, novel_dir: str | os.PathLike[str]) -> str:
     return rel
 
 
-def stage_of(rel: str) -> str:
-    return rel.split('/', 1)[0]
-
-
 def required_artifacts(stage: str, *,
                        novel_dir: str | os.PathLike[str]) -> tuple[str, ...]:
     """这一层跑完了盘上该有哪几份。**本层各节点 `produces` 的并集，去掉逐份不定的那些。**

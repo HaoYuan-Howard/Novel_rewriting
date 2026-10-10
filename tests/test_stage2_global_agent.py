@@ -8,9 +8,8 @@
 测试用例**（与退役前一致：它是夹具模块，用例在各自文件里）；存活的夹具职责迁到
 `tests/str06_facilities.py`（候选上下文与付费边次）与 `tests/conftest.py`。
 
-保留本文件的原因：`contracts/schema/retirement.py` 把这条登记为
-rewrite_consumer（"global agent 面随 F8b 切新链"），且 `tests/suite_catalog.json`
-仍按模块登记它；删除文件要先改登记表与目录，那属 STR-06 关闭批次，不在本批范围。
+保留本文件的原因：它是对现役直连 executor 形状（LegacyExecutorBackend /
+LegacyLlmProfile——稳定传输名，非旧实现）的断言，存废随被测面。
 ⇒ 这里只放**新链上仍成立的直连 executor 形状**断言面：legacy profile 的构造与
 解析（`novel/cli/main.py::_executor_backend_of` 与 `nodes.resolve_executor_backend`
 的共用形状），保证「直连 LLM 是唯一执行面」这条在夹具层也有落点。

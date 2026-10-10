@@ -1,16 +1,12 @@
 import type { ReactNode } from 'react'
 import { errorBody, errorHint, errorTitle, isApiError } from '@/api/errors'
-import { FRESH, GATE, SEV } from '@/constants/vocabulary'
+import { SEV } from '@/constants/vocabulary'
 import { cx } from '@/lib/cx'
 import { LinkButton } from '@/components/ui/ActionButton'
 
 /**
  * 这一层就是 U-00 的落点：
  * 「查过、没问题」和「查不了 / 没查 / 不知道」在界面上必须长得不一样。
- *
- * 所以这里刻意**不做**一个通用的 <Empty>：
- * EmptyIsSuspicious（空数组可能是漏抽了）和 EmptyIsGood（清空了，好了）
- * 合并成一个组件，正是「不知道」被画成「没问题」的那条路径。
  */
 
 export function LoadingPane({ label = '取数中', rows = 3 }: { label?: string; rows?: number }) {
@@ -113,60 +109,6 @@ export function NotRunYet({
       <div className="text-section font-semibold">{title}</div>
       <div className="prose-cn max-w-[46em] text-body text-ink-3">{body}</div>
       {action}
-    </div>
-  )
-}
-
-/**
- * 空数组不等于「没问题」。
- * `secrets: []` 的意思是「这本书没抽到秘密」，那**可能是漏抽了**。
- */
-export function EmptyIsSuspicious({
-  title,
-  body,
-  extra,
-  action,
-}: {
-  title: string
-  body: string
-  extra?: ReactNode
-  action?: ReactNode
-}) {
-  return (
-    <div className="flex max-w-[900px] flex-col gap-10 rounded-card border border-hook-line border-l-5 border-l-hook bg-hook-bg px-24 py-20">
-      <div className="text-h3 font-semibold text-hook-ink">{title}</div>
-      <div className="prose-cn text-body-lg text-ink-2">{body}</div>
-      {extra}
-      {action ? <div className="mt-4 flex gap-8">{action}</div> : null}
-    </div>
-  )
-}
-
-/** 空是目标状态。应该让人觉得「好了」。 */
-export function EmptyIsGood({ title, body }: { title: string; body: string }) {
-  return (
-    <div
-      className="flex flex-col items-center gap-10 rounded-card border px-36 py-44"
-      style={{ borderColor: GATE.okLine, background: FRESH.fresh.wash }}
-    >
-      <div className="text-h2 font-semibold" style={{ color: GATE.doneStrip.color }}>
-        {title}
-      </div>
-      <div className="prose-cn max-w-[600px] text-center text-body-lg text-ink-3">{body}</div>
-    </div>
-  )
-}
-
-/** 斜纹占位：这一块的数据取不到，不是这一块是空的 */
-export function HatchNote({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <div
-      className={cx(
-        'hatch prose-cn rounded-block border border-dashed border-line-dash p-16 text-body text-ink-4',
-        className,
-      )}
-    >
-      {children}
     </div>
   )
 }

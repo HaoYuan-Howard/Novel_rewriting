@@ -67,7 +67,7 @@ _hard('source_identity_covers_hook_copy', 'stage2',
 _hard('source_chapter_dense_ordinals', 'stage2',
       '源章数组阅读序 1..N 密集且非空', 'R-2.2')
 _hard('source_chapter_blueprint', 'stage2',
-      '逐章 Blueprint v13 编译闭合（三类转移、场景分段、participants/holder 闭集、因果边）', 'R-2.3')
+      '逐章 Blueprint v17 编译闭合（三类转移、场景分段、participants/holder 闭集、因果边）', 'R-2.3')
 _hard('source_loop_lifecycle', 'stage2',
       'loops 只许 open/close：loop 一次性 open、close 必带 resolution、问题文本不可改写', 'R-2.11')
 _hard('source_proposition_closure', 'stage2',
@@ -82,7 +82,7 @@ _hard('source_registered_key_scope', 'stage2',
 _hard('source_fold_consistent', 'stage2',
       'source fold 事件与 Blueprint canonical 一致', 'R-2.4')
 _hard('names_structure_compile', 'stage2',
-      'Characters v4 名称结构编译闭合（人物闭集、家族与称谓面合法）', 'R-3.1')
+      'Characters v6 名称结构编译闭合（人物闭集、家族与称谓面合法）', 'R-3.1')
 _hard('names_coverage', 'stage2',
       '应改名集合覆盖源名称结构（名称位一致、无漏标）', 'R-3.2')
 _unver('source_semantics_unver', 'stage2',
@@ -114,8 +114,9 @@ _hard('length_budget_conserved', 'stage4',
 _hard('preserve_compile', 'stage4',
       'Preserve checkpoint 编译闭合（策略义务完整、来源可溯）', 'R-5.4')
 _hard('binding_mechanical', 'stage4',
-      'Bind 接受闸接进 ask 同节点修订轮（≤OWNER_REVISION_MAX_ROUNDS）；耗尽/'
-      '无进展才进 .INVALID 孪生（typed witness）后 fail-fast，停在 owner', 'R-5.5')
+      '承载闸接进 body_design 的 ask 同节点修订轮（CS-3 bind 退役改写，'
+      '≤OWNER_REVISION_MAX_ROUNDS）；耗尽/无进展才进 .INVALID 孪生（typed '
+      'witness）后 fail-fast，停在 owner', 'R-5.5')
 _hard('hook_design_mechanical', 'stage4',
       'Hook 设计机械校验通过；PresentationGraph 唯一 publisher', 'R-5.6')
 _hard('execution_plan_compile', 'stage4',

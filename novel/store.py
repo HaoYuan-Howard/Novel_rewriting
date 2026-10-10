@@ -39,7 +39,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, NamedTuple, TypeVar, cast
+from typing import Any, Callable, Iterable, Iterator, NamedTuple, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -71,7 +71,6 @@ from novel.prov import FreshnessReport
 from novel.run import RunContext
 
 M = TypeVar('M', bound=BaseModel)
-T = TypeVar('T')
 
 
 def _rel_pattern(rel: str) -> re.Pattern[str]:
@@ -261,18 +260,6 @@ def _memo_for_context(ctx: RunContext) -> _ReadonlySnapshotMemo | None:
         raise ValueError(
             f'readonly snapshot memo code is {memo.code}, not {ctx.code}')
     return memo
-
-
-def readonly_snapshot_value(
-    ctx: RunContext, key: tuple[object, ...], factory: Callable[[], T],
-) -> T:
-    """Memoize one pure readonly projection inside the active snapshot only."""
-    memo = _memo_for_context(ctx)
-    if memo is None:
-        return factory()
-    if key not in memo.values:
-        memo.values[key] = copy.deepcopy(factory())
-    return cast(T, copy.deepcopy(memo.values[key]))
 
 
 def _filesystem_path(path: Path) -> str:

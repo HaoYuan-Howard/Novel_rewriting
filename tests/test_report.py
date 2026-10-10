@@ -399,7 +399,7 @@ def test_an_empty_value_still_prints_its_line(monkeypatch):
 
 
 def test_a_stage_missing_from_the_table_raises(monkeypatch):
-    """当前七层都要有一行：「没有记账键」与「没被声明过」不是一回事。"""
+    """当前六层都要有一行：「没有记账键」与「没被声明过」不是一回事。"""
     monkeypatch.delitem(acc.ACCOUNTING, STAGE)
     with pytest.raises(AccountingKeyUnregistered, match='没有一行'):
         build(sid='s', node=NODE, freshness=_fresh(),
