@@ -10,7 +10,6 @@ from copy import deepcopy
 import pytest
 
 from contracts.schema.grounding import OutputConstraints
-from contracts.schema.hook import HookConstraints
 from novel.llm.paid_requests import digest
 from novel.llm.transport import ChatResponse
 from novel.stages.chain import ChainContext, run_body_design, run_preserve, run_workflow
@@ -145,8 +144,7 @@ def test_free_preview_before_any_design_publish_uses_same_candidate_checks(tmp_p
     _bad_design(wires['design'])
     direct = inspect_design_candidate(wires['design'], **args).report()
     preview = dry_run_patch(ctx.repository, 'design', wires['design'], evidence={},
-                            budget=2000, chapter_count=2, length_band=ctx.length_band,
-                            hook_constraints=HookConstraints(target_chars=100, hard_max_chars=360))
+                            budget=2000, chapter_count=2, length_band=ctx.length_band)
     assert preview['status'] == 'ran', '没有正式Binding或Hook不妨碍候选预检'
     assert preview['candidate_preflight'] == direct
     assert preview['errors'] == direct['errors'] + direct['material_errors']
@@ -170,8 +168,7 @@ def test_free_preview_rechecks_existing_hook_against_changed_candidate(tmp_path)
     run_body_design(ctx)
     run_hook_design(ctx)
     before = ctx.repository.path('stage4/design/presentation_graph.json').read_bytes()
-    args = dict(evidence={}, budget=2000, chapter_count=2, length_band=ctx.length_band,
-                hook_constraints=ctx.hook_constraints)
+    args = dict(evidence={}, budget=2000, chapter_count=2, length_band=ctx.length_band)
     good = dry_run_patch(ctx.repository, 'design', wires['design'], **args)
     assert good['candidate_preflight']['checks'][-1]['status'] == 'passed'
     assert good['candidate_preflight']['passed'] and not good['errors']
@@ -219,8 +216,7 @@ def test_owner_patch_preview_rechecks_existing_hook_surface_release_rules(tmp_pa
         validate=lambda w: list(inspect_design_candidate(w, **candidate_args).errors),
         dry_run=lambda w: dry_run_patch(
             ctx.repository, 'design', w, evidence={}, budget=ctx.budget,
-            chapter_count=len(ctx.chapters), length_band=ctx.length_band,
-            hook_constraints=ctx.hook_constraints))
+            chapter_count=len(ctx.chapters), length_band=ctx.length_band))
     assert not preview['owner_errors'], '错误来自候选与旧Hook组合，不是Design自身'
     downstream = preview['downstream']
     report = downstream['candidate_preflight']

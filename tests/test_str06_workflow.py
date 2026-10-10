@@ -53,7 +53,8 @@ def _design_wire_v7():
                  {'ev': '约定成立', 'who': ['yun', 'fu_jun'],
                   'real': ['ob01', 'ob02', 'ob03'],
                   'state': [{'at': 'yun+fu_jun', 'key': 'marital_status',
-                             'val': '夫妻'}]}],
+                             'val': '夫妻'}]},
+                 {'ev': '两人准备实行约定', 'who': ['yun', 'fu_jun']}],
              }],
         'chapters': [{'purpose': '婚姻从名分走向盟约', 'scenes': 1}],
     }
@@ -114,13 +115,15 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         'preserve': _preserve_wire(), 'design': _design_wire_v7(),
         # F5 起 Hook Design 属 Stage4 腿：完整 graph 与 WriterIR 一起发布
         'hook_design': {
-            'protocol_version': 'stage4-hook-design-v2',
+            'protocol_version': 'stage4-hook-design-v3',
             'pov': {'person': 'first', 'focalizers': ['yun']},
-            'materials': [{'beat_ref': {'scene': 'sc01', 'beat': 'b01'}, 'withheld': []}],
+            'materials': [{'beat_ref': {'scene': 'sc01', 'beat': 'b01'}, 'withheld': [],
+                           'emphasis': 'develop', 'transition': 'start'}],
             'surface_releases': [],
             'forbidden_reveals': [],
-            'design_brief': '从约定成立的瞬间切入，快速带过背景，收在立约落地。',
-            'delivery_brief': '第一人称限知，短句，不解释。',
+            'local_focus': '通过人物即时反应突出约定的反差。',
+            'reader_expectation': {'kind': 'action', 'focus': '两人怎样实行约定',
+                                   'followup_refs': [{'scene': 'sc01', 'beat': 'b02'}]},
         },
     }
     wires['design']['initial_surfaces'] = [{'char_id': 'yun', 'surfaces': ['云娘']},
@@ -412,12 +415,14 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
         'cross_cause': {'protocol_version': 'stage2-cross-cause-v1', 'causes': []},
         'preserve': preserve, 'design': design,
         'hook_design': {
-            'protocol_version': 'stage4-hook-design-v2',
+            'protocol_version': 'stage4-hook-design-v3',
             'pov': {'person': 'first', 'focalizers': ['yun']},
-            'materials': [{'beat_ref': {'scene': 'sc02', 'beat': 'b01'}, 'withheld': []}],
+            'materials': [{'beat_ref': {'scene': 'sc01', 'beat': 'b01'}, 'withheld': [],
+                           'emphasis': 'develop', 'transition': 'start'}],
             'surface_releases': [], 'forbidden_reveals': [],
-            'design_brief': '从夜半响动切入，快速带过藏身，收在床底确认。',
-            'delivery_brief': '第一人称限知，短句，不解释。'},
+            'local_focus': '以限知视角即时反应保留声响疑问。',
+            'reader_expectation': {'kind': 'action', 'focus': '她怎样查清声响来源',
+                                   'followup_refs': [{'scene': 'sc02', 'beat': 'b01'}]}},
     }
     repo = Str06Repository(tmp_path / 'book')
     repo.attach_context(make_context(tmp_path / 'book', ledger=CostLedger(path=None)))

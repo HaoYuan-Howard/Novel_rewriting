@@ -38,8 +38,12 @@ def stage0_machine_revise(book, new_clean: str):
     return rev.commit(store, transform, clean_text=new_clean)
 
 
-def hook_wire_v2(coordinates: dict) -> dict:
-    """测试用坐标式构造器：组装 v2 引用，不调用恢复 adapter 或待测验收函数。"""
+def hook_wire_v3(coordinates: dict) -> dict:
+    """测试用坐标式构造器：只换算引用，不替设计填入组织或阅读期待。
+
+    夹具必须显式提供 v3 的 emphasis／transition／local_focus／阅读期待。
+    不调用恢复 adapter 或待测验收函数，不把缺项或错误选择自动补成合法设计。
+    """
     from copy import deepcopy
     from novel.stages.stage4.hook_facts import fact_ref_of
     result = deepcopy(coordinates)
@@ -59,5 +63,9 @@ def hook_wire_v2(coordinates: dict) -> dict:
         result['forbidden_reveals'][k] = (
             {'kind': 'fact', 'fact_ref': handle(row['ref'], row['address'])}
             if row.get('address') is not None else {'kind': 'event', 'beat_ref': row['ref']})
-    result['protocol_version'] = 'stage4-hook-design-v2'
+    expectation = result.get('reader_expectation')
+    if expectation and expectation['kind'] == 'fact' and 'answer' in expectation:
+        answer = expectation.pop('answer')
+        expectation['fact_ref'] = handle(answer['ref'], answer['address'])
+    result['protocol_version'] = 'stage4-hook-design-v3'
     return result

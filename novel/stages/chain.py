@@ -59,7 +59,7 @@ from contracts.invariants import (
     PIPELINE_PROVIDER_CONCURRENCY,
 )
 from contracts.schema.grounding import OutputConstraints, PreserveCheckpoint
-from contracts.schema.hook import HookConstraints, HookReceipt
+from contracts.schema.hook import HookReceipt
 from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.workflow import (
     OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1,
@@ -208,8 +208,6 @@ class ChainContext:
     hook_copy: str = ''
     budget: int = 11000
     book_title: str = ''
-    hook_constraints: HookConstraints = field(
-        default_factory=lambda: HookConstraints(target_chars=280, hard_max_chars=360))
     length_band: tuple[float, float] = (0.6, 1.3)
     body_replay: Callable[[int, Any], bool] = lambda _ordinal, _packet: False
     after_node_commit: Callable[[str], None] = lambda _node: None
@@ -1618,8 +1616,7 @@ def run_hook_design(ctx: ChainContext) -> dict:
         HOOK_DESIGN_RULES, book_title=ctx.book_title, story=project_hook_input(body),
         wire_schema=hook_wire_schema(body),
         semantics=semantics,
-        identities=[i.model_dump(mode='json') for i in identities],
-        constraints=ctx.hook_constraints.model_dump(mode='json'))
+        identities=[i.model_dump(mode='json') for i in identities])
     hook_design_prompt = revision_prompt_for_owner(
         repository, 'hook_design', hook_design_prompt, 'stage4/design/presentation_graph.json')
 
@@ -1632,7 +1629,6 @@ def run_hook_design(ctx: ChainContext) -> dict:
         """
         return hook_combination_errors(
             w, body=body, binding=binding, chars=chars,
-            hook_constraints=ctx.hook_constraints,
             kp_statements=kp_statements, world_statements=world_statements)
 
     def hook_design_compile(w):
@@ -1713,7 +1709,7 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     kp_statements = {p.kp_id: p.statement for p in brief.propositions}
     world_statements = {wc.constraint_id: wc.statement
                         for wc in brief.book_constraints}
-    hook_context, errors = compile_hook_context(graph, projection, ctx.hook_constraints,
+    hook_context, errors = compile_hook_context(graph, projection,
                                                 chars.name_structure, kp_statements,
                                                 world_statements,
                                                 characters=chars.core_view())
@@ -2657,7 +2653,7 @@ def load_stage1_chapters(base, sid: str) -> Stage1Input:
 
 def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
                  through='stage4', provider='manual-adoption', model='unknown',
-                 book_title='', hook_constraints=None, length_band=(0.6, 1.3),
+                 book_title='', length_band=(0.6, 1.3),
                  body_chapters=None, node_filter=None, hook_copy='', chapter_patch_owners=(),
                  concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
                  node_concurrency: Mapping[str, int] | None = None,
@@ -2676,12 +2672,10 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
     的独立字段供审计，**不进** `input_sha256` 身份摘要、请求身份、回执或
     provenance——从 canary 续跑到全书不改变任何已提交章的采用与恢复身份。
     """
-    hook_constraints = hook_constraints or HookConstraints(
-        target_chars=280, hard_max_chars=360)
     ctx = ChainContext(
         repository=repository, ask=ask, ask_text=ask_text, ask_body=ask_body,
         chapters=chapters, hook_copy=hook_copy, budget=budget, book_title=book_title,
-        hook_constraints=hook_constraints, length_band=length_band,
+        length_band=length_band,
         body_chapters=body_chapters, chapter_patch_owners=chapter_patch_owners,
         provider=provider, model=model,
         body_replay=body_replay, after_node_commit=after_node_commit,
@@ -2767,8 +2761,6 @@ def execute(args) -> None:
     """
     if not args.book_sid and args.source_json is None:
         raise ValueError('必须给出 --book-sid（正式 Stage1 输入）或 --source-json（开发路径）')
-    if args.hook_target_chars > args.hook_hard_max:
-        raise ValueError('--hook-target-chars 不得大于 --hook-hard-max')
     if not 0 < args.body_band_low < args.body_band_high:
         raise ValueError('--body-band-low/high 必须满足 0 < low < high')
     if args.check_only and (args.yes or args.allow_source_export):
@@ -2956,8 +2948,6 @@ def execute(args) -> None:
                 dry_run=(downstream_preview if downstream_preview is not None else
                          lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
                     evidence=build_evidence(chapters, hook_copy), budget=args.budget,
-                    hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
-                                                     hard_max_chars=args.hook_hard_max),
                     chapter_count=len(chapters), source_texts=tuple(c['text'] for c in chapters),
                     book_title=args.book_title, length_band=(args.body_band_low, args.body_band_high))))
             stage_revision(repository, owner=owner, identity=baseline_identity,
@@ -3026,8 +3016,7 @@ def execute(args) -> None:
             dry_run=(downstream_preview if downstream_preview is not None else
                      lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
                 evidence=build_evidence(chapters, hook_copy), budget=args.budget,
-                hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
-                                                 hard_max_chars=args.hook_hard_max), chapter_count=len(chapters),
+                chapter_count=len(chapters),
                 source_texts=tuple(c['text'] for c in chapters), book_title=args.book_title,
                 length_band=(args.body_band_low, args.body_band_high))))
         stage_revision(repository, owner=owner, identity=selection.baseline_request_sha256,
@@ -3174,8 +3163,6 @@ def execute(args) -> None:
                        provider='manual-adoption' if args.wire_dir else profile.provider,
                        model='unknown' if args.wire_dir else profile.model,
                        book_title=args.book_title,
-                       hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
-                                                         hard_max_chars=args.hook_hard_max),
                        length_band=(args.body_band_low, args.body_band_high),
                        body_chapters=args.body_chapters,
                        chapter_patch_owners=chapter_patch_owners,

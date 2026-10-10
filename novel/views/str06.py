@@ -38,7 +38,9 @@ from contracts.schema.api import (
 )
 from contracts.invariants import NODES, OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.workflow import candidate_node_owner
+from contracts.schema.hook import HookDesign
 from novel.errors import ArtifactUnreadable
+from novel.stages.common import hook_organization_summary
 from novel.store import Str06Repository
 from novel.work_unit_usage import read_cost_snapshot
 
@@ -277,7 +279,7 @@ def design_view(base: str | os.PathLike[str], candidate: str) -> Str06DesignView
         materials=tuple(m['beat_ref'] for m in hook_payload['materials']),
         concealed=tuple(hook_payload.get('concealed') or ()),
         forbidden_reveals=len(hook_payload.get('forbidden_reveals') or ()),
-        design_brief=hook_payload['design_brief'])
+        design_brief=hook_organization_summary(HookDesign.model_validate(hook_payload)))
         if hook_payload else None)
     binding_payload = _inspect(run, 'stage4/grounding/semantic_binding.json')
     binding = (Str06DesignBindingView(

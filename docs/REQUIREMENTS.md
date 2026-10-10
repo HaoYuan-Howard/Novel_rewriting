@@ -84,6 +84,11 @@ workflow_status=delivered、through=stage7、accepted_body=true，总字数 9084
   独立新跑待核：目睹渠道、求娶—反应—跃梁连续性、系列概括不超前、救人动机、礼物愿望铺垫、
   改口与亲属称谓、未解守卫、楔子与开章协调及语气、已说／未说、婚前／婚后告知。
   先核对新源事实和设计，再选定点正文供用户阅读；不默认扩大整书或其他 golden，不增生产 Judge。
+  2026-10-10 用户批准 Hook 局部优化：以现役 contracts 精简组织契约，正式材料／声线
+  同源投影，取消固定字数门槛，保留倒叙与跨场、单 Hook 和现有 Stage4 条目窄修。
+  工程验证零真实付费，不新增生产审稿节点或 Stage5 段落 patch。首答文学质量仍待
+  《夫君的报恩》旧新楔子配合同一第 1 章阅读验证（冲突、因果、喜剧声线、期待、简洁、
+  重复与新增推进），同时记录真实生成成本；本批工程通过不代签阅读结论。
   CS-F5 阅读反例（2026-10-05，绑定成书 `16d26c4b…`，详单 `outputs/csf5_review_20261005/csf5_review.md` §二）：
   D1 婚史融合（GS-01b 负控：童年坠河＝救命同一次，财貌动机与婚前感情连带丢失，语义层静默漏过）；
   D2 藏身元计数错×2（ch8「上回是床底」应为衣柜、ch9「第三回」应为第四回）；D3 死结载体衣带→裤绳漂移；
@@ -116,9 +121,8 @@ Phase 4（devices A/B）未立项，不随本路线执行。
 
 | 对象 | 有效义务与删除条件 |
 |---|---|
-| rc12／rc13 ExecutionPlan adapter | rc21 质量批删除已废止的五类旧质量产物迁移，仅 `novel/store.py::_upgrade_rc12_payload` 对形状未变的 ExecutionPlan 保留 rc12／rc13→rc14 无损适配。checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR 均须显式当前 rc22，旧版或缺版本拒读，不补造细节或概括判断。read_graph_hook 先验证当前图版本再摘组件，不绕版本读取旧图。存量 ExecutionPlan 全部重建或退役后删除此 adapter，禁止无限新增版本 |
+| rc12／rc13 ExecutionPlan adapter | rc21 质量批删除已废止的五类旧质量产物迁移，仅 `novel/store.py::_upgrade_rc12_payload` 对形状未变的 ExecutionPlan 保留 rc12／rc13→rc14 无损适配。checkpoint／Brief／Binding／BodyDesign／WriterBookIR 须显式 rc22，PresentationGraph 须 rc23、HookContext 须 rc18；旧版或缺版本拒读，不补造细节、概括、Hook 组织或阅读期待。read_graph_hook 先验证当前图版本再摘组件，不绕版本读取旧图。存量 ExecutionPlan 全部重建或退役后删除此 adapter，禁止无限新增版本 |
 | Design v9 已购候选 | 用户 2026-10-09 明确要求修订后优先沿用／窄复核；v10/v2 新生成使用短引用，`novel/stages/stage4/slim.py::design_wire_model` 集中解码 v9，canonical rc22 不变。旧候选窄复核只用原 v9 引用语法与 v1 切片，原请求／响应／patch 基底摘要不改，不新增 v9 整份生成路径。所有存量 v9 候选已采用、归档且不再续跑后删除 v9 schema、解码与切片分支 |
-| Hook v1 已购引用换算 | 用户 2026-10-09 确认按事实判据→目录 wire→窄修/恢复顺序修复。`novel/stages/stage4/hook_wire.py::upgrade_purchased_hook_wire` 唯一显式 v1→v2 换算，仅按当前正式 BodyDesign 的唯一位置/地址映射；缺失或歧义拒绝。工具先核原请求/响应/成本，跨身份采用显式留原响应身份与当前应用身份，经现役完整闸；不改旧字节、不推断值、不新增 v1 生成路径，不重置轮数/额度。存量 v1 全部已采用或归档不再恢复后删除换算函数和 upgrade-hook 工具入口 |
 | OwnerIssue v1／v2 读兼容 | v3 显式 dispatch_pending、指纹历史与更正记录；只经 `contracts/schema/workflow.py::owner_issue_record_of_payload` 集中解码；所有存量 v1／v2 根只读归档／不再续跑后删除。旧错误路由账的更正按 RC-15 显式恢复，不重置轮数 |
 | OwnerRevisionRecord V1 读兼容 | V2 增必填 `applies_to_request_sha256` 与 kind `carried_forward`（CS-H H1b，RC-54/56：免费沿用的采用凭证）；只经 `contracts/schema/workflow.py::owner_revision_record_of_payload` 集中解码（v1 的应用身份即其 `baseline_request_sha256`——V1 只可能是 owner_patch／resample）。现存根盘上不再存在 `schema_version=1` 的修订记录（只读归档／不再续跑）后删除 V1 读兼容；未知版本显式拒绝，不向领域 schema 塞默认值 |
 | names／Characters旧信封 | names v2与两类信封v2显式拒识旧版；须新协议names重建后compile重建Characters，不推断空resolutions。原冻结根只读，授权新epoch再重建；无隐式adapter |

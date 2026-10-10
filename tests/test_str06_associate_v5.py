@@ -664,7 +664,6 @@ def test_unresolved_verdict_keeps_a_stable_patch_path_and_blocks_final_publish(k
 
 @pytest.mark.parametrize('problem', ['missing_identity', 'unresolved', 'stray_cause'])
 def test_associate_free_patch_preview_uses_the_real_identity_wire_phase(problem):
-    from contracts.schema.hook import HookConstraints
     from novel.stages.review import dry_run_patch
 
     book, chapters, final = _assembled_case()
@@ -691,8 +690,7 @@ def test_associate_free_patch_preview_uses_the_real_identity_wire_phase(problem)
                     for no, obs in chapters.items()}[rel]
 
     snapshot = faulty.model_dump(mode='json')
-    args = dict(evidence=EVIDENCE, budget=2000, chapter_count=len(chapters),
-                hook_constraints=HookConstraints(target_chars=100, hard_max_chars=200))
+    args = dict(evidence=EVIDENCE, budget=2000, chapter_count=len(chapters))
     preview = dry_run_patch(ObservationRepository(), 'associate', snapshot, **args)
     assert preview['status'] == 'ran'
     assert preview['association_phase'] == 'identity' and preview['final_status'] == 'not_run'

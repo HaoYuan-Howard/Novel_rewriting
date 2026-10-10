@@ -336,10 +336,13 @@ def _hook_design_bad_wire() -> list:
 
     graph, projection, _context = _green_pair()
     _hook, errors = assemble_hook_design(
-        {'protocol_version': 'stage4-hook-design-v2',
+        {'protocol_version': 'stage4-hook-design-v3',
          'pov': {'person': 'third', 'focalizers': ['narrator']},
-         'design_brief': '从不存在的材料拍冷开', 'delivery_brief': '克制',
+         'local_focus': '用即时反应形成反差',
+         'reader_expectation': {'kind': 'action', 'focus': '人物怎样应对旧约',
+                                'followup_refs': [{'scene': 'sc02', 'beat': 'b02'}]},
          'materials': [{'beat_ref': {'scene': 's99', 'beat': 'bt1'},
+                        'emphasis': 'develop', 'transition': 'start',
                         'presentation': '倒叙材料'}],
          'opening_facts': [], 'forbidden_reveals': []},
         body=graph, known_char_ids=set(), name_projection=projection)
@@ -387,7 +390,6 @@ def _chapter_closure_unclosed() -> list:
 
 def _hook_context_unresolvable() -> list:
     """HookContext 仅凭正式输入可重建：起笔事实在引用处未建立即拒。"""
-    from contracts.schema.hook import HookConstraints
     from tests.test_str06_hook import _green_pair
     from novel.stages.stage4.hook_context import compile_hook_context
 
@@ -398,7 +400,7 @@ def _hook_context_unresolvable() -> list:
             fact.model_copy(update={'ref': 's99#bt1'})
             for fact in graph.hook.opening_facts)})})
     _rebuilt, errors = compile_hook_context(
-        broken, _projection(), HookConstraints(target_chars=280, hard_max_chars=360))
+        broken, _projection())
     return errors
 
 

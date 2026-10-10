@@ -55,7 +55,7 @@ from __future__ import annotations
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
-from contracts.schema.common import FreeProvenance, LlmProvenance
+from contracts.schema.common import CharacterVoice, FreeProvenance, LlmProvenance
 from contracts.schema.hook import HookDesign, HookPov
 from contracts.schema.expression import ExpressionDecision, ExpressionDecisionWire
 from contracts.schema.state import (
@@ -253,13 +253,6 @@ class SceneDelivery(StrictModel):
 # `world_rules` 随 BookBrief 进每章请求）。rc7 的四个静态锚定列表
 # （standing_goals／ongoing_actions／open_questions／promises）没有任何消费者
 # （AUD-04），已删除——wire 旧键关闭式拒读，不走迁移（I-13）。
-
-class CharacterVoice(StrictModel):
-    """稳定人物声线：一个人物全书的口吻约定（进 BookBrief，全书一致）。"""
-
-    char_id: str = Field(min_length=1)
-    voice: str = Field(min_length=1)
-
 
 class ChapterEntry(StrictModel):
     """章间承接声明（R2.6，裁决 7）：很薄的衔接方式，由 Design 声明、编译器不猜。
@@ -501,6 +494,8 @@ class PresentationGraph(BodyDesign):
     此处的跨引用校验只保结构闭合（引用的拍/人物在本 graph 内存在）；
     语义合法（withheld ⊆ 该拍 delta、时序、披露自洽）归 assemble_hook_design。
     """
+    # Hook 组织协议独立升版；正文 view 仍为 rc22，不扩大正文失效面。
+    contract_version: Literal['str06-rc23'] = 'str06-rc23'
     hook: HookDesign
     #: 来源账（F7a）：盘上键 `_provenance`；`exclude=True` 保 prompt 字节不变。
     provenance: FreeProvenance | LlmProvenance | None = Field(

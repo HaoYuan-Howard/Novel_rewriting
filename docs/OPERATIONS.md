@@ -335,19 +335,11 @@ provider、model、reasoning_effort和thinking_mode。编排器从冻结profiles
 `tools/str06_review.py ... patch-preview`同样接受`--request-profile`，须与被审阅请求一致；
 显式effort冲突即拒绝，工具通过同一冻结函数构造实际请求身份，始终不授予付费权限。
 
-Hook v1 已购首答可显式换算为 v2，保持原文语义与原成本：
+Hook 当前协议为 `stage4-hook-design-v3`。旧 v1／v2 缺少正式组织选择和阅读期待，不能
+由代码猜补；原 v1→v2 换算入口已退出。保留旧响应、成本和原接受记录，当前运行需要
+以 v3 重新设计，再免费编译当前 HookContext（rc18）。新的付费或正文外发仍分别依
+本轮授权执行；免费复检不能购买缺失的现役回答。
 
-```powershell
-python -X utf8 -B -m tools.str06_review --base <输出根> --sid <sid> --save upgrade-hook `
-  --baseline-request-sha256 <原首答请求身份> `
-  --request-profile '{"provider":"deepseek","model":"deepseek-flash","reasoning_effort":"high","thinking_mode":"on"}'
-```
-
-工具核验原请求、响应与 ledger，捕获现役生产接受闸；即使正式 graph 尚未发布也运行
-完整确定性下游预检。通过才导出本书 `runtime/review/hook_v2_upgrade/` 下的
-`hook_design_wire.json` 与 `hook_design_patch_note.json`；失败只留诊断，不导出采用材料。
-不带 `--save` 只打印，不写盘。换算不新增模型调用，不覆盖历史首答的失败记录。
-采用走正常 Hook 节点，带 `--check-only --wire-dir <上述目录> --request-profile <同配置>`；
-该入口不得带 `--yes`／`--allow-egress`，缺已购绑定或当前完整闸失败就拒绝。采用会写正式
-graph 和修订证据，但不运行下一 compile 节点。首答通过率须另冻结真实新请求的首轮结果，
-不能把历史回答免费复验接受率记成首答通过率。
+Hook 不再接受固定字数目标／上限选项。字符数只作观察；评价应将楔子与实际第 1 章
+成对阅读，并记录冲突、因果、声线、阅读期待和重复。机械通过与免费恢复不证明文学
+质量，也不能把历史回答免费复验接受率记成新协议首答通过率。

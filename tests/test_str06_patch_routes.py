@@ -430,25 +430,25 @@ def test_hook_locate_codes_emit_wire_paths():
     from novel.stages.stage4.hook import assemble_hook_design
     from tests.test_str06_hook import _body_wire, _hook_wire
     from novel.stages.stage4.design import assemble_body_design
-    from tests.factories import hook_wire_v2
+    from tests.factories import hook_wire_v3
 
     body, errors = assemble_body_design(
         _body_wire(), known_char_ids={'fu_jun', 'yun_niang'},
         expression_requirements=_requirements(), source_narration=_narration())
     assert body is not None and not errors, errors
-    bad_pov = hook_wire_v2(_hook_wire())
+    bad_pov = hook_wire_v3(_hook_wire())
     bad_pov['pov'] = {'person': 'first', 'focalizers': ['ghost']}
-    bad_withheld = hook_wire_v2(_hook_wire())
+    bad_withheld = hook_wire_v3(_hook_wire())
     # v2 只能选目录事实；合法事实放到别的拍仍须拒绝，不能因引用存在就放行。
     bad_withheld['materials'][0]['withheld'] = [bad_withheld['opening_facts'][1]['fact_ref']]
     bad_fact = _hook_wire()
     bad_fact['materials'][0]['withheld'] = [
         {'domain': 'character', 'subjects': ['nope'], 'key': 'k'}]
-    bad_shape = hook_wire_v2(_hook_wire())
+    bad_shape = hook_wire_v3(_hook_wire())
     bad_shape['materials'][0]['beat_ref'] = 'sc02#b01'
     matched = []
     cases = ((bad_pov, 'hook_pov_char'), (bad_withheld, 'hook_withheld_ref'),
-             (hook_wire_v2(bad_fact), 'hook_fact_ref'), (bad_shape, 'hook_wire_shape'))
+             (hook_wire_v3(bad_fact), 'hook_fact_ref'), (bad_shape, 'hook_wire_shape'))
     for bad, expected in cases:
         _hook, found = assemble_hook_design(
             bad, body=body, known_char_ids={'fu_jun', 'yun_niang'},

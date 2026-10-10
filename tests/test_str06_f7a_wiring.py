@@ -16,7 +16,6 @@ import pytest
 
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from novel.llm.paid_requests import open_candidate_epoch
-from contracts.schema.hook import HookConstraints
 from novel.errors import ProvenanceRefused, UpstreamStale
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
 from novel.llm.paid_requests import (
@@ -636,7 +635,6 @@ def test_design_gate_stops_owner_chain_without_downstream_calls(tmp_path):
         run_workflow(repository=repo, chapters=chapters, ask=ask(session),
                      ask_text=ask_text(session), ask_body=ask_body(session),
                      budget=2000, through='stage7', book_title='报恩',
-                     hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
                      length_band=(0.01, 0.05))
     assert not repo.path('stage4/design/body_design.json').exists()
     status = repo.inspect('runtime/workflow_status.json')
@@ -681,7 +679,6 @@ def test_crash_tail_replays_exact_without_new_purchase(tmp_path):
     wires = _full_chain_wires()
     repo, session, transport, (ask, ask_text, ask_body, chapters) = _full_chain(tmp_path, wires)
     kwargs = dict(budget=2000, through='stage7', book_title='报恩',
-                  hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
                   length_band=(0.01, 0.05))
     run_workflow(repository=repo, chapters=chapters, ask=ask(session),
                  ask_text=ask_text(session), ask_body=ask_body(session), **kwargs)

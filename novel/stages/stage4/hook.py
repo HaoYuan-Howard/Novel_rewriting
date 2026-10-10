@@ -29,18 +29,20 @@ from contracts.schema.source import NameProjection, NameStructure
 from contracts.schema.workflow import STAGE4_HOOK_DESIGN_PROTOCOL
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.hook_validation import validate_hook_payload
-from novel.stages.stage4.hook_wire import expand_hook_wire, hook_catalog, hook_wire_schema
+from novel.stages.stage4.hook_wire import (
+    expand_hook_wire, hook_catalog, hook_wire_schema, opening_chapter_input,
+)
 
 _WIRE_KEYS = frozenset({
     'protocol_version', 'pov', 'opening_facts', 'materials', 'concealed',
-    'surface_releases', 'forbidden_reveals', 'design_brief', 'delivery_brief'})
+    'surface_releases', 'forbidden_reveals', 'local_focus', 'reader_expectation'})
 
 def assemble_hook_design(
     wire: dict[str, Any], *, body: BodyDesign, known_char_ids: set[str],
     name_projection: NameProjection,
     name_structure: NameStructure | None = None,
 ) -> tuple[HookDesign | None, list[str]]:
-    """Hook Design wire（stage4-hook-design-v2）→ HookDesign
+    """Hook Design wire（stage4-hook-design-v3）→ HookDesign
     （canonical 候选，待 publish_graph 发布）。
 
     事实只选目录 fact_ref，材料只给位置分量；compiler 展开 canonical 引用，
@@ -79,6 +81,7 @@ def assemble_hook_design(
 def publish_graph(body: BodyDesign, hook: HookDesign) -> PresentationGraph:
     """完整 PresentationGraph 的唯一 publisher。"""
     payload = body.model_dump()
+    payload['contract_version'] = 'str06-rc23'
     payload['hook'] = hook.model_dump()
     return PresentationGraph.model_validate(payload)
 
@@ -93,12 +96,32 @@ def _hook_ref_parts(raw: Any) -> tuple[str, str] | None:
     return None
 
 
+def _hook_followup_directory(index: dict, order: list[tuple[str, str]], materials: Any) -> dict:
+    """期待返修的只读故事目录：按已知视界筛选，不根据问题猜承载拍。"""
+    material_refs = [_hook_ref_parts(item.get('beat_ref')) if isinstance(item, dict) else None
+                     for item in materials] if isinstance(materials, (list, tuple)) else []
+    timing_known = bool(material_refs) and all(ref in index for ref in material_refs)
+    horizon = max(order.index(ref) for ref in material_refs) if timing_known else None
+    candidates = order[horizon + 1:] if horizon is not None else order
+    horizon_ref = order[horizon] if horizon is not None else None
+    return {
+        'scope': 'after_material_horizon' if timing_known else 'all_beats_horizon_unresolved',
+        'material_horizon': {'scene': horizon_ref[0], 'beat': horizon_ref[1]} if horizon_ref else None,
+        'beats': [{
+            'beat_ref': {'scene': scene_id, 'beat': beat_id},
+            'event': index[(scene_id, beat_id)][1].event,
+            'participants': list(index[(scene_id, beat_id)][1].participants)}
+            for scene_id, beat_id in candidates]}
+
+
 def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple]) -> dict:
     """Hook 窄返修的依赖切片：只带失败条目引用的拍与释放事实。
 
     · **被引用的拍**：目标材料／起笔事实／禁揭条目引用到的拍（event、参与人、
       目标增量与释放），模型据此判断 withheld 与 presentation；
     · **到该拍为止的释放前缀**：initial_surfaces 与阅读序上不晚于该拍的释放；
+    · **阅读期待的候选目录**：仅在修订期待时列视界之后的真实拍及事件，包含没有
+      delta 的行动／关系拍；材料位置非法则明确给全拍目录，不猜时序界。
     · **secret 侧约束**：已发布正文里隐藏人物的呈现约束由 HookContext 编译时
       校验，切片不预判语义，只给事实。
     """
@@ -112,7 +135,7 @@ def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple]) -> 
         entry = wire.get(path[0]) if path and isinstance(path[0], str) else None
         rows = ([entry[path[1]]] if isinstance(entry, list) and len(path) > 1
                 and isinstance(path[1], int) and path[1] < len(entry)
-                else entry if isinstance(entry, list) else ())
+                else entry if isinstance(entry, list) else [entry] if isinstance(entry, dict) else ())
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -120,11 +143,20 @@ def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple]) -> 
                 parts = _hook_ref_parts(row.get(key))
                 if parts is not None and parts in index:
                     wanted.append(parts)
-            fact = catalog.get(row.get('fact_ref'))
+            followups = row.get('followup_refs')
+            for followup in followups if isinstance(followups, (list, tuple)) else ():
+                parts = _hook_ref_parts(followup)
+                if parts is not None and parts in index:
+                    wanted.append(parts)
+            fact_ref = row.get('fact_ref')
+            fact = catalog.get(fact_ref) if isinstance(fact_ref, str) else None
             if fact and isinstance(fact['ref'], dict):
                 wanted.append((fact['ref']['scene'], fact['ref']['beat']))
     # 呈现起点与视界是修正起笔事实所需的只读边界，不能只给失败条目的来源拍。
-    for material in wire.get('materials', []):
+    raw_materials = wire.get('materials')
+    for material in raw_materials if isinstance(raw_materials, (list, tuple)) else ():
+        if not isinstance(material, dict):
+            continue
         parts = _hook_ref_parts(material.get('beat_ref'))
         if parts in index:
             wanted.append(parts)
@@ -146,11 +178,20 @@ def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple]) -> 
             'event': beat.event, 'participants': list(beat.participants),
             'target_delta': [d.model_dump(mode='json') for d in beat.target_delta],
             'release_prefix': releases})
-    return {'slice_version': 'stage4-hook-patch-slice-v2', 'facts': catalog,
+    sliced = {'slice_version': 'stage4-hook-patch-slice-v3', 'facts': catalog,
             'initial_surfaces': [s.model_dump(mode='json') for s in body.initial_surfaces],
             'materials': wire.get('materials', []),
+            'reader_expectation': wire.get('reader_expectation'),
+            'local_focus': wire.get('local_focus'),
+            'opening_chapter': opening_chapter_input(body),
+            'book_style': body.book_style,
+            'expression_decisions': [d.model_dump(mode='json') for d in body.expression_decisions],
+            'character_voices': [v.model_dump(mode='json') for v in body.character_voices],
             'forbidden_reveals': wire.get('forbidden_reveals', []), 'pov': wire.get('pov'),
             'beats': beats}
+    if any(path and path[0] == 'reader_expectation' for path in targets):
+        sliced['followup_candidates'] = _hook_followup_directory(index, order, raw_materials)
+    return sliced
 
 
 def hook_patch_legal_values(*, body: BodyDesign, known_char_ids: Iterable[str] = (),

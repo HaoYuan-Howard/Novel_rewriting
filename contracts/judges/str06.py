@@ -204,7 +204,7 @@ _hard('answer_reuse_four_conditions', 'stage4',
       '展示变化→不触发付费重写', 'R-5.20')
 _hard('writer_packet_background_narrowing', 'stage4',
       '背景投影规则（R10b）：写手面背景只投书级初态立足点＋建立之后仍被'
-      '消费的当前状态（消费者＝声明读取/读者确认目标/Hook 地址/锁键）；'
+      '消费的当前状态（消费者＝正文声明读取/读者确认目标/锁键）；'
       'unset/unknown 不作背景；补齐面（依赖边生成）保持全量不受收窄影响',
       'R-6.16')
 
@@ -222,7 +222,8 @@ _hard('chapter_receipt_binding', 'stage5',
       '章回执绑定章序、章包摘要（写手视图/验证输入）、请求身份与改名前正文摘要',
       'R-7.4')
 _hard('hook_mechanical', 'stage5',
-      'Hook 机械验通过（POV、起笔事实时序、禁止集与 withheld 字面）', 'R-8.1')
+      'Hook 成文机械验通过（非空、编码、无包装外壳、withheld 字面）；'
+      '篇幅仅统计，语义与文学质量保持未评', 'R-8.1')
 _hard('hook_receipt_binding', 'stage5',
       'Hook 回执绑定 HookContext 身份、正文 hash 与请求身份', 'R-8.2')
 _unver('body_semantics_unver', 'stage5',
@@ -356,6 +357,12 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'hook_concealed_char': 'locate',
     'hook_pov_char': 'locate',
     'hook_material_ref': 'locate',
+    'hook_transition': 'locate',
+    'hook_expectation_fact': 'locate',
+    'hook_expectation_knowledge': 'locate',
+    'hook_expectation_followup': 'locate',
+    'hook_expectation_ref': 'locate',
+    'hook_expectation_horizon': 'locate',
     'hook_withheld_shape': 'locate',
     'hook_withheld_ref': 'locate',
     'hook_hidden_presentation': 'locate',

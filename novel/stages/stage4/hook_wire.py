@@ -1,18 +1,16 @@
-"""Hook v2 的确定性目录、wire 展开与显式 v1 换算。
+"""Hook v3 的确定性目录与 wire 展开。
 
-模型仅选择已给出的引用。换算仅供已购回答的显式恢复，生产 assembler 不收 v1；
-找不到或有多个对应建立时拒绝，不改写语义、补地址或把原请求伪装成新请求。
+模型仅选择已给出的引用与呈现策略；compiler 不补出旧版缺少的组织及读者期待。
+答案、后续承载位置只用于校验，不作为 Writer 的正向写作材料。
 """
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
 from pydantic import ValidationError
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.hook import HookDesignWire
-from contracts.schema.workflow import STAGE4_HOOK_DESIGN_PROTOCOL
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.hook_facts import hook_facts
 
@@ -39,17 +37,32 @@ def hook_wire_schema(body: BodyDesign) -> dict:
     for name in ('HookOpeningFactWire', 'HookForbiddenFactWire'):
         field = schema['$defs'][name]['properties']['fact_ref']
         field['enum'] = established
+    for definition in schema['$defs'].values():
+        properties = definition.get('properties', {})
+        if (properties.get('kind', {}).get('const') == 'fact'
+                and 'focus' in properties and 'fact_ref' in properties):
+            properties['fact_ref']['enum'] = established
     schema['$defs']['HookMaterialWire']['properties']['withheld']['items']['enum'] = all_refs
     schema['$defs']['HookBeatRefWire']['enum'] = [
         {'scene': s.scene_id, 'beat': b.beat_id} for s in body.scenes for b in s.beats]
     return schema
 
 
+def opening_chapter_input(body: BodyDesign) -> dict:
+    """首章分工的正式投影；引用保持章内分配顺序，不读取已写正文。"""
+    opening = next(chapter for chapter in body.chapters if chapter.chapter_ordinal == 1)
+    scenes = {scene.scene_id: scene for scene in body.scenes}
+    return {
+        'purpose': opening.purpose, 'scene_refs': list(opening.scene_ids),
+        'beat_refs': [ref_parts(f'{scene_ref}#{beat.beat_id}')
+                      for scene_ref in opening.scene_ids for beat in scenes[scene_ref].beats]}
+
+
 def project_hook_input(body: BodyDesign) -> dict:
     """保留入口决策的完整故事语义，剥离预算、审计和重复状态地址。"""
     facts = hook_facts(body)
     return {
-        'input_version': 'stage4-hook-input-v2', 'facts': hook_catalog(body),
+        'input_version': 'stage4-hook-input-v3', 'facts': hook_catalog(body),
         'book_style': body.book_style, 'narration': body.narration.model_dump(mode='json'),
         'world_rules': list(body.world_rules),
         'character_voices': [v.model_dump(mode='json') for v in body.character_voices],
@@ -66,6 +79,7 @@ def project_hook_input(body: BodyDesign) -> dict:
                 for beat in scene.beats]}
             for scene in body.scenes],
         'chapters': [c.model_dump(mode='json', exclude={'length_budget'}) for c in body.chapters],
+        'opening_chapter': opening_chapter_input(body),
     }
 
 
@@ -120,32 +134,13 @@ def expand_hook_wire(wire: dict[str, Any], body: BodyDesign) -> tuple[dict | Non
         else:
             ref = item.pop('beat_ref')
             item.update(ref='#'.join((ref['scene'], ref['beat'])), address=None)
+    expectation = data['reader_expectation']
+    if expectation['kind'] == 'fact':
+        fact = resolve(expectation.pop('fact_ref'), ('reader_expectation',))
+        if fact is not None:
+            expectation['answer'] = {'ref': fact.ref, 'address': address(fact)}
+    else:
+        expectation['followup_refs'] = [
+            '#'.join((ref['scene'], ref['beat']))
+            for ref in expectation['followup_refs']]
     return (None, errors) if errors else (data, [])
-
-
-def upgrade_purchased_hook_wire(wire: dict, body: BodyDesign) -> dict:
-    """显式、无损的 v1→v2 引用换算；调用方另核已购来源与完整接受闸。"""
-    if wire.get('protocol_version') != 'stage4-hook-design-v1':
-        raise ValueError('已购 Hook 换算只接受显式 stage4-hook-design-v1')
-    result = deepcopy(wire)
-    facts = hook_facts(body)
-
-    def select(ref, raw):
-        if isinstance(ref, dict):
-            ref = '#'.join((ref['scene'], ref['beat']))
-        key = (raw['domain'], tuple(raw.get('subjects') or ()), raw.get('holder') or '', raw['key'])
-        matches = [f.fact_ref for f in facts if f.identity == (ref, key)]
-        if len(matches) != 1:
-            raise ValueError(f'已购事实引用无法无损换算：{ref}／{key}')
-        return matches[0]
-
-    for item in result.get('opening_facts', []):
-        item['fact_ref'] = select(item.pop('ref'), item.pop('address'))
-    for item in result['materials']:
-        item['withheld'] = [select(item['beat_ref'], raw) for raw in item.get('withheld', [])]
-    for k, item in enumerate(result.get('forbidden_reveals', [])):
-        result['forbidden_reveals'][k] = (
-            {'kind': 'fact', 'fact_ref': select(item['ref'], item['address'])}
-            if item.get('address') is not None else {'kind': 'event', 'beat_ref': item['ref']})
-    result['protocol_version'] = STAGE4_HOOK_DESIGN_PROTOCOL
-    return result

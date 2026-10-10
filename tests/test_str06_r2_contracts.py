@@ -651,13 +651,12 @@ def test_r2_version_constants():
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
-    assert STR06_RC_VERSION == 'str06-rc22'          # 创作材料：可选细节与系列前情
+    assert STR06_RC_VERSION == 'str06-rc23'          # Hook 独立升版；正文契约不变。
     assert 'str06-rc10' in STR06_RC_LABELS
     assert RENDERER_VERSION == 'str06-render-v11'
     assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v9'
-    for rel in ('stage4/design/body_design.json',
-                'stage4/design/presentation_graph.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc22', rel
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/design/body_design.json'] == 'str06-rc22'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/design/presentation_graph.json'] == 'str06-rc23'
     # rc17（CS-H H3）：IR 因显示面分表（display_fallback）、必保揭名
     # （requires_released）与拍级释放（release_introductions）再升版。
     # rc18（CS-S 1b 补升）：IR 经 VerificationIR.obligations 内嵌 ObligationAnchor，

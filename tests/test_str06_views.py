@@ -33,7 +33,6 @@ fastapi = pytest.importorskip(
 from fastapi.testclient import TestClient          # noqa: E402
 
 from contracts.schema import api as str06_api   # noqa: E402
-from contracts.schema.hook import HookConstraints      # noqa: E402
 from novel.api.app import create_app                         # noqa: E402
 from novel.errors import ArtifactUnreadable                  # noqa: E402
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot   # noqa: E402
@@ -69,7 +68,6 @@ def _candidate_root(tmp_path, wires, *, through='stage7', body_chapters=None) ->
                  ask=_fake_ask(session), ask_text=_fake_text(session),
                  ask_body=_fake_body(session), budget=2000, through=through,
                  book_title='报恩',
-                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
                  length_band=(0.01, 0.05), body_chapters=body_chapters)
     init_or_resume_candidate_workflow(
         repository=repo, base=root, code='code-test', root_sha1='a' * 40,
@@ -102,7 +100,6 @@ def _failed_candidate_root(tmp_path) -> Path:
                      ask=_fake_ask(session), ask_text=_fake_text(session),
                      ask_body=_fake_body(session), budget=2000, through='stage7',
                      book_title='报恩',
-                     hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
                      length_band=(0.01, 0.05))
     init_or_resume_candidate_workflow(
         repository=repo, base=tmp_path, code='code-test', root_sha1='a' * 40,
@@ -132,6 +129,10 @@ def test_views_cover_the_whole_delivered_chain(base):
     assert [c.chapter_ordinal for c in design.chapters] == [1, 2]
     assert design.hook is not None and design.hook.person == 'first'
     assert list(design.hook.materials) == ['sc02#b01', 'sc01#b02'], '按设计序（乱序冷开合法）'
+    assert '材料1：从这一材料入场' in design.hook.design_brief
+    assert '材料2：倒回较早时点' in design.hook.design_brief
+    assert '阅读期待：' in design.hook.design_brief
+    assert '局部表现重点：' in design.hook.design_brief
     assert design.binding is not None and design.binding.obligations == 1
 
     ir = views.ir_nav_view(base, name)
@@ -261,7 +262,6 @@ def test_run_view_projects_assembly_report_five_states(base):
                  ask=_fake_ask(session), ask_text=_fake_text(session),
                  ask_body=_fake_body(session), budget=2000, through='stage7',
                  book_title='报恩',
-                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
                  length_band=(0.01, 0.05),
                  node_filter=('str06.stage7.assemble',))
     run = views.run_view(base, 'cand')
@@ -335,9 +335,7 @@ def test_chapter_observation_failures_project_the_last_completed_execution(
         run_workflow(repository=repo, chapters=_chapters(),
                      ask=json_ask(session), ask_text=text_ask(session),
                      ask_body=lambda owner, prompt: None, budget=2000,
-                     through='stage7', book_title='报恩',
-                     hook_constraints=HookConstraints(target_chars=10,
-                                                      hard_max_chars=360))
+                     through='stage7', book_title='报恩')
     init_or_resume_candidate_workflow(
         repository=repo, base=root, code='code-test', root_sha1='a' * 40,
         source_identity='b' * 64, task_id='task-1', configured_model='fake',
@@ -378,7 +376,6 @@ def test_body_failures_clear_after_authorized_recovery(tmp_path):
                  ask=_fake_ask(authorized), ask_text=_fake_text(authorized),
                  ask_body=_fake_body(authorized), budget=2000, through='stage4',
                  book_title='报恩',
-                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
                  length_band=(0.01, 0.05))
     init_or_resume_candidate_workflow(
         repository=repo, base=root, code='code-test', root_sha1='a' * 40,
@@ -392,8 +389,6 @@ def test_body_failures_clear_after_authorized_recovery(tmp_path):
                      ask=_fake_ask(unauthorized), ask_text=_fake_text(unauthorized),
                      ask_body=_fake_body(unauthorized), budget=2000,
                      node_filter=('str06.stage5.body',), book_title='报恩',
-                     hook_constraints=HookConstraints(target_chars=10,
-                                                      hard_max_chars=360),
                      length_band=(0.01, 0.05))
     run = views.run_view(tmp_path, 'auth')
     assert run.status == 'needs_authorization'
@@ -408,7 +403,6 @@ def test_body_failures_clear_after_authorized_recovery(tmp_path):
                  ask=_fake_ask(authorized), ask_text=_fake_text(authorized),
                  ask_body=_fake_body(authorized), budget=2000,
                  node_filter=('str06.stage5.body',), book_title='报恩',
-                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
                  length_band=(0.01, 0.05))
     healed = views.run_view(tmp_path, 'auth')
     cleared = healed.body_failures
@@ -470,9 +464,7 @@ def _faulted_candidate_root(tmp_path, monkeypatch, *, fault_once: bool,
         run_workflow(repository=repo, chapters=_chapters(),
                      ask=json_ask(session), ask_text=text_ask(session),
                      ask_body=lambda owner, prompt: None, budget=2000,
-                     through='stage7', book_title='报恩',
-                     hook_constraints=HookConstraints(target_chars=10,
-                                                      hard_max_chars=360))
+                     through='stage7', book_title='报恩')
     except Exception:
         pass          # 粘性故障停在 OwnerRevisionStop；失败形状由链自己留痕
     init_or_resume_candidate_workflow(
@@ -587,7 +579,6 @@ def test_free_recovery_adds_only_cached_rows(base):
                  ask=_fake_ask(session), ask_text=_fake_text(session),
                  ask_body=_fake_body(session), budget=2000, through='stage7',
                  book_title='报恩',
-                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
                  length_band=(0.01, 0.05))
     after = views.run_view(base, 'cand').cost
     assert not transport.calls, '同请求身份重放零新购'

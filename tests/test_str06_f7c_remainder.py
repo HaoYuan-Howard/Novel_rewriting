@@ -27,7 +27,6 @@ import json
 import pytest
 
 from contracts.schema.execution import EffectDomain
-from contracts.schema.hook import HookConstraints
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
 from novel.llm.paid_requests import (
     PaidRequestSession, PurchaseRequired, digest, ask_json,
@@ -402,7 +401,6 @@ def _routing_session(tmp_path, wires, *, yes: bool, sticky_bad_design: bool = Fa
 
 def _run(repo, session, **kw):
     kwargs = dict(budget=2000, through='stage7', book_title='报恩',
-                  hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
                   length_band=(0.01, 0.05))
     kwargs.update(kw)
     return run_workflow(repository=repo, chapters=_chapters(),

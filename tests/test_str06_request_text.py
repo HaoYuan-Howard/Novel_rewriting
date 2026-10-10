@@ -51,13 +51,12 @@ def test_writer_request_carries_avoid_and_leaks_nothing_mechanical():
 
 def test_hook_request_carries_referenced_scene_avoid_and_leaks_nothing():
     """楔子请求：材料所引场的 avoid 到达；无内部句柄／枚举词／未释放姓名。"""
-    from contracts.schema.hook import HookConstraints
     from novel.stages.common import material_identities, render_hook_context
     from novel.stages.stage4.design import assemble_body_design
     from novel.stages.stage4.grounding import derive_semantic_binding
     from novel.stages.stage4.hook import assemble_hook_design, publish_graph
     from novel.stages.stage4.hook_context import compile_hook_context
-    from tests.factories import hook_wire_v2
+    from tests.factories import hook_wire_v3
     from tests.str06_expression_inputs import sample_narration, sample_requirements
     from tests.test_str06_hook import _body_wire, _characters, _hook_wire
     chars = _characters()
@@ -75,13 +74,12 @@ def test_hook_request_carries_referenced_scene_avoid_and_leaks_nothing():
             {'char_id': 'yun_niang', 'surfaces': ['苏芸娘', '芸娘']},
             {'char_id': 'fu_jun', 'surfaces': ['夫君']}])
     hook, errors = assemble_hook_design(
-        hook_wire_v2(hook_wire), body=body, known_char_ids=known,
+        hook_wire_v3(hook_wire), body=body, known_char_ids=known,
         name_projection=chars.name_projection(), name_structure=chars.name_structure)
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
         graph, chars.name_projection(),
-        HookConstraints(target_chars=280, hard_max_chars=360),
         chars.name_structure, {}, {}, characters=chars.core_view())
     assert context is not None and not errors, errors
     assert context.avoid_lines == ('倒叙开篇',)

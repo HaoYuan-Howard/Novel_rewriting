@@ -212,11 +212,10 @@ def test_lossy_guard_keeps_original_and_reports_block():
 def test_hook_concealed_characters_do_not_fall_back_but_others_do():
     """concealed 人物不走第 3 步回落：未释放即无显示面；非 concealed 未释放者
     在 compile 期附带回落纯称谓（夫君）——两条边界都在 display_faces 里。"""
-    from contracts.schema.hook import HookConstraints
     from novel.stages.stage4.design import assemble_body_design
     from novel.stages.stage4.hook import assemble_hook_design, publish_graph
     from novel.stages.stage4.hook_context import compile_hook_context
-    from tests.factories import hook_wire_v2
+    from tests.factories import hook_wire_v3
     from tests.str06_expression_inputs import sample_narration, sample_requirements
     from tests.test_str06_hook import _body_wire, _hook_wire
     chars = _characters()
@@ -229,14 +228,13 @@ def test_hook_concealed_characters_do_not_fall_back_but_others_do():
 
     def build(concealed):
         hook, errors = assemble_hook_design(
-            hook_wire_v2(_hook_wire(concealed=concealed, surface_releases=[
+            hook_wire_v3(_hook_wire(concealed=concealed, surface_releases=[
                 {'char_id': 'yun_niang', 'surfaces': ['苏芸娘']}])),
             body=body, known_char_ids=known, name_projection=chars.name_projection(),
             name_structure=chars.name_structure)
         assert hook is not None and not errors, errors
         context, errors = compile_hook_context(
             publish_graph(body, hook), chars.name_projection(),
-            HookConstraints(target_chars=280, hard_max_chars=360),
             chars.name_structure, {}, {}, characters=chars.core_view())
         assert context is not None and not errors, errors
         return context
@@ -251,7 +249,7 @@ def test_hook_concealed_characters_do_not_fall_back_but_others_do():
     assert 'fu_jun' not in faces['hidden']
     from novel.stages.common import hook_material_issues
     assert any(i.literal == '陆大哥' for i in hook_material_issues(
-        hidden_context.model_copy(update={'design_brief': '陆大哥的身份不露'}),
+        hidden_context.model_copy(update={'local_focus': '陆大哥的身份不露'}),
         internal_ids=set()))
 
 

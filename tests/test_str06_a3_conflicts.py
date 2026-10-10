@@ -287,7 +287,6 @@ class _ConflictPreserveTransport:
 
 
 def _run_to_preserve(tmp_path, transport_factory, monkeypatch, prepare=None):
-    from contracts.schema.hook import HookConstraints
     from novel.stages.chain import run_workflow
     from tests.str06_facilities import json_ask, text_ask, stub_body_runner
     from tests.test_str06_body import _chapters, _make_session

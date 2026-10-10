@@ -18,7 +18,6 @@ from copy import deepcopy
 
 import pytest
 
-from contracts.schema.hook import HookConstraints
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.paid_requests import PaidRequestSession
 from novel.llm.transport import ChatRequest, ChatResponse
@@ -771,7 +770,7 @@ class _RoutingTransport:
         for owner, marker in (
                 ('names', '登记全书源名称结构'), ('preserve', '最小语义义务'),
                 ('design', '设计目标书'),
-                ('hook_design', '读者入口'), ('naming', '表层姓名')):
+                ('hook_design', 'stage4-hook-design-v3'), ('naming', '表层姓名')):
             if marker in user:
                 return owner
         raise AssertionError(f'无法路由的请求：{user[:80]}')
@@ -856,13 +855,11 @@ def _ledger_rows(repo, purpose: str) -> list[dict]:
 
 
 def _run(repo, session, *, budget=2000, concurrency=4, node_concurrency=None,
-         node_filter=None, hook_max=360, body_chapters=None, through='stage7'):
+         node_filter=None, body_chapters=None, through='stage7'):
     return run_workflow(repository=repo, chapters=_chapters(),
                         ask=_fake_ask(session), ask_text=_fake_text(session),
                         ask_body=_fake_body(session),
                         budget=budget, through=through, book_title='报恩',
-                        hook_constraints=HookConstraints(target_chars=10,
-                                                         hard_max_chars=hook_max),
                         length_band=(0.01, 0.05), concurrency=concurrency,
                         node_concurrency=node_concurrency,
                         node_filter=node_filter, body_chapters=body_chapters)
@@ -1239,7 +1236,7 @@ def test_out_of_order_completion_yields_identical_ordered_delivery(tmp_path):
     assert [c['chapter_ordinal'] for c in manifest_a['chapters']] == [1, 2]
 
 
-def test_hook_failure_keeps_other_legal_commits_and_recovers_free(tmp_path):
+def test_hook_failure_keeps_other_legal_commits_and_recovers_free(tmp_path, monkeypatch):
     """Hook 失败不破坏其他合法提交（I-31）：章提交与已交付字节原样保留。
 
     Hook Design 输入变化 → 新 HookContext（章包摘要不变，章提交仍有效）；
@@ -1258,13 +1255,18 @@ def test_hook_failure_keeps_other_legal_commits_and_recovers_free(tmp_path):
 
     # ── Hook 输入变化（新 HookContext，章包不变）＋ Hook 写手机械不过 ──
     wires_hook_changed = deepcopy(wires)
-    wires_hook_changed['hook_design']['delivery_brief'] = '倒叙开场，先深夜后新婚夜。'
+    wires_hook_changed['hook_design']['local_focus'] = '以瞬时反应突出局面反差。'
     transport.wires = wires_hook_changed
-    transport.hook_text = '超' * 400  # 超过 hard_max，[length] 每次都失败
+    transport.hook_text = '陆大哥的旧约。'  # 未释放姓名，每次都失败
     calls_before = len(transport.calls)
     from novel.stages.owner_revision import MechanicalDefectStop
-    with pytest.raises(MechanicalDefectStop, match='Hook 写作') as stopped:
-        _run(repo, session, hook_max=300)
+    from novel.stages import chain
+    # Hook 提示词修订只改变其请求身份；正文设计、章包与历史正文仍同一输入。
+    with monkeypatch.context() as changed_hook:
+        changed_hook.setattr(chain, 'HOOK_DESIGN_RULES',
+                             chain.HOOK_DESIGN_RULES + '\n局部表现重点采用修订后的反差策略。')
+        with pytest.raises(MechanicalDefectStop, match='Hook 写作') as stopped:
+            _run(repo, session)
     assert stopped.value.node == 'str06.stage5.hook' and stopped.value.item == 'book'
     status = repo.read('runtime/workflow_status.json')
     assert status['status'] == 'failed' and status['failed_node'] == 'str06.stage5.hook'

@@ -1106,14 +1106,14 @@ def test_stage5_review_tracks_context_code_without_overinvalidating_writing():
     assert hook_projection is artifact_payload
     before = {
         'chapters': [{'output_ordinal': 1}],
-        'design_brief': '压住悬念，先给后果。',
+        'local_focus': '压住悬念，先呈现人物反应。',
         '_provenance': {'code': 'old-code'},
     }
     after = {**before, '_provenance': {'code': 'new-code'}}
     assert hook_projection(before) == hook_projection(after)
 
     rewritten = copy.deepcopy(before)
-    rewritten['design_brief'] = '改从收信人视角切入。'
+    rewritten['local_focus'] = '放慢收信人的反应。'
     assert hook_projection(before) != hook_projection(rewritten)
 
 def test_a_draft_cannot_be_read_through_the_edge_path():
@@ -2704,7 +2704,7 @@ def test_quality_artifacts_refuse_old_or_missing_payload_versions(tmp_path, rel,
     from tests.str06_facilities import synthetic_ref
     repo = _sealed_repository(tmp_path / 'green')
     current = _quality_model(rel)
-    assert current.contract_version == STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc22'
+    assert current.contract_version == STR06_ARTIFACT_RC_VERSIONS[rel]
     refs = tuple(synthetic_ref(owner, '版本读取反例') for owner in owners)
     repo.write(rel, current, owners=owners, refs=refs)
     assert repo.read_model(rel) == current
@@ -2763,7 +2763,7 @@ def test_execution_plan_migration_is_pure_and_keeps_its_independent_version(vers
     original = copy.deepcopy(source)
     migrated = _upgrade_rc12_payload('stage4/compiled/execution_plan.json', source)
     assert source == original, '内存迁移不能修改输入或封存字节'
-    assert STR06_RC_VERSION == 'str06-rc22'
+    assert STR06_RC_VERSION == 'str06-rc23'
     assert migrated['contract_version'] == 'str06-rc14', '全局版式头不决定独立产物版本'
     scene = migrated['scenes'][0]
     reader = scene['establishments'][0]
@@ -2792,7 +2792,7 @@ def test_execution_plan_formal_read_migrates_without_rewriting_sealed_bytes(tmp_
     assert repo.path(rel).read_bytes() == original
 
 
-@pytest.mark.parametrize('version', [None, 'str06-rc13', 'str06-rc14', 'str06-rc20'])
+@pytest.mark.parametrize('version', [None, 'str06-rc13', 'str06-rc14', 'str06-rc20', 'str06-rc22'])
 def test_old_graph_hook_component_cannot_bypass_quality_version_refusal(tmp_path, version):
     from tests.str06_facilities import synthetic_ref
     from tests.test_str06_hook import _green_pair
@@ -2839,3 +2839,45 @@ def test_free_design_recovery_reads_current_sealed_hook_without_guessing_broken_
     repo.write(rel, data, owners=('design', 'hook_design'), refs=refs)
     with pytest.raises(ValidationError):
         repo.read_graph_hook()
+
+
+@pytest.mark.parametrize('version', [None, 'str06-rc12', 'str06-rc17'])
+def test_hook_context_refuses_old_version_before_schema_defaults(tmp_path, version):
+    """旧 Hook 上下文不能靠字段默认值取得新材料组织与阅读期待。"""
+    from tests.test_str06_hook import _green_pair
+    _, _, current = _green_pair()
+    rel = 'stage4/context/hook/hook.json'
+    repo = _sealed_repository(tmp_path / 'green')
+    repo.write(rel, current)
+    assert repo.read_model(rel) == current
+    old = current.model_dump(mode='json')
+    if version is None:
+        old.pop('contract_version')
+    else:
+        old['contract_version'] = version
+    repo = _sealed_repository(tmp_path / 'old')
+    repo.write(rel, old)
+    before = repo.path(rel).read_bytes()
+    with pytest.raises(ProvenanceRefused, match='质量契约版本不兼容'):
+        repo.read_model(rel)
+    assert repo.path(rel).read_bytes() == before
+
+
+def test_graph_body_consumption_keeps_body_version_and_ignores_hook_selection():
+    """新 graph 版式与 Hook 组织独立；正文投影仍严格包含全部正文事实。"""
+    from novel.consumption import body_graph_payload, projection_for
+    from tests.test_str06_hook import _green_pair
+    body, graph, _ = _green_pair()
+    raw = graph.model_dump(mode='json')
+    before = copy.deepcopy(raw)
+    project = projection_for('str06.stage5.body', 'stage4/design/presentation_graph.json')
+    assert project is body_graph_payload
+    assert project(raw) == body.model_dump(mode='json')
+    assert project(raw)['contract_version'] == 'str06-rc22'
+    changed_hook = copy.deepcopy(raw)
+    changed_hook['hook']['local_focus'] = '以人物对答推进，落在荒唐计划提出的瞬间'
+    assert project(changed_hook) == project(raw)
+    changed_body = copy.deepcopy(raw)
+    changed_body['scenes'][0]['beats'][0]['event'] += '（正文事实改变）'
+    assert project(changed_body) != project(raw)
+    assert raw == before, '投影不得修改 canonical graph'

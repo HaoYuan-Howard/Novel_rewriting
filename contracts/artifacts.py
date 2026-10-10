@@ -317,13 +317,15 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc10（2026-09-28 R2 语义送达）：Design wire 升 stage4-design-v2——拍上线程
     # （threads）、书级 world_rules、章级 entry；四个静态跨章列表删除（AUD-04）。
     'stage4/design/body_design.json': 'str06-rc22',
-    'stage4/design/presentation_graph.json': 'str06-rc22',
+    # rc23：Hook 组织与阅读期待改为正式选择，正文载荷仍是 rc22。
+    'stage4/design/presentation_graph.json': 'str06-rc23',
     # rc16（2026-10-05 CS-F2）：HookContext 增 withheld_bindings（按 Hook 自选
     # surface_releases 算好的唯一绑定称谓表，渲染期投影）；旧 rc12 楔子上下文
     # 拒读，免费重编译。正文与楔子投影同尺（RC-40/41）。
     # rc17（2026-10-06 CS-H H3，RC-60）：HookContext 增 display_faces/avoid_lines
     # （显示面投影与材料所引场 avoid 并集）。
-    'stage4/context/hook/hook.json': 'str06-rc17',
+    # rc18：继承全书风格与人物声线；材料强调与跳时显式投影，取消字数边界。
+    'stage4/context/hook/hook.json': 'str06-rc18',
     # rc7 同批：BookBrief 带整书风格与稳定人物声线；PendingConfirmation 带事实
     # 地址（D4），投影按地址精确到消费该地址的章包。
     # rc8（2026-09-27 B4，D2）：ChapterIR 增章级验证材料（称谓许可、禁用字面

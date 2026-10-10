@@ -331,8 +331,8 @@ def test_workflow_check_detects_drift_and_tampering():
 
 
 def test_runtime_config_is_the_formal_source_and_identity_bound():
-    """Hook 长度／篇幅带／取整粒度有正式来源，且进契约身份（配置变化换身份）。"""
-    assert STR06_RUNTIME_CONFIG.hook_hard_max_chars > STR06_RUNTIME_CONFIG.hook_target_chars
+    """正文篇幅配置有正式来源；Hook 没有字数闸或冻结的长度选择。"""
+    assert not {'hook_target_chars', 'hook_hard_max_chars'} & set(STR06_RUNTIME_CONFIG._fields)
     assert 0 < STR06_RUNTIME_CONFIG.length_band_low < STR06_RUNTIME_CONFIG.length_band_high
     assert 'config' in json.loads(json.dumps({
         'config': STR06_RUNTIME_CONFIG._asdict()})), '配置必须可序列化进身份'

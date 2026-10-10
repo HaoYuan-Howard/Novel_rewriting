@@ -4,14 +4,14 @@
 
 【Hook 与正文同一份 graph】
 Hook 是同一目标故事的另一种呈现，不是第二份 truth、不是 Scene 0。必要选择
-（材料及顺序、起笔事实、POV、披露边界）由 Hook Design 保存进 PresentationGraph.hook，
+（材料及顺序、展开重点、转场、阅读期待、起笔事实、POV、披露边界）由 Hook Design 保存进 PresentationGraph.hook，
 由唯一 publisher 发布；Writer 只做呈现。机械可验性靠两条类型纪律保证：
 
   ① 起笔事实只引用已存在的目标事实（ref='init' 或 '场景#拍' + StateAddress），
      不收自由文本——「读者获准知道什么」是可解析引用，不是散文。
   ② 材料只允许 `presentation` 一处承载呈现语义（隐藏侧面／隐藏人物时才给），
-     其余投影一律从 body 拍的 event／delta 确定性解析，compiler 不解释 brief
-     补出缺失选择。
+     其余投影一律从 body 拍的 event／delta 确定性解析。局部表现重点不承载剧情；
+     compiler 不解释自然语言补出缺失选择。阅读期待的未来依据只留在设计校验侧。
 
 【上下文与回执的语义边界】
 HookContext 是 Derived（`stage4/context/hook/hook.json`），不含义务字段——
@@ -32,10 +32,12 @@ from typing import Annotated, Literal
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
-from contracts.schema.common import FreeProvenance, LlmProvenance
+from contracts.schema.common import CharacterVoice, FreeProvenance, LlmProvenance
 from contracts.schema.state import StateAddress, SurfaceRelease, WithheldNameBinding
 
 OpeningRef = str  # 'init' 或 '<scene_id>#<beat_id>'；存在性归跨引用校验
+HookEmphasis = Literal['develop', 'brief']
+HookTransition = Literal['start', 'continue', 'time_skip', 'flashback', 'return', 'scene_cut']
 
 
 class HookPov(StrictModel):
@@ -81,6 +83,8 @@ class HookMaterial(StrictModel):
     """
 
     beat_ref: OpeningRef
+    emphasis: HookEmphasis
+    transition: HookTransition
     withheld: tuple[StateAddress, ...] = ()
     presentation: str | None = None
 
@@ -90,6 +94,40 @@ class ForbiddenReveal(StrictModel):
 
     ref: OpeningRef
     address: StateAddress | None = None
+
+
+class HookReaderExpectationFocus(StrictModel):
+    """阅读期待的呈现部分；写手只收到期待，不收到未来答案。"""
+
+    kind: Literal['fact', 'action', 'relationship']
+    focus: str = Field(min_length=1, description='读者期待了解或继续看到什么，不复述未来结果')
+
+
+class HookReaderFact(HookReaderExpectationFocus):
+    """事实谜题的正式依据；存在性不代表答案与问题的语义已经标定。"""
+
+    model_config = {'extra': 'forbid', 'json_schema_extra': {'allOf': [
+        {'properties': {'answer': {'properties': {'address': {'not': {'type': 'null'}}},
+                                  'required': ['address']}}}]}}
+    kind: Literal['fact']
+    answer: ForbiddenReveal
+
+    @model_validator(mode='after')
+    def _fact_address(self) -> 'HookReaderFact':
+        if self.answer.address is None:
+            raise ValueError('事实期待必须引用明确事实，不能用整拍冒充答案')
+        return self
+
+
+class HookReaderDevelopment(HookReaderExpectationFocus):
+    """行动或关系的发展依据，可有多个后文拍，不强迫唯一答案。"""
+
+    kind: Literal['action', 'relationship']
+    followup_refs: tuple[OpeningRef, ...] = Field(min_length=1)
+
+
+HookReaderExpectation = Annotated[
+    HookReaderFact | HookReaderDevelopment, Field(discriminator='kind')]
 
 
 class HookDesign(StrictModel):
@@ -105,8 +143,8 @@ class HookDesign(StrictModel):
     concealed: tuple[str, ...] = Field(default=(), min_length=0)
     surface_releases: tuple[SurfaceRelease, ...] = ()
     forbidden_reveals: tuple[ForbiddenReveal, ...] = ()
-    design_brief: str = Field(min_length=1, description='材料如何组织成 Hook（只谈组织方式）')
-    delivery_brief: str = Field(min_length=1, description='文风机制与口吻（呈现自由交给 Writer）')
+    reader_expectation: HookReaderExpectation
+    local_focus: str = Field(min_length=1, description='局部表达重心与反差机制；不得复述或新增事件')
 
     @model_validator(mode='after')
     def _unique_materials(self) -> 'HookDesign':
@@ -128,6 +166,8 @@ class HookOpeningFactWire(StrictModel):
 
 class HookMaterialWire(StrictModel):
     beat_ref: HookBeatRefWire
+    emphasis: HookEmphasis
+    transition: HookTransition
     withheld: tuple[str, ...] = ()
     presentation: str | None = None
 
@@ -142,9 +182,19 @@ class HookForbiddenEventWire(StrictModel):
     beat_ref: HookBeatRefWire
 
 
+class HookReaderFactWire(HookReaderExpectationFocus):
+    kind: Literal['fact']
+    fact_ref: str = Field(min_length=1)
+
+
+class HookReaderDevelopmentWire(HookReaderExpectationFocus):
+    kind: Literal['action', 'relationship']
+    followup_refs: tuple[HookBeatRefWire, ...] = Field(min_length=1)
+
+
 class HookDesignWire(StrictModel):
-    """v2 只选目录引用；事实/整拍禁区用显式分支，不用 optional 偷带控制流。"""
-    protocol_version: Literal['stage4-hook-design-v2']
+    """v3 组织选择随有序材料，阅读期待用已有事实/拍；无第二份剧情简报。"""
+    protocol_version: Literal['stage4-hook-design-v3']
     pov: HookPov
     opening_facts: tuple[HookOpeningFactWire, ...] = ()
     materials: tuple[HookMaterialWire, ...] = Field(min_length=1)
@@ -152,21 +202,9 @@ class HookDesignWire(StrictModel):
     surface_releases: tuple[SurfaceRelease, ...] = ()
     forbidden_reveals: tuple[Annotated[
         HookForbiddenFactWire | HookForbiddenEventWire, Field(discriminator='kind')], ...] = ()
-    design_brief: str = Field(min_length=1)
-    delivery_brief: str = Field(min_length=1)
-
-
-class HookConstraints(StrictModel):
-    """Hook 长度边界（CLI 配置的本地选择；不是 canonical，不进 graph）。"""
-
-    target_chars: int = Field(ge=1)
-    hard_max_chars: int = Field(ge=1)
-
-    @model_validator(mode='after')
-    def _target_within_hard(self) -> 'HookConstraints':
-        if self.target_chars > self.hard_max_chars:
-            raise ValueError('target_chars 不得大于 hard_max_chars')
-        return self
+    reader_expectation: Annotated[
+        HookReaderFactWire | HookReaderDevelopmentWire, Field(discriminator='kind')]
+    local_focus: str = Field(min_length=1)
 
 
 class HookOpeningFact(StrictModel):
@@ -181,6 +219,8 @@ class HookMaterialView(StrictModel):
     """HookContext 投影后的材料：presentation，或 event + 未 withheld 的 delta 渲染。"""
 
     beat_ref: OpeningRef
+    emphasis: HookEmphasis
+    transition: HookTransition
     presentation: str | None = None
     event: str | None = None
     deltas: tuple[str, ...] = ()
@@ -194,6 +234,20 @@ class HookMaterialView(StrictModel):
         return self
 
 
+class HookSceneVoice(StrictModel):
+    """材料场声线的派生投影；来源锚只供归因，不送入写手阅读面。"""
+
+    scene_ref: str = Field(min_length=1)
+    voice: str = Field(min_length=1)
+
+
+class HookExpressionView(StrictModel):
+    """正式表达决定的写手投影：只保留已选机制与来源，不复制决策理由。"""
+
+    ex_id: str = Field(pattern=r'^ex_\d{2,}$')
+    statement: str = Field(min_length=1)
+
+
 class HookContext(StrictModel):
     """Hook Writer 的唯一输入（Derived，`stage4/context/hook/hook.json`）。
 
@@ -205,17 +259,19 @@ class HookContext(StrictModel):
     （无可证明绑定＝一律不投影），上下文字段本身不被投影改写。
     """
 
-    contract_version: Literal['str06-rc17'] = 'str06-rc17'
+    contract_version: Literal['str06-rc18'] = 'str06-rc18'
     pov: HookPov
     opening_facts: tuple[HookOpeningFact, ...] = ()
     materials: tuple[HookMaterialView, ...] = Field(min_length=1)
     forbidden_reveals: tuple[str, ...] = Field(default=(), min_length=0)
     provenance: FreeProvenance | LlmProvenance | None = Field(
         default=None, alias='_provenance', exclude=True)
-    design_brief: str = Field(min_length=1)
-    delivery_brief: str = Field(min_length=1)
-    target_chars: int = Field(ge=1)
-    hard_max_chars: int = Field(ge=1)
+    reader_expectation: HookReaderExpectationFocus
+    local_focus: str = Field(min_length=1)
+    book_style: str = Field(min_length=1)
+    expression_mechanisms: tuple[HookExpressionView, ...] = ()
+    character_voices: tuple[CharacterVoice, ...] = ()
+    scene_voices: tuple[HookSceneVoice, ...] = ()
     usable_surfaces: tuple[SurfaceRelease, ...] = ()
     withheld_literals: tuple[str, ...] = Field(default=(), min_length=0)
     #: 禁用字面中已证明唯一绑定人物的完整登记称谓（渲染期投影的验证材料，不进阅读面）。
@@ -228,12 +284,6 @@ class HookContext(StrictModel):
     #: 材料所引场的明确禁止（CS-H H3 判据⑥）：materials 引用拍所在场的
     #: `delivery.avoid` 并集（去重保序）——楔子不得违背正文设计已声明的禁区。
     avoid_lines: tuple[str, ...] = Field(default=(), min_length=0)
-
-    @model_validator(mode='after')
-    def _length_window(self) -> 'HookContext':
-        if self.target_chars > self.hard_max_chars:
-            raise ValueError('target_chars 不得大于 hard_max_chars')
-        return self
 
     @model_validator(mode='after')
     def _unique_binding_literals(self) -> 'HookContext':

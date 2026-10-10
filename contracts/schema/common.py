@@ -46,6 +46,13 @@ Sha256 = Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{64}$')]
 P = TypeVar('P', bound='Provenance')
 
 
+class CharacterVoice(StrictModel):
+    """稳定人物声线的唯一模型；正文设计与 Hook 派生输入同源使用。"""
+
+    char_id: str = Field(min_length=1)
+    voice: str = Field(min_length=1)
+
+
 def plain_report_text(value: Any) -> Any:
     """Remove report-author Markdown while preserving the instance text itself.
 

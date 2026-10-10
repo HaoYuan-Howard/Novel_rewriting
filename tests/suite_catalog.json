@@ -651,7 +651,11 @@
     },
     "tests/test_store.py": {
       "layer": "unit_contract",
-      "stages": []
+      "stages": [],
+      "cases": {
+        "test_hook_context_refuses_old_version_before_schema_defaults": "unit_contract",
+        "test_graph_body_consumption_keeps_body_version_and_ignores_hook_selection": "unit_contract"
+      }
     },
     "tests/test_str06_body.py": {
       "layer": "unit_contract",
@@ -779,10 +783,7 @@
     },
     "tests/test_str06_hook_facts.py": {
       "layer": "unit_contract",
-      "stages": ["stage4", "stage5"],
-      "cases": {
-        "test_upgrade_cli_uses_authenticated_purchase_and_real_acceptance_without_published_graph": "stage"
-      }
+      "stages": ["stage4", "stage5"]
     },
     "tests/test_str06_hook.py": {
       "layer": "unit_contract",
@@ -880,6 +881,7 @@
         "test_acceptance_record_replaces_validation_file_and_adopts_by_seal": "stage",
         "test_free_artifacts_are_sealed_like_paid_ones": "unit_contract",
         "test_unsealed_formal_read_is_refused_then_free_recovery_reseals": "stage",
+        "test_hook_revision_recompiles_free_without_invalidating_accepted_body": "stage",
         "test_compile_stage4_keeps_formal_positions_unpublished_on_guard_failure": "stage",
         "test_carried_forward_records_one_zero_token_cached_row_pointing_at_the_original_attempt": "stage",
         "test_carried_forward_revision_record_is_idempotent_and_refuses_a_different_candidate": "stage"

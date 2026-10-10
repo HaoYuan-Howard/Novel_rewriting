@@ -29,6 +29,7 @@ from contracts.artifacts import (
     STR06_EXECUTION_PLAN, STR06_BODY_DESIGN, STR06_PRESENTATION_GRAPH,
     STR06_HOOK_CONTEXT, STR06_WRITER_BOOK_IR,
     STR06_HOOK_RECEIPT, STR06_NAME_MAP,
+    STR06_ARTIFACT_RC_VERSIONS,
 )
 from contracts.invariants import NODES
 
@@ -40,6 +41,19 @@ def artifact_payload(data: object) -> object:
     if isinstance(data, dict):
         return {key: value for key, value in data.items() if key != '_provenance'}
     return data
+
+
+def body_graph_payload(data: object) -> object:
+    """Graph 的正文投影：Hook 选择及其独立版式不进入正文身份。
+
+    graph 的正文结构与 BodyDesign 同源。去掉 Hook 后恢复正文契约版本，
+    使只调整楔子组织不改变正文消费者的业务输入；不迁移旧 graph。
+    """
+    payload = artifact_payload(data)
+    if not isinstance(payload, dict):
+        return payload
+    return {**{key: value for key, value in payload.items() if key != 'hook'},
+            'contract_version': STR06_ARTIFACT_RC_VERSIONS[STR06_BODY_DESIGN]}
 
 
 def stage2_main_text(data: object) -> object:
@@ -145,7 +159,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     },
     'str06.stage5.body': {
         STR06_WRITER_BOOK_IR: artifact_payload,
-        STR06_PRESENTATION_GRAPH: artifact_payload,
+        STR06_PRESENTATION_GRAPH: body_graph_payload,
         STR06_STAGE2_CHARACTERS: artifact_payload,
     },
     'str06.stage5.hook': {
@@ -238,7 +252,7 @@ def producer_node(rel: str, *, fallback: str | None = None) -> str | None:
 
 __all__ = [
     'CONSUMED_PROJECTIONS', 'Projection',
-    'artifact_payload', 'canonical_rel', 'context_inputs_for',
+    'artifact_payload', 'body_graph_payload', 'canonical_rel', 'context_inputs_for',
     'producer_node', 'project_consumed',
     'projection_for',
 ]

@@ -561,15 +561,13 @@ from typing import Final, NamedTuple
 
 
 class CandidateRuntimeConfig(NamedTuple):
-    """候选链运行期配置的**正式来源**（F7c）：Hook 长度、章篇幅带与书级篇幅
+    """候选链运行期配置的**正式来源**（F7c）：章篇幅带与书级篇幅
     取整粒度。与付费调用额度（`--book-call-ceiling`、工作单元／整书总闸）是两件
     事：配置进 prompt 与 IR，从而进请求身份；额度只闸新购次数，不进语义身份。
 
     CLI 旗标可覆盖，但覆盖值同样经 prompt／IR 进入身份——配置变化不误用旧结果。
     """
 
-    hook_target_chars: int = 280
-    hook_hard_max_chars: int = 360
     length_band_low: float = 0.6
     length_band_high: float = 1.3
     #: 书级正文篇幅从源 MainText 章节总字数向上取整的粒度（保留全书篇幅边界）。
@@ -652,14 +650,16 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 # 三层知情、源盲重设计、节点和额度不变；旧质量契约不隐式迁移。
 # rc22（2026-10-09）：Preserve v5/policy 8 增有完整正式证据的独立事件锚点；
 # 事件承载行动及细节，状态/知情/悬念锁仍由各自原子派生；六类质量产物同批升版。
-STR06_RC_VERSION: Final = 'str06-rc22'
+# rc23（2026-10-10）：Hook 设计的材料呈现、衔接与阅读期待显式化；
+# graph 单独升版，正文设计保持 rc22；楔子取消字数约束并继承正式风格与声线。
+STR06_RC_VERSION: Final = 'str06-rc23'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
                           'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
                           'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15',
                           'str06-rc16', 'str06-rc17', 'str06-rc18', 'str06-rc19',
-                          'str06-rc20', 'str06-rc21', 'str06-rc22')
+                          'str06-rc20', 'str06-rc21', 'str06-rc22', 'str06-rc23')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒
@@ -691,7 +691,7 @@ STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v5'
 # CS-3（2026-10-03）：`str06.stage4.bind` 退役——承载位由 design wire 的 real
 # 标注派生（stage4-design-v6 的面），stage4-bind-v1 wire 协议随之退役。
 # Hook v2：事实引用由代码目录给出；canonical 的位置＋地址形状保持不变。
-STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v2'
+STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v3'
 
 #: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`
 #: 是 typed 修复的显式 producer 边界（对齐正式 ExecutionEpochReason 的 continue）。

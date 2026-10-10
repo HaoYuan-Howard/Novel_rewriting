@@ -127,6 +127,7 @@ _QUALITY_CONTRACT_SITES = frozenset({
     'stage4/grounding/semantic_binding.json',
     'stage4/design/body_design.json',
     'stage4/design/presentation_graph.json',
+    'stage4/context/hook/hook.json',
     'stage4/ir/writer_book_ir.json',
 })
 
@@ -140,7 +141,7 @@ def _require_current_quality_contract(spec: str | None, data: dict) -> None:
     if found != expected:
         raise ProvenanceRefused(
             f'{spec} 的质量契约版本不兼容：载荷 {found!r}，当前 {expected}。'
-            '旧产物或缺版本标记的产物不能补成新系列回顾与细节证据；'
+            '旧产物或缺版本标记的产物不能补成当前语义选择与证据；'
             '保留旧盘只读，按当前契约从所属 owner 重建')
 
 

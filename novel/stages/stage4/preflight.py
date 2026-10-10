@@ -153,7 +153,7 @@ def _location_text(location: tuple) -> str:
     return ':'.join(str(part) for part in location) if location else '（无位置）'
 
 
-def hook_combination_errors(hook, *, body, binding, chars, hook_constraints,
+def hook_combination_errors(hook, *, body, binding, chars,
                             kp_statements, world_statements) -> list[str]:
     """候选 Hook 与目标正文的组合检查（CS-H H2，RC-57「同法接入」）。
 
@@ -167,7 +167,7 @@ def hook_combination_errors(hook, *, body, binding, chars, hook_constraints,
     from novel.stages.common import material_identities
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, chars.name_projection(), hook_constraints, chars.name_structure,
+        graph, chars.name_projection(), chars.name_structure,
         kp_statements, world_statements, characters=chars.core_view())
     if context is None:
         return list(errors)

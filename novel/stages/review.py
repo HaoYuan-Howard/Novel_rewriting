@@ -4,7 +4,6 @@ from __future__ import annotations
 from pydantic import ValidationError
 
 from contracts.schema.grounding import OutputConstraints
-from contracts.schema.hook import HookConstraints
 from contracts.schema.observation import (
     AssociateObservation, NamesObservation, STAGE2_NAMES_PROTOCOL,
 )
@@ -47,7 +46,7 @@ def character_literals(repository) -> dict[str, tuple[str, ...]]:
 
 
 def dry_run_patch(repository, owner, candidate, *, evidence, budget,
-                  hook_constraints: HookConstraints, chapter_count: int,
+                  chapter_count: int,
                   source_texts: tuple[str, ...] | None = None, book_title: str = '',
                   length_band: tuple[float, float] = (
                       STR06_RUNTIME_CONFIG.length_band_low, STR06_RUNTIME_CONFIG.length_band_high),
@@ -173,7 +172,6 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         if owner == 'design':
             return _design_preview(repository, candidate, checkpoint, brief, chars,
                                    budget=budget, chapter_count=chapter_count,
-                                   hook_constraints=hook_constraints,
                                    length_band=length_band, book_title=book_title)
         binding = repository.read_model('stage4/grounding/semantic_binding.json')
         body = repository.read_model('stage4/design/body_design.json')
@@ -189,7 +187,7 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         plan, errors = compile_execution_plan(graph, binding)
         kp_statements = {p.kp_id: p.statement for p in brief.propositions}
         world_statements = {wc.constraint_id: wc.statement for wc in brief.book_constraints}
-        hook_context, hook_errors = compile_hook_context(graph, projection, hook_constraints,
+        hook_context, hook_errors = compile_hook_context(graph, projection,
                                                         chars.name_structure, kp_statements,
                                                         world_statements,
                                                         characters=chars.core_view())
@@ -211,7 +209,7 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
 
 
 def _design_preview(repository, candidate, checkpoint, brief, chars, *, budget,
-                    chapter_count, hook_constraints, length_band, book_title):
+                    chapter_count, length_band, book_title):
     """失败书没有正式Design/Binding/Hook时，仍运行同一份完整候选预检。"""
     inspection = inspect_design_candidate(
         candidate, checkpoint=checkpoint, brief=brief,
@@ -232,7 +230,6 @@ def _design_preview(repository, candidate, checkpoint, brief, chars, *, budget,
                 # 组合检查，内部句柄闭集取 material_identities 全集。
                 hook_errors = hook_combination_errors(
                     hook, body=inspection.body, binding=inspection.binding, chars=chars,
-                    hook_constraints=hook_constraints,
                     kp_statements={p.kp_id: p.statement for p in brief.propositions},
                     world_statements={w.constraint_id: w.statement
                                       for w in brief.book_constraints})

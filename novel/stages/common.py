@@ -48,7 +48,7 @@ from contracts.schema.context import (
     PriorSeriesEvent, StateEntry, SurfaceRelease, ThreadOpIR, UnansweredGuard, VerificationIR,
     WriterBrief, WriterContext, WriterDetail, WriterPacket, beats_ir,
 )
-from contracts.schema.hook import HookContext
+from contracts.schema.hook import HookContext, HookDesign
 from contracts.schema.design import BodyDesign
 from contracts.schema.execution import (
     EffectDomain, Establishment, ExecutionPlan, ExecutionSlice,
@@ -314,6 +314,24 @@ def _hook_projection(context: HookContext):
     return project
 
 
+_HOOK_TRANSITION_TEXT = {
+    'start': '从这一材料入场', 'continue': '接着上一材料继续',
+    'time_skip': '时间向后推进，明确交代转场', 'flashback': '倒回较早时点，明确标记回溯',
+    'return': '返回此前现场，明确接回当前行动', 'scene_cut': '切换现场，交代时间和关系',
+}
+_HOOK_EMPHASIS_TEXT = {'develop': '展开行动、对白和即时反应', 'brief': '简短带过，保留必要前提'}
+
+
+def hook_organization_summary(hook: HookDesign) -> str:
+    """监控面组织说明仅从正式选择生成；不是第二份剧情或语义真相。"""
+    lines = [f'材料{i + 1}：{_HOOK_TRANSITION_TEXT[item.transition]}；'
+             f'{_HOOK_EMPHASIS_TEXT[item.emphasis]}。'
+             for i, item in enumerate(hook.materials)]
+    lines.extend((f'阅读期待：{hook.reader_expectation.focus}',
+                  f'局部表现重点：{hook.local_focus}'))
+    return '\n'.join(lines)
+
+
 def _hook_render(context: HookContext) -> tuple[list[str], tuple[dict, ...]]:
     """行组装与投影留痕的单一场地：render 与审计读数共用同一字段清单。
 
@@ -354,18 +372,22 @@ def _hook_render(context: HookContext) -> tuple[list[str], tuple[dict, ...]]:
 
     focalizers = '、'.join(_focal_face(f) for f in context.pov.focalizers)
     parts = ['【起笔已成立的事实】（开场前已成立；自然带过，不作为任务交代）']
-    parts.extend(f'- {show(fact.text, f"opening_facts/{i}")}'
+    audiences = {'world': '世界已成立，人物未必知晓', 'pov': '视角人物可知',
+                 'reader': '读者获准知道，人物未必知晓'}
+    parts.extend(f'- [{audiences[fact.audience]}] {show(fact.text, f"opening_facts/{i}")}'
                  for i, fact in enumerate(context.opening_facts))
     parts.append('【必须写出的材料】（按给定顺序组织；不得重选或换序）')
     for i, material in enumerate(context.materials):
         index = i + 1
+        parts.append(f'- 材料{index}的呈现：{_HOOK_TRANSITION_TEXT[material.transition]}；'
+                     f'{_HOOK_EMPHASIS_TEXT[material.emphasis]}。')
         if material.presentation is not None:
             parts.append(f'- 材料{index}：{show(material.presentation, f"materials/{i}/presentation")}')
         else:
             parts.append(f'- 材料{index}：{show(material.event, f"materials/{i}/event")}')
             for j, delta in enumerate(material.deltas):
                 parts.append(f'  随材料成立：{show(delta, f"materials/{i}/deltas/{j}")}')
-    parts.append('【禁止提前兑现】（禁区：不得出现、不得暗示）')
+    parts.append('【禁止提前兑现】（禁区中的答案、后续结果不得出现或暗示）')
     parts.extend(f'- {show(line, f"forbidden_reveals/{i}")}'
                  for i, line in enumerate(context.forbidden_reveals))
     # 材料所引场的明确禁止（CS-H H3 判据⑥）：楔子不得违背正文设计已声明的禁区。
@@ -373,15 +395,34 @@ def _hook_render(context: HookContext) -> tuple[list[str], tuple[dict, ...]]:
         parts.append(f'- 材料所引场景的明确禁止：{show(line, f"avoid_lines/{i}")}')
     parts.append('【叙述与组织】')
     parts.append(f'- 视角：{person}，聚焦 {focalizers}')
-    parts.append(f'- 组织方式：{show(context.design_brief, "design_brief")}')
-    parts.append(f'- 文风与口吻：{show(context.delivery_brief, "delivery_brief")}')
+    parts.append(f'- 全书表达机制：{show(context.book_style, "book_style")}')
+    for i, mechanism in enumerate(context.expression_mechanisms):
+        parts.append(f'- 全书默认表达机制（按本楔子人称实现）：'
+                     f'{show(mechanism.statement, f"expression_mechanisms/{i}/statement")}')
+    for i, voice in enumerate(context.character_voices):
+        parts.append(f'- {_name(voice.char_id)}的声线：'
+                     f'{show(voice.voice, f"character_voices/{i}/voice")}')
+    for i, voice in enumerate(context.scene_voices):
+        labels = '、'.join(f'材料{j + 1}' for j, item in enumerate(context.materials)
+                          if item.beat_ref.split('#', 1)[0] == voice.scene_ref)
+        parts.append(f'- {labels}所在场的表达机制（按本楔子人称实现）：'
+                     f'{show(voice.voice, f"scene_voices/{i}/voice")}')
+    parts.append(f'- 局部表现重点：{show(context.local_focus, "local_focus")}')
+    expectations = {'fact': '尚未解答的事实问题', 'action': '尚未完成的行动',
+                    'relationship': '尚待发展的关系'}
+    parts.append(f'- 阅读期待（{expectations[context.reader_expectation.kind]}）：'
+                 f'{show(context.reader_expectation.focus, "reader_expectation/focus")}。'
+                 '让读者形成期待，不在楔子中兑现，也不暗示未来答案或结果。')
+    parts.append('- 最后一份材料是本楔子的截断边界，不继续写后文；'
+                 '末尾可落在动作、对白、即时反应或有依据的疑问上。')
     parts.append('【可用称谓】（只能使用这些字面）')
     surfaces = '、'.join(sorted({s for r in context.usable_surfaces
                                  for s in r.surfaces}))
     parts.append(f'- {surfaces}' if surfaces else '- （无）')
     parts.append('【交付要求】')
-    parts.append(f'- 篇幅目标约 {context.target_chars} 字，'
-                 f'绝对不得超过 {context.hard_max_chars} 字（标点计入，空白不计）。')
+    parts.append('- 不参照原文楔子长度，不为固定字数压缩或凑字。'
+                 '篇幅由理解当前冲突所需的行动、对白和反应决定；每段推进局面或认识，'
+                 '必要前提足够清楚后停止解释，在阅读期待最强的位置截断。')
     parts.append('请写出楔子。')
     return parts, tuple(hits)
 
@@ -420,8 +461,15 @@ def hook_material_issues(context: HookContext, *,
     text = render_hook_context(context)
     before, tail = text.split('【禁止提前兑现】', 1)
     positive = before + '【叙述与组织】' + tail.split('【叙述与组织】', 1)[1]
-    sources = [MaterialSource('hook', 'hook', field, getattr(context, field))
-               for field in ('design_brief', 'delivery_brief')]
+    sources = [MaterialSource('hook', 'hook', 'local_focus', context.local_focus),
+               MaterialSource('hook', 'hook', 'reader_expectation.focus', context.reader_expectation.focus),
+               MaterialSource('design', 'book', 'book_style', context.book_style)]
+    sources.extend(MaterialSource('design', voice.char_id, 'voice', voice.voice)
+                   for i, voice in enumerate(context.character_voices))
+    sources.extend(MaterialSource('design', voice.scene_ref, 'delivery.voice', voice.voice)
+                   for i, voice in enumerate(context.scene_voices))
+    sources.extend(MaterialSource('expression', mechanism.ex_id, 'statement', mechanism.statement)
+                   for mechanism in context.expression_mechanisms)
     sources.extend(MaterialSource('hook', fact.established_by, f'opening_facts/{i}', fact.text)
                    for i, fact in enumerate(context.opening_facts))
     for i, item in enumerate(context.materials):
@@ -1285,25 +1333,34 @@ NAME_VARIANTS_RULES = """任务：判定疑似姓名异写候选。程序已从�
 处理）；不得在证据矛盾时强行归并；同一字面只答一次。
 输出 JSON 顶层：{{"protocol_version":"{protocol}","variants":[{{"literal":"…","verdict":"same|unresolved|not_name","char_id":…,"surface":…,"evidence_refs":["…"],"reason":"…"}}]}}"""
 
-HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。brief 明确入口知识、跳时定位与末尾悬念；POV 可以与正文不同，事实和披露边界一致。只输出设计 JSON，不写 prose
-（wire 协议 stage4-hook-design-v2）。事实只选择输入 facts 目录中的 fact_ref；
+HOOK_DESIGN_RULES = """任务：从正式正文设计中选择一个能迅速吸引读者的冲突单元，设计楔子的进入、呈现与截断。只输出设计 JSON，不写楔子正文
+（wire 协议 stage4-hook-design-v3）。事实只选择输入 facts 目录中的 fact_ref；
 不得自行生成地址、人物组合、状态键或引用编号。材料位置只选择 scene/beat 分量。
 目录每条保留建立位置、原值、op、modality、holder 与 knowledge_mode；这些是不同
 维度。世界事实已成立不自动代表人物或读者已经知道，不把不同原值猜成同一事实。
 
-你看到的骨架是正文设计（BodyDesign）：唯一事件真相。楔子不是 Scene 0，不是正文
-第一场的压缩版，而是从已设计好的故事中重新选择最有吸引力的一条进入路径。
+你看到的骨架是正文设计（BodyDesign）：唯一事件真相。默认选择一个清楚的冲突片段，
+让人物采取行动、对方作出反应、局面发生变化，并在冲突尚未解决时截断。
+材料要能直接写成小说，不能只有几个相隔很远的结果。不要为了展示全书卖点堆入多条支线。
+输入中的 opening_chapter 是第1章正式任务与材料位置的派生视图：比较楔子已经消耗的
+信息与第1章还会推进的内容，避免把第1章的完整行动与反应提前浓缩复述。无需改写正文设计。
 
 设计自由（明确授权）：
 - cold open：从故事任意位置的高张力画面或认知状态开场；
-- 倒叙、flash-forward、跨场景取材、合并、压缩，只要语义合法；
+- 倒叙、跨场景取材与压缩均允许，但每次切换必须服务同一冲突，有明确时间定位，
+  且理解所需的因果前提必须来自所选起笔事实或材料，不能交给写手补造；
 - materials 的排列按读者接收信息的顺序，可以不同于故事时序——这正是倒叙授权。
 
-materials（默认 2-4 条，按呈现序；这只是随篇幅调整的指引，不是机械闸）：每条
-{beat_ref:{"scene":...,"beat":...}, withheld:[fact_ref], presentation}。
-- 每加入一份材料，读者对局面的理解必须升级；最后一份材料必须能天然收束楔子；
-- 围绕一个核心冲突取材，并给读者留下一个未兑现的问题；
-- 不选只属于后期 payoff 的拍；人物对事件的完整处理（追问、伦理辩论、对峙）不属于楔子；
+materials（按呈现序，不规定条数）：每条
+{beat_ref:{"scene":...,"beat":...}, emphasis:"develop|brief",
+ transition:"start|continue|time_skip|flashback|return|scene_cut", withheld:[fact_ref], presentation}。
+- emphasis：develop=展开行动、对白与即时反应；brief=简短带过必要前提。
+- 第一条 transition=start；后续不得 start。continue 接同场相邻下一拍；time_skip
+  向后推进到较晚时点；flashback 倒回较早位置；return 在回溯后向前返回已呈现场景；
+  scene_cut 切到不同场景。切换的事实桥接依赖所选材料与起笔事实，不另写一套剧情。
+- 每份材料应推进同一冲突或补足理解所需的前提。末份材料是楔子的截断位置：
+  可停在动作、回应或局面即将改变之处，不要求把该场结局写完，也不要求替读者发问。
+- 截断精度沿用现有拍引用：选择足够细的末拍，不虚构拍内动作地址。
 - withheld：只选该拍 fact_refs 中不呈现的事实引用（隐藏侧面时用）；
 - presentation：只在该拍涉及隐藏身份（concealed 中人物）或需要隐藏侧面时给出，
   用一句话显式声明本材料呈现什么（不含隐藏人物的姓名字面）；否则省略，
@@ -1333,31 +1390,53 @@ forbidden_reveals：后文真实存在、楔子不得提前兑现的关键揭示
 {kind:"fact", fact_ref:"目录引用"} 或 {kind:"event", beat_ref:{scene:...,beat:...}}。
 fact 禁该位置的具体事实；event 禁整拍。不能与材料或起笔所选的同次揭示冲突。
 
-design_brief（120-300 字）：这些材料如何组织成楔子的写作要求，逐项覆盖——
-入口（从什么状态或画面进入）、哪些材料快速带过、冲突如何升级、重点展开哪里、
-给读者留下什么问题、在哪里切断。只谈组织方式，不谈措辞。
-delivery_brief（一句话）：文风机制与口吻（人称、节奏、对白密度），呈现自由交给写手。
+reader_expectation：让读者带去后文的一项明确期待。focus 描述期待，不复述未来答案。
+- 事实谜题：{kind:"fact", focus:"...", fact_ref:"目录引用"}。所选事实必须能真正
+  回答这个问题，且建立位置晚于全部材料；不能用人物怀疑、相信或含混反应冒充确证，
+  不能把源文未回答的问题设计成有答案的谜题。引用存在只证明位置合法，答案是否匹配
+  是你的语义责任。未来 fact_ref 只用于设计和校验，不会成为写手的故事材料。
+- 行动或关系期待：{kind:"action|relationship", focus:"...", followup_refs:[{scene:...,beat:...}]}。
+  选后文实际推进该行动或关系的拍，均须晚于全部材料；不要求唯一答案，但不能许诺
+  正文没有的发展。未来引用只用于校验，不投影给写手。
+- 不在材料、起笔事实或局部重点中提前兑现这项期待；与它冲突的揭示应列入禁区。
 
-只输出一个 JSON 对象（protocol_version 为 "stage4-hook-design-v2"；不要围栏、
+local_focus：只写表现重点，例如人物严肃措辞与荒唐行动的反差、表面克制与内心反应
+的落差。不得另行复述事件、增补动机、前史、桥接事实或结局。全书风格、人物声线与
+材料场景声线由正式设计投影，不再自拟 delivery_brief。
+
+只输出一个 JSON 对象（protocol_version 为 "stage4-hook-design-v3"；不要围栏、
 不要解释）：
-{"protocol_version":"stage4-hook-design-v2","pov":{...},"opening_facts":[...],"materials":[...],"concealed":[...],
- "surface_releases":[...],"forbidden_reveals":[...],"design_brief":"...","delivery_brief":"..."}"""
+{"protocol_version":"stage4-hook-design-v3","pov":{...},"opening_facts":[...],"materials":[...],"concealed":[...],
+ "surface_releases":[...],"forbidden_reveals":[...],"reader_expectation":{...},"local_focus":"..."}"""
 
-HOOK_WRITER_SYSTEM = """你是楔子写手（prose realizer）。楔子的结构设计已经全部完成，你的唯一职责是把它写成高质量的小说语言。
+HOOK_WRITER_SYSTEM = """你是小说楔子写手。把已设计的冲突单元写成一段能让读者继续翻页的小说。
+读者应看清眼前谁要做什么、受到什么阻力，并通过行动、对白和即时反应进入人物处境。
 
-输入按身份分区（违反任何一条即报废）：
-1.【必须写出的材料】是你的全部故事内容：按给定顺序组织，不得重新选择材料、不得改变顺序、不得把楔子扩写成正文第一场的完整戏；材料之外的事实、背景与人物前史一律不补造。
-2.【起笔已成立的事实】是开场前已成立的世界：自然带过，作为延续或背景使用，不作为写作任务逐条交代，也不复述成说明。
-3.【禁止提前兑现】是禁区：其中的任何信息不得出现、不得暗示；受保护的未决问题不回答、不点破，也不主动向读者提起。
+输入是你唯一的写作依据：
+1.【必须写出的材料】按给定顺序、展开重点和转场方式呈现。把事件写成发生中的戏，
+  不把几条梗概逐句扩写。保留理解所需的因果前提，转场交代时间和当前行动的联系。
+  不重新选材，不改变行为主体、结果、顺序或事实，不越过最后一份材料的截断位置。
+2.【起笔已成立的事实】自然融入必要前提，不逐条交代。世界成立、人物可知、读者获准
+  知道是不同权限：世界事实不自动成为视角人物的知识，人物怀疑、相信不写成确知。
+3.【禁止提前兑现】是禁区：其中的答案或后续结果不得出现、不得暗示；受保护的未决
+  问题不回答，不虚构线索或答案。让眼前局面形成期待，不强迫替读者发问。
 4.【可用称谓】之外的人名字面一律不得出现。已释放只表示字面可用，不表示任何人都能这样称呼；叙述、人物自称及对他人的称呼须符合当前说话人和对象的关系。
-5. 遵守文风与口吻要求：篇幅以目标为准，绝对不得超过硬上限。
+5.【叙述与组织】中的全书风格、人物与场景声线落实为实际表达机制，局部重点只指导
+  表现。不能因为楔子需要冲击力而把喜剧写成悲凉、把猜测写成秘密已经坐实。
 
-呈现自由（你的创意只在这里发挥）：句法、对白措辞、节奏、意象、语气、局部小动作。
-局部小动作只能服务气氛与人物状态，不得带出新的情节动作或结果（谁来了、谁走了、
-什么被拿走、什么被答应，都不属于你）。
-可以补措辞、对白、即时反应与局部动作；不得新增改变动机、行为主体、关系、时序、
+你的文学表达空间：组织句法与段落，取舍展开程度，写自然的对白、即时心理反应、
+停顿与局部动作。材料已有关键原话时保留它的信息和人物说话机制；新增对白措辞不能
+新增承诺、动机、告知或结果。用人物的反应表现反差，不由旁白解释情节多么荒唐。
+环境在改变处境、行动或感知时使用，避免独立堆景、空泛心跳与无依据的悲凉腔调。
+标点服务当前句子的节奏，破折号不承担反复制造悬念的任务。
+局部动作与感受不得新增改变动机、行为主体、关系、时序、
 知情条件或后续前提的事实。删去这句后若会改变读者对为什么发生、谁做了、前史是什么
 的理解，就属于新增事实，必须删去。
+
+篇幅由完成这段冲突所需的表达决定，无固定字数目标，不沿用源楔子的长度。
+保持简洁有力：每段都推进动作、人物反应或必要理解，删去重复解释与空转气氛。
+阅读期待通过尚未解决的局面形成，末句可以停在动作或一句话上；不为了收尾另造谜题，
+也不默认替读者问“究竟为什么”“他是不是早就知道”。
 
 直接输出楔子正文本身：不要标题，不要任何解释、前言、后缀，不要 markdown 围栏。"""
 
@@ -1746,12 +1825,11 @@ def consumption_closure(graph: BodyDesign,
                         fact_bindings: Iterable = ()) -> dict[tuple, tuple[int, ...]]:
     """全书消费闭包（R10b.3）：地址 → 消费者场序集合（升序）。
 
-    消费者闭集四类（背景投影的「后文仍被消费」判定面）：
+    消费者闭集三类（正文背景投影的「后文仍被消费」判定面）：
 
     · 后文场景的**声明读取**（`state_reads`——写手按 must_respect 消费）；
     · **读者确认目标**（reader set 的 `confirms` 地址——确认前该事实仍受
       「何时确认」约束，章包需要它的入场值）；
-    · **Hook 起笔/隐藏/禁揭地址**（书末消费，位置记全书场数）；
     · **锁承载**（拍上 `kp_*` 键＝该地址的知情承载；CS-F2 起事实锁的承载状态由
       Binding 的 `fact_bindings` 给出——升级与兑现都消费旧值边界）。
 
@@ -1759,9 +1837,9 @@ def consumption_closure(graph: BodyDesign,
     判定后文消费——同一地址先建立（sc01 起疑）后升级（sc02 确认）时，
     建立场序不是「后文」。纯函数、只报告位置：只写不被读的事实状态无
     消费者，留在其拍「必须写出」与 Machine IR，不再向后投影（C7）。
+    Hook 独立从正式故事投影；它的取材与禁区不得改变正文背景或章包身份。
     """
     positions: dict[tuple, list[int]] = {}
-    total_scenes = len(graph.scenes)
 
     def _consume(address: tuple, at: int) -> None:
         bucket = positions.setdefault(address, [])
@@ -1782,16 +1860,6 @@ def consumption_closure(graph: BodyDesign,
         at = scene_index.get(bound.beat_ref.split('#', 1)[0])
         if at is not None:
             _consume(bound.address.address(), at)
-    hook = getattr(graph, 'hook', None)
-    if hook is not None:
-        for fact in hook.opening_facts:
-            _consume(fact.address.address(), total_scenes)
-        for material in hook.materials:
-            for address in material.withheld:
-                _consume(address.address(), total_scenes)
-        for item in hook.forbidden_reveals:
-            if item.address is not None:
-                _consume(item.address.address(), total_scenes)
     return {address: tuple(sorted(buckets))
             for address, buckets in positions.items()}
 
@@ -1824,7 +1892,7 @@ def narrow_background(
       故事中已解除）；
     · 书级初态（`established_by == 'init'`）保留——人物立足点；
     · 拍建立的状态仅在**建立之后仍有消费者**（声明读取、读者确认目标、
-      Hook 地址、锁键；`consumers` 给出消费者场序集合）时保留——消费者
+      锁键；`consumers` 给出消费者场序集合）时保留——消费者
       位置必须晚于建立场（`scene_of` 解析 `established_by`）：建立拍自身
       已经在「必须写出」里，不构成后文消费。
 

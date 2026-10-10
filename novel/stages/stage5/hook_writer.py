@@ -4,12 +4,12 @@
 
 【Writer 是 realizer，不是 designer】
 请求只从 HookContext 构建（沿用原型 realizer 的系统契约，去掉强制第一人称）；
-结构已由 Hook Design 完成。机械 validator 只查：非空、长度、编码、包装行与
+结构已由 Hook Design 完成。机械 validator 只查：非空、编码、包装行与
 withheld 专名字面泄漏（先认领已释放称谓，再查未覆盖出现）。机械通过**不**
 产生「语义已验」字段——回执的 semantic 恒为 unverified。
 
 【失败归属】
-超长或格式失败 = realization failure：同一 Context 下有限重写（最多再 2 次），
+格式失败 = realization failure：同一 Context 下有限重写（最多再 2 次），
 重写请求 = 同一 Context + 上一稿的机械错误，身份确定、可免费恢复；上游设计
 错误回 Stage4；付费状态未知阻断。
 """
@@ -20,15 +20,14 @@ import json
 import re
 
 from contracts.schema.hook import HookContext
-from novel.core.text import count_non_whitespace_chars
 from novel.stages.common import claim_spans, uncovered_occurrences, render_hook_context
 
 #: 机械 validator 的版本：回执 validator_version 记这一位，规则变化必须换版。
-HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v2'
+HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v3'
 
 #: 已通过的机械检查项名单（回执 mechanical_checks 的取值面）。
 MECHANICAL_CHECKS = (
-    'non_empty', 'length', 'encoding', 'no_wrapper', 'withheld_literals',
+    'non_empty', 'encoding', 'no_wrapper', 'withheld_literals',
 )
 
 #: realization failure 的同 Context 重写上限（首次 + 再 2 次）。
@@ -63,10 +62,6 @@ def validate_hook_prose(prose: str, context: HookContext) -> list[str]:
     text = (prose or '').strip()
     if not text:
         return ['[non_empty] 楔子为空']
-    count = count_non_whitespace_chars(text)
-    if count > context.hard_max_chars:
-        errors.append(
-            f'[length] 长度 {count} 超过 hard_max_chars={context.hard_max_chars}')
     if '\ufffd' in text or _CONTROL.search(text):
         errors.append('[encoding] 存在 U+FFFD 或控制字符')
     if '```' in text or text.lstrip().startswith('#') or _TITLE_LINE.match(

@@ -431,8 +431,6 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         through=_STR06_THROUGH[a.node],
         book_sid=a.sid,
         budget=None,
-        hook_target_chars=STR06_RUNTIME_CONFIG.hook_target_chars,
-        hook_hard_max=STR06_RUNTIME_CONFIG.hook_hard_max_chars,
         body_band_low=STR06_RUNTIME_CONFIG.length_band_low,
         body_band_high=STR06_RUNTIME_CONFIG.length_band_high,
         body_chapters=body_chapters,

@@ -496,8 +496,9 @@ def test_fact_lock_carrier_is_a_consumer_via_binding_not_via_a_kf_key():
         assert KF_PROMISE not in text and 'kf_' not in text
 
 
-def test_consumption_closure_includes_hook_addresses():
-    """Hook 起笔/隐藏/禁揭地址进消费闭包（书末消费）。"""
+def test_consumption_closure_ignores_hook_selection():
+    """正文背景消费只来自正文，Hook 取材与禁区不改变章包。"""
+    from contracts.schema.design import PresentationGraph
     from contracts.schema.hook import HookDesign
     from novel.stages.common import consumption_closure
     body = _design()
@@ -506,19 +507,24 @@ def test_consumption_closure_includes_hook_addresses():
         opening_facts=[{'ref': 'init', 'audience': 'reader',
                         'address': {'domain': 'character', 'key': 'residence',
                                     'subjects': ['yun_niang'], 'holder': None}}],
-        materials=[{'beat_ref': 'sc01#b01'}],
+        materials=[{'beat_ref': 'sc01#b01', 'emphasis': 'develop', 'transition': 'start'}],
         concealed=[], surface_releases=[{'char_id': 'yun_niang',
                                          'surfaces': ['芸娘']}],
         forbidden_reveals=[
             {'ref': 'sc02#b02',
              'address': {'domain': 'knowledge', 'key': KP_INQUIRY,
                          'subjects': ['yun_niang'], 'holder': 'yun_niang'}}],
-        design_brief='从疑心进入，收在文书一角。', delivery_brief='冷峻短句。')
-    graph = body.model_copy(update={'hook': hook})
+        reader_expectation={'kind': 'action', 'focus': '她如何查明真相',
+                            'followup_refs': ['sc02#b02']},
+        local_focus='通过观察与即时反应呈现疑心。')
+    graph = PresentationGraph.model_validate({
+        **body.model_dump(mode='json'), 'contract_version': 'str06-rc23',
+        'hook': hook.model_dump(mode='json')})
     closure = consumption_closure(graph)
-    assert closure.get(('character', ('yun_niang',), '', 'residence')) == (3,)
+    assert closure == consumption_closure(body)
+    assert ('character', ('yun_niang',), '', 'residence') not in closure
     assert closure.get(
-        ('knowledge', ('yun_niang',), 'yun_niang', KP_INQUIRY)) == (0, 1, 3)
+        ('knowledge', ('yun_niang',), 'yun_niang', KP_INQUIRY)) == (0, 1)
 
 
 # ═══════════════ 三、原文未回答锁与禁区（C9 判据） ═════════════════════════

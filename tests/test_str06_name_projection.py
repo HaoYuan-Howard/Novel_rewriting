@@ -24,7 +24,7 @@ from novel.stages.common import (
 )
 from novel.stages.stage4.hook_context import compile_hook_context
 from novel.stages.stage5.hook_writer import build_hook_user_prompt
-from tests.factories import hook_wire_v2
+from tests.factories import hook_wire_v3
 from tests.test_str06_hook import _characters
 
 
@@ -210,7 +210,6 @@ def test_compiler_keeps_ambiguous_appellations_for_material_validation():
 
 def test_guard_only_projection_reaches_compile_report_and_survives_restart(tmp_path):
     """RC-40/41：禁区投影经真实 compiler 发布、落报告并在重启读取；禁区仍不验词。"""
-    from contracts.schema.hook import HookConstraints
     from novel.stages.chain import run_workflow
     from novel.stages.common import (
         build_writer_packet, project_chapter_packet, writer_material_issues,
@@ -237,8 +236,7 @@ def test_guard_only_projection_reaches_compile_report_and_survives_restart(tmp_p
 
     run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
                  ask_text=text_ask(session), ask_body=no_paid_call, budget=2000,
-                 through='stage4',
-                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
+                 through='stage4')
     report = repo.inspect('stage4/acceptance/guard/report.json')
     assert not report['guard_errors']
     reopened = Str06Repository(repo.root)
@@ -354,7 +352,6 @@ def test_compiler_never_releases_a_full_name_early_to_clear_a_conflict(tmp_path)
 
 def _hook_context(**hook_over):
     """经正式装配与编译链路构造带名称结构的 HookContext；覆盖项直达 Hook wire。"""
-    from contracts.schema.hook import HookConstraints
     from novel.stages.stage4.design import assemble_body_design
     from novel.stages.stage4.hook import assemble_hook_design, publish_graph
     from novel.stages.stage4.hook_context import compile_hook_context
@@ -367,12 +364,11 @@ def _hook_context(**hook_over):
         source_narration=sample_narration())
     assert body is not None and not errors, errors
     hook, errors = assemble_hook_design(
-        hook_wire_v2(_hook_wire(**hook_over)), body=body, known_char_ids=known,
+        hook_wire_v3(_hook_wire(**hook_over)), body=body, known_char_ids=known,
         name_projection=chars.name_projection())
     assert hook is not None and not errors, errors
     context, errors = compile_hook_context(
-        publish_graph(body, hook), chars.name_projection(),
-        HookConstraints(target_chars=280, hard_max_chars=360), chars.name_structure)
+        publish_graph(body, hook), chars.name_projection(), chars.name_structure)
     assert context is not None and not errors, errors
     return context
 
@@ -412,16 +408,16 @@ def test_hook_materials_project_bound_literals_and_keep_sources_original():
     """
     context = _hook_context(
         concealed=[], surface_releases=_released_both(),
-        design_brief='从深夜冷开倒叙入新婚夜旧约，陆大哥的身份不露，苏姑娘只以闺名示人。')
-    assert '陆大哥' in context.design_brief, '上下文字段保持原文本'
+        local_focus='从深夜冷开倒叙入新婚夜旧约，陆大哥的身份不露，苏姑娘只以闺名示人。')
+    assert '陆大哥' in context.local_focus, '上下文字段保持原文本'
     prompt = render_hook_context(context)
     assert '陆大哥' not in prompt and '夫君的身份' in prompt
     assert '苏姑娘' not in prompt and '我（叙述者）只以闺名示人' in prompt
     rows = hook_name_projections(context)
     assert rows and set(rows[0]) == {'field', 'literal', 'char_id', 'replacement'}
-    assert {'field': 'design_brief', 'literal': '陆大哥', 'char_id': 'fu_jun',
+    assert {'field': 'local_focus', 'literal': '陆大哥', 'char_id': 'fu_jun',
             'replacement': '夫君'} in rows
-    assert {'field': 'design_brief', 'literal': '苏姑娘', 'char_id': 'yun_niang',
+    assert {'field': 'local_focus', 'literal': '苏姑娘', 'char_id': 'yun_niang',
             'replacement': '我（叙述者）'} in rows
     assert hook_material_issues(context, internal_ids=set()) == (), '投影后无假泄漏'
     assert render_hook_context(context) == build_hook_user_prompt(context), \
@@ -432,22 +428,22 @@ def test_hook_unbound_literals_stay_for_the_leak_check_with_original_field_sourc
     """短姓与未登记表达不投影；禁用短姓的泄漏如实报出，来源归因用原字段文本。"""
     context = _hook_context(
         concealed=[], surface_releases=_released_both(),
-        design_brief='陆郎与陆家的旧事不露，陆大哥身份存疑。')
+        local_focus='陆郎与陆家的旧事不露，陆大哥身份存疑。')
     prompt = render_hook_context(context)
     # 陆郎未登记、陆家已随释放面放开：二者原样保留；只有可证绑定的陆大哥被换成夫君。
     assert '陆郎' in prompt and '陆大哥' not in prompt
     issues = hook_material_issues(context, internal_ids=set())
     assert {i.literal for i in issues} == {'陆'}, '短姓无绑定，残留在陆郎内的陆如实报出'
     issue = next(i for i in issues if i.literal == '陆')
-    assert any(s.kind == 'hook' and s.field == 'design_brief'
-               and s.text == context.design_brief for s in issue.sources), \
+    assert any(s.kind == 'hook' and s.field == 'local_focus'
+               and s.text == context.local_focus for s in issue.sources), \
         '来源归因依赖原字段文本，不用投影后的衍生行'
 
 
 def test_hook_bound_literal_without_release_is_reported_not_masked():
     """concealed 人物不可释放面：绑定存在但无显示面，字面如实留下并报告。"""
     context = _hook_context(
-        design_brief='从深夜冷开倒叙，陆大哥的身份不露。')
+        local_focus='从深夜冷开倒叙，陆大哥的身份不露。')
     assert any(b.literal == '陆大哥' and b.char_id == 'fu_jun'
                for b in context.withheld_bindings)
     assert '陆大哥' in render_hook_context(context)
@@ -458,7 +454,6 @@ def test_hook_bound_literal_without_release_is_reported_not_masked():
 def test_hook_forbidden_lines_project_but_never_join_the_leak_check():
     """禁区行同样投影（减少暴露）；禁区不进字面检查，两个边界分开。"""
     from tests.test_str06_hook import _body_wire, _hook_wire
-    from contracts.schema.hook import HookConstraints
     from novel.stages.stage4.design import assemble_body_design
     from novel.stages.stage4.hook import assemble_hook_design, publish_graph
     from tests.str06_expression_inputs import sample_narration, sample_requirements
@@ -474,12 +469,11 @@ def test_hook_forbidden_lines_project_but_never_join_the_leak_check():
         concealed=[], surface_releases=_released_both(),
         forbidden_reveals=[{'ref': {'scene': 'sc01', 'beat': 'b01'}}])
     hook, errors = assemble_hook_design(
-        hook_wire_v2(wire), body=body, known_char_ids=known,
+        hook_wire_v3(wire), body=body, known_char_ids=known,
         name_projection=chars.name_projection())
     assert hook is not None and not errors, errors
     context, errors = compile_hook_context(
-        publish_graph(body, hook), chars.name_projection(),
-        HookConstraints(target_chars=280, hard_max_chars=360), chars.name_structure)
+        publish_graph(body, hook), chars.name_projection(), chars.name_structure)
     assert context is not None and not errors, errors
     assert '事件不得提前揭示：夫君拜堂成亲' in render_hook_context(context)
     assert {'field': 'forbidden_reveals/0', 'literal': '陆大哥',
@@ -499,7 +493,7 @@ def test_hook_forbidden_lines_project_but_never_join_the_leak_check():
 def test_hook_projection_is_deterministic_and_keeps_the_context_untouched():
     context = _hook_context(
         concealed=[], surface_releases=_released_both(),
-        design_brief='从深夜冷开倒叙入新婚夜旧约，陆大哥的身份不露。')
+        local_focus='从深夜冷开倒叙入新婚夜旧约，陆大哥的身份不露。')
     before = context.model_dump_json()
     assert hook_name_projections(context) == hook_name_projections(context)
     assert render_hook_context(context) == render_hook_context(context)
@@ -509,7 +503,7 @@ def test_hook_projection_is_deterministic_and_keeps_the_context_untouched():
     assert '陆大哥' in render_hook_context(no_binding)
     leaks = hook_material_issues(no_binding, internal_ids=set())
     assert {i.literal for i in leaks} == {'陆大哥'}
-    assert any(s.field == 'design_brief' and s.text == no_binding.design_brief
+    assert any(s.field == 'local_focus' and s.text == no_binding.local_focus
                for i in leaks for s in i.sources)
 
 
@@ -523,7 +517,7 @@ def test_hook_context_rejects_pre_rc16_payload_and_duplicate_bindings():
     with pytest.raises(ValidationError):
         HookContext.model_validate(stored)
     duplicate = dict(stored)
-    duplicate['contract_version'] = 'str06-rc17'
+    duplicate['contract_version'] = 'str06-rc18'
     duplicate['withheld_bindings'] = [
         dict(b) for b in context.withheld_bindings][:1] * 2
     with pytest.raises(ValidationError, match='重复'):
@@ -532,7 +526,6 @@ def test_hook_context_rejects_pre_rc16_payload_and_duplicate_bindings():
 
 def test_hook_projection_reaches_the_compile_guard_report(tmp_path):
     """经真实 run_workflow：楔子投影留痕进 guard report，重启读取一致（免费产物）。"""
-    from contracts.schema.hook import HookConstraints
     from novel.stages.chain import run_workflow
     from novel.store import Str06Repository
     from tests.str06_facilities import json_ask, text_ask
@@ -542,7 +535,7 @@ def test_hook_projection_reaches_the_compile_guard_report(tmp_path):
     wires = _full_chain_wires()
     wires['hook_design'].update(
         concealed=[], surface_releases=_released_both(),
-        design_brief='从深夜冷开倒叙入新婚夜旧约，陆大哥的身份不露。')
+        local_focus='从深夜冷开倒叙入新婚夜旧约，陆大哥的身份不露。')
 
     def no_paid_call(*args, **kwargs):
         raise AssertionError('Stage4 验证不调用正文写手')
@@ -550,15 +543,14 @@ def test_hook_projection_reaches_the_compile_guard_report(tmp_path):
     repo, session, _transport = _make_session(tmp_path, wires)
     run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
                  ask_text=text_ask(session), ask_body=no_paid_call, budget=2000,
-                 through='stage4',
-                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
+                 through='stage4')
     report = repo.inspect('stage4/acceptance/guard/report.json')
     assert not report['guard_errors']
-    expected = {'field': 'design_brief', 'literal': '陆大哥',
+    expected = {'field': 'local_focus', 'literal': '陆大哥',
                 'char_id': 'fu_jun', 'replacement': '夫君'}
     assert expected in report['hook_name_projections'], '楔子投影留痕可观测'
     reopened = Str06Repository(repo.root)
     assert reopened.inspect('stage4/acceptance/guard/report.json') == report
     context = reopened.read_model('stage4/context/hook/hook.json')
-    assert context.contract_version == 'str06-rc17'
-    assert '陆大哥' in context.design_brief and '陆大哥' not in build_hook_user_prompt(context)
+    assert context.contract_version == 'str06-rc18'
+    assert '陆大哥' in context.local_focus and '陆大哥' not in build_hook_user_prompt(context)

@@ -31,8 +31,41 @@ Design 是 source-blind 的：实际输入只有 Preserve 投影（`project_brie
 | `stage4/acceptance/guard/compile.json` | 自由形态派生记录 | `str06.stage4.compile` | Guard 编译错误清单 |
 | `stage4/acceptance/guard/report.json` | 自由形态派生记录 | `str06.stage4.compile` | Guard 报告（planned-only 读数） |
 | `stage4/acceptance/packet_metrics.json` | 自由形态派生记录 | `str06.stage4.compile` | WriterPacket 逐章指标（分区条目数、基线事实数、活跃/受保护线程数、重复比例、必须写出密度；audit_only 读数） |
-| `stage4/context/hook/hook.json` | `HookContext` | `str06.stage4.compile` | HookContext 确定性投影（POV、起笔事实、材料序、禁止集、称谓释放） |
+| `stage4/context/hook/hook.json` | `HookContext` | `str06.stage4.compile` | rc18 确定性投影（POV、起笔事实、有序材料与组织选择、阅读期待、正式风格与声线、禁止集、称谓释放） |
 | `stage4/ir/writer_book_ir.json` | `WriterBookIR` | `str06.stage4.compile` | 全书静态写作 IR（BookBrief 导航＋ChapterIR 双视图） |
+
+## Hook 组织与事实交接（2026-10-10）
+
+现役模型 wire 为 `stage4-hook-design-v3`。`materials` 是唯一有序材料列表，每条显式
+选择 `emphasis`（develop／brief）和 `transition`（start／continue／time_skip／flashback／
+return／scene_cut）；首条为 start。默认围绕一个清楚、尚在推进的核心冲突，允许倒叙与
+跨场；切换须有时间定位并保留理解所需的因果前提。设计同时考虑正式第 1 章将新增什么
+认识、选择、代价或关系变化，不把楔子完整重复成开章。上述文学选择不是机械质量硬闸。
+
+`design_brief`／`delivery_brief` 已退出正式 Hook，`local_focus` 仅表达表现重点与反差
+机制，不另写动作、动机或结果。API 原 `design_brief` 展示字段由正式有序选择与表现
+重点确定性生成，没有第二份剧情真源。入场与截断沿用现役拍引用，不增加动作地址模型。
+
+`reader_expectation` 区分 fact／action／relationship。fact 选正式事实目录的 `fact_ref`，
+compiler 展开为 `{ref,address}`；action／relationship 引用后续发展拍。依据须在材料
+故事视界之后；未来依据仅供设计与校验，写手只收到 kind／focus，不能获得可使用的未来
+答案。引用存在和时序合法不证明期待与依据的语义匹配或悬念吸引力。
+独立显式选择的 `forbidden_reveals` 仍按现役规则投影为负向禁区，阅读期待的引用
+不自动加入其中，也不自动把未来发展全文发给写手。
+
+Context 从同一 BodyDesign 投影 `book_style`、出场 `character_voices` 与材料场的
+`scene_voices`，以及正式 `expression_decisions` 的已选机制 statement；表达决定的
+投影是 Derived `expression_mechanisms`，不重定义 canonical 决定、不复制决定理由。
+场声线按适用材料编号送达，来源场锚与表达 ex_id 只用于归因。人物所知、相信、怀疑
+和世界事实保持区分，材料选择、称谓与披露纪律不变。
+正文章包从 BodyDesign 独立编译，背景消费闭包不再把 Hook 选择当成正文消费者；
+调整 Hook 的组织、期待或声线投影不改变已接受正文的章包与回执身份。
+PresentationGraph 单独升 rc23，HookContext 升 rc18；BodyDesign 及正文章包维持 rc22。
+旧 Hook v1／v2 的组织与期待无法机械推断，不隐式升级，也不再提供 v1→v2 恢复入口；
+历史已购字节与成本保留，现役接受需要新 v3 设计与正式输入重新编译。
+
+现有 Stage4 条目窄修继续按受影响条目工作，合并后经过完整设计、Context 和材料预检；
+免费重验只能接受与当前请求身份及契约一致的已购回答，不因修订放宽恢复身份。
 
 ## Guard M1–M8
 
@@ -81,7 +114,7 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `design_detail_ref_closure` | hard | 拍上细节只从正式 Brief 闭集引用；选中提示只进 creative_guidance，不选合法；悬空引用 typed 拒绝，可窄修并免费重验 |
 | `epistemic_lock_order_guard` | hard | R10a a5：kp 知情升级/读者确认不得早于授权该模式的义务承载位置（授权位＝必保义务全部承载点最早者；initial_state 与自由键不查；故事发生顺序不查，P5）；违例按 epistemic_lock_order 回派 body_design |
 | `answer_reuse_four_conditions` | hard | R10a §二.4：已购回答复用四条件——模型输入未变→复用；验收条件变化→免费机械复验；实际写作材料变化→按请求身份判断新回答；仅审计/展示变化→不触发付费重写 |
-| `writer_packet_background_narrowing` | hard | R10b §R10b.3：背景投影规则——写手面背景只投书级初态立足点＋建立之后仍被消费的当前状态（消费者＝声明读取/读者确认目标/Hook 地址/锁键）；unset/unknown 不作背景；补齐面（依赖边生成）保持全量 |
+| `writer_packet_background_narrowing` | hard | R10b §R10b.3：背景投影规则——写手面背景只投书级初态立足点＋建立之后仍被消费的当前状态（消费者＝正文声明读取/读者确认目标/锁键）；unset/unknown 不作背景；补齐面（依赖边生成）保持全量 |
 
 当前注册表共 **33 条**：**31 hard、1 metric、1 unver**（rc21 新增系列概括与细节引用闭集两条 hard）。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。

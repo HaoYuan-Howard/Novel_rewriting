@@ -10,6 +10,7 @@ presentation、正文字面三层被挡；Hook 窄改不扩大正文失效；机
 from __future__ import annotations
 
 import ast
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from contracts.schema.design import (
     TargetScene,
 )
 from contracts.schema.hook import (
-    HookConstraints, HookDesign, HookPov, HookReceipt,
+    HookDesign, HookPov, HookReceipt,
 )
 from contracts.schema.source import (
     CharactersArtifactV6, NameStructure,
@@ -148,7 +149,7 @@ def _body_wire() -> dict:
 
 
 def _hook_wire(**over) -> dict:
-    """stage4-hook-design-v1 形状：位置引用只给 {"scene","beat"} 分量（B3 前半）。"""
+    """测试用坐标材料：v3 组织与期待显式给出，helper 只换目录引用。"""
     wire = {
         'protocol_version': 'stage4-hook-design-v1',
         'pov': {'person': 'first', 'focalizers': ['yun_niang']},
@@ -163,9 +164,11 @@ def _hook_wire(**over) -> dict:
              'audience': 'reader'}],
         'materials': [
             {'beat_ref': {'scene': 'sc02', 'beat': 'b01'}, 'withheld': [],
-             'presentation': '深夜，一个身影翻出后墙'},
+             'presentation': '深夜，一个身影翻出后墙',
+             'emphasis': 'develop', 'transition': 'start'},
             {'beat_ref': {'scene': 'sc01', 'beat': 'b02'}, 'withheld': [],
-             'presentation': '新婚夜，丈夫低声说起一桩旧约'}],
+             'presentation': '新婚夜，丈夫低声说起一桩旧约',
+             'emphasis': 'brief', 'transition': 'flashback'}],
         'concealed': ['fu_jun'],
         'surface_releases': [
             {'char_id': 'yun_niang', 'surfaces': ['苏芸娘', '芸娘']}],
@@ -173,8 +176,12 @@ def _hook_wire(**over) -> dict:
             {'ref': {'scene': 'sc02', 'beat': 'b02'},
              'address': {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
                          'key': 'secret'}}],
-        'design_brief': '从深夜冷开倒叙入新婚夜旧约，信息逐层升级后在新婚夜收束，玉佩之谜不露。',
-        'delivery_brief': '第一人称冷面叙述，短句，不解释。',
+        'reader_expectation': {
+            'kind': 'fact', 'focus': '玉佩与夫君的旧约有什么关联？',
+            'answer': {'ref': {'scene': 'sc02', 'beat': 'b02'},
+                       'address': {'domain': 'knowledge', 'subjects': ['fu_jun'],
+                                   'holder': 'yun_niang', 'key': 'secret'}}},
+        'local_focus': '重心在眼前异样与旧约的反差，冷面叙述，短句，不解释。',
     }
     wire.update(over)
     return wire
@@ -239,13 +246,14 @@ def _hook_wire_v7(**over) -> dict:
         'ref': {'scene': 'sc02', 'beat': 'b02'},
         'address': {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
                     'key': 'secret'}}]
+    wire['reader_expectation']['answer'] = deepcopy(wire['forbidden_reveals'][0])
     wire.update(over)
     return wire
 
 
 def _assemble_coordinate_fixture(wire, **kwargs):
-    from tests.factories import hook_wire_v2
-    return assemble_hook_design(hook_wire_v2(wire), **kwargs)
+    from tests.factories import hook_wire_v3
+    return assemble_hook_design(hook_wire_v3(wire), **kwargs)
 
 
 def _projection():
@@ -262,7 +270,7 @@ def _green_pair():
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection(), HookConstraints(target_chars=280, hard_max_chars=360))
+        graph, _projection())
     assert context is not None and not errors, errors
     return body, graph, context
 
@@ -275,7 +283,7 @@ def test_context_rebuild_is_byte_identical_after_delete(tmp_path):
     repo.attach_context(make_context(tmp_path, ledger=CostLedger(path=None)))
     def build():
         context, errors = compile_hook_context(
-            graph, _projection(), HookConstraints(target_chars=280, hard_max_chars=360))
+            graph, _projection())
         assert context is not None and not errors, errors
         return repo.write('stage4/context/hook/hook.json', context).read_bytes()
     first = build()
@@ -300,7 +308,7 @@ def test_pov_comes_from_design_not_body_majority():
     assert hook is not None and not errors, errors
     graph = publish_graph(body2, hook)
     context, errors = compile_hook_context(
-        graph, _projection(), HookConstraints(target_chars=280, hard_max_chars=360))
+        graph, _projection())
     assert context is not None and not errors, errors
     assert context.pov.person == 'first'
     assert context.pov.focalizers == ('yun_niang',)
@@ -330,7 +338,7 @@ def test_partial_disclosure_single_beat():
     wire = _hook_wire()
     wire['concealed'] = []
     wire['materials'] = [
-        {'beat_ref': {'scene': 'sc01', 'beat': 'b02'}, 'withheld': [
+        {'beat_ref': {'scene': 'sc01', 'beat': 'b02'}, 'emphasis': 'develop', 'transition': 'start', 'withheld': [
             {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
              'key': 'agreement'}], 'presentation': None},
     ]
@@ -342,7 +350,7 @@ def test_partial_disclosure_single_beat():
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection(), HookConstraints(target_chars=280, hard_max_chars=360))
+        graph, _projection())
     assert context is not None and not errors, errors
     material = context.materials[0]
     assert material.event == '洞房夜夫君立约'
@@ -360,7 +368,7 @@ def _rendered_deltas(*, knowledge_mode: str, holder: str):
     assert body is not None and not errors, errors
     hook_wire = _hook_wire()
     hook_wire['concealed'] = []
-    hook_wire['materials'] = [{'beat_ref': {'scene': 'sc01', 'beat': 'b02'}, 'withheld': [], 'presentation': None}]
+    hook_wire['materials'] = [{'beat_ref': {'scene': 'sc01', 'beat': 'b02'}, 'emphasis': 'develop', 'transition': 'start', 'withheld': [], 'presentation': None}]
     hook_wire['opening_facts'] = [hook_wire['opening_facts'][0]]
     hook, errors = _assemble_coordinate_fixture(hook_wire, body=body,
                                         known_char_ids={'fu_jun', 'yun_niang'},
@@ -368,7 +376,7 @@ def _rendered_deltas(*, knowledge_mode: str, holder: str):
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection(), HookConstraints(target_chars=280, hard_max_chars=360))
+        graph, _projection())
     assert context is not None and not errors, errors
     return context.materials[0].deltas
 
@@ -465,7 +473,9 @@ def test_reader_fact_beyond_horizon_rejected():
 def test_forbidden_conflicts_with_material():
     wire = _hook_wire()
     wire['concealed'] = []
-    wire['materials'].append({'beat_ref': {'scene': 'sc02', 'beat': 'b02'}, 'withheld': [], 'presentation': None})
+    wire['materials'].append({'beat_ref': {'scene': 'sc02', 'beat': 'b02'},
+                             'emphasis': 'develop', 'transition': 'return',
+                             'withheld': [], 'presentation': None})
     _, errors = _assemble(wire)
     assert any('既是材料又禁止揭示' in e for e in errors)
 
@@ -520,7 +530,7 @@ def test_hook_change_does_not_touch_body_slices():
     body, _, _ = _green_pair()
     # 正文 plan 只依赖 body：同一 body 配两个不同 hook，plan 全等
     hook_a, _ = _assemble(_hook_wire(), body)
-    hook_b, _ = _assemble(_hook_wire(design_brief='换一种组织方式：先婚后查，冷开收束。'), body)
+    hook_b, _ = _assemble(_hook_wire(local_focus='换一种组织方式：先婚后查，冷开收束。'), body)
     graph_a = publish_graph(body, hook_a)
     graph_b = publish_graph(body, hook_b)
     plan_a, errors = compile_execution_plan(graph_a, _binding_for(body))
@@ -556,32 +566,32 @@ def test_non_material_beat_change_keeps_context():
     body_dump = graph.model_dump(mode='json')
     body_dump['scenes'][1]['beats'][1]['event'] = '芸娘发现玉佩上另有刻字（改）'
     body_dump.pop('hook')
+    body_dump['contract_version'] = 'str06-rc22'
     body2 = BodyDesign.model_validate(body_dump)
     graph2 = publish_graph(body2, graph.hook)
     context2, errors = compile_hook_context(
-        graph2, _projection(), HookConstraints(target_chars=280, hard_max_chars=360))
+        graph2, _projection())
     assert errors == [], errors
     assert context2.model_dump(mode='json') == context.model_dump(mode='json')
 
 
 # ───────────────────────── Hook Writer 机械验 ─────────────────────────
 
-def test_hook_length_uses_non_whitespace_count():
+def test_hook_has_no_fixed_length_gate():
     _, _, context = _green_pair()
-    context = context.model_copy(update={'target_chars': 10, 'hard_max_chars': 10})
     assert not validate_hook_prose('夜 \n\t' * 10, context)
-    assert any('[length]' in e for e in validate_hook_prose('夜' * 11, context))
+    assert not validate_hook_prose('夜' * 1200, context)
 
 
-def test_hook_writer_length_rewrite_same_context():
+def test_hook_writer_wrapper_rewrite_same_context():
     _, _, context = _green_pair()
-    long_prose = '夜' * (context.hard_max_chars + 1)
+    wrapped_prose = '# 楔子\n苏芸娘望着空房。'
     ok_prose = '苏芸娘望着空房。'
     prompts = []
 
     def ask_text(owner, prompt, validate=None):
         prompts.append(prompt)
-        return (long_prose, [], f'id-{len(prompts)}') if len(prompts) == 1 \
+        return (wrapped_prose, [], f'id-{len(prompts)}') if len(prompts) == 1 \
             else (ok_prose, [], f'id-{len(prompts)}')
 
     from novel.stages.chain import _write_hook
@@ -598,7 +608,7 @@ def test_hook_writer_rewrite_limit_exhausted():
 
     def ask_text(owner, prompt, validate=None):
         calls.append(prompt)
-        return ('夜' * (context.hard_max_chars + 1), [], f'id-{len(calls)}')
+        return ('# 楔子', [], f'id-{len(calls)}')
 
     from novel.stages.chain import _write_hook
     prose, attempts, _ = _write_hook(context, ask_text)
@@ -625,7 +635,7 @@ def test_mechanical_pass_never_claims_semantic_verification():
     receipt = HookReceipt(
         hook_context_sha256=H64, prose_sha256=H64, request_identity='r1',
         validator_version='v1', status='accepted',
-        mechanical_checks=('non_empty', 'length'))
+        mechanical_checks=('non_empty', 'encoding'))
     assert receipt.semantic == 'unverified'
     with pytest.raises(ValidationError):
         # semantic 不是自由字段：机械面不能宣称语义已验
@@ -634,26 +644,18 @@ def test_mechanical_pass_never_claims_semantic_verification():
 
 # ───────────────────────── 契约形状补充 ─────────────────────────
 
-def test_duplicate_materials_and_constraints():
+def test_duplicate_materials_are_rejected_without_length_policy():
     # canonical 形状直接构造（重复检测是 schema 层的职责；wire→canonical 的
     # 分量解析归 assemble_hook_design）。
-    canonical = {k: v for k, v in _hook_wire().items() if k != 'protocol_version'}
-    canonical['opening_facts'] = [
-        {**fact, 'ref': ('init' if fact['ref'] == 'init'
-                         else f"{fact['ref']['scene']}#{fact['ref']['beat']}")}
-        for fact in canonical['opening_facts']]
+    _, graph, _ = _green_pair()
+    canonical = graph.hook.model_dump(mode='json')
     canonical['materials'] = [
-        {'beat_ref': 'sc01#b02', 'withheld': [], 'presentation': 'p'},
-        {'beat_ref': 'sc01#b02', 'withheld': [], 'presentation': 'q'}]
-    canonical['forbidden_reveals'] = [
-        {**item, 'ref': ('init' if item['ref'] == 'init'
-                         else f"{item['ref']['scene']}#{item['ref']['beat']}")}
-        for item in canonical['forbidden_reveals']]
+        {'beat_ref': 'sc01#b02', 'withheld': [], 'presentation': 'p',
+         'emphasis': 'develop', 'transition': 'start'},
+        {'beat_ref': 'sc01#b02', 'withheld': [], 'presentation': 'q',
+         'emphasis': 'brief', 'transition': 'continue'}]
     with pytest.raises(ValidationError, match='重复'):
         HookDesign.model_validate(canonical)
-    HookConstraints(target_chars=280, hard_max_chars=360)
-    with pytest.raises(ValidationError):
-        HookConstraints(target_chars=400, hard_max_chars=360)
 
 
 def test_receipt_hash_charset():
@@ -767,8 +769,8 @@ def _full_chain_wires():
         wire.update(over)
         return wire
 
-    from tests.factories import hook_wire_v2
-    hook_wire = hook_wire_v2(_hook_wire_v7())
+    from tests.factories import hook_wire_v3
+    hook_wire = hook_wire_v3(_hook_wire_v7())
     naming_wire = {'entries': [
         {'char_ref': 'fu_jun', 'name': {'family': '顾', 'given': None}, 'aliases': {},
          'keep_reason': None},
@@ -844,9 +846,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monke
                           ask=make_ask(wires, counter, repo),
                           ask_text=make_text(repo),
                           ask_body=ask_body,
-                          budget=2000, through='stage7', book_title='报恩',
-                          hook_constraints=HookConstraints(target_chars=10,
-                                                           hard_max_chars=360))
+                          budget=2000, through='stage7', book_title='报恩')
     assert report['assembly']['status'] == 'not_ready'
     assert report['assembly']['reason'] == 'body_not_implemented'
     assert report['accepted_body'] is False
@@ -868,8 +868,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monke
     run_workflow(repository=repo, chapters=chapters,
                  ask=make_ask(wires, counter, repo), ask_text=make_text(repo),
                  ask_body=ask_body,
-                 budget=2000, through='stage7', book_title='报恩',
-                 hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
+                 budget=2000, through='stage7', book_title='报恩')
     after = {rel: repo.path(rel).read_bytes() for rel in before}
     assert before == after
     assert counter  # fake wire 命中与真实 wire-dir 采用语义一致（0 付费调用）

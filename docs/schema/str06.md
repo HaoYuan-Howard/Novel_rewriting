@@ -68,7 +68,7 @@ ChapterEntry 的 immediate_continuation／flashback 必须带较早事件拍 anc
 单字残余；未释放人物声线与收尾人物指认省略，禁止 slug 兜底。
 
 全链字符计数使用 `novel/core/text.py::count_non_whitespace_chars`（标点计入、空白不计），
-预算仅来自 MainText 正文，不含系统章标题或 Hook；Hook 单独配置。Design 接受与 compile
+预算仅来自 MainText 正文，不含系统章标题或 Hook；Hook 字符数只作统计，无固定目标或上限。Design 接受与 compile
 共用读取闭包，单章接受与 Stage2 compile 共用首现判据。ValidationStop／机械缺陷／
 owner 停止保留 node、item 与问题坐标，CLI 负结论 exit 1，程序错误仍为 exit 70。
 
@@ -105,14 +105,14 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 
 ### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
 
-现役版式为 `str06-rc22`（2026-10-09 独立事件锚点批：Preserve v5/policy 8、Design wire v9（现役 v10）、可选细节与系列前情；Stage2 仍为 rc20；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
+现役版式为 `str06-rc23`（2026-10-10 Hook 组织与声线批：PresentationGraph 独立 rc23、HookContext rc18，BodyDesign／正文章包仍 rc22；2026-10-09 独立事件锚点批：Preserve v5/policy 8、Design wire v9（现役 v10）、可选细节与系列前情；Stage2 仍为 rc20；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
 `7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个（CS-3 bind
 退役后 13），运行配置未变。
 book 观察 `stage2-book-v7`、chapters 独立 `stage2-chapters-v7`、names 独立
 `stage2-names-v4`、associate `stage2-associate-v5`（输入投影变经 RC 表换身份）；
 Preserve 当前 `stage4-preserve-v5`＋policy 8、Design 内部展开 `stage4-design-v5`
 （瘦 wire 现役 v10）；
-hook-design 字面不变。当前正文 renderer v11／写手协议 v9（可选细节与前情送达；历史 R10b 升 v7）。
+Hook Design 为 `stage4-hook-design-v3`；正式输入／呈现协议显式换身份。当前正文 renderer v11／写手协议 v9（可选细节与前情送达；历史 R10b 升 v7）。
 
 **章观察瘦 wire（CS-2 第一步，2026-10-03）**：`str06.stage2.chapters` 的
 LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模型：
@@ -178,7 +178,8 @@ Design 接受判据携带所有同址条目的 wire 路径，Binding 派生与�
 
 历史 R10 收口把 Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14。
 rc21 质量批后只保留未变化 ExecutionPlan 的 rc12/rc13→rc14 登记无损适配；六类质量产物
-（checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR）均显式 rc22，
+（checkpoint／Brief／Binding／BodyDesign／WriterBookIR）均显式 rc22，PresentationGraph
+在 2026-10-10 Hook 组织批独立升 rc23、HookContext 升 rc18；
 旧版或缺版本关闭式拒读，不能把缺省空细节／空概括当成历史判断证据。checkpoint 本次增
 contract_version；policy 升 6，请求输入变更会换身份。旧根与已购响应保持原字节，
 需从上游正式输入在新契约根重建；付费／外发仍由用户显式授权，迁移删除条件见 REQUIREMENTS。
@@ -468,7 +469,7 @@ renderer 在正向材料行（含禁区行）把这类字面换成本场已释�
 （`novel/stages/stage4/guard.py::expected_thread_faces` 是 M8 对账的机械执行面）。
 
 **背景投影收窄（R10b）**：写手面背景只投书级初态立足点＋建立之后仍被
-消费的当前状态（消费者＝声明读取/读者确认目标/Hook 地址/锁键；R-6.16）；
+消费的当前状态（消费者＝正文声明读取/读者确认目标/锁键；R-6.16）；
 unset/unknown 与无消费者拍状态不投影（留在 Machine IR 与拍级「必须写出」）；
 依赖边生成仍消费全量参与者基线（`participant_background`）。
 **编译器补齐的背景**：`project_context` 按参与者机械补入入场状态（人物域、参与者
@@ -745,7 +746,7 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 | `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v8）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
 | `contracts/schema/grounding.py` | `SourceObligation` / `PreserveCheckpoint` / `ReconstructionBrief` / `IdentityProjection` / `OutputConstraints` / `SemanticBinding` | 必保义务必有非空 `satisfaction`；checkpoint 无 Design/Bind 字段；Brief 无源章/源拍/叙述顺序/证据定位字段；Binding 是完整 snapshot |
 | `contracts/schema/design.py` | `BodyDesign`（rc11：narration、expression_decisions、可定位 entry；保留拍上线程、world_rules）／`PresentationGraph(BodyDesign)+hook` | source-blind；章号连续 1..N、场景全覆盖；POV 服从正文人称许可；表达决定恰好覆盖；entry 锚满足分支条件；hook 引用与线程生命周期闭合 |
-| `contracts/schema/hook.py` | `HookDesign`／`HookContext`／`HookReceipt`／`HookConstraints` | 起笔事实只引用已建立目标事实；first 恰一人且非 narrator；回执 semantic 恒 unverified |
+| `contracts/schema/hook.py` | `HookDesign`／`HookContext`／`HookReceipt` | 有序材料组织与阅读期待显式选择；起笔事实只引用已建立目标事实；声线同源；first 恰一人且非 narrator；字符数只统计，回执 semantic 恒 unverified |
 | `contracts/schema/naming.py` | `NameMapV5`／`NameAssignment`／`TargetName` | name 与 keep_reason 恰好一个；full 由 compiler 拼接；char_ref 唯一 |
 | `contracts/schema/source.py` | Characters v6（`CharactersCore`＋`name_structure`）／Blueprints v17（拍三类转移＋场景分段＋带证据源表达） | 名称结构 surface 恰好覆盖、模板渲染逐字相等；canonical 逐字等于某个已登记 surface；from_chapter 由证据锚点派生（`R-2.10`）；命题引用闭合与同拍两遍解析（`R-2.12`）；登记键作用域由 compiler 绑定；表达编号及读数由 compiler 生成 |
 | `contracts/schema/execution.py` | `ExecutionPlan`（establishment/constraint/dependency/reinforcement）与 `ExecutionSlice` | 必保只落 establishment/constraint；依赖边禁自指 |
@@ -803,28 +804,48 @@ Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契约与�
 提交顺序：原响应耐久保存 → 编译与检查 → 选定候选 → 原子写正文 → 原子写章回执；
 各章经共享总槽并发执行，恢复按有效提交集合补缺。
 
-### Hook 的正式选择与确定性投影（现役；Hook wire v2）
+### Hook 的正式选择与确定性投影（现役；Hook wire v3）
 
-Hook 是同一目标故事的另一种呈现。设计负责材料及顺序、起笔、时间跳转、披露和收束；
-Writer 负责句法、措辞、对白、局部动作、节奏、意象和语气。`PresentationGraph(BodyDesign)+hook`
-必填、`publish_graph` 唯一发布；`pov`、`opening_facts`（按 world/pov/reader 分获准面）、
-`materials`（呈现序，默认 2–4 份材料指引）、`concealed`、`surface_releases`、
-`forbidden_reveals`、两份 brief 由 Hook Design 保存。机械校验臂钉住引用闭合、withheld
-⊆ 该拍 delta、起笔事实时序、first 恰一人且非 narrator、隐藏人物字面三层防线。
-HookContext 包含 POV、按 audience 分组的起笔事实、材料投影、禁止揭示、两份 brief、
-长度边界、可用称谓与 `withheld_literals`（名称结构 ∩ 专名/带名 surface 推导）；事实
-渲染保留 domain/holder/knowledge_mode 认知维度。Hook Writer 机械验非空、长度、编码、
-包装行与 withheld 字面泄漏；超长同 Context 有限重写（再 2 次，attempt 进请求身份）；
-回执 semantic 恒 unverified。
+Hook 是同一目标故事的另一种呈现。Stage4 负责选材、入场、详略、转换、截断与阅读期待；
+Stage5 负责对白、即时反应、句法、措辞与节奏。设计默认围绕一个清楚的核心冲突，允许
+倒叙和跨场，各次切换要有定位与足够因果前提。设计同时考虑正式第 1 章的新推进，实际
+“楔子＋第 1 章”联合阅读是核心质量验收项；不默认改变已接受正文。
 
-2026-10-09 Hook 模型协议升为 `stage4-hook-design-v2`，canonical HookDesign 与 rc22
-产物形状不变。输入 `stage4-hook-input-v2` 从正式 BodyDesign 投影完整故事决策材料和
-事实目录；`fact_ref` 由 compiler 根据（建立位置、地址）计算，目录保留 op/value/
-modality/knowledge_mode/scope，不是第二份事实真源。模型只选：opening_facts 的
-`{fact_ref,audience}`、materials 的 `{beat_ref,withheld:[fact_ref],presentation}`，以及
-forbidden_reveals 的 `{kind:fact,fact_ref}`／`{kind:event,beat_ref}`；后者两分支不混用。
-材料 withheld 必须属于该拍；起笔与事实禁区只能指向唯一 set。目录闭集与完整分支 schema
-进入初答请求及窄返修合法取值；模型不拼状态地址，也不生成短引用。
+`PresentationGraph(BodyDesign)+hook` 必填、`publish_graph` 唯一发布；`pov`、
+`opening_facts`（world／pov／reader 获准面）、有序 `materials`、`concealed`、
+`surface_releases`、`forbidden_reveals` 继续沿用正式引用。材料每条必填 `emphasis`
+（develop／brief）和 `transition`（start／continue／time_skip／flashback／return／
+scene_cut），首条 start。材料顺序本身就是呈现顺序，不维护另一份排列。入场与截断
+使用现役拍地址，不引入动作地址或另一套故事状态机。
+
+两份自由剧情 brief 退出正式 Hook；`local_focus` 只表达表现重点与反差机制，不能
+复述或新增事件、动机、结果。API 保留的 `design_brief` 展示字段由组织选择确定性
+生成。阅读期待分事实谜题、行动、关系：fact 只选正式目录 `fact_ref`，发展分支
+选后文拍；依据须晚于材料故事视界。未来依据留在设计与校验侧，写手只获 kind／focus。
+引用存在和时序合法不证明它确实回答该问题，也不证明期待具有吸引力。
+独立显式选择的禁区继续负向投影；期待引用不自动转成禁区答案全文。
+
+2026-10-10 模型协议为 `stage4-hook-design-v3`，PresentationGraph 单独 rc23、
+HookContext rc18，BodyDesign／正文章包维持 rc22。正式输入从 BodyDesign 投影完整
+故事决策材料和事实目录；`fact_ref` 由 compiler 根据建立位置／地址计算，目录保留
+op／value／modality／knowledge_mode／scope，不是第二份事实真源。材料 withheld
+必须属于该拍；起笔与事实禁区只能指向唯一 set。完整目录与分支 schema 进入初答和
+窄返修合法取值，模型不拼状态地址，也不生成可机械推导的引用。
+
+HookContext 从正式输入投影 POV、起笔事实、事件与状态、组织选择、禁区、称谓许可，
+以及 `book_style`、出场人物 `character_voices` 和材料场 `scene_voices`；正式
+`expression_decisions` 的已选 statement 投影为 Derived `expression_mechanisms`，
+不再作决定或复制理由，ex_id 只用于归因。场声线注明适用材料编号，不暴露内部场引用。
+阅读期待只携带呈现部分。认知渲染保留 holder／knowledge_mode，人物相信、怀疑不当成世界
+确认事实。写手只消费 Context，不读正文、源 Hook 或额外小说。
+正文编译独立读取 BodyDesign，背景消费闭包不含 Hook 选择；改 Hook 组织或期待只
+影响 Hook 与交付，不改变已接受章的写手／验证身份。
+
+Hook 取消固定字数目标与拒稿上限，字符数仅统计；每段须推进局面、人物认识或期待，
+背景只解释到足以理解当前行动，在期待最强处截断。机械验覆盖非空、编码、包装行、
+withheld 专名字面；同 Context 有限重写仍首次＋最多两次，attempt 进请求身份。
+输出 token 预算是执行边界。回执 semantic 恒 unverified，不新增生产审稿节点或
+Stage5 段落 patch；现有 Stage4 条目窄修继续。
 
 一次建立以（位置、地址）定位；后续同地址更新不等于同一次揭示，不由代码猜两个值的
 语义等价。world/pov 事实必须早于**呈现序第一材料**的故事位置，且在该起点前仍有效；
@@ -835,9 +856,9 @@ reader 可以使用材料视界（最大故事位置）以内的事实；视界�
 与某材料的**同一次增量**或某禁区的**同一次建立**重叠。Context 保留尚未发生的时态措辞。
 
 生产、Context 重建、窄改合并及已购免费恢复共用 `validate_hook_payload`。未发布 graph
-的失败书也可从正式 BodyDesign 和候选 Hook 执行完整下游只读预检。v1 不在生产路径隐式
-解码；已购恢复仅经登记的 `upgrade_purchased_hook_wire` 无损换算，先核原请求/响应/成本，
-再绑定当前请求身份并经完整接受闸，不修改历史首过结果或成本。
+的失败书也可从正式 BodyDesign 和候选 Hook 执行完整下游只读预检。旧 v1／v2 缺少
+组织选择与期待依据，不能机械推断；旧升级入口退出，历史响应、首过记录和成本不改。
+当前恢复仍严格绑定现役契约、正式输入与请求身份，不从历史回答猜补新语义。
 
 ### NameMap v5 与接受／交付文本分离（现役）
 

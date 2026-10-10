@@ -12,7 +12,6 @@ from copy import deepcopy
 
 import pytest
 
-from contracts.schema.hook import HookConstraints
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.paid_requests import digest
 from novel.stages.chain import ChainContext, run_compile_stage4
@@ -68,7 +67,6 @@ def _prepare(tmp_path, wires, *, through='stage4'):
         repository=repo, ask=_fake_ask(session), ask_text=_fake_text(session),
         ask_body=_fake_body(session), chapters=_chapters(), budget=2000,
         book_title='报恩', digest=digest,
-        hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
         length_band=(0.01, 0.05), concurrency=1,
     )
     return ctx, transport
@@ -191,8 +189,7 @@ def test_preserve_preview_runs_without_checkpoint_and_keeps_conflicts_unpublisha
     _ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires)
     assert not repo.path('runtime/preserve_checkpoint.json').exists()
     before = {p: p.read_bytes() for p in repo.root.rglob('*') if p.is_file()}
-    options = dict(evidence={}, budget=2000,
-                   hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360), chapter_count=2)
+    options = dict(evidence={}, budget=2000, chapter_count=2)
     report = dry_run_patch(repo, 'preserve', wires['preserve'], **options)
     assert report['status'] == 'ran' and report['publishable'] and not report['errors']
     assert report['downstream']['status'] == 'not_run'
