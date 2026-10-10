@@ -26,6 +26,8 @@
 """
 from __future__ import annotations
 
+from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
+
 import pytest
 from pydantic import ValidationError
 
@@ -491,8 +493,8 @@ def test_receipt_binds_writer_view_and_validation_separately():
                     machine_view_sha256=identities.machine_view_sha256,
                     prose_sha256='e' * 64, request_identity='r1',
                     protocol_version='p1', renderer_version='r1',
-                    validator_version='v1', status='accepted',
-                    mechanical_checks=('non_empty',),
+                    validator_version=BODY_VALIDATOR_VERSION, status='accepted',
+                    mechanical_checks=BODY_MECHANICAL_CHECKS,
                     length=ChapterLengthDisclosure(
                         char_count=900, target_chars=1000, band_low=600,
                         band_high=1300, within_band=True, deviation_ratio=-0.1))
@@ -543,8 +545,8 @@ def test_machine_only_change_does_not_invalidate_receipt():
         validation_sha256=identities.validation_sha256,
         machine_view_sha256=identities.machine_view_sha256,
         prose_sha256='e' * 64, request_identity='r1',
-        protocol_version='p1', renderer_version='r1', validator_version='v1',
-        status='accepted', mechanical_checks=('non_empty',),
+        protocol_version='p1', renderer_version='r1', validator_version=BODY_VALIDATOR_VERSION,
+        status='accepted', mechanical_checks=BODY_MECHANICAL_CHECKS,
         length=ChapterLengthDisclosure(char_count=900, target_chars=1000,
                                        band_low=600, band_high=1300,
                                        within_band=True, deviation_ratio=-0.1))

@@ -597,6 +597,7 @@ def check_chapter_receipt(
     （D2，`R-7.4` 改写）：写手只收当前章包，各章独立有效、可集合恢复。
     逐份核对（I-16：回执不是第二份业务权威）。
     """
+    from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
     problems: list[str] = []
     if receipt.status != 'accepted':
         problems.append(f'回执状态为 {receipt.status}，不构成有效提交')
@@ -605,7 +606,9 @@ def check_chapter_receipt(
                         '（写手可见面变化使本章回执失效，须重购）')
     if receipt.validation_sha256 != identities.validation_sha256:
         problems.append('validation_sha256 与当前编译出的验证输入摘要不一致'
-                        '（禁用字面/称谓许可/篇幅带变化，须重做）')
+                        '（验证材料变化，须先免费重验）')
+    if receipt.validator_version != BODY_VALIDATOR_VERSION or tuple(receipt.mechanical_checks) != BODY_MECHANICAL_CHECKS:
+        problems.append('机械校验版本或检查项变化，须先免费重验')
     if receipt.prose_sha256 != prose_sha256:
         problems.append('prose_sha256 与章文本不匹配（回执与正文脱钩）')
     return problems
@@ -2788,7 +2791,7 @@ class ChapterIdentities(NamedTuple):
     · `writer_view_sha256`：写手实际可见的阅读面（renderer 渲染字节），材料含
       renderer 与写手协议版本——变化 ⇒ 该章重购；
     · `validation_sha256`：验证输入（禁用字面、称谓许可、篇幅带）——变化 ⇒
-      旧机械验证不再成立，须重做；
+      旧机械验证不再成立，先免费重验原章稿；
     · `machine_view_sha256`：整包 Machine 层摘要，**仅审计**——只改 Machine 层
       字段不触发重购。
     """

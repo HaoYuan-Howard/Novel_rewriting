@@ -2141,6 +2141,13 @@ class Str06Repository:
     def file_sha256(path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
 
+    def snapshot_file_sha256(self, rel: str) -> str:
+        """升级只读快照也覆盖 Stage0/1 原文件；不扩 STR-06 正式写入家族。"""
+        target = paths.artifact_path(self.root, rel).resolve()
+        if not target.is_relative_to(self.root):
+            raise PathRefused('升级快照文件越出书根')
+        return self.file_sha256(target)
+
     def read(self, rel: str) -> Any:
         path = self.path(rel)
         raw = path.read_bytes()
@@ -2331,6 +2338,80 @@ class Str06Repository:
             raise ValueError('修订证据读回不一致')
         return path
 
+    def archive_upgrade_file(self, upgrade_id: str, rel: str, sha256: str) -> None:
+        """升级事务逐字归档后退出正式位；中断重放不能覆盖后来的新产物。
+
+        事务计划先耐久保存。归档和正式位均按计划的原字节摘要核对，历史
+        CommitBundle／已购响应保留。路径仍经 repository 的闭集检查。
+        """
+        if not re.fullmatch(r'[0-9a-f]{64}', upgrade_id):
+            raise PathRefused('升级身份必须是 SHA-256')
+        source = self.path(rel)
+        target = self.path(f'runtime/upgrades/{upgrade_id}/files/{rel}')
+        if source.exists():
+            data = source.read_bytes()
+            if hashlib.sha256(data).hexdigest() != sha256:
+                raise ProvenanceRefused(f'升级期间正式字节已变化：{rel}')
+            if target.exists() and target.read_bytes() != data:
+                raise ProvenanceRefused(f'升级历史证据已变化：{rel}')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            self._atomic_write(target, data)
+        if not target.exists() or self.file_sha256(target) != sha256:
+            raise ProvenanceRefused(f'升级缺少原字节归档：{rel}')
+        if source.exists():
+            if self.file_sha256(source) != sha256:
+                raise ProvenanceRefused(f'升级退出正式位前字节已变化：{rel}')
+            source.unlink()
+
+    def save_upgrade_evidence(self, upgrade_id: str, name: str, data: bytes) -> None:
+        """升级的原记录按原字节保存；同地址已有不同证据即停止。"""
+        if not re.fullmatch(r'[0-9a-f]{64}', upgrade_id) or name != 'workflow.json':
+            raise PathRefused('升级证据路径不符合登记')
+        target = self.path(f'runtime/upgrades/{upgrade_id}/{name}')
+        if target.exists() and target.read_bytes() != data:
+            raise ProvenanceRefused('升级原 workflow 证据已变化')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self._atomic_write(target, data)
+
+    def clear_upgrade_pending(self) -> None:
+        """升级完成后删除恢复日志；调用方先核对完成回执与 workflow。"""
+        self.path('runtime/contract_upgrade.json').unlink()
+
+    def publish_chapter_recheck(self, rel: str, receipt: Any, prose_rel: str) -> None:
+        """免费重验只刷新接受回执；原正文、请求与采用链保持原身份。
+
+        回执的新 provenance 是免费验证事实；新 seal 显式继承原章提交的
+        adoptions，避免免费重验令原已购轮失去正式采用关系。
+        """
+        from novel.work_units import sealed_commit_bundles
+        before = self.path(rel).read_bytes()
+        prose_sha = self.file_sha256(self.path(prose_rel))
+        old = next((b for _, b in reversed(sealed_commit_bundles(self.root))
+                    if any(o.key == rel and o.sha256 == hashlib.sha256(before).hexdigest()
+                           for o in b.outputs)
+                    and any(o.key == prose_rel and o.sha256 == prose_sha for o in b.outputs)), None)
+        if old is None:
+            raise UnsealedArtifact('免费重验缺少原正文／回执的完整提交证据')
+        item = PublishItem(rel=rel, value=receipt, declared_free=True)
+        data, provenance = self._prepare_item(item)
+        bundle = self.context.commit_bundle(
+            node=old.node, rel=rel, artifact_sha256=hashlib.sha256(data).hexdigest(),
+            inputs=provenance.inputs, refs=(), run_id=self.context.ledger.run_id,
+            created_at=int(time.time()), outputs=(
+                CommitOutputRef(key=prose_rel, sha256=prose_sha),
+                CommitOutputRef(key=rel, sha256=hashlib.sha256(data).hexdigest())))
+        from contracts.schema.workflow import commit_bundle_seal
+        bundle['adoptions'] = [a.model_dump(mode='json') for a in old.adoptions]
+        bundle['seal'] = commit_bundle_seal(bundle)
+        history = self.path(f'runtime/rechecks/body/{hashlib.sha256(before).hexdigest()}.json')
+        history.parent.mkdir(parents=True, exist_ok=True)
+        if history.exists() and history.read_bytes() != before:
+            raise ProvenanceRefused('免费重验原回执证据损坏')
+        self._atomic_write(history, before)
+        # 先写 seal 后换回执：任一崩溃窗口都有覆盖当前字节的旧／新 seal。
+        self._write_commit_bundle(bundle)
+        self._atomic_write(self.path(rel), data)
+
     def write_text(self, rel: str, text: str) -> Path:
         """正文/文本产物的原子写（UTF-8）+ 回读核对；与 write 同一套语义。"""
         path = self.path(rel)
@@ -2376,14 +2457,22 @@ class Str06Repository:
         """
         return self._read_checked_model(rel, consume=False)
 
-    def _read_checked_model(self, rel: str, *, consume: bool):
+    def inspect_sealed_model(self, rel: str):
+        """验封与 typed 读取，不展开整对象输入边；消费者须另证局部绑定。
+
+        章回执由当前章包的写手／验证摘要核对，不能因其他章 IR 的变动
+        先按全书文件边拒绝。此入口仍拒绝未封存与未知版本。
+        """
+        return self._read_checked_model(rel, consume=False, check_inputs=False)
+
+    def _read_checked_model(self, rel: str, *, consume: bool, check_inputs: bool = True):
         spec = candidate_artifact(rel)
         model = _artifact_model(spec)
         if spec is None or model is None:
             raise ProvenanceRefused(f'{rel} 未登记契约模型，不能按模型读')
         self._require_sealed(rel)
         data = self.read(rel) if consume else self.inspect(rel)
-        if not consume:
+        if not consume and check_inputs:
             self._refuse_stale(rel, data)
         if isinstance(data, dict):
             data = {k: v for k, v in data.items() if k != '_provenance'}

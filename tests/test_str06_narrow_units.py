@@ -397,8 +397,9 @@ def _changed_identity_case():
 
 
 def _tree_bytes(root):
+    # OS 锁文件属于运行互斥设施；Windows 活锁不允许读字节，不是审计产物。
     return {path.relative_to(root).as_posix(): path.read_bytes()
-            for path in root.rglob('*') if path.is_file()}
+            for path in root.rglob('*') if path.is_file() and path.suffix != '.lock'}
 
 
 def _prepare_changed_identity(tmp_path, *, missing_formal=False, check_preview=False):

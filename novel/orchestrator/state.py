@@ -142,6 +142,25 @@ def _candidate_artifact_state(store: ArtifactStore, rel: str, st: os.stat_result
     except (ArtifactUnreadable, UpstreamMissing):
         fresh, reason, ghosts = 'unknown', 'no_provenance', []
     readable = store.candidate_readable(rel)
+    body = re.fullmatch(r'stage5/body/ch(\d+)\.txt', rel)
+    if readable and fresh == 'fresh' and body is not None:
+        # 正文字节当前不代表写作输入仍当前；章包绑定是逐章权威，不按整本 IR hash 失效。
+        from novel.stages.common import check_chapter_receipt, chapter_identities, project_chapter_packet
+        from novel.errors import UnsealedArtifact, ProvenanceRefused
+        repository = Str06Repository(store.ctx.novel_dir)
+        ordinal = int(body.group(1))
+        try:
+            receipt = repository.inspect_sealed_model(artifact_rel(STR06_STAGE5_BODY_RECEIPT, nn=ordinal))
+            ir = repository.check_model('stage4/ir/writer_book_ir.json')
+            identities = chapter_identities(project_chapter_packet(ir, ordinal))
+            if receipt.chapter_ordinal != ordinal or receipt.status != 'accepted':
+                fresh, reason = 'unknown', 'no_provenance'
+            elif check_chapter_receipt(receipt, identities=identities,
+                                       prose_sha256=repository.file_sha256(repository.path(rel))):
+                fresh, reason = 'stale', 'consumed_changed'
+        except (ArtifactUnreadable, UpstreamMissing, UnsealedArtifact, ProvenanceRefused,
+                OSError, ValueError, StopIteration):
+            fresh, reason = 'unknown', 'consumed_unresolved'
     if readable and _BODY_RECEIPT_RE.fullmatch(rel):
         try:
             payload = store.candidate_payload(rel)

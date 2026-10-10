@@ -2328,12 +2328,14 @@ def init_or_resume_candidate_workflow(
     · 记录有效且代码未漂移：**原 epoch 原样复用**——身份未漂移不开新 epoch，
       累计的整书额度与工作单元账跨调用连续（Q-10）；
     · 代码漂移：按 `code_drift` 滚动 epoch（parent 会话不变），重写记录；
-    · 契约表漂移或源输入身份变化：**关闭式拒绝**——旧根的已购采用结论不覆盖
-      新输入，也不能拿旧表身份的采用冒充新表（F7a-3 的阻断条件）。
+    · 契约表漂移：先阻断，已登记变化经 `contract-upgrade` 免费计划与显式应用
+      开新 epoch；未登记变化仍拒绝。源身份变化不能借升级绕过。
 
     ledger 以 epoch 的 `session_run_id` 为 parent：每次 CLI 调用是新 run，
     epoch 是稳定窗口，与正式 AgentRun 的 run／parent 分工同构。
     """
+    if repository.path('runtime/contract_upgrade.json').exists():
+        raise ProvenanceRefused('同根契约升级尚未完成；请重放 contract-upgrade 原计划，禁止节点执行')
     try:
         record = workflow_from_disk(repository.read(WORKFLOW_REL))
     except FileNotFoundError:

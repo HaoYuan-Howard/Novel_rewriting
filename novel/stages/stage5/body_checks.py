@@ -24,21 +24,12 @@ from __future__ import annotations
 import re
 from typing import Callable
 
+from contracts.schema.receipt import BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION
+
 from novel.core.text import count_non_whitespace_chars
 from novel.core.validation import ValidationIssue
 from novel.stages.common import (
     ChapterWriterPacket, claim_spans, uncovered_occurrences,
-)
-
-#: 机械 validator 的版本：章级回执 validator_version 记这一位，规则变化必须换版。
-#: v2（CS-H H3，RC-61）：新增 `required_literals`——必保揭名的承载章正文必现
-#: 称谓字面（缺字面即拒，走段落级修句，不披露放行）。
-BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v2'
-
-#: 已通过的机械检查项名单（回执 mechanical_checks 的取值面）。
-BODY_MECHANICAL_CHECKS = (
-    'non_empty', 'encoding', 'no_wrapper', 'withheld_literals', 'required_literals',
-    'length_band',
 )
 
 #: realization failure 的同输入重写上限（首次 + 再 2 次）。

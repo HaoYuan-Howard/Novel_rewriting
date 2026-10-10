@@ -657,6 +657,18 @@
         "test_graph_body_consumption_keeps_body_version_and_ignores_hook_selection": "unit_contract"
       }
     },
+    "tests/test_contract_upgrade.py": {
+      "layer": "unit_contract",
+      "stages": ["stage4", "stage5", "stage7"],
+      "cases": {
+        "test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body": "stage",
+        "test_cli_subprocess_preview_and_apply_are_free_and_reachable": "stage",
+        "test_recompile_changes_only_one_chapter_and_keeps_other_commit": "stage",
+        "test_unknown_call_and_accumulated_budget_survive_upgrade": "stage",
+          "test_operator_and_agent_resume_same_root_to_delivery": "stage",
+        "test_validation_only_change_rechecks_original_prose_and_preserves_adoption": "stage"
+      }
+    },
     "tests/test_str06_body.py": {
       "layer": "unit_contract",
       "stages": [

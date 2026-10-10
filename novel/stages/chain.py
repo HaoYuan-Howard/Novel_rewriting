@@ -135,7 +135,7 @@ from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt,
     build_rewrite_user_prompt, context_sha256,
-    chapter_prose_validator, sha256_text, validate_hook_prose, write_chapter,
+    chapter_prose_validator, recheck_chapter, sha256_text, validate_hook_prose, write_chapter,
 )
 from novel.stages.stage7 import (
     apply_names, assemble_delivery, build_delivery_manifest, chapter_access,
@@ -2022,7 +2022,7 @@ def _packet_identities(writer_ir) -> dict[int, 'ChapterIdentities']:
 
 
 def _committed_set(repository, identities: dict[int, 'ChapterIdentities'],
-                  target: tuple[int, ...]):
+                  target: tuple[int, ...], *, writer_ir=None):
     """集合恢复：逐章独立装载有效提交（回执＋正文＋章包摘要三方绑定）。
 
     各章互不依赖（D2）：某章缺失、章包过期或正文脱钩只使**该章**回到待补
@@ -2037,6 +2037,7 @@ def _committed_set(repository, identities: dict[int, 'ChapterIdentities'],
     他章 stale，破坏「各章独立有效」。
     """
     from novel.stages.common import check_chapter_receipt
+    from novel.errors import UnsealedArtifact
     from pydantic import ValidationError
     committed: dict[int, str] = {}
     receipts: dict[int, dict] = {}
@@ -2046,21 +2047,28 @@ def _committed_set(repository, identities: dict[int, 'ChapterIdentities'],
         try:
             receipt = repository.inspect(rel_receipt)
             prose = repository.read_text(rel_prose)
-            model = _receipt_model(receipt)
-        except (FileNotFoundError, ValidationError):
+            model = repository.inspect_sealed_model(rel_receipt)
+        except (FileNotFoundError, ValidationError, UnsealedArtifact):
             continue
         problems = check_chapter_receipt(
             model, identities=identities[ordinal], prose_sha256=sha256_text(prose))
+        if (problems and writer_ir is not None and model.status == 'accepted'
+                and model.writer_view_sha256 == identities[ordinal].writer_view_sha256
+                and model.prose_sha256 == sha256_text(prose)):
+            # 写作输入未变，先在原章稿上免费验证；验证器从不改写正文。
+            packet = project_chapter_packet(writer_ir, ordinal)
+            renewed = recheck_chapter(packet, prose, model)
+            if renewed is not None:
+                repository.publish_chapter_recheck(rel_receipt, renewed, rel_prose)
+                model = renewed
+                receipt = repository.inspect(rel_receipt)
+                problems = check_chapter_receipt(model, identities=identities[ordinal],
+                                                 prose_sha256=sha256_text(prose))
         if problems:
             continue
         committed[ordinal] = prose
         receipts[ordinal] = receipt
     return committed, receipts
-
-
-def _receipt_model(receipt: dict):
-    from contracts.schema.receipt import ChapterReceipt
-    return ChapterReceipt.model_validate(receipt)
 
 
 def _write_and_commit_chapter(ctx: ChainContext, packet, ordinal: int):
@@ -2113,7 +2121,7 @@ def run_body(ctx: ChainContext) -> dict:
     writer_ir = repository.read_model('stage4/ir/writer_book_ir.json')
     target = resolve_body_chapters(ctx.body_chapters, len(writer_ir.chapters))
     identities = _packet_identities(writer_ir)
-    committed, committed_receipts = _committed_set(repository, identities, target)
+    committed, committed_receipts = _committed_set(repository, identities, target, writer_ir=writer_ir)
     for ordinal in tuple(committed):
         if ctx.body_replay(ordinal, project_chapter_packet(writer_ir, ordinal)):
             del committed[ordinal]
@@ -2754,6 +2762,17 @@ def frozen_concurrency(cfg: Config) -> dict[str, Any]:
 
 
 def execute(args) -> None:
+    """独立 CLI 的整次书执行与升级共用跨进程锁；付费在飞时不失效正式位。"""
+    from novel.appendlog import path_transaction_lock
+    base = getattr(args, 'base', None) or os.environ.get('NOVEL_OUTPUT')
+    if not base or not Path(args.run_dir).resolve().is_relative_to(Path(base).resolve()):
+        raise ValueError('--run-dir 必须位于显式输出根下')
+    repository = Str06Repository(Path(args.run_dir))
+    with path_transaction_lock(repository.path('runtime/candidate_workflow.json')):
+        _execute(args)
+
+
+def _execute(args) -> None:
     """装配显式依赖并驱动链执行（F8b：CLI `run <str06 节点>` 与工具共用本函数）。
 
     `args` 是任一来源解析出的同形命名空间（argparse Namespace 或等价对象）：

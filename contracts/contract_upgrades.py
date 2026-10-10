@@ -1,0 +1,41 @@
+"""同根升级闭集；登记的是已证明的消费边界，不是通用版本迁移。
+
+rc22→rc23 不转换旧 Hook 语义。旧组织与期待无法确定性补出，必须重建；
+正文真源形状未变，免费重编译后以逐章写手／验证身份决定恢复范围。
+"""
+from typing import Final, TypedDict
+
+
+class ContractUpgradeSpec(TypedDict):
+    id: str
+    source_identity: str
+    target_identity: str
+    source_version: str
+    target_version: str
+    rebuild_nodes: tuple[str, ...]
+    archive_patterns: tuple[str, ...]
+
+HOOK_UPGRADE: Final[ContractUpgradeSpec] = {
+    'id': 'hook-rc22-rc23',
+    'source_identity': '9a7e1067bbbcca471d237f52ee2df63fc75020ed2166ff0aceb4272b2a51932d',
+    'target_identity': '2c833f1a715a4fcee944b5377cd5b12e8d2b7d84f77262f9c9261ec8861682ff',
+    'source_version': 'str06-rc22',
+    'target_version': 'str06-rc23',
+    'rebuild_nodes': (
+        'str06.stage4.hook_design', 'str06.stage4.compile',
+        'str06.stage5.hook', 'str06.stage5.body', 'str06.stage7.assemble',
+    ),
+    # 输出组完整失效；IR 重编译不等于章稿重写。正文／姓名映射原样保留。
+    'archive_patterns': (
+        'stage4/design/presentation_graph*.json',
+        'stage4/compiled/execution_plan*.json',
+        'stage4/context/hook/hook*.json',
+        'stage4/ir/writer_book_ir*.json',
+        'stage4/acceptance/guard/*.json',
+        'stage4/acceptance/packet_metrics*.json',
+        'stage5/hook/*', 'stage7/final/*', 'runtime/delivery/*',
+        'runtime/workflow_status.json',
+    ),
+}
+
+REGISTERED_UPGRADES: Final = (HOOK_UPGRADE,)

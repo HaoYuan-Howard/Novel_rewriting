@@ -678,6 +678,9 @@ def test_verify_chapter_receipts_checks_each_chapter_against_its_packet():
     r2 = {'status': 'accepted', 'writer_view_sha256': sha2,
           'validation_sha256': vsha, 'machine_view_sha256': 'e' * 64,
           'prose_sha256': sha(prose2)}
+    from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
+    for receipt in (r1, r2):
+        receipt.update(validator_version=BODY_VALIDATOR_VERSION, mechanical_checks=BODY_MECHANICAL_CHECKS)
     ids = {1: identities(sha1), 2: identities(sha2)}
     assert verify_chapter_receipts({1: r1, 2: r2}, {1: prose1, 2: prose2},
                                   identities_by_ordinal=ids) == []

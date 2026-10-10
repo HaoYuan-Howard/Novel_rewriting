@@ -152,10 +152,10 @@ def test_design_whose_materials_belong_to_preserve_is_recorded_rejected_on_the_r
 # ─── 真实入口：文本节点首稿被机械闸拒 ────────────────────────────────────────
 
 class _BadFirstDraft(_RoutingTransport):
-    """正文第 1 章与楔子的**首稿**违规（篇幅越界），重写后给合格稿。"""
+    """正文首稿篇幅越界、楔子首稿带包装，重写后给合格稿。"""
 
     BAD_BODY = '字' * 5000
-    BAD_HOOK = '空' * 400
+    BAD_HOOK = '```text\n旧约仍在。\n```'
 
     def __init__(self, wires):
         super().__init__(wires)
@@ -186,6 +186,7 @@ def test_first_draft_rejected_by_the_mechanical_gate_is_recorded_rejected(tmp_pa
     hook = _records(base, 'run', 'str06.stage5.hook', 'book')
     assert [(turn, accepted) for turn, accepted, _p, _e in hook] == [(1, False), (2, True)]
     assert hook[0][2] == 'failed' and hook[0][3], '楔子首稿同理'
+    assert any('[no_wrapper]' in e for e in hook[0][3])
 
 
 class _Sequence:

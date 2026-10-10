@@ -210,8 +210,11 @@ def _naming_residual() -> list:
 def _chain_broken() -> list:
     """章回执与当前编译脱钩：集合核对报出，装配未就绪（D2；rc6 身份拆分）。"""
     from novel.stages.stage7.assembly import verify_chapter_receipts
+    from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
     receipts = {1: {'status': 'accepted', 'writer_view_sha256': 'c' * 64,
                     'validation_sha256': 'b' * 64, 'machine_view_sha256': 'd' * 64,
+                    'validator_version': BODY_VALIDATOR_VERSION,
+                    'mechanical_checks': BODY_MECHANICAL_CHECKS,
                     'prose_sha256': 'b' * 64}}
     from novel.stages.common import ChapterIdentities
     return verify_chapter_receipts(
@@ -415,6 +418,7 @@ def _receipt_stale() -> list:
     """章回执绑定：旧回执配新章包必须拒绝（rc6 身份拆分，逐一核对）。"""
     from contracts.schema.receipt import ChapterReceipt
     from novel.stages.common import ChapterIdentities, check_chapter_receipt
+    from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
 
     from contracts.schema.receipt import ChapterLengthDisclosure
     receipt = ChapterReceipt(
@@ -422,8 +426,8 @@ def _receipt_stale() -> list:
         writer_view_sha256='a' * 64, validation_sha256='b' * 64,
         machine_view_sha256='e' * 64,
         prose_sha256='c' * 64, request_identity='r1',
-        protocol_version='p1', renderer_version='r1', validator_version='v1',
-        mechanical_checks=('non_empty',), length=ChapterLengthDisclosure(
+        protocol_version='p1', renderer_version='r1', validator_version=BODY_VALIDATOR_VERSION,
+        mechanical_checks=BODY_MECHANICAL_CHECKS, length=ChapterLengthDisclosure(
             char_count=100, target_chars=100, band_low=60, band_high=130,
             within_band=True, deviation_ratio=0.0))
     return check_chapter_receipt(

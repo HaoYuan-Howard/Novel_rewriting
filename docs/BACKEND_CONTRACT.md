@@ -72,7 +72,7 @@ orchestrator 推进，semantic unit 生成；Stage 页只读监控。`HUMAN_NODE
 
 不能从 stage 编号拼 R 编号：Stage2/4/5 各有多节点或多相职责。
 `tests/test_coverage.py::test_stage_sections_is_not_the_naive_stage_number` 保留该反例。
-旧输出只可与冻结旧代码配对，不原地迁移、选写作臂或触发付费重建。
+退役链旧输出只可与冻结旧代码配对。现役同根契约升级只接受登记的身份边；不转换旧语义产物，不新增额度或付费授权。
 
 ## 二、功能需求 R-0 ~ R-14
 
@@ -224,7 +224,7 @@ Stage5/6 从已读取的 Stage1 文本即时计算机械读数，不生成 Stage
 | R-4.5b | 旧 Stage3 v2 的解码器及专用 consumed 投影已退役；旧来源边不能通过当前 Store 获得现役有效性，历史字节只随旧代码与旧根配对读取 | `载体`（`contracts/schema/__init__.py::ARTIFACT_SPECS` + `novel/store.py::_projection_payload`） |
 | R-4.6 | 开篇文案段是**必填输入**；无文案段已由 `R-1.12` 挡在 Stage1（其 Stage6 机械消费边已随 STR-06 退役，本层不造 nullable hook 或空兜底） | 见 `R-1.12` |
 | R-4.7 | 当前机械测量不独立记 provenance；Stage5 的来源账直接记录真正读取的 Stage1 主体（Stage6 来源边已随 STR-06 退役） | `结构`（`novel/consumption.py::stage2_main_text` / `contracts/schema/hook.py::HookContext`） |
-| R-4.8 | 测量算法口径是独立版本轴；只改算法、不改输入 JSON 形状时，下游也必须自然 stale。旧 `STYLE_MEASUREMENT_CONTRACT` 常量已随 2026-10-04 清理批删除，现役版本轴由章级 validator 版本承载 | `结构`（`novel/stages/stage5/body_checks.py::BODY_VALIDATOR_VERSION`） |
+| R-4.8 | 测量算法口径是独立版本轴；只改算法、不改输入 JSON 形状时，下游也必须自然 stale。旧 `STYLE_MEASUREMENT_CONTRACT` 常量已随 2026-10-04 清理批删除，现役版本轴由章级 validator 版本承载 | `结构`（`contracts/schema/receipt.py::BODY_VALIDATOR_VERSION`） |
 | R-4.9 | 当前正文测量的真实上游只有 Stage1 正文（原作文案消费边已随 STR-06 退役）；测量本身不等待、也不消费 Stage2。Hook 字符数仅作观察，不作生成目标或质量硬闸 | `结构`（`novel/stages/stage5/body_checks.py::count_body_chars`／`novel/stages/stage5/hook_writer.py::validate_hook_prose`） |
 | R-4.10 | 测量契约必须进入 Stage5/6 对相应 Stage1 文本的 consumed 投影，使算法改动与输入文本改动走同一 freshness 机制 | `结构`（`novel/consumption.py::stage2_main_text` / `contracts/schema/hook.py::HookContext`） |
 | R-4.11 | 不再注册 Stage3 规则或 check 端点；即时读数只由 Stage5/6 的真实消费者继续进入 prompt、归一化或机械检查 | `结构`（`contracts/rules.py` + `novel/core/measure.py`） |
@@ -260,7 +260,7 @@ Stage4 的三个付费节点按固定序推进：`preserve`（保存策略义务
 | R-5.8 | 章预算相对场景权重的分布读数无条件报出（度量，不是门）。 | `度量`（`novel/stages/stage4/book_ir.py::allocate_chapter_budgets`）；场景轻重与披露顺序的审美无 ground truth，见 `B-17`／`B-02` |
 | R-5.9 | `BodyDesign`／`PresentationGraph` 的盘上形状由 `ARTIFACT_SPECS` 登记；模型自带 `contract_version` 字面量与候选产物表逐字对账。 | `载体`（`contracts/schema/design.py::BodyDesign`） |
 | R-5.10 | Design 实际输入无源叙述拓扑：`project_brief` 只投影义务与身份，源章拓扑/原文不进 prompt。 | `结构`（`novel/stages/stage4/grounding.py::project_brief`）；prompt 侧隔离守卫见 `B-05` |
-| R-5.11b | 当前组合的产物形状由候选产物表与 `ARTIFACT_SPECS` 登记（25 份书产物：家族＋schema 版本＋唯一 writer；模型自带 `contract_version` 的表值逐字对账），候选根的 workflow 身份记录绑定契约表身份与源输入身份；表漂移即拒绝复用旧根的采用结论。 | `载体`（`contracts/invariants.py::NODES`＋`contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS` + `contracts/schema/__init__.py::ARTIFACT_SPECS`）+ `tests/test_str06_candidates.py` 对账 |
+| R-5.11b | 当前组合的产物形状由候选产物表与 `ARTIFACT_SPECS` 登记（25 份书产物：家族＋schema 版本＋唯一 writer；模型自带 `contract_version` 的表值逐字对账），workflow 绑定契约表与源输入身份。表漂移先阻断；仅 `contracts/contract_upgrades.py::REGISTERED_UPGRADES` 登记的精确身份边允许同根升级：确定性计划与文件摘要 CAS、旧 owner 排空及书执行互斥、原字节归档后开新 epoch；保留历史响应、费用、累计额度和 unknown。未登记、源身份变化或不能证明兼容仍拒绝。prepared 升级中断时阻断节点，只能免费重放原计划。 | `载体`（`contracts/schema/upgrades.py`＋`novel/orchestrator/contract_upgrade.py`）+ `tests/test_contract_upgrade.py`；表形状由 `tests/test_str06_candidates.py` 对账 |
 | R-5.12 | **Design 知情词汇含 believes（D14）**：knowledge 域的 `knowledge_mode` 取值域为 known/suspected/heard/believes；believes＝持有者以为为真、不代表世界为真——错误看法以结构形式进入写手入场知情，不得写成 known 让写手当世界事实演出。Preserve 策略 v3 同批登记（源侧说辞/行为反差、concealed 揭示时点、iterative 作用、loop 问题与 resolution）。 | `HARD`（`contracts/schema/state.py::StateChange`＋`novel/stages/common.py::DESIGN_RULES`；反例 `tests/test_str06_execution_ir.py::test_believes_knowledge_enters_writer_view_without_becoming_world_fact`） |
 | R-5.13 | **Stage4 各语义节点独立 wire 协议与 compiler 生成派生面（B3 前半，rc7；R2 起 Design 升 v2，R8b 按 D8 修订升 v3，模型面现役瘦 wire `stage4-design-v10`、展开回 canonical 面 `stage4-design-v5`）**：Preserve／Design／Hook Design 各用独立 wire 协议（Bind 的 stage4-bind-v1 随 CS-3 bind 退役一并删除），顶层 `protocol_version` 逐字对账，漏带/错带即拒；模型只表达选择、结构与相对篇幅重点——义务编号（Preserve 列表序派发＋requires 序号重写）、场景/拍 ID（`sc{序:02d}`／`b{序:02d}`）、归章切片、线程编号（`th{nn}`，R2 按 open 先后派发）、权重归一（相对重点正数数组→和为 1）与整数预算全部由 compiler 生成，wire 白名单外的 ID/编号/归一权重键即拒（I-21/Q-1）。Design 的输入投影只含义务清单与锁摘要（`R-5.18`），不回显其它节点全量。 | `结构`（`novel/stages/stage4/design.py::assemble_body_design`＋`novel/stages/stage4/grounding.py`＋`contracts/schema/workflow.py::STAGE4_PRESERVE_PROTOCOL` 等三常量＋`contracts/schema/design.py::STAGE4_DESIGN_WIRE_PROTOCOL`；反例 `tests/test_str06_stage4_protocol.py`、`tests/test_str06_target.py`、`tests/hard_cases.py`） |
 | R-5.14 | **TargetDesign 结构化跨章依赖（B3 前半；R2/rc10 改独立线程结构）**：整书风格（`book_style` 必填）、书级世界边界（`world_rules`）与稳定人物声线（`character_voices`）是 BodyDesign 的正式书级字段，随 BookBrief 进每章请求；跨章语义走**拍上的线程操作**（`TargetBeat.threads`：open 带 kind 闭集＋主体＋文本、advance 带进展、close 带按 kind 限定的结局闭集＋简短收束，生命周期闭合由 schema 构造期校验，主体人物闭集由 assemble 校验），章间承接由 `ChapterAssignment.entry` 必填声明（第 1 章固定开篇，编译器不猜）。rc7 的四个静态跨章列表（standing_goals／ongoing_actions／open_questions／promises）已删除（AUD-04 无消费者），wire 旧键关闭式拒读。 | `结构`（`contracts/schema/design.py::BodyDesign`＋`novel/stages/stage4/book_ir.py::compile_writer_book_ir`；反例 `tests/test_str06_stage4_protocol.py`） |

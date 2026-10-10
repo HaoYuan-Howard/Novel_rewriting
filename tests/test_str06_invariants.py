@@ -198,12 +198,13 @@ def test_plan_matches_graph_green_and_red():
 # ───────────────────────── 章级回执绑定（旧回执配新输入拒绝） ─────────────────────────
 
 def _chapter_receipt(**over) -> ChapterReceipt:
+    from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
     base = dict(
         chapter_ordinal=1, writer_view_sha256=H64, validation_sha256='b' * 64,
         machine_view_sha256='d' * 64,
         prose_sha256=('c' * 64), request_identity='req-1',
-        protocol_version='p1', renderer_version='r1', validator_version='v1',
-        status='accepted', mechanical_checks=('non_empty', 'length_band'),
+        protocol_version='p1', renderer_version='r1', validator_version=BODY_VALIDATOR_VERSION,
+        status='accepted', mechanical_checks=BODY_MECHANICAL_CHECKS,
         length=ChapterLengthDisclosure(char_count=900, target_chars=1000, band_low=600,
                                        band_high=1300, within_band=True,
                                        deviation_ratio=-0.1))

@@ -174,7 +174,22 @@ Design 接受判据携带所有同址条目的 wire 路径，Binding 派生与�
 映射只证结构；承载状态的语义是否满足锁（如把暂缓和离绑到赏花）需要标定的语义核验，未运行保持 unver。
 `SemanticBinding` 与 `WriterBookIR` 因此升 rc16（旧 rc12／rc14 产物按版本字面量拒读，不迁移）；全局 RC 版式头
 升 rc16，旧 rc15 候选根按契约表漂移关闭式拒收（`init_or_resume_candidate_workflow`），原根留作冻结失败证据，
-续跑用新根并经历史采用按请求身份复用已购响应。
+未登记身份的续跑用新根并经历史采用按请求身份复用已购响应。
+
+**同根登记升级（2026-10-10）**：`contracts/contract_upgrades.py::REGISTERED_UPGRADES`
+只登记已证明的精确 source→target 契约身份。首条为 rc22→rc23 Hook 批：原 Hook
+设计、Context、Hook 正文与最终交付逐字退出正式位，免费编译输出组完整重建；
+源事实、Preserve、正文 Design、Binding、姓名映射和各章正文／回执保留。
+计划由 `contract-upgrade` 免费预览，绑定源身份、代码、原 workflow 与正式文件摘要；
+应用在排空与书执行锁内复验，prepared 日志先落，旧 workflow 原字节和原产物保存在
+`runtime/upgrades/<计划SHA>/`，再开 contract_drift epoch。原 ledger、工作单元、
+额度、未知调用和 CommitBundle 不改。中断后原计划幂等补尾，完成后重放不触碰新产物。
+升级不补造新版 Hook 的组织／期待，不新增付费与正文外发授权。
+
+免费重编译后逐章核对：写手视图与接受验证身份均未变的章保持原回执；只改验证
+材料／validator 版本先免费重验原稿，更新回执并继承原请求／adoption，旧回执逐字
+保存于 `runtime/rechecks/body/`；写作材料变化或重验失败只使该章进入既有恢复入口。
+Hook 背景投影修正可能改变部分章包，不能扩成整书重写。
 
 历史 R10 收口把 Brief、BodyDesign、PresentationGraph、ExecutionPlan、WriterBookIR 升 rc14。
 rc21 质量批后只保留未变化 ExecutionPlan 的 rc12/rc13→rc14 登记无损适配；六类质量产物

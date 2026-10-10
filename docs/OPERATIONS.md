@@ -43,6 +43,20 @@ blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可�
 
 ## AgentRun 与流水线恢复
 
+已登记的现役同根升级先免费预览，再应用同一计划（不需要 API key、`--yes` 或外发授权）：
+
+```powershell
+conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录>
+conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录> `
+  --apply --subject-sha256 <预览SHA> --actor <操作者> --reason <升级依据>
+```
+
+仅接受登记身份边。原产物和 workflow 原字节留在书内 `runtime/upgrades/<SHA>/`；
+不中断账与额度。prepared 中断后以相同 SHA 重放；代码或源身份漂移时明确阻断。
+rc22→rc23 之后重建 Hook Design、免费 Stage4 compile、Hook，再运行 Stage5 body
+（逐章沿用／免费重验／局部恢复）和 Stage7 assemble。付费节点先用 `--check-only`
+核已购响应；新请求仍须原有的 `--yes` 与 `--allow-egress` 授权，不在升级命令中购买。
+
 自动运行的暂停、恢复、停止和按原配置继续使用跑书页；Stage 页只读监控。工程诊断先查询
 `python -m novel.cli --help` 和目标子命令 `--help`。内部执行入口为
 `novel/orchestrator/run_step.py`；命名 scratch

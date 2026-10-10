@@ -365,3 +365,23 @@ def _outcome(packet: ChapterWriterPacket, prose: str, identity: str,
     return ChapterOutcome(prose=prose, receipt=receipt, attempts=tuple(attempts),
                           request_identity=identity, length_disclosed=disclosed,
                           ref=ref)
+
+
+def recheck_chapter(packet: ChapterWriterPacket, prose: str,
+                    receipt: ChapterReceipt) -> ChapterReceipt | None:
+    """当前验证规则免费复验原稿；写手输入／正文字节不符不构造新接受。"""
+    identities = chapter_identities(packet)
+    if (receipt.status != 'accepted'
+            or receipt.chapter_ordinal != packet.chapter.chapter_ordinal
+            or receipt.protocol_version != WRITER_PROTOCOL_VERSION
+            or receipt.renderer_version != RENDERER_VERSION
+            or receipt.writer_view_sha256 != identities.writer_view_sha256
+            or receipt.prose_sha256 != sha256_text(prose)):
+        return None
+    errors = chapter_prose_validator(packet)(prose)
+    if errors and not (receipt.length_disclosed and all(str(e).startswith('[length_band]') for e in errors)):
+        return None
+    contract = packet.realization_contract
+    return _outcome(packet, prose, receipt.request_identity, [],
+                    contract.band_low, contract.band_high, contract.target_chars,
+                    disclosed=bool(errors)).receipt
