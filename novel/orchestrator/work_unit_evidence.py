@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from contracts.schema.api import WorkUnitCostView
 from contracts.schema.orchestration import AgentRunEvent
-from contracts.schema.workflow import WorkUnitLedgerV2
+from contracts.schema.workflow import WorkUnitLedgerV3
 from novel import paths, work_units
 from novel.errors import PathRefused
 from novel.llm import session_audit as agent_session_audit
@@ -27,7 +27,7 @@ def load_budget(base: str | Path, sid: str, unit_id: str) -> work_units.WorkUnit
         if book is not None:
             ledger_sid = book.name
             path = paths.work_unit_dir(base, ledger_sid, unit_id) / 'ledger.json'
-    ledger = work_units._read(base, path, WorkUnitLedgerV2)
+    ledger = work_units._read(base, path, WorkUnitLedgerV3)
     if ledger.sid != ledger_sid:
         raise work_units.WorkUnitRefused('工作单元账所属书键与持久路径不符')
     budget = work_units.WorkUnitBudget(base, ledger.sid, ledger.node, ledger.role, ledger.scope)
@@ -54,7 +54,7 @@ def _same_book(base: str | Path, left: str, right: str) -> bool:
             and left_book.resolve() == right_book.resolve())
 
 
-def cost_evidence(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2) -> tuple[WorkUnitCostView, list[dict], set[str]]:
+def cost_evidence(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV3) -> tuple[WorkUnitCostView, list[dict], set[str]]:
     rows = read_rows(ledger_path(budget.base), '工作单元累计成本账')
     selected: list[dict] = []
     owners: set[str] = set()
@@ -100,13 +100,13 @@ def rebuild_budget_views(base: str | Path, ledger_sid: str,
     out: list[dict] = []
     wanted = set(nodes)
     for ledger_file in sorted(units_dir.glob('*/ledger.json')):
-        ledger = work_units._read(base, ledger_file, WorkUnitLedgerV2)
+        ledger = work_units._read(base, ledger_file, WorkUnitLedgerV3)
         if ledger.node in wanted:
             out.append(work_units.unit_view(ledger))
     return out
 
 
-def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2,
+def owner_stop_proof(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV3,
                  owners: set[str], cost_rows: list[dict]) -> dict:
     """追加额度前的 owner 停止证明（R8a-5 重写归属轴）。
 

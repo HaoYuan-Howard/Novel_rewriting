@@ -246,9 +246,9 @@ def abort_pending(repository: Str06Repository, *, base: Path, sid: str,
 def _refund_rebuild_units(repository: Str06Repository, base: Path, sid: str,
                           plan: ContractUpgradePlanV1, registration: ContractUpgradeSpec,
                           subject_sha256: str, actor: str, reason: str) -> list[dict]:
-    """裁决「升级清账」（2026-10-10）：登记 refund_nodes 的付费单元轮次返还。
+    """产物升级完成后调用统一节点版本同步；全部 LLM 升版不受此范围限制。
 
-    只在升级回执已成立后执行；`WorkUnitBudget.refund_for_upgrade` 负责幂等与
+    只在升级回执已成立后执行；`WorkUnitBudget.refund_for_upgrade` 适配历史回执并负责幂等与
     账内校验。返还失败＝账损坏，显式停（I-34），不静默跳过任何登记单元。
     """
     from novel import work_units

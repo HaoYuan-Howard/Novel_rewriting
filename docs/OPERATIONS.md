@@ -43,6 +43,18 @@ blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可�
 
 ## AgentRun 与流水线恢复
 
+所有 LLM 节点正式执行版本升版后，免费查看并同步现有单元额度：
+
+```powershell
+conda run -n novel_refactor python -m novel.orchestrator.llm_budget_upgrade --base <Output目录> --sid <sid>
+conda run -n novel_refactor python -m novel.orchestrator.llm_budget_upgrade --base <Output目录> --sid <sid> --apply
+```
+
+同步恢复至少基础四轮；同版本只一次，历史轮、费用、追加与 unknown 保留。V2 旧账首次
+同步建立版本基线并恢复，后续只按正式版本升版触发。入口零模型调用，不运行下游。
+原调用及免费采用也会在执行边界同步；只读查看不写账。整书总闸与付费/正文外发授权不变。
+
+
 已登记的现役同根升级先免费预览，再应用同一计划（不需要 API key、`--yes` 或外发授权）：
 
 ```powershell

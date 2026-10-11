@@ -30,6 +30,19 @@ def _old_workflow(repo, source=SOURCE):
     before = open_candidate_workflow(epoch=epoch, source_identity=source, created_at=epoch.created_at)
     before = before._replace(contract_identity=EDGE['source_identity'])
     repo.write(WORKFLOW_REL, workflow_to_disk(before))
+    # 真实存量版本在升版前已记录旧 Context；测试不能把当前版本的模型账仅换
+    # workflow 标签冒充旧版本，否则同版本不应再次获得额度。
+    from novel import work_units
+    for unit_id in work_units.registered_unit_ids(repo.root.parent, repo.root.name):
+        budget = work_units.readonly_budget(repo.root.parent, repo.root.name, unit_id)
+        if budget.identity['node'] != 'str06.stage5.hook':
+            continue
+        raw = budget._read().model_dump(mode='json')
+        for reset in raw['version_resets']:
+            reset['versions']['context'] = int(EDGE['source_version'].rsplit('rc', 1)[1])
+            reset['upgrade_id'] = work_units._digest({'node': raw['node'], 'versions': reset['versions']})
+        work_units._write(repo.root.parent, budget.path,
+                          work_units.WorkUnitLedgerV3.model_validate(raw))
     return before
 
 
@@ -287,7 +300,7 @@ def test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body(tmp_path, monk
     for unit_id in registered_unit_ids(repo.root.parent, 'run'):
         ledger = readonly_budget(repo.root.parent, 'run', unit_id)._read()
         if ledger.node in EDGE['refund_nodes']:
-            assert ledger.refunds, ledger.node
+            assert ledger.version_resets[-1].additional > 0, ledger.node
     assert all(p.read_bytes() == data for p, data in body.items())
     # 真实初始化入口必须接受新 epoch，历史账沿用同一 base／sid。
     from novel.llm.paid_requests import PaidRequestSession
@@ -576,8 +589,8 @@ def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
     # 裁决「升级清账」：轮次返还入账；历史轮（含 unknown）与费用总闸原样保留。
     refunded = unit._read()
     assert refunded.turns == old_ledger.turns
-    assert [row.upgrade_id for row in refunded.refunds] == [receipt['subject_sha256']]
-    assert refunded.content_limit == old_ledger.content_limit + refunded.refunds[0].additional
+    assert len(refunded.version_resets) == len(old_ledger.version_resets) + 1
+    assert refunded.content_limit == old_ledger.content_limit + refunded.version_resets[-1].additional
     assert read_book_budget(repo.root.parent, 'run') == old_budget
     _, context = init_or_resume_candidate_workflow(repository=repo, base=repo.root.parent,
         code=prov.code_version(), root_sha1='a' * 40, source_identity=SOURCE,
@@ -691,6 +704,7 @@ def _exhausted_hook_unit(repo):
         budget.finish(reservation.turn_id, outcome='failed',
                       reason_code='content_rejected')
     assert budget.remaining == 0 and budget.used == 4
+    _old_workflow(repo)
     return budget
 
 
@@ -704,7 +718,7 @@ def test_apply_refunds_registered_unit_rounds_to_base(tmp_path):
     assert row['status'] == 'refunded' and row['additional'] == 4
     assert budget.remaining == 4 and budget.used == 4
     ledger = budget._read()
-    assert [r.additional for r in ledger.refunds] == [4]
+    assert [r.additional for r in ledger.version_resets] == [0, 4]
     assert ledger.content_limit == 8
     # 历史轮与费用证据保留：轮次只增可用额度，不清账面。
     assert len(ledger.turns) == 4 and all(

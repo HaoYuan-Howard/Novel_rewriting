@@ -5,15 +5,14 @@ rc22→rc23 不转换旧 Hook 语义。旧组织与期待无法确定性补出�
 违反 I-21——故本边**不登记**换算器，走重建）；
 正文真源形状未变，免费重编译后以逐章写手／验证身份决定恢复范围。
 
-2026-10-10 裁决「升级清账」：登记 `refund_nodes` 的升级在 apply 时，把对应
-付费工作单元的可用轮次恢复到基础额度（历史轮与费用证据保留）。rebuild 与
-refund 的差集是有意为之：stage5.body 的章产物不随本升级归档，其单元轮次
-不作废，不返还。
+2026-10-11 裁决：全部 LLM 节点正式执行版本升版均恢复基础可用额度，
+不再以产物归档或本表 refund_nodes 为适用条件。本表只登记产物升级时调用
+统一同步的范围；历史返还记录只读，节点同版本重放不能再次恢复额度。
 
 rc23→rc24 只改 HookContext 形状（篇幅包络三字段）与请求字节：PresentationGraph
 （rc23）与 design wire v3 不变，已发布 Hook 选择继续有效；旧上下文按契约表
 漂移拒读，免费重编译即得 rc24 形状。stage5.hook 的请求身份随交付要求变化，
-旧稿不沿用（付费重写，轮次随归档返还）；正文与姓名映射原样保留。
+旧稿不沿用（付费重写，轮次按节点升版恢复）；正文与姓名映射原样保留。
 """
 from typing import Final, TypedDict
 
@@ -26,7 +25,7 @@ class ContractUpgradeSpec(TypedDict):
     target_version: str
     rebuild_nodes: tuple[str, ...]
     archive_patterns: tuple[str, ...]
-    #: 轮次返还的付费节点闭集（裁决「升级清账」）；确定性/免费节点不进此表。
+    #: 本产物升级调用版本同步的范围；全部 LLM 升版另由统一入口覆盖。
     refund_nodes: tuple[str, ...]
 
 HOOK_UPGRADE: Final[ContractUpgradeSpec] = {
@@ -39,7 +38,7 @@ HOOK_UPGRADE: Final[ContractUpgradeSpec] = {
         'str06.stage4.hook_design', 'str06.stage4.compile',
         'str06.stage5.hook', 'str06.stage5.body', 'str06.stage7.assemble',
     ),
-    #: 只返还付费产物被本升级归档的节点；stage5.body 章产物保留，不返还。
+    #: 本产物升级同步的节点；其余 LLM 升版仍由统一版本入口覆盖。
     'refund_nodes': ('str06.stage4.hook_design', 'str06.stage5.hook'),
     # 输出组完整失效；IR 重编译不等于章稿重写。正文／姓名映射原样保留。
     'archive_patterns': (

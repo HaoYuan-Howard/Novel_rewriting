@@ -1,12 +1,31 @@
 # 工作单元与人工追加
 
-`WorkUnitLedgerV2` 位于 `novel/paths.py::work_unit_dir`。工作单元身份仍由工作流任务、书、
+`WorkUnitLedgerV3` 位于 `novel/paths.py::work_unit_dir`。工作单元身份仍由工作流任务、书、
 节点、角色和 scope 决定。新工作单元只接受 `role=executor`（`role='commander'` 构造期
 关闭式拒绝；历史 commander 账经 `read_only=True` 只读解码，仅服务 owner 停止证明与
 历史决定重放，不参与任何新预算）。waiting_on 到 owner/scope 的投影用
 `contracts/invariants.py::approval_work_unit` / `::approval_scope_allowed`。基础内容额度
 四次；新候选、新会话、新 run 和新 epoch 都沿用原账。网络重试单列为 attempt，缓存命中
 单列。追加金额只表示允许增加的内容调用次数，不是货币费用。
+
+**全部 LLM 节点升版重置额度（2026-10-11 用户裁决）**：正式产物、协议、保存策略、写手
+协议、renderer 或机械判据任一版本分量升版，相关节点的每个工作单元（包括逐章和
+窄调用 scope）恢复至少基础四次可用额度。已有更多可用额度保留；历史轮、响应、失败、
+人工追加与费用不删除。`contracts/llm_versions.py::llm_node_versions` 是从正式常量
+派生的唯一版本登记，必须覆盖 NODES 的全部付费节点；改变生成规则必须显式升对应
+版本。不按输入、模型配置、Git、候选、run、epoch 或会话变化恢复额度。
+
+`LlmNodeVersionReset` 随 V3 账记录完整版本分量、归一账摘要、当前轮序和恢复次数；
+同一版本仅登记一次，即使无需补轮也保存零增量基线，降版拒绝。同版本重放、免费
+采用或契约升级回执重放都不会再次恢复。真实外发前 reserve 和免费处理登记共用
+同一同步入口；unknown、未闭合回答、整书总闸和付费/外发授权仍独立生效。
+
+V2→V3 仅经 `contracts/schema/workflow.py::work_unit_ledger_of_payload` 无损读迁移，
+不猜旧节点版本、不在读面写盘或发额度。首次写 V3 前把原 V2 字节耐久保存为
+`ledger.v2.<sha256>.json`，该快照只作历史证据。旧账首次执行版本同步时，一次性建立当前
+版本基线并恢复基础额度。整书免费预览/应用入口为
+`python -m novel.orchestrator.llm_budget_upgrade --base <Output> --sid <sid> [--apply]`；
+应用持书级写许可和 workflow 锁，部分中断按单元重放幂等。版本恢复不自动重跑小说。
 
 **整书级付费内容调用总闸**（2026-09-15）：`BookContentBudgetV1` 持久于
 `novel/paths.py::book_budget_path`（`_service/runs/<sid>/book_budget.json`），对同一本书
@@ -24,7 +43,7 @@ reasoning 不重复加到 completion，缺失用量显示 unknown。默认追加
 
 提交先取得同书 writer、审批和工作单元锁，再证明全部原 owner 已停止并在锁内复验主体、
 代码、成本和 session/epoch 归属。预算未耗尽、未闭合尝试、已保存回答或 producer/group
-待提交均不能追加。只在现有 ledger 的 grants 末尾记录不可变 `BudgetGrant`；原轮次与费用
+待提交、升版待免费恢复均不能追加。只在现有 ledger 的 grants 末尾记录不可变 `BudgetGrant`；原轮次与费用
 完整保留。相同 intent_id 的原内容重试返回同一授权；改金额、理由或 token 必须拒绝。
 授权自身不发模型、不改变 typed 决定、不解除无进展停点。后续模型调用仍经过独立付费与正文
 外发授权。每个 role/scope 的额度互不流转；直连 `LlmClient` / `WorkUnitBudget` 恢复同一
@@ -42,10 +61,10 @@ logical request 时接受累计额度和全部历史 attempt links，不把第�
 缺失 token 仍未知；仅允许另开内容轮消耗原剩余额度，不恢复旧 provider 会话。工程操作入口见
 `docs/OPERATIONS.md`。
 
-`WorkUnitLedgerV2.processing` 按写入顺序保存不可变来源回执；冻结请求时登记待处理单元，
+`WorkUnitLedgerV3.processing` 按写入顺序保存不可变来源回执；冻结请求时登记待处理单元，
 包括尚未启动的并发章节，避免只统计已发请求。模型项精确引用内容轮次，
 机械处理、历史采用和缓存命中引用 producer 已核验的输入与结果摘要。免费处理登记同一
-业务单元但不创建 turn、不消耗或重发基础额度；同一来源重放幂等。回执损坏保持 unknown。
+业务单元但不创建 turn、不消耗额度；只有节点正式升版才恢复基础额度，同一来源重放幂等。回执损坏保持 unknown。
 `WorkUnitView` 统一发布 content_base_limit、content_granted、grant_count、content_used、
 content_limit、content_remaining 和恢复入口；`WorkUnitView.processing` 展示该单元最近一次
 实际处理的总量、待处理、新生成、机械处理、历史采用、缓存、失败、未知和原因。这描述处理

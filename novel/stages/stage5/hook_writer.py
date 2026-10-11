@@ -23,11 +23,9 @@ import json
 import re
 
 from contracts.schema.hook import HookContext
+from contracts.schema.receipt import HOOK_VALIDATOR_VERSION
 from novel.core.text import count_non_whitespace_chars
 from novel.stages.common import claim_spans, uncovered_occurrences, render_hook_context
-
-#: 机械 validator 的版本：回执 validator_version 记这一位，规则变化必须换版。
-HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v4'
 
 #: 已通过的机械检查项名单（回执 mechanical_checks 的取值面）。
 MECHANICAL_CHECKS = (

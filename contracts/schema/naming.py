@@ -23,6 +23,7 @@ from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 
 NamePart = str  # 非空名称部件；长度/字符面由 compile 校验（schema 只保非空语义）
+NAMING_VALIDATOR_VERSION = 'str06-naming-v1'
 
 
 class TargetName(StrictModel):

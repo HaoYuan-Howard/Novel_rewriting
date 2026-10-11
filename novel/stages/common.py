@@ -56,6 +56,7 @@ from contracts.schema.execution import (
 from contracts.schema.state import StateAddress, SurfaceIntroduction, WithheldNameBinding
 from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.workflow import STR06_RC_VERSION
+from contracts.schema.receipt import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure, render_form
 from novel.core.name_materials import FIRST_PERSON_ROLE_WORD
 from novel.core.name_materials import expand_surface_releases, family_form_literals, withheld_name_literals
@@ -2298,13 +2299,11 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 #: 按本场已释放称谓确定性投影（`project_withheld_names`）；短姓、关系称呼与未登记表达
 #: 不投影，仍按字面检查回派 owner。
 #: v12：已证明同人的自然混称逐次投影，保持各次提及与中间文本；不以共现模拟揭名。
-RENDERER_VERSION = 'str06-render-v12'
 
 #: 整书写作约定与自由度（Writer 协议，固定文本）。v7 按三类身份重写（必须写出／
 #: 必须遵守不必复述／写手自由）：场景是控制单元、反差不写成总结句、知情与
 #: 时态按输入措辞——「事实全对、处处交代」的对症条款。分区名用「」引用
 #: （阅读面的节标题用【】，二者不冲突）。v8明确逐拍结果与状态的有效时点。
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v11'
 WRITER_PROTOCOL = """\
 可补措辞、对白、即时反应和局部动作；不得新增或改变动机、行为主体、关系、历史、时序、知情条件或后文依赖的前件。\n本章写作输入按六个分区给出，归三类用法：
 【必须写出】在正文里实际完成：拍的事件、承载的义务满足条件、表达任务、线索的推进或收束。化进情节写出——不是提到关键词，也不逐条宣布；条目可拆开融入叙述，不要求逐条对应句子、段落或独立场景。

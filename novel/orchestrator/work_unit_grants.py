@@ -15,7 +15,7 @@ from contracts.invariants import WORK_UNIT_GRANT_ADDITIONS
 from contracts.schema.api import (
     WorkUnitGrantPreview, WorkUnitGrantRequest, WorkUnitGrantResult,
 )
-from contracts.schema.workflow import BudgetGrant, WorkUnitLedgerV2
+from contracts.schema.workflow import BudgetGrant, WorkUnitLedgerV3
 from novel import paths, prov, work_units
 from novel.appendlog import path_transaction_lock
 from novel.errors import TerminalState
@@ -32,7 +32,7 @@ from novel.orchestrator.work_unit_evidence import (
 class _Inspection:
     view: WorkUnitGrantPreview
     budget: work_units.WorkUnitBudget
-    ledger: WorkUnitLedgerV2
+    ledger: WorkUnitLedgerV3
     surface: str
     owners: tuple[str, ...]
 
@@ -56,6 +56,8 @@ def _inspect(base: str | Path, sid: str, unit_id: str, additional: int) -> _Insp
         reason = '整组候选待免费补提交，不能用额度追加绕过'
     elif any(row.producer_sha256 is not None and row.ordinal > ledger.committed_through for row in ledger.turns):
         reason = '已保存 producer 提交目标，须先免费补提交'
+    elif budget._synchronize_version(ledger).content_limit > ledger.content_limit:
+        reason = 'LLM 节点已升版，先免费同步版本额度，无需人工追加'
     if reason is not None:
         # 不可追加的前置原因先于 owner 停止证明返回：delivered 轮在 CLI 直跑
         # （无会话身份）下 owner 证明必炸深水异常，会把本该指路的拒绝覆盖成
@@ -140,7 +142,7 @@ def apply(base: str | Path, sid: str, unit_id: str, request: WorkUnitGrantReques
                     before_ledger_sha256=work_units._digest(checked.ledger.model_dump(mode='json')),
                     surface_sha256=checked.surface, authorized_after_ordinal=len(checked.ledger.turns),
                     owner_run_ids=checked.owners)
-                updated = WorkUnitLedgerV2.model_validate({**checked.ledger.model_dump(mode='json'),
+                updated = WorkUnitLedgerV3.model_validate({**checked.ledger.model_dump(mode='json'),
                     'grants': [*checked.ledger.grants, grant]})
                 work_units._write(base, budget.path, updated)
         return WorkUnitGrantResult(grant=grant, current=inspect(base, sid, unit_id, request.additional))

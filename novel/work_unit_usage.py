@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from contracts.schema.run_metrics import UsageSummary
-from contracts.schema.workflow import WorkUnitAttempt, WorkUnitContentTurn, WorkUnitLedgerV2
+from contracts.schema.workflow import WorkUnitAttempt, WorkUnitContentTurn, WorkUnitLedgerV3
 from novel.llm.ledger import read_cost_snapshot
 from novel.work_units import WorkUnitRefused
 
@@ -23,7 +23,7 @@ def owner(row: Mapping[str, Any]) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def match_attempt(ledger: WorkUnitLedgerV2, turn: WorkUnitContentTurn,
+def match_attempt(ledger: WorkUnitLedgerV3, turn: WorkUnitContentTurn,
                   attempt: WorkUnitAttempt, rows: Sequence[dict]) -> dict | None:
     """attempt 必须一一对应且精确绑定书、角色、producer 和请求。"""
     found = [row for row in rows if row.get('attempt_id') == attempt.attempt_id]

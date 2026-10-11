@@ -1106,6 +1106,9 @@ def _hook_prompt(context: HookContext) -> str:
 #: Hook 面变异用例（R10-0.4 起覆盖全部登记 hook_context 消费者字段；与
 #: `test_writer_visible_fields_have_mutation_cases` 的自检共用）。
 _HOOK_MUTATION_CASES = [
+    ('hook_context.length_low', {}, None, True),
+    ('hook_context.length_high', {}, None, True),
+    ('hook_context.length_cap', {}, None, True),
     ('hook_context.local_focus', {'local_focus': '变异钩子导演九九'},
      '变异钩子导演九九', True),
     ('hook_context.book_style', {'book_style': '变异全书文风九九'},
@@ -1141,7 +1144,13 @@ def test_hook_mutations_reach_only_hook_face(green_hook, green_ir, path, update,
                                              sentinel, expect_prompt_change):
     """hook_only 面：Hook 材料变异只动 Hook 阅读面，正文章包摘要一律不动。"""
     context = green_hook
-    if path == 'hook_context.materials[].presentation':
+    if path in {'hook_context.length_low', 'hook_context.length_high', 'hook_context.length_cap'}:
+        field = path.rsplit('.', 1)[1]
+        value = getattr(context, field) + 1
+        context = context.model_copy(update={field: value})
+        assert context.length_low < context.length_high < context.length_cap
+        sentinel = str(value)
+    elif path == 'hook_context.materials[].presentation':
         materials = list(context.materials)
         materials[0] = materials[0].model_copy(
             update={'presentation': '变异材料九九'})

@@ -41,6 +41,7 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_operator_telemetry.py',
     'tests/test_output_root_archive.py',
     'tests/test_work_unit_grants.py',
+    'tests/test_llm_budget_versions.py',
     'tests/test_legacy_work_unit_recovery.py',
     'tests/test_agent.py',
     'tests/test_str06_product_entry.py',

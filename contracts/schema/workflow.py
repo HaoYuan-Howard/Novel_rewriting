@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, model_validator
 
@@ -182,9 +182,9 @@ class BudgetGrant(FrozenModel):
 
 
 class UpgradeRoundRefund(FrozenModel):
-    """同根契约升级作废已购产物后的轮次返还（2026-10-10 裁决：升级清账）。
+    """2026-10-10 的旧契约返还记录；2026-10-11 起只读，现役用节点版本重置。
 
-    系统动作，不是人工追加：登记过 `refund_nodes` 的升级在 apply 时，把本单元
+    历史系统动作，不是人工追加：登记过 `refund_nodes` 的升级曾在 apply 时把本单元
     可用轮次恢复到基础额度。历史轮、费用账与响应证据原样保留（成本权威仍是
     `_service/ledger.jsonl`；本表只恢复**可用轮次**，不返还实际花费）。
     同一升级对同一单元幂等：`upgrade_id` 唯一。
@@ -196,6 +196,29 @@ class UpgradeRoundRefund(FrozenModel):
     before_ledger_sha256: Sha256
     refunded_after_ordinal: int = Field(ge=0)
     additional: int = Field(ge=1, le=4, strict=True)
+
+
+class LlmNodeVersionReset(FrozenModel):
+    """2026-10-11 裁决：全部 LLM 节点升版恢复基础额度；版本基线也必须落账。
+
+    additional=0 仍保存版本，防止先免费处理、后付费时重复恢复。同一版本
+    不重复追加；旧 V2 没有版本基线，首次显式迁移时恢复并建立当前版本基线。
+    """
+
+    upgrade_id: Sha256
+    versions: dict[str, Annotated[int, Field(ge=1, strict=True)]] = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=2000)
+    created_at: int = Field(ge=0)
+    before_ledger_sha256: Sha256
+    refunded_after_ordinal: int = Field(ge=0)
+    additional: int = Field(ge=0, le=4, strict=True)
+
+    @model_validator(mode='after')
+    def _versions(self) -> LlmNodeVersionReset:
+        if any(not key or type(value) is not int or value < 1
+               for key, value in self.versions.items()):
+            raise ValueError('节点版本分量必须有名称和显式正整数')
+        return self
 
 
 class WorkUnitProcessing(FrozenModel):
@@ -248,10 +271,7 @@ class WorkUnitLedgerV2(FrozenModel):
         limit = self.base_content_limit
         intents: set[str] = set()
         refund_ids: set[str] = set()
-        events = sorted(
-            [*((row.created_at, 1, index, row) for index, row in enumerate(self.grants)),
-             *((row.created_at, 0, index, row) for index, row in enumerate(self.refunds))],
-            key=lambda item: (item[0], item[1], item[2]))
+        events = self._budget_events()
         for _at, _kind_order, _index, row in events:
             if isinstance(row, BudgetGrant):
                 if row.intent_id in intents or row.authorized_after_ordinal != limit:
@@ -267,6 +287,9 @@ class WorkUnitLedgerV2(FrozenModel):
                     raise ValueError('轮次返还不得越过实际已用轮次')
                 if not row.reason.strip():
                     raise ValueError('轮次返还必须登记理由')
+                if isinstance(row, LlmNodeVersionReset) and row.additional != max(
+                        0, self.base_content_limit - (limit - row.refunded_after_ordinal)):
+                    raise ValueError('节点升版只能恢复基础可用额度，不能额外发放轮次')
                 refund_ids.add(row.upgrade_id)
                 limit += row.additional
         if len(self.turns) > self.content_limit:
@@ -304,6 +327,61 @@ class WorkUnitLedgerV2(FrozenModel):
         return (self.base_content_limit
                 + sum(grant.additional for grant in self.grants)
                 + sum(refund.additional for refund in self.refunds))
+
+
+    def _budget_events(self):
+        return sorted(
+            [*((row.created_at, 0, index, row) for index, row in enumerate(self.grants)),
+             *((row.created_at, 1, index, row) for index, row in enumerate(self.refunds))],
+            key=_budget_event_order)
+
+
+class WorkUnitLedgerV3(WorkUnitLedgerV2):
+    """唯一现役预算账；V2 只由 work_unit_ledger_of_payload 显式读取迁移。"""
+
+    schema_version: Literal[3] = 3
+    version_resets: tuple[LlmNodeVersionReset, ...] = ()
+
+    @property
+    def content_limit(self) -> int:
+        return super().content_limit + sum(row.additional for row in self.version_resets)
+
+    def _budget_events(self):
+        return sorted(
+            [*super()._budget_events(),
+             *((row.created_at, 2, index, row)
+               for index, row in enumerate(self.version_resets))],
+            key=_budget_event_order)
+
+    @model_validator(mode='after')
+    def _version_chain(self) -> WorkUnitLedgerV3:
+        previous: dict[str, int] = {}
+        ordinal = 0
+        for row in self.version_resets:
+            if (row.refunded_after_ordinal < ordinal
+                    or not set(previous) <= set(row.versions)
+                    or any(row.versions[key] < value for key, value in previous.items())
+                    or row.versions == previous):
+                raise ValueError('节点版本重置必须按单调升版顺序登记，不能重复或降版')
+            previous, ordinal = row.versions, row.refunded_after_ordinal
+        return self
+
+
+def work_unit_ledger_of_payload(payload: dict) -> WorkUnitLedgerV3:
+    """登记的 V2→V3 无损读迁移；不写盘、不重置额度、不补猜历史节点版本。"""
+    if payload.get('schema_version') == 2:
+        old = WorkUnitLedgerV2.model_validate(payload)
+        return WorkUnitLedgerV3.model_validate({**old.model_dump(mode='json'),
+                                               'schema_version': 3, 'version_resets': []})
+    return WorkUnitLedgerV3.model_validate(payload)
+
+
+def _budget_event_order(event):
+    _at, kind, index, row = event
+    ordinal = (row.authorized_after_ordinal if isinstance(row, BudgetGrant)
+               else row.refunded_after_ordinal)
+    # 同轮序的授权先于首次版本基线；同类保留 append 顺序，不依赖墙钟精度。
+    return ordinal, kind, index
 
 
 class WorkUnitBlobV1(FrozenModel):

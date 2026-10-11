@@ -39,12 +39,17 @@ from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 
 __all__ = ['ChapterLengthDisclosure', 'ChapterReceipt',
-           'BODY_VALIDATOR_VERSION', 'BODY_MECHANICAL_CHECKS']
+           'BODY_VALIDATOR_VERSION', 'BODY_MECHANICAL_CHECKS',
+           'RENDERER_VERSION', 'WRITER_PROTOCOL_VERSION', 'HOOK_VALIDATOR_VERSION']
 
 #: 机械规则的独立版本轴；规则变化必须换版，消费者先免费重验原章稿。
 #: v2（CS-H H3，RC-61）增加 required_literals：必保揭名承载章须出现称谓字面。
 #: v3：标题词须有标题边界，正文首句“尾声未尽”等自然用语不作包装标题。
 BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v3'
+#: 写手材料与机械回执共用的正式版本轴；运行时提示、身份与预算从此取值。
+RENDERER_VERSION = 'str06-render-v12'
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v11'
+HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v4'
 #: 回执宣告通过的机械检查项闭集。
 BODY_MECHANICAL_CHECKS = (
     'non_empty', 'encoding', 'no_wrapper', 'withheld_literals', 'required_literals', 'length_band',

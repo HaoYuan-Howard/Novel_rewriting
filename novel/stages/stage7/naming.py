@@ -18,15 +18,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
+from contracts.schema.naming import NAMING_VALIDATOR_VERSION, NameAssignment, NameMapV5, TargetName
 from contracts.schema.source import (
     BlueprintsArtifactV17, CharactersArtifactV6, render_form,
 )
 from novel.stages.common import (
     apply_replacements, group_located_errors, uncovered_occurrences,
 )
-
-NAMING_VALIDATOR_VERSION = 'str06-naming-v1'
 
 
 # ───────────────────────── 投影（Naming 的唯一输入面） ─────────────────────────

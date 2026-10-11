@@ -4,6 +4,7 @@
       "_note": "B5（S-05）迁移登记清理：F8c 分流叙事与旧路径引用已删除，本条不再指向任何已删除路径；`str06` 范围转为该链的**现役选测范围**（路径与 tests 清单均实存、与真实导入消费者取并集）。",
       "paths": [
         "contracts/invariants.py",
+        "contracts/llm_versions.py",
         "contracts/schema/source.py",
         "contracts/schema/observation.py",
         "contracts/schema/design.py",
@@ -36,10 +37,12 @@
         "novel/paths.py",
         "docs/schema/str06.md",
         "novel/cli/main.py",
-        "novel/orchestrator/state.py"
+        "novel/orchestrator/state.py",
+        "novel/orchestrator/llm_budget_upgrade.py"
       ],
       "tests": [
         "tests/test_str06_*.py",
+        "tests/test_llm_budget_versions.py",
         "tests/test_layering.py",
         "tests/test_test_selection.py"
       ]
@@ -1353,6 +1356,18 @@
       "cases": {
         "test_missing_literal_gets_a_paragraph_level_repair_round": "stage",
         "test_unparseable_paragraph_patch_is_a_failed_attempt_not_a_candidate": "stage"
+      }
+    },
+    "tests/test_llm_budget_versions.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_paid_boundary_resets_exhausted_upgraded_node_without_new_grant": "stage"
       }
     }
   },
