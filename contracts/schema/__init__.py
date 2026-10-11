@@ -112,7 +112,7 @@ from contracts.schema.source import (
     BlueprintsArtifactV17, CharactersArtifactV6, CharactersCore,
 )
 from contracts.schema.observation import (
-    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_OBSERVATION_PROTOCOL, AssociateObservation,
+    STAGE2_ASSOCIATE_PROTOCOL, AssociateObservation,
     BookObservation, ChapterObservation, NamesObservation,
 )
 from contracts.schema.grounding import (
@@ -203,10 +203,10 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # 【版本口径】新链产物全部 current_version=1：三级路径是切换时新建的命名
     #   空间，盘上没有旧信封字节可读（旧路径已整体退役，见 RETIRED_ARTIFACT_PATHS）。
     #   形状破坏史不在信封上累加，而由两条线承载：① 模型自带 `contract_version`
-    #   字面量（Characters v4／Brief／Binding／Plan／Graph／BookIR／HookContext／
+    #   字面量（Characters v6／Brief／Binding／Plan／Graph／BookIR／HookContext／
     #   ChapterReceipt／NameMap v5，与候选产物表逐字对账）；② 候选产物表的
     #   `schema_version` RC 标签（rc2→rc3→rc4 的批次定格）。未声明
-    #   `contract_version` 的模型（Blueprints v13）按 F8
+    #   `contract_version` 的模型（Blueprints v17）按 F8
     #   义务在本注册表登记形状（即本表条目自身），不进模型——往模型加非 exclude
     #   字段会改 `model_dump` 字节，从而改 prompt 与已购请求身份，F7a 的历史
     #   采用会当场失配（`_provenance` 用 exclude=True 正是为守住这条）。
@@ -397,5 +397,5 @@ __all__ = [
     'decode_artifact', 'encode_artifact',
     # B2 观察与关联协议（contracts/schema/observation.py）
     'AssociateObservation', 'BookObservation', 'ChapterObservation',
-    'NamesObservation', 'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_OBSERVATION_PROTOCOL',
+    'NamesObservation', 'STAGE2_ASSOCIATE_PROTOCOL',
 ]

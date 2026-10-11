@@ -1106,14 +1106,21 @@ def _hook_prompt(context: HookContext) -> str:
 #: Hook 面变异用例（R10-0.4 起覆盖全部登记 hook_context 消费者字段；与
 #: `test_writer_visible_fields_have_mutation_cases` 的自检共用）。
 _HOOK_MUTATION_CASES = [
-    ('hook_context.design_brief', {'design_brief': '变异钩子导演九九'},
+    ('hook_context.length_low', {}, None, True),
+    ('hook_context.length_high', {}, None, True),
+    ('hook_context.length_cap', {}, None, True),
+    ('hook_context.local_focus', {'local_focus': '变异钩子导演九九'},
      '变异钩子导演九九', True),
-    ('hook_context.delivery_brief', {'delivery_brief': '变异钩子口吻九九'},
-     '变异钩子口吻九九', True),
-    ('hook_context.target_chars', {'target_chars': 320}, None, True),
+    ('hook_context.book_style', {'book_style': '变异全书文风九九'},
+     '变异全书文风九九', True),
+    ('hook_context.expression_mechanisms[].statement', {}, '变异表达机制九九', True),
+    ('hook_context.expression_mechanisms[].ex_id', {}, 'ex_99', False),
+    ('hook_context.reader_expectation.kind', {}, None, True),
+    ('hook_context.reader_expectation.focus', {}, '变异阅读期待九九', True),
+    ('hook_context.character_voices[].voice', {}, '变异人物声线九九', True),
+    ('hook_context.scene_voices[].voice', {}, '变异场景声线九九', True),
     ('hook_context.forbidden_reveals',
      {'forbidden_reveals': ('变异禁揭九九',)}, '变异禁揭九九', True),
-    ('hook_context.hard_max_chars', {'hard_max_chars': 400}, None, True),
     ('hook_context.pov.person',
      {'pov': HookPov(person='third', focalizers=('yun_niang',))}, None, True),
     ('hook_context.pov.focalizers',
@@ -1121,7 +1128,10 @@ _HOOK_MUTATION_CASES = [
     ('hook_context.materials[].presentation', {}, '变异材料九九', True),
     ('hook_context.materials[].event', {}, '变异事件九九', True),
     ('hook_context.materials[].deltas', {}, '变异钩子效应九九', True),
+    ('hook_context.materials[].emphasis', {}, None, True),
+    ('hook_context.materials[].transition', {}, None, True),
     ('hook_context.opening_facts[].text', {}, '变异起笔九九', True),
+    ('hook_context.opening_facts[].audience', {}, None, True),
     ('hook_context.usable_surfaces[].surfaces', {}, '变异面九九', True),
     # CS-H H3 判据⑥：材料所引场的 avoid 随上下文送达楔子（渲染进禁区行）。
     ('hook_context.avoid_lines', {'avoid_lines': ('变异场禁九九',)}, '变异场禁九九', True),
@@ -1134,11 +1144,46 @@ def test_hook_mutations_reach_only_hook_face(green_hook, green_ir, path, update,
                                              sentinel, expect_prompt_change):
     """hook_only 面：Hook 材料变异只动 Hook 阅读面，正文章包摘要一律不动。"""
     context = green_hook
-    if path == 'hook_context.materials[].presentation':
+    if path in {'hook_context.length_low', 'hook_context.length_high', 'hook_context.length_cap'}:
+        field = path.rsplit('.', 1)[1]
+        value = getattr(context, field) + 1
+        context = context.model_copy(update={field: value})
+        assert context.length_low < context.length_high < context.length_cap
+        sentinel = str(value)
+    elif path == 'hook_context.materials[].presentation':
         materials = list(context.materials)
         materials[0] = materials[0].model_copy(
             update={'presentation': '变异材料九九'})
         context = context.model_copy(update={'materials': tuple(materials)})
+    elif path in {'hook_context.materials[].emphasis', 'hook_context.materials[].transition'}:
+        field = path.rsplit('.', 1)[1]
+        materials = list(context.materials)
+        value = ('brief' if materials[0].emphasis == 'develop' else 'develop'
+                 ) if field == 'emphasis' else 'scene_cut'
+        materials[0] = materials[0].model_copy(update={field: value})
+        context = context.model_copy(update={'materials': tuple(materials)})
+    elif path.startswith('hook_context.reader_expectation.'):
+        field = path.rsplit('.', 1)[1]
+        value = ('action' if context.reader_expectation.kind != 'action' else 'relationship'
+                 ) if field == 'kind' else '变异阅读期待九九'
+        context = context.model_copy(update={
+            'reader_expectation': context.reader_expectation.model_copy(update={field: value})})
+    elif path.startswith('hook_context.expression_mechanisms[].'):
+        field = path.rsplit('.', 1)[1]
+        assert context.expression_mechanisms, '正式表达机制必须从正文设计送达'
+        mechanisms = list(context.expression_mechanisms)
+        value = '变异表达机制九九' if field == 'statement' else 'ex_99'
+        mechanisms[0] = mechanisms[0].model_copy(update={field: value})
+        context = context.model_copy(update={'expression_mechanisms': tuple(mechanisms)})
+    elif path == 'hook_context.character_voices[].voice':
+        from contracts.schema.common import CharacterVoice
+        context = context.model_copy(update={'character_voices': (
+            CharacterVoice(char_id='yun_niang', voice='变异人物声线九九'),)})
+    elif path == 'hook_context.scene_voices[].voice':
+        from contracts.schema.hook import HookSceneVoice
+        context = context.model_copy(update={'scene_voices': (
+            HookSceneVoice(scene_ref=context.materials[0].beat_ref.split('#')[0],
+                           voice='变异场景声线九九'),)})
     elif path == 'hook_context.materials[].event':
         # event／deltas 是 presentation 为 None 时的回退渲染面
         # （render_hook_context：先 presentation、无则 event＋随材料成立的 deltas）
@@ -1157,6 +1202,11 @@ def test_hook_mutations_reach_only_hook_face(green_hook, green_ir, path, update,
         surfaces[0] = surfaces[0].model_copy(
             update={'surfaces': surfaces[0].surfaces + ('变异面九九',)})
         context = context.model_copy(update={'usable_surfaces': tuple(surfaces)})
+    elif path == 'hook_context.opening_facts[].audience':
+        facts = list(context.opening_facts)
+        facts[0] = facts[0].model_copy(update={
+            'audience': 'pov' if facts[0].audience != 'pov' else 'world'})
+        context = context.model_copy(update={'opening_facts': tuple(facts)})
     elif path == 'hook_context.opening_facts[].text':
         context = context.model_copy(update={'opening_facts': (
             HookOpeningFact(audience='reader', established_by='init',
@@ -1195,7 +1245,6 @@ def _fault_run(tmp_path, monkeypatch, fault, name):
     返回 ``(runner, repo)``：runner 触发一次 `run_workflow`（正文 runner 已
     stub，正文不在故障注入面内）；repo 供盘面证据断言。
     """
-    from contracts.schema.hook import HookConstraints
     from novel.stages.chain import run_workflow
     from tests.str06_faults import FaultTransport, looped_full_chain_wires
     from tests.str06_facilities import json_ask, text_ask, stub_body_runner
@@ -1214,8 +1263,7 @@ def _fault_run(tmp_path, monkeypatch, fault, name):
         return run_workflow(
             repository=repo, chapters=_chapters(), ask=json_ask(session),
             ask_text=text_ask(session), ask_body=ask_body, budget=2000,
-            through='stage7', book_title='报恩',
-            hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
+            through='stage7', book_title='报恩')
     return runner, repo
 
 

@@ -3,7 +3,7 @@
 【为什么错误要在判定处带路径】修订控制不得从展示文案猜位置（`novel/core/validation.py`）。
 本模块只定义构造与消费约定：判据在发现问题的地方生成 `ValidationIssue`，规则码与稳定
 位置属身份，`context['wire_paths']` 是责任方可编辑的 wire JSON 路径；定位器只读这些
-结构化字段，不解析任何错误字符串。Design（v8 wire）与 Hook（stage4-hook-design-v1
+结构化字段，不解析任何错误字符串。Design（v8 wire）与 Hook（stage4-hook-design-v3
 wire）共用同一约定与同一定位器——Hook 错误不带拍结构，耦合合并自然不触发。
 
 【定位策略】（纯函数、确定性、不改 wire）

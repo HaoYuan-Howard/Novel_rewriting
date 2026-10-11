@@ -41,9 +41,7 @@ scripts/export_plot_types.py、export_plot_fixture.py 与 export_stage2_core_fix
 
 | 工具 | 状态 |
 |---|---|
-| `archive_stage3_v1_books.py` | 已完成的 Stage3 v1 两书归档一次性工具（preview 默认，`--execute` 门控） |
 | `effort_ab.py` | FC-13 逐节点 effort 实验一次性 runner |
-| `node_role_table.py` | 一次性节点角色表生成 |
 
 ## F8c 清理记录
 

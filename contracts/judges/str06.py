@@ -67,7 +67,7 @@ _hard('source_identity_covers_hook_copy', 'stage2',
 _hard('source_chapter_dense_ordinals', 'stage2',
       '源章数组阅读序 1..N 密集且非空', 'R-2.2')
 _hard('source_chapter_blueprint', 'stage2',
-      '逐章 Blueprint v13 编译闭合（三类转移、场景分段、participants/holder 闭集、因果边）', 'R-2.3')
+      '逐章 Blueprint v17 编译闭合（三类转移、场景分段、participants/holder 闭集、因果边）', 'R-2.3')
 _hard('source_loop_lifecycle', 'stage2',
       'loops 只许 open/close：loop 一次性 open、close 必带 resolution、问题文本不可改写', 'R-2.11')
 _hard('source_proposition_closure', 'stage2',
@@ -82,7 +82,7 @@ _hard('source_registered_key_scope', 'stage2',
 _hard('source_fold_consistent', 'stage2',
       'source fold 事件与 Blueprint canonical 一致', 'R-2.4')
 _hard('names_structure_compile', 'stage2',
-      'Characters v4 名称结构编译闭合（人物闭集、家族与称谓面合法）', 'R-3.1')
+      'Characters v6 名称结构编译闭合（人物闭集、家族与称谓面合法）', 'R-3.1')
 _hard('names_coverage', 'stage2',
       '应改名集合覆盖源名称结构（名称位一致、无漏标）', 'R-3.2')
 _unver('source_semantics_unver', 'stage2',
@@ -114,8 +114,9 @@ _hard('length_budget_conserved', 'stage4',
 _hard('preserve_compile', 'stage4',
       'Preserve checkpoint 编译闭合（策略义务完整、来源可溯）', 'R-5.4')
 _hard('binding_mechanical', 'stage4',
-      'Bind 接受闸接进 ask 同节点修订轮（≤OWNER_REVISION_MAX_ROUNDS）；耗尽/'
-      '无进展才进 .INVALID 孪生（typed witness）后 fail-fast，停在 owner', 'R-5.5')
+      '承载闸接进 body_design 的 ask 同节点修订轮（CS-3 bind 退役改写，'
+      '≤OWNER_REVISION_MAX_ROUNDS）；耗尽/无进展才进 .INVALID 孪生（typed '
+      'witness）后 fail-fast，停在 owner', 'R-5.5')
 _hard('hook_design_mechanical', 'stage4',
       'Hook 设计机械校验通过；PresentationGraph 唯一 publisher', 'R-5.6')
 _hard('execution_plan_compile', 'stage4',
@@ -174,7 +175,7 @@ _hard('design_lock_acceptance', 'stage4',
 _hard('preserve_name_literal_gate', 'stage4',
       'Preserve 自闸（RC-64）：义务 statement／satisfaction／details.text 里的裸姓／'
         '多义带名面（未登记别名因含裸姓成分同被查出）在 Preserve 接受循环被逐条定位，'
-        '同句不同登记称谓的无损投影阻断同样前置（含组合材料行），必保揭名保留；'
+        '唯一归属的完整登记称谓可自然混用并逐次投影，必保揭名保留；'
       '带 obligations[i] 条目路径走条目返修；同一把尺与下游材料归因共用', 'R-5.22')
 _hard('design_requires_released_gate', 'stage4',
       '必保揭名（RC-61）：requires_released 的 know 所在拍必须已释放所列称谓'
@@ -203,7 +204,7 @@ _hard('answer_reuse_four_conditions', 'stage4',
       '展示变化→不触发付费重写', 'R-5.20')
 _hard('writer_packet_background_narrowing', 'stage4',
       '背景投影规则（R10b）：写手面背景只投书级初态立足点＋建立之后仍被'
-      '消费的当前状态（消费者＝声明读取/读者确认目标/Hook 地址/锁键）；'
+      '消费的当前状态（消费者＝正文声明读取/读者确认目标/锁键）；'
       'unset/unknown 不作背景；补齐面（依赖边生成）保持全量不受收窄影响',
       'R-6.16')
 
@@ -221,7 +222,8 @@ _hard('chapter_receipt_binding', 'stage5',
       '章回执绑定章序、章包摘要（写手视图/验证输入）、请求身份与改名前正文摘要',
       'R-7.4')
 _hard('hook_mechanical', 'stage5',
-      'Hook 机械验通过（POV、起笔事实时序、禁止集与 withheld 字面）', 'R-8.1')
+      'Hook 成文机械验通过（非空、编码、无包装外壳、withheld 字面）；'
+      '篇幅仅统计，语义与文学质量保持未评', 'R-8.1')
 _hard('hook_receipt_binding', 'stage5',
       'Hook 回执绑定 HookContext 身份、正文 hash 与请求身份', 'R-8.2')
 _unver('body_semantics_unver', 'stage5',
@@ -331,7 +333,6 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'material_name_leak': 'stop',             # 材料归因回派（route_owner_issue）
     # CS-H H3（RC-64）：Preserve 自闸——义务文本里的裸姓／未登记别名。
     'preserve_name_literal': 'locate',        # obligations[i] 条目返修（最小可替换单元）
-    'preserve_name_projection': 'locate',     # 同句称谓投影阻断，义务/细节条目窄修
     'preserve_event_evidence': 'locate',      # 完整事件证据缺口，保留义务条目定位
     'preserve_detail_shape': 'locate',        # 可改写细节形状；只修出错条目
     'preserve_detail_anchor': 'locate',       # 细节须引用源投影视图的正式锚点
@@ -340,7 +341,6 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'series_summary_early': 'locate',         # 显式回顾早于覆盖实例；两侧承载拍窄修
     # CS-H H3（RC-60「投影后的残余归属」）：Design 原文闸先投影再查的残余三态。
     'design_unreleased_reference': 'locate',  # 已绑定称谓但该位置无显示面：补释放／挪承载位／改指称
-    'design_projection_lossy': 'locate',      # 无损性守卫触发：不可投影残余归 Design
     # CS-H H3（RC-61 必保揭名）：know 拍位必须已释放所列称谓（同拍合法）。
     'design_requires_released': 'locate',     # 挪 know 拍位或提前释放（know 行路径）
 
@@ -355,6 +355,12 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'hook_concealed_char': 'locate',
     'hook_pov_char': 'locate',
     'hook_material_ref': 'locate',
+    'hook_transition': 'locate',
+    'hook_expectation_fact': 'locate',
+    'hook_expectation_knowledge': 'locate',
+    'hook_expectation_followup': 'locate',
+    'hook_expectation_ref': 'locate',
+    'hook_expectation_horizon': 'locate',
     'hook_withheld_shape': 'locate',
     'hook_withheld_ref': 'locate',
     'hook_hidden_presentation': 'locate',

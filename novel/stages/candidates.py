@@ -13,7 +13,7 @@ attempt，patch 回合在上一份候选上合并成整份 wire 再过同一道�
 `novel/stages/revisions.py::wire_diff` 的差异，条目按（kind, anchors）对齐分为
 未变/变化/新增/删除）、`canonical_appellation_form`（复用
 `novel/stages/common.py::claim_spans` 的字面扫描：唯一归属某人物的登记称谓换成
-该人物记号、相邻同记号折叠为一个、再归一标点与空白）与 `plan_reuse`
+该人物记号并保留每次提及、再归一标点与空白）与 `plan_reuse`
 （择优：全绿优先、剩余根因最少次之、同分取最近）都不读盘、不发请求、不判
 语义——它们只把「能否零调用沿用」变成可测的确定性结论；编排在
 `novel/stages/chain.py::run_body_design`。
@@ -342,8 +342,6 @@ def upstream_diff(before: Any, after: Any) -> UpstreamDiff:
 # ── 称谓规范形 ───────────────────────────────────────────────────────────────
 
 _TOKEN_START, _TOKEN_END = '\ue000', '\ue001'
-_ADJACENT_TOKEN = re.compile('(' + _TOKEN_START + '[^' + _TOKEN_END + ']*' + _TOKEN_END
-                             + r')\1+')
 
 
 def _is_dropped(char: str) -> bool:
@@ -351,12 +349,13 @@ def _is_dropped(char: str) -> bool:
 
 
 def canonical_appellation_form(text: str, person_literals: Mapping[str, Iterable[str]]) -> str:
-    """称谓规范形（纯函数）：登记称谓换成人物记号、相邻同记号折叠、再归一标点与空白。
+    """称谓规范形（纯函数）：登记称谓逐次换成人物记号，再归一标点与空白。
 
     ``person_literals`` 是人物记号 → 该人物**唯一归属**的登记称谓（同一字面归属
-    两个人物即调用方输入错误，显式拒绝——规范形只比较用词与同位语，不做归属猜测，
-    I-20/I-21）。规范形相等说明两段文本只差在用哪个登记称谓、有无同位语、标点
-    空白；不证明语义等价。
+    两个人物即调用方输入错误，显式拒绝——规范形只比较登记用词，不做归属猜测，
+    I-20/I-21）。每次原文提及都保留；相邻同人称谓可能是重复呼唤，不能仅凭身份
+    相同折叠成同位语来证明免费沿用。规范形相等只说明登记称谓与标点空白的差异，
+    不证明语义等价；无法机械证明的同位语删改走既有窄复核。
     """
     if not isinstance(text, str):
         raise ValueError('称谓规范形只接受文本')
@@ -380,8 +379,7 @@ def canonical_appellation_form(text: str, person_literals: Mapping[str, Iterable
         cursor = claim.end
     pieces.append(text[cursor:])
     replaced = ''.join(pieces)
-    folded = _ADJACENT_TOKEN.sub(lambda m: m.group(1), replaced)
-    return ''.join(ch for ch in folded if not _is_dropped(ch))
+    return ''.join(ch for ch in replaced if not _is_dropped(ch))
 
 
 #: 条目里允许「只差用哪个登记称谓」的自由文本字段；其余字段一律逐字相等才算等价。

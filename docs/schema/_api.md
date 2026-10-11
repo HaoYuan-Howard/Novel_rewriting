@@ -147,8 +147,8 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/agent/runs/:id/resume` | `AgentRunRecord`（202） | 受理后由后台同身份续 current epoch/provider session；代码或执行契约 漂移时同 parent run 开新 epoch并免费复检 |
 | `GET /api/str06/candidates` | `contracts/schema/api.py::Str06CandidateList`（输出根下的候选根与各自 run 级状态；以 workflow 身份记录为标记） | 新链候选链只读监控面（F7d）；F8 起与现役 `/novels` 面物理分开 |
 | `GET /api/str06/candidates/:candidate/run` | `Str06RunView`（workflow 状态、失败形状、epoch、节点盘面事实、逐章失败留证、Stage7 集合核对五态报告、修订轮回派账与 ledger 成本；无 badge/passed/counts） | 节点 `produced` 是 I/O 事实，不充当业务状态；失败形状直投影 `workflow_status.json`（`failure_kind`／`detail`，ExecutionError 另带 `error_code/stage/node/item/phase/context` 六字段）；`body_failures`／`chapter_observation_failures`／`assembly_report` 缺席是 null（该节点还没有一次完成执行，不冒充合法空值），逐章留证按「最近一次完成执行」形状（`requested`／`attempted`／`chapters`／`recorded_at`；正文与章观察同形共用）呈现；五态分开、unknown 不作零（I-42）；R3 修订轮经 `owner_issues` 投影 `runtime/issues/<owner>.json`（open 与 resolved 都在、`rounds_total` 终身不复位、`rounds_cap` 是契约常量投影），停止原因在失败形状里带按 item 的 typed 问题清单，两面并排不互相推导 |
-| `GET /api/str06/candidates/:candidate/characters` | `Str06CharactersView`（Characters v4 称谓时间窗＋源名称结构） | 新 |
-| `GET /api/str06/candidates/:candidate/blueprint` | `Str06BlueprintView`（Blueprint v12 世界约束、逐章 beats 与因果边） | 新 |
+| `GET /api/str06/candidates/:candidate/characters` | `Str06CharactersView`（Characters v6 称谓时间窗＋源名称结构） | 新 |
+| `GET /api/str06/candidates/:candidate/blueprint` | `Str06BlueprintView`（Blueprint v17 世界约束、逐章 beats 与因果边） | 新 |
 | `GET /api/str06/candidates/:candidate/design` | `Str06DesignView`（graph／binding：导演说明、章目的、Hook 选择与 Binding 条目） | 新 |
 | `GET /api/str06/candidates/:candidate/ir` | `Str06IrNavView`（WriterBookIR 导航：章预算、章目的、逐场摘要行与称谓释放位置表） | 新 |
 | `GET /api/str06/candidates/:candidate/chapters/:ordinal` | `Str06ChapterView`（章正文＋章回执：机械范围、semantic 恒 unverified、篇幅披露显式） | present=false 与合法空值分开 |
@@ -417,7 +417,7 @@ Stage2 语义审阅、`blueprint-reading-workpack` 阅读工作包、`blueprint/
 与 `Run.blueprint_progress` 字段已随旧 Stage2/4/5/7 链整层退役（STR-06 切换，F8c）：
 `GET /api/novels/:sid/check/:kind` 的取值面只剩 `stage0`/`stage1`，新链的复检是节点级
 `--check-only`；盘面只读投影走 `GET /api/str06/candidates/:candidate/blueprint`
-（Blueprint v12 世界约束、逐章 beats 与因果边）与 `.../run`（节点 `produced` 是 I/O 事实，
+（Blueprint v17 世界约束、逐章 beats 与因果边）与 `.../run`（节点 `produced` 是 I/O 事实，
 不充当业务状态；ledger 成本单列）。历史形状见 Git，不为退役面保留第二个 HTTP 落点。
 
 ### 写作上下文的即时读数（旧链，已退役）

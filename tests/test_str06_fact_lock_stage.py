@@ -16,7 +16,6 @@ from copy import deepcopy
 import pytest
 
 from contracts.schema.grounding import OutputConstraints, _lock_id
-from contracts.schema.hook import HookConstraints
 from novel.llm.paid_requests import ValidationStop, digest
 from novel.stages.chain import ChainContext, run_body_design, run_preserve, run_workflow
 from tests.str06_facilities import json_ask, stub_body_runner, text_ask
@@ -105,8 +104,7 @@ def test_downstream_compile_consumes_the_binding_and_writer_material_hides_the_h
     report = run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
                           ask_text=text_ask(session),
                           ask_body=lambda *a: (_ for _ in ()).throw(AssertionError('stub')),
-                          budget=2000, through='stage4',
-                          hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
+                          budget=2000, through='stage4')
     assert report is not None
     ir = repo.read_model('stage4/ir/writer_book_ir.json')
     text = render_chapter_packet(project_chapter_packet(ir, 1))
@@ -163,7 +161,7 @@ def test_ambiguous_fact_lock_is_rejected_by_full_candidate_paid_entry_and_free_p
         'hook_materials': 'not_run'}
     preview = dry_run_patch(
         repo, 'design', wires['design'], evidence={}, budget=2000, chapter_count=2,
-        length_band=ctx.length_band, hook_constraints=ctx.hook_constraints)
+        length_band=ctx.length_band)
     assert preview['status'] == 'ran' and preview['candidate_preflight'] == view.report()
     with pytest.raises(ValidationStop) as stopped:
         run_body_design(ctx)
@@ -250,8 +248,7 @@ def test_saved_misplaced_lock_is_rejected_then_owner_patch_recovers_free(tmp_pat
             owner='design', identity=identity, candidate=wire, baseline=baseline,
             validate=validate, dry_run=lambda w: dry_run_patch(
                 repo, 'design', w, evidence={}, budget=ctx.budget,
-                chapter_count=2, length_band=ctx.length_band,
-                hook_constraints=ctx.hook_constraints))
+                chapter_count=2, length_band=ctx.length_band))
 
     bad_preview = preview(before_wire)
     assert any(getattr(e, 'code', '') == 'fact_lock_outside_obligation'

@@ -273,7 +273,6 @@ def test_recovery_after_revision_stop_replays_free(tmp_path):
 
 def _chain_runner(tmp_path, monkeypatch, fault, name, fault_once=False):
     """用（可选故障化的）wires 走真实链入口；返回 (runner, repo, transport)。"""
-    from contracts.schema.hook import HookConstraints
     from novel.stages.chain import run_workflow
     from tests.str06_facilities import json_ask, text_ask, stub_body_runner
     from tests.test_str06_body import _chapters, _make_session
@@ -291,8 +290,7 @@ def _chain_runner(tmp_path, monkeypatch, fault, name, fault_once=False):
         return run_workflow(
             repository=repo, chapters=_chapters(), ask=json_ask(session),
             ask_text=text_ask(session), ask_body=ask_body, budget=2000,
-            through='stage7', book_title='报恩',
-            hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360))
+            through='stage7', book_title='报恩')
     return runner, repo, transport
 
 
@@ -362,7 +360,6 @@ def test_no_progress_design_gate_stops_per_item_without_rebuy(tmp_path,
     from tests.str06_facilities import json_ask, text_ask, stub_body_runner
     from novel.llm.paid_requests import ValidationStop
     from novel.stages.chain import run_workflow
-    from contracts.schema.hook import HookConstraints
 
     wires = looped_full_chain_wires()
     repo, session, transport = _make_session(
@@ -376,9 +373,7 @@ def test_no_progress_design_gate_stops_per_item_without_rebuy(tmp_path,
     with pytest.raises(ValidationStop, match='重问后无进展'):
         run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
                      ask_text=text_ask(session), ask_body=ask_body, budget=2000,
-                     through='stage7', book_title='报恩',
-                     hook_constraints=HookConstraints(target_chars=10,
-                                                      hard_max_chars=360))
+                     through='stage7', book_title='报恩')
     # 承载闸在 body_design 同节点修订轮：原轮＋一轮修订即同指纹停；无跨节点
     # 回派面（issue 记录不产生）。
     assert transport.calls.count('design') == 2

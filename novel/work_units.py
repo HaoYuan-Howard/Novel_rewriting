@@ -22,11 +22,13 @@ from pydantic import BaseModel
 from contracts.invariants import (
     BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES, narrow_unit_scopes,
 )
+from contracts.llm_versions import llm_node_versions
 from contracts.schema.workflow import (
     BookBudgetGrantV1, BookContentBudgetV1,
     WorkflowManifestV7, WorkflowManifestV8, WorkflowManifestV9, WorkUnitAttempt, WorkUnitBlobV1,
-    WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV2,
+    WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV3,
     WorkUnitRegistryV1, WorkUnitProcessing, CommitBundleV1, commit_bundle_seal,
+    LlmNodeVersionReset, work_unit_ledger_of_payload,
 )
 from contracts.schema.work_unit_recovery import (
     CommanderFailureRecoveryReceipt, ExecutorWireRefusalReceipt,
@@ -41,11 +43,17 @@ if TYPE_CHECKING:
 
 
 def sealed_commit_bundles(root: Path) -> list[tuple[Path, CommitBundleV1]]:
-    """候选根 ``runtime/commit/`` 的全部已封存提交记录（seal 不符即关闭式拒绝）。
+    """候选根 ``runtime/commit/`` 的全部已封存提交记录（损坏即关闭式拒绝）。
 
     **采用状态从 seal 派生**（B1）：恢复路径据此判断哪些内容轮已被正式提交
-    采用；记录损坏不是「当它不存在」，而是显式停止。
+    采用；记录损坏不是「当它不存在」，而是显式停止。形状不合约与 seal 不符
+    同走 `ProvenanceRefused`——此前形状错以裸 `ValidationError` 冒出，被
+    `chain._committed_set` 的逐章 except 吞成「本章无提交」，把全局记录损坏
+    扩大成全书待补集合（2026-10-10 审阅实证）。要么整份记录可信，要么整个
+    恢复面停下，不存在「跳过坏记录继续」的中间档。
     """
+    from pydantic import ValidationError
+
     from novel.errors import ProvenanceRefused
 
     commit_dir = Path(root) / 'runtime' / 'commit'
@@ -56,7 +64,12 @@ def sealed_commit_bundles(root: Path) -> list[tuple[Path, CommitBundleV1]]:
         payload = _read_json_dict(path)
         if commit_bundle_seal(payload) != payload.get('seal'):
             raise ProvenanceRefused(f'CommitBundle 记录 seal 不符：{path}')
-        found.append((path, CommitBundleV1.model_validate(payload)))
+        try:
+            found.append((path, CommitBundleV1.model_validate(payload)))
+        except ValidationError as exc:
+            raise ProvenanceRefused(
+                f'CommitBundle 记录形状不合约：{path}'
+                f'（{exc.errors(include_url=False)}）') from exc
     return found
 
 
@@ -127,7 +140,22 @@ def _safe(base: str | os.PathLike[str], path: Path) -> Path:
 def _write(base: str | os.PathLike[str], path: Path, model: BaseModel) -> None:
     target = _safe(base, path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    data = _bytes(model.model_dump(mode='json'))
+    if isinstance(model, WorkUnitLedgerV3) and target.is_file():
+        with _open_snapshot(target) as stream:
+            original = stream.read()
+        if json.loads(original).get('schema_version') == 2:
+            # 显式迁移先耐久保存原字节；账仍只有 ledger.json 是现役真相源。
+            snapshot = target.with_name('ledger.v2.' + hashlib.sha256(original).hexdigest() + '.json')
+            if snapshot.is_file():
+                with _open_snapshot(snapshot) as stream:
+                    if stream.read() != original:
+                        raise WorkUnitRefused('V2 原账迁移快照摘要冲突')
+            else:
+                _write_bytes(snapshot, original)
+    _write_bytes(target, _bytes(model.model_dump(mode='json')))
+
+
+def _write_bytes(target: Path, data: bytes) -> None:
     fd, tmp = tempfile.mkstemp(prefix='.wu-', dir=target.parent)
     try:
         with os.fdopen(fd, 'wb') as stream:
@@ -246,7 +274,10 @@ def _read(base: str | os.PathLike[str], path: Path, model: type[BaseModel]) -> A
     target = _safe(base, path)
     try:
         with _open_snapshot(target) as stream:
-            return model.model_validate_json(stream.read())
+            raw = stream.read()
+            if model is WorkUnitLedgerV3:
+                return work_unit_ledger_of_payload(json.loads(raw))
+            return model.model_validate_json(raw)
     except (OSError, ValueError) as exc:
         raise WorkUnitRefused(f'工作单元账缺失或不符合当前契约：{target.name}') from exc
 
@@ -495,7 +526,7 @@ class WorkUnitBudget:
         """blob 内容摘要的同一把尺（外部只读校验用，R8a-6 采用证据）。"""
         return _digest(blob.model_dump(mode='json'))
 
-    def _read(self) -> WorkUnitLedgerV2:
+    def _read(self) -> WorkUnitLedgerV3:
         if not self.path.exists():
             if self.unit_id in self._registry().unit_ids:
                 raise WorkUnitRefused('已登记的工作单元预算账缺失，禁止重新发放额度')
@@ -503,11 +534,14 @@ class WorkUnitBudget:
             if self.directory.exists() and any(
                     p.name != 'ledger.json.lock' for p in self.directory.iterdir()):
                 raise WorkUnitRefused('工作单元已有内容但预算账缺失')
-            return WorkUnitLedgerV2(unit_id=self.unit_id, **self.identity)
-        ledger = _read(self.base, self.path, WorkUnitLedgerV2)
+            return WorkUnitLedgerV3(unit_id=self.unit_id, **self.identity)
+        ledger = _read(self.base, self.path, WorkUnitLedgerV3)
         if ledger.unit_id != self.unit_id or any(
                 getattr(ledger, key) != val for key, val in self.identity.items()):
             raise WorkUnitRefused('工作单元账身份不一致')
+        if any(row.upgrade_id != _digest({'node': ledger.node, 'versions': row.versions})
+               for row in ledger.version_resets):
+            raise WorkUnitRefused('LLM 节点版本重置身份损坏')
         for row in ledger.processing:
             if self._processing(**row.model_dump(exclude={'processing_id'}, exclude_none=True)) != row:
                 raise WorkUnitRefused('工作单元处理来源回执损坏，禁止新调用')
@@ -517,7 +551,7 @@ class WorkUnitBudget:
         return ledger
 
     def failure_recovery_receipt(
-            self, ledger: WorkUnitLedgerV2,
+            self, ledger: WorkUnitLedgerV3,
             turn: WorkUnitContentTurn) -> WorkUnitFailureReceipt:
         """历史失败一旦已收口，其原失败和工程裁决证明仍必须可验证。
 
@@ -545,7 +579,7 @@ class WorkUnitBudget:
                 expected_role = 'commander'
             expected = receipt.before.model_copy(update={
                 'state': 'failed', 'reason_code': COMMANDER_FAILURE_RECONCILED})
-            original = WorkUnitLedgerV2.model_validate(receipt.evidence['ledger'])
+            original = work_unit_ledger_of_payload(receipt.evidence['ledger'])
             if (_digest(blob.model_dump(mode='json')) != row.evidence_sha256
                     or blob.unit_id != self.unit_id or blob.turn_id != turn.turn_id
                     or receipt.unit_id != ledger.unit_id or receipt.sid != ledger.sid
@@ -577,20 +611,20 @@ class WorkUnitBudget:
         processing = self._processing(run_id=turn.run_id, kind='mechanical',
             input_sha256=failure_recovery_input(turn.turn_id), evidence_sha256=digest)
         failed = turn.model_copy(update={'state': 'failed', 'reason_code': COMMANDER_FAILURE_RECONCILED})
-        updated = WorkUnitLedgerV2.model_validate({**ledger.model_dump(mode='json'),
+        updated = WorkUnitLedgerV3.model_validate({**ledger.model_dump(mode='json'),
             'turns': [failed if row.turn_id == turn.turn_id else row for row in ledger.turns],
             'processing': [*ledger.processing, processing]})
         self.failure_recovery_receipt(updated, failed)
         _write(self.base, self.path, updated)
 
-    def _replace(self, ledger: WorkUnitLedgerV2, turn: WorkUnitContentTurn) -> None:
+    def _replace(self, ledger: WorkUnitLedgerV3, turn: WorkUnitContentTurn) -> None:
         rows = [row.model_dump(mode='json') if row.turn_id != turn.turn_id
                 else turn.model_dump(mode='json') for row in ledger.turns]
-        updated = WorkUnitLedgerV2.model_validate({
+        updated = WorkUnitLedgerV3.model_validate({
             **ledger.model_dump(mode='json'), 'turns': rows})
         _write(self.base, self.path, updated)
 
-    def _turn(self, ledger: WorkUnitLedgerV2, turn_id: str) -> WorkUnitContentTurn:
+    def _turn(self, ledger: WorkUnitLedgerV3, turn_id: str) -> WorkUnitContentTurn:
         found = [t for t in ledger.turns if t.turn_id == turn_id]
         if len(found) != 1:
             raise WorkUnitRefused('内容轮不属于当前工作单元')
@@ -610,6 +644,58 @@ class WorkUnitBudget:
         ledger = self._read()
         return ledger.content_limit - ledger.base_content_limit
 
+    def _synchronize_version(self, ledger: WorkUnitLedgerV3) -> WorkUnitLedgerV3:
+        """已持有单元锁：版本升版恢复基础额度；历史、状态与请求身份不变。"""
+        versions = llm_node_versions(self.identity['node'])
+        previous = ledger.version_resets[-1].versions if ledger.version_resets else {}
+        if versions == previous:
+            return ledger
+        if (not set(previous) <= set(versions)
+                or any(versions[key] < value for key, value in previous.items())):
+            raise WorkUnitRefused('LLM 节点版本降级，不能恢复或消耗当前版本额度')
+        reset = LlmNodeVersionReset(
+            upgrade_id=_digest({'node': ledger.node, 'versions': versions}),
+            versions=versions,
+            reason=('LLM 节点升版恢复基础额度' if previous else
+                    '首次建立 LLM 节点版本基线并恢复基础额度'),
+            created_at=int(time.time()),
+            before_ledger_sha256=_digest(ledger.model_dump(mode='json')),
+            refunded_after_ordinal=len(ledger.turns),
+            additional=max(0, ledger.base_content_limit - (
+                ledger.content_limit - len(ledger.turns))))
+        return WorkUnitLedgerV3.model_validate({**ledger.model_dump(mode='json'),
+            'version_resets': [*ledger.version_resets, reset]})
+
+    def synchronize_version(self) -> dict[str, Any]:
+        """免费执行入口；同版本幂等，读面不通过本入口偷偷写账。"""
+        with path_transaction_lock(self.path):
+            ledger = self._read()
+            updated = self._synchronize_version(ledger)
+            if updated == ledger:
+                return {'status': 'already_refunded', 'additional': 0,
+                        'remaining': ledger.content_limit - len(ledger.turns)}
+            if not self.path.is_file():
+                raise WorkUnitRefused('版本恢复只处理已登记工作单元，不初始化空账')
+            _write(self.base, self.path, updated)
+            return {'status': 'refunded', 'additional': updated.content_limit - ledger.content_limit,
+                    'remaining': updated.content_limit - len(updated.turns),
+                    'versions': updated.version_resets[-1].versions}
+
+    def refund_for_upgrade(self, upgrade_id: str, *, reason: str) -> dict:
+        """登记的旧契约升级调用适配；历史 refunds 只读，预算只按节点版本恢复。
+
+        删除条件：contracts/contract_upgrades.py 的旧身份边全部退役。旧回执重放
+        先复读其原返还记录；新升级共用 synchronize_version，不能重复返还同一版。
+        """
+        if not re.fullmatch(r'[0-9a-f]{64}', upgrade_id or '') or not reason.strip():
+            raise WorkUnitRefused('契约升级返还必须有 SHA-256 身份和理由')
+        ledger = self._read()
+        existing = next((row for row in ledger.refunds if row.upgrade_id == upgrade_id), None)
+        if existing is not None:
+            return {'status': 'already_refunded', 'additional': 0,
+                    'remaining': ledger.content_limit - len(ledger.turns)}
+        return self.synchronize_version()
+
     def reserve(self, request_sha256: str, *, run_id: str,
                 session_run_id: str = '',
                 agent_run_id: str = '', agent_epoch_id: str = '',
@@ -621,6 +707,11 @@ class WorkUnitBudget:
                 raise WorkUnitRefused('已有整组候选待补提交；须先免费恢复，不能重新调用模型')
             if any(t.state in ('reserved', 'unknown', 'delivered') for t in ledger.turns):
                 raise WorkUnitRefused('已有未闭合内容请求；须先对账，不能重新调用模型')
+            updated_version = self._synchronize_version(ledger)
+            if self.path.is_file() and updated_version != ledger:
+                # 先独立保存免费版本恢复；整书总闸或后续调用失败不丢掉该基线。
+                _write(self.base, self.path, updated_version)
+            ledger = updated_version
             if len(ledger.turns) >= ledger.content_limit:
                 raise WorkUnitBudgetExhausted(
                     f'本工作单元内容轮额度已耗尽（{len(ledger.turns)}/'
@@ -645,7 +736,7 @@ class WorkUnitBudget:
                 digest = _digest(blob.model_dump(mode='json'))
                 # 账先持久，避免工作包落盘后崩溃把未知预算洗成空账。
                 turn = turn.model_copy(update={'request_payload_sha256': digest})
-            updated = WorkUnitLedgerV2.model_validate({
+            updated = WorkUnitLedgerV3.model_validate({
                 **ledger.model_dump(mode='json'),
                 'turns': [*ledger.turns, turn],
                 'processing': [*ledger.processing, self._processing(
@@ -685,14 +776,18 @@ class WorkUnitBudget:
                                     kind=kind, evidence_sha256=evidence_sha256)
         with path_transaction_lock(self.path):
             ledger = self._read()
+            updated_version = self._synchronize_version(ledger)
             if proposed in ledger.processing:
+                if updated_version != ledger:
+                    _write(self.base, self.path, updated_version)
                 return
+            ledger = updated_version
             with path_transaction_lock(self.registry_path):
                 registry = self._registry()
                 if self.unit_id not in registry.unit_ids:
                     _write(self.base, self.registry_path, registry.model_copy(update={
                         'unit_ids': (*registry.unit_ids, self.unit_id)}))
-            _write(self.base, self.path, WorkUnitLedgerV2.model_validate({
+            _write(self.base, self.path, WorkUnitLedgerV3.model_validate({
                 **ledger.model_dump(mode='json'),
                 'processing': [*ledger.processing, proposed]}))
 
@@ -1058,7 +1153,7 @@ class WorkUnitBudget:
         """只读原整组提交证明；缺失、串单元或损坏均不得当成没执行。"""
         return self._group_producer_recovery(self._read())
 
-    def _group_producer_recovery(self, ledger: WorkUnitLedgerV2) -> dict[str, Any] | None:
+    def _group_producer_recovery(self, ledger: WorkUnitLedgerV3) -> dict[str, Any] | None:
         # 读取原子账快照及不可变 blob 不需要写锁；写侧可在已持有的事务锁内复用，
         # 避免不可重入 OS 锁死锁，也不让 API 查询创建不存在的单元或 .lock 文件。
         digest = ledger.group_producer_sha256
@@ -1247,7 +1342,7 @@ def registered_unit_ids(base: str | os.PathLike[str], sid: str) -> tuple[str, ..
 def readonly_budget(base: str | os.PathLike[str], sid: str, unit_id: str) -> WorkUnitBudget:
     """观察既有工作单元；缺登记、缺账或身份漂移一律拒绝，不初始化额度。"""
     registry = _read(base, paths.work_unit_registry_path(base, sid), WorkUnitRegistryV1)
-    ledger = _read(base, paths.work_unit_dir(base, sid, unit_id) / 'ledger.json', WorkUnitLedgerV2)
+    ledger = _read(base, paths.work_unit_dir(base, sid, unit_id) / 'ledger.json', WorkUnitLedgerV3)
     budget = WorkUnitBudget(base, sid, ledger.node, ledger.role, ledger.scope, read_only=True)
     if (registry.sid != sid or registry.task_id != budget.identity['task_id']
             or unit_id not in registry.unit_ids or budget.unit_id != unit_id):
@@ -1287,7 +1382,7 @@ def executor_scope(node: str, purpose: str, progress: Any = None) -> str:
     raise WorkUnitRefused('该节点没有登记 Executor 模型工作单元')
 
 
-def unit_view(ledger: WorkUnitLedgerV2) -> dict[str, Any]:
+def unit_view(ledger: WorkUnitLedgerV3) -> dict[str, Any]:
     """运行页与额度预览共享同一投影，不从剩余次数重新猜恢复路径。"""
     latest = ledger.turns[-1] if ledger.turns else None
     state = latest.state if latest else 'not_run'
@@ -1300,13 +1395,16 @@ def unit_view(ledger: WorkUnitLedgerV2) -> dict[str, Any]:
                 scope=ledger.scope, content_used=len(ledger.turns),
                 content_limit=ledger.content_limit, content_base_limit=ledger.base_content_limit,
                 content_granted=ledger.content_limit - ledger.base_content_limit,
-                grant_count=len(ledger.grants), content_remaining=ledger.content_limit - len(ledger.turns),
+                content_refunded=sum(row.additional for row in (*ledger.refunds, *ledger.version_resets)),
+                grant_count=len(ledger.grants), refund_count=len(ledger.refunds) + sum(
+                    row.additional > 0 for row in ledger.version_resets),
+                content_remaining=ledger.content_limit - len(ledger.turns),
                 state=state, latest_request_sha256=latest.request_sha256 if latest else None,
                 latest_response_sha256=latest.response_sha256 if latest else None,
                 recovery_action=recovery, processing=processing_view(ledger))
 
 
-def processing_view(ledger: WorkUnitLedgerV2) -> dict[str, Any] | None:
+def processing_view(ledger: WorkUnitLedgerV3) -> dict[str, Any] | None:
     """最近一次实际处理与累计内容账分别展示；回答存在不代表质量验收通过。"""
     last = ledger.processing[-1] if ledger.processing else None
     turn = (next((row for row in ledger.turns if row.turn_id == last.turn_id), None)
@@ -1344,7 +1442,7 @@ def list_unit_views(base: str | os.PathLike[str], sid: str) -> list[dict[str, An
         return []
     result: list[dict[str, Any]] = []
     for path in sorted(root.glob('*/ledger.json')):
-        ledger = _read(base, path, WorkUnitLedgerV2)
+        ledger = _read(base, path, WorkUnitLedgerV3)
         identity = {key: getattr(ledger, key) for key in ('task_id', 'sid', 'node', 'role', 'scope')}
         if (ledger.task_id != manifest.task_id or ledger.sid != sid
                 or ledger.unit_id != path.parent.name or ledger.unit_id != _digest(identity)):

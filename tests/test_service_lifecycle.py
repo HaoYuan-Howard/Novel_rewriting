@@ -14,22 +14,6 @@ from novel.errors import PathRefused
 from novel.orchestrator import admission, beacon, service_lifecycle
 
 
-def test_run_history_writes_service_and_keeps_legacy_as_read_only_locator(tmp_path):
-    book = tmp_path / '测试书_42'
-    book.mkdir()
-
-    current = paths.stage5_chapter_run_path(book, 'run-1', 3)
-    legacy = paths.legacy_stage5_chapter_run_path(book, 'run-1', 3)
-    current.mkdir(parents=True)
-
-    assert current == (
-        tmp_path / '_service' / 'runs' / '42' / 'stage5' / 'run-1' / 'ch0003')
-    assert legacy == book / '_stage5_runs' / 'run-1' / 'ch0003'
-    assert current != legacy
-    assert not legacy.exists()
-    assert paths.iter_novel_dirs(tmp_path) == [book]
-
-
 def test_scratch_session_finishes_only_the_exact_session(tmp_path):
     first = service_lifecycle.open_scratch_session(tmp_path, '42', 'session-a')
     second = service_lifecycle.open_scratch_session(tmp_path, '42', 'session-b')

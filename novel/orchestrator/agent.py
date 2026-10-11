@@ -659,14 +659,6 @@ def reconcile_run(
     return done
 
 
-def active_run(base: str | os.PathLike[str], *, registry: JobRegistry = REGISTRY,
-               ) -> AgentRunRecord | None:
-    """此刻在跑的 agent 代跑（全局一把锁 ⇒ 至多一个）。**给 jobs 路由的反向互斥用**。"""
-    return next((r for r in records(base, registry=registry)
-                 if r.state in ('pending', 'running', 'paused')),
-                None)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 三、拉起与熄火
 # ─────────────────────────────────────────────────────────────────────────────

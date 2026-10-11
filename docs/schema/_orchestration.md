@@ -531,7 +531,7 @@ delivery 终验未闭合时只运行`novel/orchestrator/delivery.py` 的确定�
 > ### ⚠ `done` 是**三态**：`True` / `False` / **`None`＝判不了**
 >
 > 这一格是实跑盘上三本时被逼出来的，不是设计洁癖。
-> stage5 的产物是**逐章**的（`stage5/chNN.json`），做不了一次 `is_file()`；
+> stage5 的产物是**逐章**的（`stage5/body/ch{nn}.txt`），做不了一次 `is_file()`；
 > 它的判据是「stage4 计划里的每个输出章都有成稿吗」——
 > **而那份计划读不回来的时候，盘上有 4 章这件事既不能证明跑完了、也不能证明没跑完。**
 >
@@ -748,8 +748,10 @@ deep/shallow 表明该快照依赖旧契约，整份计划投影为 `queue:plan-
 `not_run`；另一书不受影响。取消只接收 `pending/blocked`，被取消项记 `cancelled`，同书后续记 `not_run`；
 `running` 明确拒绝，不能把已经在途的 LLM 请求伪装成可无损取消。
 
-人工闸门每项启动前重读。`stage0.edit` 是可选人工能力，不是流水线必经闸门；三道真正的
-approve 闸门读取现役类型里的批准字段，已经批准就跳过，未批准才持久显示 `waiting_on`。
+F8a 全自动裁决后无人工闸门：`HUMAN_NODES` 为空，`stage0.approve` / `stage0.edit` /
+`stage7.approve` 均已退役（非现役节点，关闭式拒识），队列项启动/恢复前只重读产物存在性与
+新鲜度。命中 `approval:*` 的 `waiting_on` 视为编排 bug（fail-closed；§5.2 现役取值表中
+已无此类待办，存量 stage0 pending 由 `stage0.remove` auto seal 补算）。
 
 ---
 
@@ -785,7 +787,7 @@ active_key(sid, node) -> str
 - **释放时调用同一个 `active_key`**——同一把锁不得在启动与释放两处重拼。
 
 旧 `n5_write` / `n6_write`、deep / shallow 与臂级互斥只属于历史事件解码面。现役节点恒为
-`stage5.write`，现役输出恒为 `stage5/chNN.json`；兼容旧记录不等于恢复旧命令能力。
+`str06.stage5.body`，现役输出恒为 `stage5/body/ch{nn}.txt`；兼容旧记录不等于恢复旧命令能力。
 
 ---
 

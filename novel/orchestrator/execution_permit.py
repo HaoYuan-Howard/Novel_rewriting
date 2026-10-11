@@ -410,7 +410,7 @@ def revalidate_active_execution_surface(
     node: str | None = None,
     flags: tuple[str, ...] | list[str] | None = None,
 ) -> None:
-    """claim 后、首个副作用前做一次轻量 CAS，不运行七层 planner。
+    """claim 后、首个副作用前做一次轻量 CAS，不运行六层 planner。
 
     校验范围只有 token 自身、caller 坐标、当前代码、active surface 与登记
     external inputs。它刻意不调用 ``operator next`` / queue / check-only；旧的

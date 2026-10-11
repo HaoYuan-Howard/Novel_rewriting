@@ -529,7 +529,9 @@ def test_chapter_access_separates_stale_from_missing_and_rejected():
     prose = {1: '第一章。', 2: '第二章。', 3: '第三章。', 4: '第四章。'}
 
     def receipt(writer_view, ordinal):
+        from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
         return {'status': 'accepted', 'writer_view_sha256': writer_view,
+                'validator_version': BODY_VALIDATOR_VERSION, 'mechanical_checks': BODY_MECHANICAL_CHECKS,
                 'validation_sha256': '9' * 64, 'machine_view_sha256': 'e' * 64,
                 'prose_sha256': sha(prose[ordinal])}
 

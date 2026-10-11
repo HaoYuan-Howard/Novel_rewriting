@@ -115,8 +115,8 @@ from novel.work_units import budget_for, executor_scope, WorkUnitBudget, WorkUni
 DEFAULT_RUNGS: Final[tuple[tuple[str, bool], ...]] = (('high', True),)
 
 #: 关思考阶梯：**单档**。`('low', False)` 是仓内唯一实测验证过的关思考档
-#: （`novel/stages/stage6/hook.py::CANDIDATE_RETRY_RUNGS` 同款；这里曾指向
-#: `stage5/write.py::TRIM_RUNGS`，那个常量随收缩臂整臂下线一起删了）；
+#: （历史上与已随 stage6 整层退役删除的 `stage6/hook.py::CANDIDATE_RETRY_RUNGS`
+#: 同款，并曾指向 `stage5/write.py::TRIM_RUNGS`——后者随收缩臂整臂下线一起删了）；
 #: 阶梯扛的两类故障全由推理流引起
 #: （见模块 docstring ①②），关掉 thinking 后没有降级对象——复制同档当第二档
 #: 等于把「重试」混进「阶梯」，而那两条循环不许合并（见上）。
@@ -2892,7 +2892,8 @@ class LlmClient:
         其余线程必须继续跑：不放行就是整批死等一个已经死掉的请求，而那比多花一次钱坏得多。
         ⚠ **只有真上线才消耗名额**：本地缓存命中走 `_read_cached`，根本进不到这里——
         一次全命中的重跑不会因为这道闸而串行。
-        ⚠ 单次调用的节点（`stage2.global` / `stage4.plan` / `stage6.hook` / `stage7.rename`）
+        ⚠ 单次调用的节点（现役 15 键里只有 `str06.stage2.chapters` / `str06.stage5.body`
+        逐章扇出，其余如 `str06.stage2.book` / `str06.stage7.assemble` 都是单次调用）
         本来就只发一次，这道闸对它们是恒等的。
         ⚠ **不给它 CLI flag**：用户已裁决默认接受这一次串行的墙钟，而一个恒真的 flag 是误导
         （同 `cache.py::CachePolicy.disabled` 那条）。构造参数留着只为让测试关掉它。

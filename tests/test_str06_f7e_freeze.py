@@ -154,7 +154,12 @@ from novel.llm.paid_requests import candidate_contract_identity
 # 六类质量产物显式升版；原文同场/顺序仍不作为目标设计硬约束。
 # rc22（2026-10-09，用户确认独立事件锚点）：Preserve v5/policy 8，六类质量
 # 产物再次显式升版；旧 v4/rc21 拒读，免费 owner 修订须完整复验与双身份绑定。
-FROZEN_CONTRACT_IDENTITY = '9a7e1067bbbcca471d237f52ee2df63fc75020ed2166ff0aceb4272b2a51932d'
+# rc23（2026-10-10，用户批准 Hook 质量设计）：Hook wire v3、graph rc23、
+# HookContext rc18；材料强调、跳时与阅读期待显式化，删除楔子长度配置。
+# 正文 Design/IR 的 rc22 及篇幅配置不变；不补造旧楔子的组织或后文依据。
+# rc24（2026-10-10 已有 Hook 篇幅包络批）：HookContext 单独升 rc24，
+# 正文 Design/IR 不变；补齐现役表的冻结记录，不改节点、配置或正文契约。
+FROZEN_CONTRACT_IDENTITY = '5a61ed782cd59035cee8d386bc03c3ed1dbee998fb204df688d3772b7442056c'
 
 #: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
@@ -169,7 +174,6 @@ FROZEN_NODES = (
 
 #: 冻结时的运行期配置（进契约身份；与付费调用额度是两件事）。
 FROZEN_RUNTIME_CONFIG = {
-    'hook_target_chars': 280, 'hook_hard_max_chars': 360,
     'length_band_low': 0.6, 'length_band_high': 1.3,
     'length_budget_rounding': 1000,
 }
@@ -226,7 +230,7 @@ def test_frozen_rc_version_label():
     # rc17：CS-H H3 称谓面＋H4 associate v3；rc18：CS-S Phase 1 死字段收口；
     # rc19：CS-S Phase 2 观察面收敛（facts／know.fact／associate v4／D-5／fold 时间线）；
     # rc20：CS-S Phase 3 收官（CHANGE_KEYS 闭集／access／reader 派生／associate v5）。
-    assert STR06_RC_VERSION == 'str06-rc22'
+    assert STR06_RC_VERSION == 'str06-rc24'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是
@@ -255,9 +259,10 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     # 消失（change 键闭集＝键即 canonical）。
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v5',
     'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v5',
-    'STAGE4_PRESERVE_POLICY_VERSION': 8,
+    # 2026-10-10 用户授权有限补桥：必要源因果完整交接，形状与 wire 不变。
+    'STAGE4_PRESERVE_POLICY_VERSION': 10,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
-    'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v2',
+    'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v3',
     # CS-3（2026-10-03）：bind 协议随节点退役——wire 面由 design v6 的 real
     # 承载标注取代，stage4-bind-v1 不再是现役协议字面量（常量删除）。
 }

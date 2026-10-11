@@ -344,7 +344,7 @@ def test_raw_blob_saved_before_state_commit_recovers_exactly(tmp_path, monkeypat
 
 
 def test_open_readers_do_not_block_parallel_chapter_registration_or_ledger_update(tmp_path):
-    from contracts.schema.workflow import WorkUnitLedgerV2, WorkUnitRegistryV1
+    from contracts.schema.workflow import WorkUnitLedgerV3, WorkUnitRegistryV1
     from novel import work_units
 
     base = tmp_path / '逐章共享快照'
@@ -364,11 +364,11 @@ def test_open_readers_do_not_block_parallel_chapter_registration_or_ledger_updat
         assert old_registry.read() == registry_before
         assert old_ledger.read() == ledger_before
         current_registry = work_units._read(base, first.registry_path, WorkUnitRegistryV1)
-        current_ledger = work_units._read(base, first.path, WorkUnitLedgerV2)
+        current_ledger = work_units._read(base, first.path, WorkUnitLedgerV3)
         assert set(current_registry.unit_ids) == {first.unit_id, second.unit_id}
         assert current_ledger.turns[0].attempts[0].attempt_id == 'chapter-one-wire'
         assert WorkUnitRegistryV1.model_validate_json(registry_before).unit_ids == (first.unit_id,)
-        assert WorkUnitLedgerV2.model_validate_json(ledger_before).turns[0].attempts == ()
+        assert WorkUnitLedgerV3.model_validate_json(ledger_before).turns[0].attempts == ()
 
     rows = list_unit_views(base, '42')
     assert {(row['scope'], row['content_used'], row['content_remaining']) for row in rows} == {

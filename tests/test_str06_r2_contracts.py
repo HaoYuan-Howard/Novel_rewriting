@@ -26,6 +26,8 @@
 """
 from __future__ import annotations
 
+from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
+
 import pytest
 from pydantic import ValidationError
 
@@ -464,17 +466,18 @@ def test_chapter_receipt_version_and_split_fields():
 
 def test_receipt_binds_writer_view_and_validation_separately():
     from novel.stages.common import (
-        RENDERER_VERSION, chapter_identities, check_chapter_receipt,
+        BODY_WRITER_SYSTEM, RENDERER_VERSION, chapter_identities, check_chapter_receipt,
         project_chapter_packet, render_chapter_packet,
     )
     ir = _green_ir()
     packet = project_chapter_packet(ir, 1)
     identities = chapter_identities(packet)
-    # 写手视图摘要的材料含 renderer 与写手协议版本＋写手实际可见的渲染字节
+    # 实际正文 system 与用户阅读面共同绑定，不能只按章包判断旧稿有效。
     material = render_chapter_packet(packet)
     import hashlib, json
     expect_writer = hashlib.sha256(json.dumps(
-        {'renderer_version': RENDERER_VERSION,
+        {'writer_system': BODY_WRITER_SYSTEM,
+         'renderer_version': RENDERER_VERSION,
          'writer_protocol_version': packet.realization_contract.protocol_version,
          'writer_view_text': material},
         ensure_ascii=False, sort_keys=True, separators=(',', ':')
@@ -491,8 +494,8 @@ def test_receipt_binds_writer_view_and_validation_separately():
                     machine_view_sha256=identities.machine_view_sha256,
                     prose_sha256='e' * 64, request_identity='r1',
                     protocol_version='p1', renderer_version='r1',
-                    validator_version='v1', status='accepted',
-                    mechanical_checks=('non_empty',),
+                    validator_version=BODY_VALIDATOR_VERSION, status='accepted',
+                    mechanical_checks=BODY_MECHANICAL_CHECKS,
                     length=ChapterLengthDisclosure(
                         char_count=900, target_chars=1000, band_low=600,
                         band_high=1300, within_band=True, deviation_ratio=-0.1))
@@ -543,8 +546,8 @@ def test_machine_only_change_does_not_invalidate_receipt():
         validation_sha256=identities.validation_sha256,
         machine_view_sha256=identities.machine_view_sha256,
         prose_sha256='e' * 64, request_identity='r1',
-        protocol_version='p1', renderer_version='r1', validator_version='v1',
-        status='accepted', mechanical_checks=('non_empty',),
+        protocol_version='p1', renderer_version='r1', validator_version=BODY_VALIDATOR_VERSION,
+        status='accepted', mechanical_checks=BODY_MECHANICAL_CHECKS,
         length=ChapterLengthDisclosure(char_count=900, target_chars=1000,
                                        band_low=600, band_high=1300,
                                        within_band=True, deviation_ratio=-0.1))
@@ -651,13 +654,12 @@ def test_r2_version_constants():
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
-    assert STR06_RC_VERSION == 'str06-rc22'          # 创作材料：可选细节与系列前情
+    assert STR06_RC_VERSION == 'str06-rc24'          # HookContext 篇幅包络独立升版；正文契约不变。
     assert 'str06-rc10' in STR06_RC_LABELS
-    assert RENDERER_VERSION == 'str06-render-v11'
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v9'
-    for rel in ('stage4/design/body_design.json',
-                'stage4/design/presentation_graph.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc22', rel
+    assert RENDERER_VERSION == 'str06-render-v12'
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v11'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/design/body_design.json'] == 'str06-rc22'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/design/presentation_graph.json'] == 'str06-rc23'
     # rc17（CS-H H3）：IR 因显示面分表（display_fallback）、必保揭名
     # （requires_released）与拍级释放（release_introductions）再升版。
     # rc18（CS-S 1b 补升）：IR 经 VerificationIR.obligations 内嵌 ObligationAnchor，

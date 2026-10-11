@@ -182,5 +182,3 @@ export interface CheckReport {
  * 层名不在取值面里 ⇒ 后端 400 并把可选值列出来。
  */
 export type CheckKind = 'stage0' | 'stage1'
-
-export const CHECK_KINDS: CheckKind[] = ['stage0', 'stage1']

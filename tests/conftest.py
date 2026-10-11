@@ -31,8 +31,8 @@ _WINDOWS_MAX_PATH = 260
 # `tests/test_layering.py::test_concurrency_and_process_lifecycle_modules_are_registered_serial`
 # 反向扫描调用面，新增模块漏登记会直接失败。
 # ⚠ F8c：本表只收**盘上存在**的模块。旧链/退役面的 34 条残留登记（指向已删
-# test_*.py）随清理一并删除——登记不是历史台账，那个归
-# `contracts/schema/retirement.py`；这里留死条目只会让人以为那些文件还在。
+# test_*.py）随清理一并删除——登记不是历史台账；这里留死条目只会让人以为
+# 那些文件还在。
 _SERIAL_TEST_MODULES = frozenset({
     'tests/test_agent_run_range.py',
     'tests/test_test_selection.py',
@@ -41,6 +41,7 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_operator_telemetry.py',
     'tests/test_output_root_archive.py',
     'tests/test_work_unit_grants.py',
+    'tests/test_llm_budget_versions.py',
     'tests/test_legacy_work_unit_recovery.py',
     'tests/test_agent.py',
     'tests/test_str06_product_entry.py',
@@ -50,6 +51,10 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_api_edits.py',
     'tests/test_appendlog.py',
     'tests/test_commander_admission.py',
+    # 含 agent 线程（test_operator_and_agent_resume_same_root_to_delivery）与真实
+    # CLI 子进程（test_cli_subprocess_preview_and_apply_are_free_and_reachable），
+    # 与 test_str06_product_entry 同类：全局 _service 面不得与他模块并行。
+    'tests/test_contract_upgrade.py',
     'tests/test_final_approval_workpacks.py',
     'tests/test_llm.py',
     'tests/test_model_slots.py',

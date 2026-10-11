@@ -1858,13 +1858,6 @@ class CostLedger:
         return Usage(calls_made=made, calls_cached=cached, **vals)
 
 
-def read_strict_audit_events(ledger: CostLedger) -> list[dict[str, Any]]:
-    """提交恢复只接受 LF 闭合的审计事实；未知尾不能补账洗白。"""
-    if ledger.path is None:
-        return [dict(row) for row in ledger.audit_events]
-    return read_strict_jsonl_objects(ledger.path.with_name('llm_audit.jsonl'), label='聚合审计账')
-
-
 def read_strict_jsonl_objects(path: Path, *, label: str) -> list[dict[str, Any]]:
     """恢复写口使用的 strict JSONL：无 LF 尾也是 unknown，而非可忽略事实。"""
     try:

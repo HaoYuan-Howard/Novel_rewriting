@@ -95,7 +95,7 @@
 ### 2.1 严重度、检查性质与处置路由是三个正交轴
 
 - `sev` 回答“影响有多大”；语义泄底可以是 HARD，语义覆盖不足可以是 INFO/UNVER。
-- `check_kind` 回答“这个结论怎么来的”。七个现役层的普通复检均为 `mechanical`；只有 Stage 6 另有独立的 `semantic` 伙伴审判，Stage 5 Review 仍是 0 成本机械检查。
+- `check_kind` 回答“这个结论怎么来的”。六个现役层的复检均为 `mechanical`；历史 Stage 6 的独立 `semantic` 伙伴审判与 Stage 5 Review 均已随旧链退役，现役没有生产 `semantic` 结论的检查面（语义未审以 `unver` 披露）。
 - `remediation` 回答“下一步谁能修”。`REPAIR_UNIQUE` 或已注册的付费 fix 是 `llm`；0 成本结构化 fix 是 `deterministic`；无安全自动路由是 `human`；metric 是 `none`。四类修复路由与成本上界见 `docs/BACKEND_CONTRACT.md` §七。
 
 这个投影故意**不把 `REPAIR_FREE` 标成 LLM 自动修复**。它表示理论上可重写，但满足路径不唯一；当前 Stage 5 付费自救明确拒绝它，因为模型可能通过删内容或编内容“修绿”。
@@ -124,22 +124,23 @@
 
 > #### ⚠ **两条不变量一格都不放宽**
 >
-> stage6 / stage7 的契约文档写着本层 `actionable=True`
-> （见两份文档各自的判据清单一节；**这里不重复条数**——注释里的计数没有守卫，
-> 而那两节的声明行有 `tests/test_coverage.py` 对着注册表现算），而那两层的 `actionable`
+> 历史上 stage6 / stage7 的契约文档曾写本层 `actionable=True`
+> （stage6 的契约文档与其判据注册表已随整层删除；stage7 的判据清单在注册表
+> `contracts/judges/str06.py`，`tests/test_coverage.py` 对着注册表现算），当时的 `actionable`
 > 意思是「**人能 0 成本改掉它**」（历史例：`--pick` 换一条候选 / `--apply-edit` 改一个字），
-> 不是「写作层能修」，`owner` 全是它们自己那一层。
+> 不是「写作层能修」，`owner` 全是那一层自己。
 >
-> **那两层全表 `repair='NONE'` ⇒ `actionable` 全 `False`。** 三条理由：
+> **现役六层全表 `repair='NONE'` ⇒ `actionable` 全 `False`。** 三条理由：
 >
-> 1. `repair` 回答的是「**进不进付费自救**」，而那两层的答案就是**一条都不开**
->    （已经有更便宜的路）。`repair='NONE'` 是**字面正确**的，不是妥协。
-> 2. `actionable` 的定义是「写作层能修」，stage6 一条都不是。
+> 1. `repair` 回答的是「**进不进付费自救**」，而现役六层的答案就是**一条都不开**
+>    （付费自救的 owner 不变量仍只认 stage5；历史「人能 0 成本改掉」的更便宜路
+>    已随 stage6 / stage7 人工面退役）。`repair='NONE'` 是**字面正确**的，不是妥协。
+> 2. `actionable` 的定义是「写作层能修」，现役一条都不是。
 >    硬把第二种意思塞进同一个名字，就是判据 32 那条：**名字先于证据定下来，
 >    后来读报告的人会按名字去解释它**——前端拿到同一个布尔值却要按层解释。
 > 历史语料迁移结果不能作为现役字段语义依据；当前反例以注册与 Finding 后置条件为准。
 >
-> ⇒ 「人能 0 成本改掉」写进 `Rule.note`（那 12 条各一句），
+> ⇒ 「人能 0 成本改掉」只写进 `Rule.note`（历史那 12 条各一句，已随 stage6 层退役），
 > **不进载体**。stage7 亦按同一条办；若发现真有消费方需要它，
 > 那是一次**独立的**契约改版，该被单独看见。
 

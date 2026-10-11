@@ -123,12 +123,12 @@ CASES: tuple[SemanticCase, ...] = (
     SemanticCase(
         case_id='C7', title='背景历史回声（无消费者的状态向后投影）',
         source_sample=('那年冬天，灶上的热汤凉了又热了几回。',),
-        observation='只写一次且无任何消费者（声明读取／确认目标／Hook 地址／'
+        observation='只写一次且无任何正文消费者（声明读取／确认目标／'
                     '锁键）的拍状态，被逐章投影进背景分区。',
         expected='背景只投书级初态立足点＋后文仍被消费的当前状态；无消费者'
                  '的拍状态留在其拍「必须写出」与 Machine IR。',
         red_in='R10b', green_in='R10b',
-        mechanical_face='背景投影消费者判定（声明读取／确认目标／Hook 地址／锁键）'),
+        mechanical_face='背景投影消费者判定（正文声明读取／确认目标／锁键）'),
     SemanticCase(
         case_id='C8', title='书级表达举了后段具体情节',
         source_sample=('全书以器物细节回扣前情。',),

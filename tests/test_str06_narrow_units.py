@@ -287,12 +287,10 @@ def test_zero_candidate_associate_stays_declared_free(tmp_path):
 # ───────────────────────── 窄 owner 与 wire v10 的免费补丁真实干跑 ─────────────────────────
 
 def _preview_args(chapters):
-    from contracts.schema.hook import HookConstraints
     from novel.stages.chain import build_evidence
 
     return dict(evidence=build_evidence(chapters, HOOK), budget=800,
-                chapter_count=len(chapters),
-                hook_constraints=HookConstraints(target_chars=100, hard_max_chars=200))
+                chapter_count=len(chapters))
 
 
 def _plain_flow_case(*, with_facts):
@@ -399,8 +397,9 @@ def _changed_identity_case():
 
 
 def _tree_bytes(root):
+    # OS 锁文件属于运行互斥设施；Windows 活锁不允许读字节，不是审计产物。
     return {path.relative_to(root).as_posix(): path.read_bytes()
-            for path in root.rglob('*') if path.is_file()}
+            for path in root.rglob('*') if path.is_file() and path.suffix != '.lock'}
 
 
 def _prepare_changed_identity(tmp_path, *, missing_formal=False, check_preview=False):
@@ -519,7 +518,7 @@ def test_execute_cause_recovery_records_current_context_preview(tmp_path, monkey
     before_calls = list(transport.calls)
     args = SimpleNamespace(
         book_sid=None, source_json=source, base=repo.root.parent, run_dir=repo.root,
-        hook_target_chars=100, hook_hard_max=200, body_band_low=.6, body_band_high=1.3,
+        body_band_low=.6, body_band_high=1.3,
         check_only=False, yes=True, allow_source_export=True, adopt_root=[],
         wire_dir=wire_dir, repair_manifest=None, resample='cross_cause' if kind == 'resample' else None,
         reason='确认首章事实为动机前提' if kind == 'resample' else None,

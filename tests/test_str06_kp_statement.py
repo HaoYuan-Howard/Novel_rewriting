@@ -24,7 +24,6 @@ from novel.stages.stage4.hook import publish_graph
 from tests.test_str06_hook import (
     _hook_wire, _projection, _body_wire, _assemble as _assemble_hook,
 )
-from contracts.schema.hook import HookConstraints
 from novel.stages.stage4.design import assemble_body_design
 from tests.test_str06_hook import sample_requirements, sample_narration
 from tests.test_str06_execution_ir import _binding, _cp, _graph, _ob
@@ -71,6 +70,7 @@ def _hook_body_with_kp():
 def _hook_wire_with_kp() -> dict:
     wire = _hook_wire()
     wire['forbidden_reveals'][0]['address']['key'] = KP
+    wire['reader_expectation']['answer']['address']['key'] = KP
     return wire
 
 
@@ -80,8 +80,8 @@ def test_hook_forbidden_reveals_render_statement_not_true():
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection(), HookConstraints(target_chars=280, hard_max_chars=360),
-        kp_statements={KP: STATEMENT})
+        graph, _projection(),
+        kp_statements={KP: STATEMENT}, total_budget=2000)
     assert context is not None and not errors, errors
     joined = '\n'.join(context.forbidden_reveals)
     assert STATEMENT in joined, '禁区以命题 statement 送达'
@@ -95,7 +95,7 @@ def test_hook_dangling_kp_is_reported_not_raised():
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection(), HookConstraints(target_chars=280, hard_max_chars=360))
+        graph, _projection(), total_budget=2000)
     assert context is None
     assert any('悬空 kp 引用' in e for e in errors)
 

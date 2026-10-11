@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from contracts.schema.observation import (
     STAGE2_ASSOCIATE_PROTOCOL, STAGE2_CHAPTERS_WIRE_PROTOCOL,
-    STAGE2_OBSERVATION_PROTOCOL, AssociateObservation,
+    AssociateObservation,
     BookObservation, ChapterObservation, NamesObservation,
 )
 from novel.stages.stage2.associate import (
@@ -70,7 +70,6 @@ __all__ = [
     'NAMES_INPUT_VERSION', 'NamesObservation', 'ProbeFinding', 'PropositionCandidate',
     'PropositionHandle', 'ResolverIssue', 'SceneCandidate', 'SceneHandle',
     'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_CHAPTERS_WIRE_PROTOCOL',
-    'STAGE2_OBSERVATION_PROTOCOL',
     'expand_chapter_wire', 'first_appearance_anchors',
     'first_appearance_issues', 'slim_chapter_wire',
     'associate_candidates_prompt', 'associate_patch_locate', 'book_observation_prompt',

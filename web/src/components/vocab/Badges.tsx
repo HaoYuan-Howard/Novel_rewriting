@@ -100,20 +100,3 @@ export function GateChip({ ok, label }: { ok: boolean; label: string }) {
     </span>
   )
 }
-
-/** 闸门左侧那个大标记：过了是圆的，没过是方的 */
-export function GateMark({ ok }: { ok: boolean }) {
-  return (
-    <span
-      aria-hidden
-      style={{
-        width: 10,
-        height: 10,
-        flex: 'none',
-        borderRadius: ok ? '50%' : 2,
-        background: ok ? GATE.ok.mark : GATE.wait.mark,
-        boxShadow: '0 0 0 3px ' + (ok ? GATE.ok.ring : GATE.wait.ring),
-      }}
-    />
-  )
-}

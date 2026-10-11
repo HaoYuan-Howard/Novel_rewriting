@@ -10,8 +10,7 @@
 --recover-analyze 免费物化）随旧链整层退役，按本表自己的纪律「改写为现役入口
 拒绝或直连正例后更新本表」逐条换成新链同族反例：新链的零付费面是候选生命周期
 自身的缓存重放、跨根历史采用、未知 turn 阻购、免费节点不开付费单元，以及 CLI
-0 成本跑法在无 API key 时仍走到明确终点（不触网）。旧链反例的历史字节见 Git
-与 `contracts/schema/retirement.py` 的 delete 桶登记。
+0 成本跑法在无 API key 时仍走到明确终点（不触网）。旧链反例的历史字节见 Git。
 """
 from __future__ import annotations
 

@@ -1,6 +1,8 @@
 """错误回派的显式免费更正；只废止已证明的旧路由，不改事实、费用或额度。"""
 from __future__ import annotations
 
+from novel.consumption import body_graph_payload
+
 import hashlib
 import json
 import time
@@ -8,7 +10,6 @@ import time
 from contracts.schema.workflow import (
     OwnerIssueCorrection, OwnerIssueFileV2, OwnerIssueV1, owner_issues_rel, STR06_RUNTIME_CONFIG,
 )
-from contracts.schema.hook import HookConstraints
 from novel.stages.common import hook_material_issues, material_identities
 from novel.stages.owner_revision import read_owner_issue_file
 from novel.stages.stage4 import compile_hook_context, inspect_body_materials, plan_material_repairs
@@ -86,18 +87,16 @@ def preview_issue_correction(repository, owner: str, *, budget: int,
             'stage2/characters/characters.json')
     models = [repository.read_model(rel) for rel in rels]
     body, graph, binding, brief, chars = models
-    if body.model_dump() != {k: v for k, v in graph.model_dump().items() if k != 'hook'}:
+    if body.model_dump(mode='json') != body_graph_payload(graph.model_dump(mode='json')):
         raise ValueError('正文Design与PresentationGraph不同步，先恢复正式消费链')
     inspection = inspect_body_materials(graph, binding, brief, chars, budget=budget,
         length_band=(STR06_RUNTIME_CONFIG.length_band_low, STR06_RUNTIME_CONFIG.length_band_high))
     if inspection.errors:
         raise ValueError(f'非材料问题尚未闭合：{inspection.errors}')
-    context, errors = compile_hook_context(graph, chars.name_projection(), HookConstraints(
-        target_chars=STR06_RUNTIME_CONFIG.hook_target_chars,
-        hard_max_chars=STR06_RUNTIME_CONFIG.hook_hard_max_chars), chars.name_structure,
+    context, errors = compile_hook_context(graph, chars.name_projection(), chars.name_structure,
         {p.kp_id: p.statement for p in brief.propositions},
         {w.constraint_id: w.statement for w in brief.book_constraints},
-        characters=chars.core_view())
+        characters=chars.core_view(), total_budget=budget)
     if errors:
         raise ValueError(f'Hook投影失败：{errors}')
     problems = (*inspection.materials, *hook_material_issues(

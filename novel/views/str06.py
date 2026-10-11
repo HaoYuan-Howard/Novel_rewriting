@@ -22,6 +22,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from contracts.schema.api import (
     Str06AssemblyOutcomeView, Str06AssemblyReportView,
     Str06BlueprintBeatView, Str06BlueprintChapterView, Str06BlueprintView,
@@ -38,7 +40,9 @@ from contracts.schema.api import (
 )
 from contracts.invariants import NODES, OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.workflow import candidate_node_owner
+from contracts.schema.hook import HookDesign
 from novel.errors import ArtifactUnreadable
+from novel.stages.common import hook_organization_summary
 from novel.store import Str06Repository
 from novel.work_unit_usage import read_cost_snapshot
 
@@ -189,7 +193,7 @@ def list_candidates(base: str | os.PathLike[str]) -> Str06CandidateList:
 # ─────────────────────────────── Stage2 面 ───────────────────────────────
 
 def characters_view(base: str | os.PathLike[str], candidate: str) -> Str06CharactersView:
-    """Characters v4：人物条目（称谓时间窗）＋源名称结构。"""
+    """Characters v6：人物条目（称谓时间窗）＋源名称结构。"""
     run = _run_dir(base, candidate)
     if run is None:
         return Str06CharactersView(present=False)
@@ -217,7 +221,7 @@ def characters_view(base: str | os.PathLike[str], candidate: str) -> Str06Charac
 
 
 def blueprint_view(base: str | os.PathLike[str], candidate: str) -> Str06BlueprintView:
-    """Blueprint v13：世界约束＋逐章 beats（三类转移、场景边界与时间模式、场景分段）与因果边。"""
+    """Blueprint v17：世界约束＋逐章 beats（三类转移、场景边界与时间模式、场景分段）与因果边。"""
     run = _run_dir(base, candidate)
     if run is None:
         return Str06BlueprintView(present=False)
@@ -271,14 +275,21 @@ def design_view(base: str | os.PathLike[str], candidate: str) -> Str06DesignView
                                scene_ids=tuple(c['scene_ids']))
         for c in graph.get('chapters') or ())
     hook_payload = graph.get('hook')
-    hook = (Str06DesignHookView(
-        person=hook_payload['pov']['person'],
-        focalizers=tuple(hook_payload['pov']['focalizers']),
-        materials=tuple(m['beat_ref'] for m in hook_payload['materials']),
-        concealed=tuple(hook_payload.get('concealed') or ()),
-        forbidden_reveals=len(hook_payload.get('forbidden_reveals') or ()),
-        design_brief=hook_payload['design_brief'])
-        if hook_payload else None)
+    hook = None
+    if hook_payload:
+        try:
+            brief = hook_organization_summary(HookDesign.model_validate(hook_payload))
+        except ValidationError:
+            # 未升级旧根上的 hook 早于当前契约形状：只读视图不因此 500——
+            # 选择本身原样投影，组织说明如实标「不可推导」，不猜内容。
+            brief = '（盘上 Hook 形状早于当前契约，组织说明不可推导；经登记升级重建后恢复）'
+        hook = Str06DesignHookView(
+            person=hook_payload['pov']['person'],
+            focalizers=tuple(hook_payload['pov']['focalizers']),
+            materials=tuple(m['beat_ref'] for m in hook_payload['materials']),
+            concealed=tuple(hook_payload.get('concealed') or ()),
+            forbidden_reveals=len(hook_payload.get('forbidden_reveals') or ()),
+            design_brief=brief)
     binding_payload = _inspect(run, 'stage4/grounding/semantic_binding.json')
     binding = (Str06DesignBindingView(
         obligations=len(binding_payload.get('obligations') or ()),

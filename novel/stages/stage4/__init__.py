@@ -58,7 +58,8 @@ from novel.stages.stage4.grounding import (
     preserve_revision_wire,
 )
 from novel.stages.stage4.preflight import (
-    hook_combination_errors, inspect_body_materials, inspect_design_candidate,
+    hook_candidate_material_errors, hook_combination_errors,
+    inspect_body_materials, inspect_design_candidate,
 )
 from novel.stages.stage4.repair import plan_material_repairs
 from novel.stages.stage4.guard import (
@@ -73,7 +74,7 @@ from novel.stages.stage4.hook import (
 )
 from novel.stages.stage4.hook_validation import validate_hook_design
 from novel.stages.stage4.hook_wire import (
-    hook_catalog, hook_wire_schema, project_hook_input, upgrade_purchased_hook_wire,
+    hook_catalog, hook_wire_schema, project_hook_input,
 )
 from novel.stages.stage4.hook_context import compile_hook_context
 from novel.stages.stage4.slim import design_fact_marks, design_placements
@@ -99,6 +100,6 @@ __all__ = [
     'project_brief', 'project_design_input', 'project_hook_semantics', 'project_preserve_view',
     'preserve_name_issues', 'preserve_patch_slice', 'preserve_revision_wire', 'fact_lock_subjects',
     'hook_combination_errors', 'hook_patch_legal_values', 'hook_patch_slice',
-    'hook_catalog', 'hook_wire_schema', 'project_hook_input', 'upgrade_purchased_hook_wire',
+    'hook_catalog', 'hook_wire_schema', 'project_hook_input',
     'publish_graph', 'run_mechanical_guard', 'scene_order', 'validate_hook_design',
 ]

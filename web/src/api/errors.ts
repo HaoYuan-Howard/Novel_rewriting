@@ -29,7 +29,7 @@ export class ApiError extends Error {
    * 书级 404 已由总览查询拦在上层，所以到了层级屏还 404 的，几乎总是「层没跑」。
    */
   readonly backendKind: string | null
-  /** 缺的是哪一个（`'novel'` / `'stage7/name_map.json'`）；null = 与某一份具体的东西无关 */
+  /** 缺的是哪一个（`'novel'` / `'stage7/naming/name_map.json'`）；null = 与某一份具体的东西无关 */
   readonly missing: string | null
   /** 下一步该做什么；null = 后端说不出来（说不出来就不编一句） */
   readonly hint: string | null
@@ -56,11 +56,6 @@ export class ApiError extends Error {
     this.missing = opts.missing ?? null
     this.hint = opts.hint ?? null
   }
-}
-
-/** 「这一步还没跑」——与「书不存在 / 打错 id」分开渲染的依据。 */
-export function isNotRunYet(e: unknown): boolean {
-  return isApiError(e) && e.kind === 'notfound' && e.backendKind === 'UpstreamMissing'
 }
 
 export function isApiError(e: unknown): e is ApiError {

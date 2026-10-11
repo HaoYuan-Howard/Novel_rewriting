@@ -10,15 +10,12 @@ from __future__ import annotations
 from contracts.artifacts import STAGE0_CLEAN_TEXT
 
 import hashlib
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 from contracts.schema.report import CheckReport
 from contracts.schema.stage0 import (
     RemovedSegment,
-    RequestedRemoval,
     Stage0Snapshot,
     Stage0Source,
     Stage0Transform,
@@ -63,10 +60,6 @@ class RemovalResult:
     @property
     def body_ratio(self) -> float:
         return self.report.body_code_points / self.report.total_code_points
-
-
-def preview_text(value: str, limit: int) -> str:
-    return re.sub(r'\s+', ' ', value).strip()[:limit]
 
 
 def machine_content(
@@ -165,15 +158,6 @@ def inspect_content(
         decoded,
         original_path=str(source),
         raw_sha256=hashlib.sha256(raw).hexdigest(),
-    )
-
-
-def inspect_source(source_path: str | Path, *, code: str) -> RemovalResult:
-    source, clean, removed, scan = inspect_content(source_path)
-    return RemovalResult(
-        clean,
-        _provisional(source, clean, removed, code=code).report,
-        scan,
     )
 
 
@@ -291,31 +275,3 @@ def run_source(source_path: str | Path, base: str | Path, *, force: bool = False
     rev.commit(store, published, clean_text=clean)
     result, report = _checked(ctx, published, clean_text=clean)
     return novel_dir, result, report
-
-
-def verified_removals(
-    requested: Sequence[RequestedRemoval],
-    source_text: str,
-    prior: Sequence[RemovedSegment],
-) -> list[RemovedSegment]:
-    """历史编辑辅助（节点已退役）；测试与存量工具偶发引用。"""
-    machine_by_span = {
-        segment.span: segment for segment in prior if segment.origin == 'machine'}
-    verified: list[RemovedSegment] = []
-    for segment in requested:
-        lo, hi = segment.span
-        earlier = machine_by_span.get(segment.span)
-        if earlier is not None:
-            verified.append(earlier)
-            continue
-        piece = source_text[lo:hi]
-        first_line = next(
-            (line.strip() for line in piece.splitlines() if line.strip()), '')
-        marker_line = first_line or '人工剔除'
-        verified.append(RemovedSegment(
-            kind=segment.kind,
-            marker_line=marker_line,
-            span=(lo, hi),
-            origin='human',
-        ))
-    return verified

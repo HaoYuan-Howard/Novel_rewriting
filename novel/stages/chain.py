@@ -17,9 +17,9 @@ owner；`execute` 只剩参数、设施装配与计划推进（薄驱动）。
 【B2 五节点重建（2026-09-27，D9）】Stage2 由联合抽取 `str06.stage2.source`
 改为 book／chapters／names／associate／compile 五 owner：book 与 chapters
 产出观察（`stage2/observations/*.json`），names 重挂到书级观察输入，
-associate 与 compile 的 runner 由 B2 后续提交落地（compile 是 Characters＋
-Blueprint 双真源唯一 writer）。`run_source` 与派生输入
-`stage2/compiled/book_extraction.json` 随之退役（D3/D9）。
+associate 与 compile 的 runner 已随 B2 第三步接线（compile 是 Characters＋
+Blueprint 双真源唯一 writer），本序与 `NODE_RUNNERS` 双向闭合。`run_source`
+与派生输入 `stage2/compiled/book_extraction.json` 随之退役（D3/D9）。
 
 【输入闭合边界（F7b 已知限制，F7c 收口）】源章仍由调用方经 `ChainContext.chapters`
 传入（F7c 起改读正式 Stage1 章数组）；其余输入一律从盘面读——单节点重放因此可能。
@@ -59,9 +59,8 @@ from contracts.invariants import (
     PIPELINE_PROVIDER_CONCURRENCY,
 )
 from contracts.schema.grounding import OutputConstraints, PreserveCheckpoint
-from contracts.schema.hook import HookConstraints, HookReceipt
+from contracts.schema.hook import HookReceipt
 from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
-from contracts.schema.observation import STAGE2_OBSERVATION_PROTOCOL
 from contracts.schema.workflow import (
     OWNER_REVISION_MAX_ROUNDS, STR06_RUNTIME_CONFIG, OwnerIssueV1,
     STAGE4_PRESERVE_POLICY_VERSION, STAGE4_PRESERVE_PROTOCOL,
@@ -91,7 +90,7 @@ from novel.stages.common import (
 from novel.stages import candidates
 from novel.stages.stage2 import (
     chapter_revision_scope_issues, slim_chapter_wire,
-    NamesObservation, STAGE2_OBSERVATION_PROTOCOL, book_observation_prompt,
+    NamesObservation, book_observation_prompt,
     book_patch_locate, chapter_observation_prompt, chapter_patch_locate,
     character_core_view, names_patch_locate,
     compile_associate_observation, associate_candidates_prompt,
@@ -136,7 +135,7 @@ from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt,
     build_rewrite_user_prompt, context_sha256,
-    chapter_prose_validator, sha256_text, validate_hook_prose, write_chapter,
+    chapter_prose_validator, recheck_chapter, sha256_text, validate_hook_prose, write_chapter,
 )
 from novel.stages.stage7 import (
     apply_names, assemble_delivery, build_delivery_manifest, chapter_access,
@@ -156,8 +155,9 @@ __all__ = [
 ]
 
 #: 执行序（stage2 → stage4 → stage5 → stage7；与 --through 的腿边界一致）。
-#: B2 五节点重建（D9）：Stage2 的 associate／compile runner 由 B2 后续提交
-#: 落地；届时本序与 NODE_RUNNERS 双向闭合。
+#: B2 五节点重建（D9）：Stage2 五 owner（book／chapters／names／associate／
+#: compile）runner 已全部落地，本序与 NODE_RUNNERS 双向闭合
+#: （对账在 `tests/test_str06_candidates.py`）。
 NODE_ORDER: tuple[str, ...] = (
     'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
     'str06.stage2.associate', 'str06.stage2.compile',
@@ -208,8 +208,6 @@ class ChainContext:
     hook_copy: str = ''
     budget: int = 11000
     book_title: str = ''
-    hook_constraints: HookConstraints = field(
-        default_factory=lambda: HookConstraints(target_chars=280, hard_max_chars=360))
     length_band: tuple[float, float] = (0.6, 1.3)
     body_replay: Callable[[int, Any], bool] = lambda _ordinal, _packet: False
     after_node_commit: Callable[[str], None] = lambda _node: None
@@ -994,7 +992,7 @@ def run_preserve(ctx: ChainContext) -> dict:
                                                request_sha256=ctx.digest(preserve_prompt))
         # CS-H H3（RC-64）自闸：义务文本里的裸姓／未登记别名在本接受循环里被
         # 逐条定位（与下游材料归因同一把尺），不再等跨节点回派。
-        return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars, blueprint)
+        return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars)
 
     def locate_preserve_patches(wire, errors):
         """Preserve 自闸按义务或完整细节对象定位；其余问题沿用整份修订。"""
@@ -1327,12 +1325,12 @@ def run_body_design(ctx: ChainContext) -> dict:
     #: 都以此登记谱系——否则被回派的候选永远没有「生成时的上游版本」，上游修好后
     #: 免费沿用对它不可达（RC-52：登记全部已购候选）。
     produced: dict[str, dict] = {}
-    expected_protocol = STAGE4_DESIGN_WIRE_PROTOCOL
+    accepted_protocols = {STAGE4_DESIGN_WIRE_PROTOCOL}
 
     def validate(w):
         nonlocal last_inspection
-        if isinstance(w, dict) and w.get('protocol_version') != expected_protocol:
-            return [design_issue(f'本请求 wire 协议必须是 {expected_protocol}',
+        if isinstance(w, dict) and w.get('protocol_version') not in accepted_protocols:
+            return [design_issue(f'本请求 wire 协议必须属于 {sorted(accepted_protocols)}',
                                  code='design_protocol_literal',
                                  location=('protocol_version',))]
         last_inspection = inspection = inspect(w)
@@ -1354,8 +1352,7 @@ def run_body_design(ctx: ChainContext) -> dict:
         gated = {issue.location[-1] for issue in inspection.errors
                  if isinstance(issue, _ValidationIssue)
                  and issue.code in ('positive_material_leak', 'internal_id_leak',
-                                    'design_unreleased_reference',
-                                    'design_projection_lossy')}
+                                    'design_unreleased_reference')}
         mirrored = [ValidationMessage(r.issue.message, r.issue.context['material_identity'])
                     for r in repairs
                     if not (r.owner == 'design' and r.action != 'stop'
@@ -1391,6 +1388,10 @@ def run_body_design(ctx: ChainContext) -> dict:
     reuse_plan, _assessments = _design_reuse_plan(
         ctx, checkpoint=checkpoint, chars=chars, brief=brief,
         obligation_index=obligation_index, constraints=constraints, inspect=inspect)
+    if reuse_plan is not None and reuse_plan.action in ('carry_forward', 'narrow_review'):
+        # 只有经兼容性检查和当前完整预检评估选中的已购候选提供历史协议权限。
+        # 免费沿用因显式修订优先让位时，修订重放也使用同一兼容接受闸。
+        accepted_protocols.add(reuse_plan.candidate['wire']['protocol_version'])
     review_targets = ()
     carried = None
     if (reuse_plan is not None and reuse_plan.action == 'carry_forward'
@@ -1426,7 +1427,9 @@ def run_body_design(ctx: ChainContext) -> dict:
         # 判定已对它做过完整预检，不再整份新购一轮；基底 attempt 的引用经
         # `PatchBaseline.attempt` 由付费边界解析进 provenance（成本链分别聚合）。
         candidate = reuse_plan.candidate or {}
-        expected_protocol = candidate['wire']['protocol_version']
+        # 已购基底的窄请求保留原协议；无法窄修时整份兜底仍使用当前协议。
+        # 两种形状都进当前完整预检（含集中兼容解码），不能把基底的协议字面
+        # 固定到整个接受循环，误拒当前 schema 的整份回答。普通新购仍只收当前版。
         baseline = PatchBaseline(
             wire=candidate['wire'], digest=candidates.wire_sha256(candidate['wire']),
             summary=f"已购候选第 {candidate.get('ordinal')} 轮（turn {candidate.get('turn_id')}）",
@@ -1615,11 +1618,13 @@ def run_hook_design(ctx: ChainContext) -> dict:
                                    node='str06.stage4.hook_design',
                                    issues=(str(exc),)) from exc
     hook_design_prompt = pack_prompt(
-        HOOK_DESIGN_RULES, book_title=ctx.book_title, story=project_hook_input(body),
+        HOOK_DESIGN_RULES, book_title=ctx.book_title,
+        story=project_hook_input(body, projection=projection,
+                                 kp_statements=kp_statements,
+                                 world_statements=world_statements),
         wire_schema=hook_wire_schema(body),
         semantics=semantics,
-        identities=[i.model_dump(mode='json') for i in identities],
-        constraints=ctx.hook_constraints.model_dump(mode='json'))
+        identities=[i.model_dump(mode='json') for i in identities])
     hook_design_prompt = revision_prompt_for_owner(
         repository, 'hook_design', hook_design_prompt, 'stage4/design/presentation_graph.json')
 
@@ -1632,14 +1637,21 @@ def run_hook_design(ctx: ChainContext) -> dict:
         """
         return hook_combination_errors(
             w, body=body, binding=binding, chars=chars,
-            hook_constraints=ctx.hook_constraints,
-            kp_statements=kp_statements, world_statements=world_statements)
+            kp_statements=kp_statements, world_statements=world_statements,
+            total_budget=ctx.budget)
 
     def hook_design_compile(w):
         hook, errors = assemble_hook_design(w, body=body, known_char_ids=set(chars.characters),
                                            name_projection=projection, name_structure=chars.name_structure)
         if hook is not None:
             errors.extend(hook_combination(hook))
+        elif errors:
+            # 方向二（2026-10-10 裁决）：结构失败时仍聚合不依赖失败条目的
+            # 材料层机械错误，一轮反馈暴露全部机械缺陷，不逐层付费排雷。
+            from novel.stages.stage4 import hook_candidate_material_errors
+            errors.extend(hook_candidate_material_errors(
+                w, body=body, chars=chars, binding=binding,
+                kp_statements=kp_statements, world_statements=world_statements))
         return (None, errors) if errors else (hook, [])
 
     def hook_narrow_context(base_wire, targets):
@@ -1650,8 +1662,10 @@ def run_hook_design(ctx: ChainContext) -> dict:
         """
         return NarrowPatchRequest(
             rules=HOOK_DESIGN_RULES,
-            dependency=json.dumps({**hook_patch_slice(body, base_wire,
-                                                   [t.path for t in targets]), 'semantics': semantics},
+            dependency=json.dumps({**hook_patch_slice(
+                body, base_wire, [t.path for t in targets], projection=projection,
+                kp_statements=kp_statements, world_statements=world_statements),
+                'semantics': semantics},
                                   ensure_ascii=False, separators=(',', ':')),
             legal_values=json.dumps(hook_patch_legal_values(
                 body=body, known_char_ids=set(chars.characters),
@@ -1713,10 +1727,11 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     kp_statements = {p.kp_id: p.statement for p in brief.propositions}
     world_statements = {wc.constraint_id: wc.statement
                         for wc in brief.book_constraints}
-    hook_context, errors = compile_hook_context(graph, projection, ctx.hook_constraints,
+    hook_context, errors = compile_hook_context(graph, projection,
                                                 chars.name_structure, kp_statements,
                                                 world_statements,
-                                                characters=chars.core_view())
+                                                characters=chars.core_view(),
+                                                total_budget=ctx.budget)
     if errors:
         raise MechanicalDefectStop(
             f'stage4 hook 上下文机械缺陷：{errors}',
@@ -2026,8 +2041,8 @@ def _packet_identities(writer_ir) -> dict[int, 'ChapterIdentities']:
 
 
 def _committed_set(repository, identities: dict[int, 'ChapterIdentities'],
-                  target: tuple[int, ...]):
-    """集合恢复：逐章独立装载有效提交（回执＋正文＋章包摘要三方绑定）。
+                  target: tuple[int, ...], *, writer_ir=None):
+    """集合恢复：逐章独立核对有效提交（回执＋正文＋章包摘要三方绑定）。
 
     各章互不依赖（D2）：某章缺失、章包过期或正文脱钩只使**该章**回到待补
     集合，其余章的合法提交原样保留（I-31）——已完成 1、2、4、6 章时只补
@@ -2035,12 +2050,18 @@ def _committed_set(repository, identities: dict[int, 'ChapterIdentities'],
     同请求身份免费重放闭合（`R-7.4`）。`target` 是本次目标章集合（W1 选章；
     不在集合内的章既不装载也不触碰）。
 
+    除装载外还会**发布**：写作输入未变、仅验证规则变化时，先在原章稿上免费
+    重验并经 `publish_chapter_recheck` 发布新回执（生成事实继承原付费账），
+    再按新回执判定；记录损坏由 `sealed_commit_bundles` 关闭式上抛，不吞成
+    「本章无提交」。
+
     回执装载走 `inspect`（不记来源边、不做输入新鲜度）：章包摘要
     （写手视图与验证输入摘要）是比输入边新鲜度更强的逐章绑定——章回执的合法输入只有
     当前 IR，若经 `read` 装载会把其他章回执字节记进来源边，一章重做即误判
     他章 stale，破坏「各章独立有效」。
     """
     from novel.stages.common import check_chapter_receipt
+    from novel.errors import UnsealedArtifact
     from pydantic import ValidationError
     committed: dict[int, str] = {}
     receipts: dict[int, dict] = {}
@@ -2050,21 +2071,28 @@ def _committed_set(repository, identities: dict[int, 'ChapterIdentities'],
         try:
             receipt = repository.inspect(rel_receipt)
             prose = repository.read_text(rel_prose)
-            model = _receipt_model(receipt)
-        except (FileNotFoundError, ValidationError):
+            model = repository.inspect_sealed_model(rel_receipt)
+        except (FileNotFoundError, ValidationError, UnsealedArtifact):
             continue
         problems = check_chapter_receipt(
             model, identities=identities[ordinal], prose_sha256=sha256_text(prose))
+        if (problems and writer_ir is not None and model.status == 'accepted'
+                and model.writer_view_sha256 == identities[ordinal].writer_view_sha256
+                and model.prose_sha256 == sha256_text(prose)):
+            # 写作输入未变，先在原章稿上免费验证；验证器从不改写正文。
+            packet = project_chapter_packet(writer_ir, ordinal)
+            renewed = recheck_chapter(packet, prose, model)
+            if renewed is not None:
+                repository.publish_chapter_recheck(rel_receipt, renewed, rel_prose)
+                model = renewed
+                receipt = repository.inspect(rel_receipt)
+                problems = check_chapter_receipt(model, identities=identities[ordinal],
+                                                 prose_sha256=sha256_text(prose))
         if problems:
             continue
         committed[ordinal] = prose
         receipts[ordinal] = receipt
     return committed, receipts
-
-
-def _receipt_model(receipt: dict):
-    from contracts.schema.receipt import ChapterReceipt
-    return ChapterReceipt.model_validate(receipt)
 
 
 def _write_and_commit_chapter(ctx: ChainContext, packet, ordinal: int):
@@ -2117,7 +2145,7 @@ def run_body(ctx: ChainContext) -> dict:
     writer_ir = repository.read_model('stage4/ir/writer_book_ir.json')
     target = resolve_body_chapters(ctx.body_chapters, len(writer_ir.chapters))
     identities = _packet_identities(writer_ir)
-    committed, committed_receipts = _committed_set(repository, identities, target)
+    committed, committed_receipts = _committed_set(repository, identities, target, writer_ir=writer_ir)
     for ordinal in tuple(committed):
         if ctx.body_replay(ordinal, project_chapter_packet(writer_ir, ordinal)):
             del committed[ordinal]
@@ -2657,7 +2685,7 @@ def load_stage1_chapters(base, sid: str) -> Stage1Input:
 
 def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
                  through='stage4', provider='manual-adoption', model='unknown',
-                 book_title='', hook_constraints=None, length_band=(0.6, 1.3),
+                 book_title='', length_band=(0.6, 1.3),
                  body_chapters=None, node_filter=None, hook_copy='', chapter_patch_owners=(),
                  concurrency: int = PIPELINE_DEFAULT_CONCURRENCY,
                  node_concurrency: Mapping[str, int] | None = None,
@@ -2676,12 +2704,10 @@ def run_workflow(*, repository, chapters, ask, ask_text, ask_body, budget=11000,
     的独立字段供审计，**不进** `input_sha256` 身份摘要、请求身份、回执或
     provenance——从 canary 续跑到全书不改变任何已提交章的采用与恢复身份。
     """
-    hook_constraints = hook_constraints or HookConstraints(
-        target_chars=280, hard_max_chars=360)
     ctx = ChainContext(
         repository=repository, ask=ask, ask_text=ask_text, ask_body=ask_body,
         chapters=chapters, hook_copy=hook_copy, budget=budget, book_title=book_title,
-        hook_constraints=hook_constraints, length_band=length_band,
+        length_band=length_band,
         body_chapters=body_chapters, chapter_patch_owners=chapter_patch_owners,
         provider=provider, model=model,
         body_replay=body_replay, after_node_commit=after_node_commit,
@@ -2760,6 +2786,19 @@ def frozen_concurrency(cfg: Config) -> dict[str, Any]:
 
 
 def execute(args) -> None:
+    """独立 CLI 的整次书执行与升级共用跨进程锁；付费在飞时不失效正式位。
+
+    base／run-dir 的合法性由 `_execute` 的同一道校验回答（那边的报错带
+    `NOVEL_OUTPUT` 语义）；这里只取锁，不另立一份措辞更含糊的预检。
+    """
+    from novel.appendlog import path_transaction_lock
+    from novel.llm.paid_requests import WORKFLOW_REL
+    repository = Str06Repository(Path(args.run_dir))
+    with path_transaction_lock(repository.path(WORKFLOW_REL)):
+        _execute(args)
+
+
+def _execute(args) -> None:
     """装配显式依赖并驱动链执行（F8b：CLI `run <str06 节点>` 与工具共用本函数）。
 
     `args` 是任一来源解析出的同形命名空间（argparse Namespace 或等价对象）：
@@ -2767,8 +2806,6 @@ def execute(args) -> None:
     """
     if not args.book_sid and args.source_json is None:
         raise ValueError('必须给出 --book-sid（正式 Stage1 输入）或 --source-json（开发路径）')
-    if args.hook_target_chars > args.hook_hard_max:
-        raise ValueError('--hook-target-chars 不得大于 --hook-hard-max')
     if not 0 < args.body_band_low < args.body_band_high:
         raise ValueError('--body-band-low/high 必须满足 0 < low < high')
     if args.check_only and (args.yes or args.allow_source_export):
@@ -2956,8 +2993,6 @@ def execute(args) -> None:
                 dry_run=(downstream_preview if downstream_preview is not None else
                          lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
                     evidence=build_evidence(chapters, hook_copy), budget=args.budget,
-                    hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
-                                                     hard_max_chars=args.hook_hard_max),
                     chapter_count=len(chapters), source_texts=tuple(c['text'] for c in chapters),
                     book_title=args.book_title, length_band=(args.body_band_low, args.body_band_high))))
             stage_revision(repository, owner=owner, identity=baseline_identity,
@@ -3026,8 +3061,7 @@ def execute(args) -> None:
             dry_run=(downstream_preview if downstream_preview is not None else
                      lambda w: dry_run_patch(Str06Repository(repository.root), owner, w,
                 evidence=build_evidence(chapters, hook_copy), budget=args.budget,
-                hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
-                                                 hard_max_chars=args.hook_hard_max), chapter_count=len(chapters),
+                chapter_count=len(chapters),
                 source_texts=tuple(c['text'] for c in chapters), book_title=args.book_title,
                 length_band=(args.body_band_low, args.body_band_high))))
         stage_revision(repository, owner=owner, identity=selection.baseline_request_sha256,
@@ -3174,8 +3208,6 @@ def execute(args) -> None:
                        provider='manual-adoption' if args.wire_dir else profile.provider,
                        model='unknown' if args.wire_dir else profile.model,
                        book_title=args.book_title,
-                       hook_constraints=HookConstraints(target_chars=args.hook_target_chars,
-                                                         hard_max_chars=args.hook_hard_max),
                        length_band=(args.body_band_low, args.body_band_high),
                        body_chapters=args.body_chapters,
                        chapter_patch_owners=chapter_patch_owners,

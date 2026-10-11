@@ -4,7 +4,7 @@ import type { RequiredActionInput } from '@/types/jobs'
  * 动作三分类。
  *
  * 花不花钱**只看服务端下发的 `paid`**，会不会写盘**只看服务端下发的 `writes_disk`**
- * ——前端一行判定都不写（FE-03）。`/api/enums` 的 82 条动作每条都带这两格
+ * ——前端一行判定都不写（FE-03）。`/api/enums` 的 30 条动作每条都带这两格
  * （writes_disk 由 WRITE_EFFECTS 折出来，落点在 novel/api/enums.py）。
  *
  * 缺格的组合画成 `unclassified`：「不知道它会不会写盘」和「它只读」是两回事。

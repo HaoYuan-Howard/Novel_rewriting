@@ -19,6 +19,7 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     doctor --llm-transport          0 成本探测 DeepSeek DNS/TCP/TLS/HTTP；不发正文/密钥
     response-repair <sid>           0 成本：提交/放弃一份隔离的结构化响应修复稿
     issue-correction <sid>          0 成本：预览或显式更正有正式证据的旧错误回派
+    contract-upgrade <sid>          0 成本：预览或应用已登记的同根契约升级
 
 ⚠ **这张表就是 `--help` 打印出来的那一份**（argparse 的 `description` 直接取本 docstring），
 而操作规程让执行者第一步就跑 `--help`。少列一条 = 那条路对读它的人不存在。
@@ -266,6 +267,24 @@ def _parser() -> argparse.ArgumentParser:
     correction.add_argument('--subject-sha256')
     correction.add_argument('--reason')
 
+    upgrade = sub.add_parser(
+        'contract-upgrade',
+        help='已登记的同根升级；保留历史证据，登记节点的轮次随 apply 返还')
+    upgrade.add_argument('sid')
+    upgrade.add_argument('--base', required=True)
+    upgrade.add_argument('--apply', action='store_true')
+    upgrade.add_argument('--abort-pending', action='store_true',
+                         help='显式放弃尚未归档任何文件的升级恢复日志')
+    upgrade.add_argument('--subject-sha256')
+    upgrade.add_argument('--actor')
+    upgrade.add_argument('--reason')
+    upgrade.add_argument('--convert', default=None,
+                         help='0 成本：把已登记无损换算边的归档产物换算成当前 '
+                              'wire（如 str06.stage4.hook_design），不跑模型')
+    upgrade.add_argument('--wire-dir', default=None,
+                         help='--convert 的输出目录；随后 run --node … --wire-dir '
+                              '… 免费采用')
+
     mk = sub.add_parser('mark', help='进度信标打点（0 成本，恒 exit 0）')
     mk.add_argument('sid')
     mk.add_argument('--node', required=True, choices=sorted(NODES))
@@ -431,8 +450,6 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         through=_STR06_THROUGH[a.node],
         book_sid=a.sid,
         budget=None,
-        hook_target_chars=STR06_RUNTIME_CONFIG.hook_target_chars,
-        hook_hard_max=STR06_RUNTIME_CONFIG.hook_hard_max_chars,
         body_band_low=STR06_RUNTIME_CONFIG.length_band_low,
         body_band_high=STR06_RUNTIME_CONFIG.length_band_high,
         body_chapters=body_chapters,
@@ -778,7 +795,7 @@ def _require_execution_permit(
 
     # active-surface CAS 已由 canonical run_step 在 admission claim 成功后、
     # evidence/beacon/subprocess 之前执行。child 只核 active claim、完整 envelope、
-    # canonical step/index/argv；这里不得再调用 operator planner 做七层复检。
+    # canonical step/index/argv；这里不得再调用 operator planner 做六层复检。
 
 
 def _cmd_run(a: argparse.Namespace) -> int:
@@ -1300,6 +1317,66 @@ def _cmd_issue_correction(a: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_contract_upgrade(a: argparse.Namespace) -> int:
+    from novel import prov
+    from novel.store import Str06Repository
+    from novel.stages.chain import load_stage1_chapters
+    from novel.orchestrator.contract_upgrade import (
+        abort_pending, preview, apply, digest,
+    )
+    from novel.orchestrator.work_unit_evidence import rebuild_budget_views
+
+    repo = Str06Repository(paths.resolve_novel_dir(a.base, a.sid))
+    source = load_stage1_chapters(a.base, a.sid)
+    code = prov.code_version()
+    if code == prov.CODE_UNKNOWN:
+        raise TerminalState('代码身份未知，不能规划契约升级')
+    if a.convert:
+        if a.apply or a.abort_pending:
+            raise TerminalState('--convert 与 --apply/--abort-pending 互斥')
+        if not a.wire_dir:
+            raise TerminalState('--convert 必须给 --wire-dir 输出目录')
+        if not all((a.actor, a.reason)):
+            raise TerminalState('--convert 必须给 --actor 和 --reason')
+        from novel.orchestrator.upgrade_converters import (
+            convert_archived_wire, upgrade_id_for_node,
+        )
+        result = convert_archived_wire(
+            repo, upgrade_id=upgrade_id_for_node(a.convert), node=a.convert,
+            wire_dir=Path(a.wire_dir), actor=a.actor, reason=a.reason)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    if a.abort_pending:
+        if a.apply:
+            raise TerminalState('--abort-pending 与 --apply 互斥')
+        if a.subject_sha256:
+            raise TerminalState('--abort-pending 不接受 --subject-sha256')
+        if not all((a.actor, a.reason)):
+            raise TerminalState('--abort-pending 必须给 --actor 和 --reason')
+        result = abort_pending(repo, base=Path(a.base), sid=a.sid,
+                               source_identity=source.source_identity,
+                               code_version=code, actor=a.actor, reason=a.reason)
+    elif a.apply:
+        if not all((a.subject_sha256, a.actor, a.reason)):
+            raise TerminalState('--apply 必须给 --subject-sha256、--actor 和 --reason')
+        result = apply(repo, base=Path(a.base), sid=a.sid, source_identity=source.source_identity,
+                       code_version=code, subject_sha256=a.subject_sha256,
+                       actor=a.actor, reason=a.reason)
+    else:
+        if any((a.subject_sha256, a.actor, a.reason)):
+            raise TerminalState('只读升级预览不接受 apply 参数')
+        plan = preview(repo, source_identity=source.source_identity, code_version=code)
+        result = {'subject_sha256': digest(plan.model_dump(mode='json')),
+                  'plan': plan.model_dump(mode='json')}
+        # 额度是易变状态，只随预览展示、不进计划（进 subject_sha256 会让
+        # 节点一跑预览就漂移）。应用前核对：额度耗尽的重建节点第一步就会
+        # WorkUnitBudgetExhausted，须先对账/追加再 apply。
+        result['rebuild_budgets'] = rebuild_budget_views(
+            a.base, repo.root.name, plan.rebuild_nodes)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _cmd_response_repair(a: argparse.Namespace) -> int:
     """给非节点 response-repair 写动作持有完整 generic admission。"""
     from novel.orchestrator.write_admission import operation_scope
@@ -1433,6 +1510,7 @@ _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'queue-resume': _cmd_queue_resume,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'doctor': _cmd_doctor,
          'response-repair': _cmd_response_repair, 'issue-correction': _cmd_issue_correction,
+         'contract-upgrade': _cmd_contract_upgrade,
          'mark': _cmd_mark}
 
 
@@ -1492,8 +1570,8 @@ def _execution_context_control_mutation(a: argparse.Namespace) -> bool:
         return not bool(a.plan_only)
     if a.cmd in ('queue-cancel', 'queue-resume'):
         return True
-    if a.cmd == 'issue-correction':
-        return bool(a.apply)
+    if a.cmd in ('issue-correction', 'contract-upgrade'):
+        return bool(a.apply) or bool(getattr(a, 'abort_pending', False))
     if a.cmd != 'reconcile':
         return False
     admission_inspect = bool(

@@ -4,6 +4,7 @@
       "_note": "B5（S-05）迁移登记清理：F8c 分流叙事与旧路径引用已删除，本条不再指向任何已删除路径；`str06` 范围转为该链的**现役选测范围**（路径与 tests 清单均实存、与真实导入消费者取并集）。",
       "paths": [
         "contracts/invariants.py",
+        "contracts/llm_versions.py",
         "contracts/schema/source.py",
         "contracts/schema/observation.py",
         "contracts/schema/design.py",
@@ -36,10 +37,12 @@
         "novel/paths.py",
         "docs/schema/str06.md",
         "novel/cli/main.py",
-        "novel/orchestrator/state.py"
+        "novel/orchestrator/state.py",
+        "novel/orchestrator/llm_budget_upgrade.py"
       ],
       "tests": [
         "tests/test_str06_*.py",
+        "tests/test_llm_budget_versions.py",
         "tests/test_layering.py",
         "tests/test_test_selection.py"
       ]
@@ -318,10 +321,6 @@
         "stage5",
         "stage7"
       ]
-    },
-    "tests/test_archive_stage3_v1_books.py": {
-      "layer": "unit_contract",
-      "stages": []
     },
     "tests/test_artifact_versions.py": {
       "layer": "unit_contract",
@@ -643,13 +642,6 @@
         "stage2"
       ]
     },
-    "tests/test_stage2_node_lifecycle.py": {
-      "cases": {},
-      "layer": "unit_contract",
-      "stages": [
-        "stage2"
-      ]
-    },
     "tests/test_stage2_recovery_runs.py": {
       "layer": "unit_contract",
       "stages": [
@@ -662,7 +654,25 @@
     },
     "tests/test_store.py": {
       "layer": "unit_contract",
-      "stages": []
+      "stages": [],
+      "cases": {
+        "test_hook_context_refuses_old_version_before_schema_defaults": "unit_contract",
+        "test_graph_body_consumption_keeps_body_version_and_ignores_hook_selection": "unit_contract"
+      }
+    },
+    "tests/test_contract_upgrade.py": {
+      "layer": "unit_contract",
+      "stages": ["stage4", "stage5", "stage7"],
+      "cases": {
+        "test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body": "stage",
+        "test_cli_subprocess_preview_and_apply_are_free_and_reachable": "stage",
+        "test_recompile_changes_only_one_chapter_and_keeps_other_commit": "stage",
+        "test_unknown_call_and_accumulated_budget_survive_upgrade": "stage",
+          "test_operator_and_agent_resume_same_root_to_delivery": "stage",
+        "test_validation_only_change_rechecks_original_prose_and_preserves_adoption": "stage",
+        "test_ir_upstream_stale_keeps_overview_alive_and_points_to_compile": "stage",
+        "test_open_hook_design_issue_is_resolved_when_product_archived": "stage"
+      }
     },
     "tests/test_str06_body.py": {
       "layer": "unit_contract",
@@ -673,6 +683,7 @@
       ],
       "cases": {
         "test_full_pipeline_to_delivery_and_free_recovery": "stage",
+        "test_body_system_change_invalidates_commits_without_changing_packet_or_validation": "stage",
         "test_book_call_ceiling_stops_generation": "stage",
         "test_body_chapters_selection_writes_only_selected_chapters": "stage",
         "test_body_chapters_full_run_after_canary_only_fills_missing": "stage",
@@ -680,7 +691,9 @@
         "test_body_chapters_does_not_enter_request_or_receipt_identity": "stage",
         "test_chapter_failure_keeps_other_legal_commits_and_stops_truncated": "stage",
         "test_summary_packet_carries_target_instances_and_only_summary_gets_the_recall": "stage",
-        "test_series_recall_changes_summary_packet_and_leaves_unrelated_future_packet_unchanged": "stage"
+        "test_series_recall_changes_summary_packet_and_leaves_unrelated_future_packet_unchanged": "stage",
+        "test_title_words_in_a_natural_opening_are_not_wrappers": "unit_contract",
+        "test_actual_heading_wrappers_are_still_rejected": "unit_contract"
       }
     },
     "tests/test_canary_chapters.py": {
@@ -704,7 +717,8 @@
         "stage7"
       ],
       "cases": {
-        "test_candidate_registry_is_a_rebuildable_index_of_the_unit_account": "stage"
+        "test_candidate_registry_is_a_rebuildable_index_of_the_unit_account": "stage",
+        "test_mention_count_changes_reach_real_design_reuse_consumer": "stage"
       }
     },
     "tests/test_str06_cli_dispatch.py": {
@@ -790,10 +804,7 @@
     },
     "tests/test_str06_hook_facts.py": {
       "layer": "unit_contract",
-      "stages": ["stage4", "stage5"],
-      "cases": {
-        "test_upgrade_cli_uses_authenticated_purchase_and_real_acceptance_without_published_graph": "stage"
-      }
+      "stages": ["stage4", "stage5"]
     },
     "tests/test_str06_hook.py": {
       "layer": "unit_contract",
@@ -891,6 +902,7 @@
         "test_acceptance_record_replaces_validation_file_and_adopts_by_seal": "stage",
         "test_free_artifacts_are_sealed_like_paid_ones": "unit_contract",
         "test_unsealed_formal_read_is_refused_then_free_recovery_reseals": "stage",
+        "test_hook_revision_recompiles_free_without_invalidating_accepted_body": "stage",
         "test_compile_stage4_keeps_formal_positions_unpublished_on_guard_failure": "stage",
         "test_carried_forward_records_one_zero_token_cached_row_pointing_at_the_original_attempt": "stage",
         "test_carried_forward_revision_record_is_idempotent_and_refuses_a_different_candidate": "stage"
@@ -1120,7 +1132,8 @@
         "stage7"
       ],
       "cases": {
-        "test_explicit_cross_identity_patch_replays_and_activates_with_original_cost": "stage"
+        "test_explicit_cross_identity_patch_replays_and_activates_with_original_cost": "stage",
+        "test_equal_wire_cross_identity_owner_patch_stages_and_replays": "stage"
       }
     },
     "tests/test_str06_a1_semantics.py": {
@@ -1190,7 +1203,12 @@
       "stages": [
         "stage2",
         "stage4"
-      ]
+      ],
+      "cases": {
+        "test_patch_targets_fold_descendants_and_preserve_requiredness": "unit_contract",
+        "test_patch_targets_keep_disjoint_authority_and_merge_duplicate_paths": "unit_contract",
+        "test_ask_json_closes_review_parent_and_located_child_before_narrowing": "unit_contract"
+      }
     },
     "tests/test_repair_rounds.py": {
       "layer": "unit_contract",
@@ -1246,6 +1264,7 @@
     "tests/test_str06_quality_materials.py": {
       "layer": "stage",
       "stages": [
+        "stage2",
         "stage4",
         "stage5"
       ]
@@ -1325,7 +1344,7 @@
       "cases": {
         "test_one_obligation_repair_sends_only_that_item_and_keeps_others_intact": "stage",
         "test_optional_details_use_same_name_gate_and_detail_item_paths": "unit_contract",
-        "test_preserve_projection_block_is_reported_without_mutating_evidence": "unit_contract"
+        "test_preserve_registered_forms_are_accepted_without_mutating_evidence": "unit_contract"
       }
     },
     "tests/test_str06_required_released.py": {
@@ -1337,6 +1356,18 @@
       "cases": {
         "test_missing_literal_gets_a_paragraph_level_repair_round": "stage",
         "test_unparseable_paragraph_patch_is_a_failed_attempt_not_a_candidate": "stage"
+      }
+    },
+    "tests/test_llm_budget_versions.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_paid_boundary_resets_exhausted_upgraded_node_without_new_grant": "stage"
       }
     }
   },

@@ -36,8 +36,8 @@ REPO = Path(__file__).resolve().parents[1]
 #: 共用发射面：`read_closure.py`（读取闭合码）、`fact_bindings.py`（事实锁码）、
 #: `common.py`（材料泄漏码）、`repair.py`（材料归因码）。`epistemic_lock_order` 由
 #: `chain._backfill_epistemic_lock_order` 以 OwnerIssueV1 码发出（compile 回派面）。
-#: `materials.py`（CS-H H3 起）是 Design 原文闸的残余三态产地——先投影再查后，
-#: `design_unreleased_reference`／`design_projection_lossy` 在此发出并带站点路径。
+#: `materials.py` 是 Design 原文闸的不可绑定与无显示面产地——先逐次投影再查，
+#: `design_unreleased_reference` 带站点路径；自然混称不作为残余错误。
 JUDGMENT_MODULES: tuple[str, ...] = (
     'novel/stages/stage4/design.py',
     'novel/stages/stage4/grounding.py',
@@ -430,25 +430,25 @@ def test_hook_locate_codes_emit_wire_paths():
     from novel.stages.stage4.hook import assemble_hook_design
     from tests.test_str06_hook import _body_wire, _hook_wire
     from novel.stages.stage4.design import assemble_body_design
-    from tests.factories import hook_wire_v2
+    from tests.factories import hook_wire_v3
 
     body, errors = assemble_body_design(
         _body_wire(), known_char_ids={'fu_jun', 'yun_niang'},
         expression_requirements=_requirements(), source_narration=_narration())
     assert body is not None and not errors, errors
-    bad_pov = hook_wire_v2(_hook_wire())
+    bad_pov = hook_wire_v3(_hook_wire())
     bad_pov['pov'] = {'person': 'first', 'focalizers': ['ghost']}
-    bad_withheld = hook_wire_v2(_hook_wire())
+    bad_withheld = hook_wire_v3(_hook_wire())
     # v2 只能选目录事实；合法事实放到别的拍仍须拒绝，不能因引用存在就放行。
     bad_withheld['materials'][0]['withheld'] = [bad_withheld['opening_facts'][1]['fact_ref']]
     bad_fact = _hook_wire()
     bad_fact['materials'][0]['withheld'] = [
         {'domain': 'character', 'subjects': ['nope'], 'key': 'k'}]
-    bad_shape = hook_wire_v2(_hook_wire())
+    bad_shape = hook_wire_v3(_hook_wire())
     bad_shape['materials'][0]['beat_ref'] = 'sc02#b01'
     matched = []
     cases = ((bad_pov, 'hook_pov_char'), (bad_withheld, 'hook_withheld_ref'),
-             (hook_wire_v2(bad_fact), 'hook_fact_ref'), (bad_shape, 'hook_wire_shape'))
+             (hook_wire_v3(bad_fact), 'hook_fact_ref'), (bad_shape, 'hook_wire_shape'))
     for bad, expected in cases:
         _hook, found = assemble_hook_design(
             bad, body=body, known_char_ids={'fu_jun', 'yun_niang'},

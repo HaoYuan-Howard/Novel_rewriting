@@ -30,7 +30,7 @@ from contracts.schema.work_unit_recovery import (
     CommanderFailureRecoveryRequest, EXECUTOR_WIRE_REFUSAL_KINDS,
     ExecutorWireRefusalReceipt, WorkUnitFailureReceipt,
 )
-from contracts.schema.workflow import WorkUnitBlobV1, WorkUnitContentTurn, WorkUnitLedgerV2
+from contracts.schema.workflow import WorkUnitBlobV1, WorkUnitContentTurn, WorkUnitLedgerV3
 from novel import prov, work_units
 from novel.llm import session_audit as agent_session_audit
 from novel.orchestrator import execution_context
@@ -58,7 +58,7 @@ _REVIEWER_RESUME_PROMPT = (
 class _Inspection:
     view: CommanderFailureRecoveryPreview
     budget: work_units.WorkUnitBudget
-    ledger: WorkUnitLedgerV2
+    ledger: WorkUnitLedgerV3
     evidence: dict
     owners: tuple[str, ...]
 
@@ -94,7 +94,7 @@ def _no_saved_answer(budget: work_units.WorkUnitBudget, turn: WorkUnitContentTur
             raise work_units.WorkUnitRefused('已有未登记回答或其他恢复材料，须先恢复原结果')
 
 
-def _inspect_executor(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV2,
+def _inspect_executor(budget: work_units.WorkUnitBudget, ledger: WorkUnitLedgerV3,
                       turn: WorkUnitContentTurn) -> _Inspection:
     """现役直连 executor 轮的确定性 wire 拒收收口（R10c 2026-10-02）。
 

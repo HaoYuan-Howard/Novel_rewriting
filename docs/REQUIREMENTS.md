@@ -43,7 +43,7 @@ outputs/rc21_quality_20261009，同日用户要求整根转移至 E:/practice_gr
 一致、该章其他拍去除派生命题编号后的内容一致，账本仍为 12 次付费（本次新增 0）。
 Preserve 升独立 wire v4/policy 7：允许既有拍＋该拍证据报告遗漏，义务/details 原子锚点
 闭集不变；chapters 回派只修所报拍、保留其他章，普通空知情合法。没有新增字段、节点或
-Judge。回派整链反例另暴露节点间输入边串入上游修订，已按节点边界清空来源窗口；保留章只验封/版本/新鲜度、不记内容依赖。章执行、派单关闭、补丁激活均使用同一局部范围。真实 names/associate/compile 及后续节点仍未运行，等用户验收；强化提示能否改善
+Judge。回派整链反例另暴露节点间输入边串入上游修订，已按节点边界清空来源窗口；保留章只验封/版本/新鲜度、不记内容依赖。章执行、派单关闭、补丁激活均使用同一局部范围。names/associate/compile 及后续节点已随 2026-10-09 跑书全链执行并交付（13 个 str06 节点全执行，workflow_status=delivered、through=stage7，accepted_body=true，总字数 9084/9000）；强化提示能否改善
 首答漏抽率、成书阅读质量和整书成本仍待后续实测，不把机械回归当作语义检出率。
 
 本批定向验证（2026-10-09，HEAD 97fcf290 上工作树）：§9.5 五文件及受影响的
@@ -62,7 +62,9 @@ JUnit 分别为 .test_cache/missing-conflict-final.xml 与 missing-conflict-scop
 
 2026-10-09 用户确认独立事件锚点方案：现役版式 rc22、Preserve v5/policy 8，
 六类质量产物显式升版；冻结身份为 `9a7e1067bbbcca471d237f52ee2df63fc75020ed2166ff0aceb4272b2a51932d`。
-真实 Design/正文尚未新跑，首答成功率及成书阅读质量仍属下列 R7 待核；工程测试
+真实 Design/正文已随 2026-10-09 跑书在 rc22 版式下全链交付（13 节点全执行，
+workflow_status=delivered、through=stage7、accepted_body=true，总字数 9084/9000）；
+首答成功率及成书阅读质量仍属下列 R7 待核，工程测试
 和免费人工修订不代签这些结论。详细前后证据在本书 runtime/review/rc22_event_anchor_review.json。
 
 - **CS-A 证据寻址（RC-26～29，rc15）**：另两本《三人成行》《夫君不行但我有孕啦》在 rc15 根只完成 book 与章观察（17／22 章），
@@ -82,6 +84,36 @@ JUnit 分别为 .test_cache/missing-conflict-final.xml 与 missing-conflict-scop
   独立新跑待核：目睹渠道、求娶—反应—跃梁连续性、系列概括不超前、救人动机、礼物愿望铺垫、
   改口与亲属称谓、未解守卫、楔子与开章协调及语气、已说／未说、婚前／婚后告知。
   先核对新源事实和设计，再选定点正文供用户阅读；不默认扩大整书或其他 golden，不增生产 Judge。
+  2026-10-10 用户授权目标故事通用修复与有限补桥，复核后现役 Preserve policy 10 联合交接已有源证据
+  的必要对话触发、行动衔接与决策条件；Design 可补局部行动、沟通和决策，保持骨架、
+  关键事实、结局、锁、知情授权与刻意未知，情节桥梁落既有正式字段；Stage5 呈现
+  既定故事，可补自然移步、短转场与即时动作，补写时点不得倒置触发和行动。
+  statement/satisfaction/requires 合起来保住骨架与必要因果，不要求各字段重复条件；
+  唯一登记称谓自然混用逐次投影，保留正式必保揭名。canonical/wire 形状不变、renderer v12，
+  正文写手协议 v11；不新增场级 entry、
+  人物状态模型、Judge 或节点，不做本书特判。旧 checkpoint 不静默重解释，恢复按现役
+  身份与完整预检闭合。待核：源盲交接充分性、转场／因果／人物转变的设计阅读、
+  首轮含完整写手材料预检的可用率、定点正文阅读质量及失败／返修／缓存分列的整书成本。
+  首答单列第一份耐久响应的形状通过、完整机械预检首次接受与人工阅读达标；返修、
+  缓存或免费复验后的接受不能回算成历史首答通过。用多书新请求对照，不从单书外推。
+  本批工程验证零付费，机械通过不代签上述质量结论；新付费及正文外发验证须另行授权。
+  工程证据（`434f7506` 工作树，`novel_refactor`）：§9.5 五文件及版本／登记 477 项通过；
+  25 文件消费定向回归 525 通过、4 失败，修正现役 rc24 预期与新增用例的章间承接断言后，
+  4 项回放通过，无 skip。覆盖源→义务→Design→IR→实际章请求、未知锁拒绝、system
+  漂移后的重写／恢复及 HTTP／CLI 合成书交付；未执行完整非 corpus 回归或 golden set。
+  同日用户复核后，旧 Design/IR/正文对照撤回 ob46/ob53/ob67 仅凭措辞的失败推断：
+  半月保留预估、可见退场后藏梁不必提前交代、递锁仍是“像是看穿”且用途未解。
+  已坐实的阅读缺口为第8章廊下直接跳床边、第11章晚饭后告知接当天午后出发，后续
+  新 Design/正文验收重点核对自然转场与新增钟点的先后。自然混称、重复呼唤、标题词
+  误拒和 Hook 地址级隐藏的通用修复不增加生产语义闸，工程通过仍不代签成书质量。
+  已购 Preserve policy9 的原首答免费复验与 policy10 显式干跑均可用，历史首次失败不
+  重算；现有 policy9 checkpoint/Brief 仍 fresh/match/ready，可继续进 Design，无需
+  为本轮代码修复再购 Preserve；盘面仍明确登记 policy9，不冒充已经用 policy10 新提示生成。旧 87 条 Design／Binding 及其 IR／Plan 已因当前 73 条 checkpoint／Brief 输入身份变化而过期，后续须基于当前正式材料重新设计或按现役候选规则复核，再编译与写作；不能只换 ob 编号沿用。相邻同人提及不再折叠为免费等价，保留次数的登记称谓替换仍可零调用。本轮没有调用模型、采用候选或修改真实输出与额度。
+  2026-10-10 用户批准 Hook 局部优化：以现役 contracts 精简组织契约，正式材料／声线
+  同源投影，取消固定字数门槛，保留倒叙与跨场、单 Hook 和现有 Stage4 条目窄修。
+  工程验证零真实付费，不新增生产审稿节点或 Stage5 段落 patch。首答文学质量仍待
+  《夫君的报恩》旧新楔子配合同一第 1 章阅读验证（冲突、因果、喜剧声线、期待、简洁、
+  重复与新增推进），同时记录真实生成成本；本批工程通过不代签阅读结论。
   CS-F5 阅读反例（2026-10-05，绑定成书 `16d26c4b…`，详单 `outputs/csf5_review_20261005/csf5_review.md` §二）：
   D1 婚史融合（GS-01b 负控：童年坠河＝救命同一次，财貌动机与婚前感情连带丢失，语义层静默漏过）；
   D2 藏身元计数错×2（ch8「上回是床底」应为衣柜、ch9「第三回」应为第四回）；D3 死结载体衣带→裤绳漂移；
@@ -114,9 +146,10 @@ Phase 4（devices A/B）未立项，不随本路线执行。
 
 | 对象 | 有效义务与删除条件 |
 |---|---|
-| rc12／rc13 ExecutionPlan adapter | rc21 质量批删除已废止的五类旧质量产物迁移，仅 `novel/store.py::_upgrade_rc12_payload` 对形状未变的 ExecutionPlan 保留 rc12／rc13→rc14 无损适配。checkpoint／Brief／Binding／BodyDesign／PresentationGraph／WriterBookIR 均须显式当前 rc22，旧版或缺版本拒读，不补造细节或概括判断。read_graph_hook 先验证当前图版本再摘组件，不绕版本读取旧图。存量 ExecutionPlan 全部重建或退役后删除此 adapter，禁止无限新增版本 |
-| Design v9 已购候选 | 用户 2026-10-09 明确要求修订后优先沿用／窄复核；v10/v2 新生成使用短引用，`novel/stages/stage4/slim.py::design_wire_model` 集中解码 v9，canonical rc22 不变。旧候选窄复核只用原 v9 引用语法与 v1 切片，原请求／响应／patch 基底摘要不改，不新增 v9 整份生成路径。所有存量 v9 候选已采用、归档且不再续跑后删除 v9 schema、解码与切片分支 |
-| Hook v1 已购引用换算 | 用户 2026-10-09 确认按事实判据→目录 wire→窄修/恢复顺序修复。`novel/stages/stage4/hook_wire.py::upgrade_purchased_hook_wire` 唯一显式 v1→v2 换算，仅按当前正式 BodyDesign 的唯一位置/地址映射；缺失或歧义拒绝。工具先核原请求/响应/成本，跨身份采用显式留原响应身份与当前应用身份，经现役完整闸；不改旧字节、不推断值、不新增 v1 生成路径，不重置轮数/额度。存量 v1 全部已采用或归档不再恢复后删除换算函数和 upgrade-hook 工具入口 |
+| rc22→rc23 同根升级登记 | `contracts/contract_upgrades.py::HOOK_UPGRADE` 只接受冻结的精确身份边。旧 Hook 原字节归档后重建，不提供语义字段 adapter；正文按当前章包局部核对，账与 unknown 不改。所有 rc22 存量根已升级或只读归档后删除该历史身份边；通用计划／CAS／恢复机制保留。未登记版本继续阻断。2026-10-10 裁决追加：①旧升级返还调用适配——`refund_nodes` 仅限定该产物升级的同步范围，2026-10-11 起所有 LLM 节点正式升版共用 V3 节点版本重置；旧 `UpgradeRoundRefund` 只读保存，不能重复恢复同版；②免费换算登记面——`novel/orchestrator/upgrade_converters.py` 只收无损纯函数边，换出 wire 走 `--wire-dir` 免费采用；hook-rc22-rc23 因 emphasis/transition/reader_expectation/local_focus 语义缺口不登记，删除条件＝该升级边从 REGISTERED_UPGRADES 退役时一并删除；③hook_design 请求面派生标注（later_writes/name_exposure）与结构失败时的材料预检聚合（rc23 重跑 6/6 耗尽的反例驱动），目标是机械判据不消耗付费轮次 |
+| rc12／rc13 ExecutionPlan adapter | rc21 质量批删除已废止的五类旧质量产物迁移，仅 `novel/store.py::_upgrade_rc12_payload` 对形状未变的 ExecutionPlan 保留 rc12／rc13→rc14 无损适配。checkpoint／Brief／Binding／BodyDesign／WriterBookIR 须显式 rc22，PresentationGraph 须 rc23、HookContext 须 rc18；旧版或缺版本拒读，不补造细节、概括、Hook 组织或阅读期待。read_graph_hook 先验证当前图版本再摘组件，不绕版本读取旧图。存量 ExecutionPlan 全部重建或退役后删除此 adapter，禁止无限新增版本 |
+| 工作单元账 V2 读迁移／旧契约返还适配 | `contracts/schema/workflow.py::work_unit_ledger_of_payload` 只无损读 V2→V3，不猜历史节点版本；首次显式同步恢复基础额度并建立版本基线。所有存量 V2 账升级或只读归档后删除 V2 读迁移；`novel/work_units.py::WorkUnitBudget.refund_for_upgrade` 只复读旧返还并调用统一版本同步，REGISTERED_UPGRADES 旧边退役后删除适配入口，历史账仍只读保留。 |
+| Design v9 已购候选 | 用户 2026-10-09 明确要求修订后优先沿用／窄复核；v10/v2 新生成使用短引用，`novel/stages/stage4/slim.py::design_wire_model` 集中解码 v9，canonical rc22 不变。旧候选窄复核只用原 v9 引用语法与 v1 切片，原请求／响应／patch 基底摘要不改，不新增 v9 整份生成路径。窄修失败的整份兜底仍请求当前 v10；选中已证明兼容的历史候选时，接受闸兼容该候选协议与当前协议（含沿用让位后的修订重放），两者都通过当前完整预检；无历史依据的新请求只接受当前协议。所有存量 v9 候选已采用、归档且不再续跑后删除 v9 schema、解码与切片分支 |
 | OwnerIssue v1／v2 读兼容 | v3 显式 dispatch_pending、指纹历史与更正记录；只经 `contracts/schema/workflow.py::owner_issue_record_of_payload` 集中解码；所有存量 v1／v2 根只读归档／不再续跑后删除。旧错误路由账的更正按 RC-15 显式恢复，不重置轮数 |
 | OwnerRevisionRecord V1 读兼容 | V2 增必填 `applies_to_request_sha256` 与 kind `carried_forward`（CS-H H1b，RC-54/56：免费沿用的采用凭证）；只经 `contracts/schema/workflow.py::owner_revision_record_of_payload` 集中解码（v1 的应用身份即其 `baseline_request_sha256`——V1 只可能是 owner_patch／resample）。现存根盘上不再存在 `schema_version=1` 的修订记录（只读归档／不再续跑）后删除 V1 读兼容；未知版本显式拒绝，不向领域 schema 塞默认值 |
 | names／Characters旧信封 | names v2与两类信封v2显式拒识旧版；须新协议names重建后compile重建Characters，不推断空resolutions。原冻结根只读，授权新epoch再重建；无隐式adapter |

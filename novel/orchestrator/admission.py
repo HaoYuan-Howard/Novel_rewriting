@@ -34,11 +34,11 @@ from pathlib import Path
 from contracts.schema.orchestration import (
     CommanderAdmissionEvent, CommanderAdmissionTailRepairRecord, ProgressEvent,
 )
-from novel import run_identity
+from novel import paths, run_identity
 from novel.appendlog import (
     append_line_under_process_lock, append_transaction, process_append_lock,
 )
-from novel.errors import TerminalState
+from novel.errors import PathRefused, TerminalState
 from novel.orchestrator import append_tail_repair
 from novel.orchestrator.jobs import service_dir
 
@@ -117,6 +117,35 @@ def require_owner_stopped(
     checked = run_identity.check_run_id(parent_run_id)
     with _probe_process_lock(
             owner_lease_path(base, checked), label=f'parent run {checked!r}'):
+        yield
+
+
+@contextmanager
+def require_book_owners_stopped(base: str | os.PathLike[str], novel_dir: Path):
+    """证明这本书账上所有**未结束**的 AgentRun 都没有 live owner lease。
+
+    生产里持有 owner lease 的是 AgentRun 的 run_id（`agent.py` 启动时
+    ``owner_lease(base, run_id)``），不是候选根 epoch 的 session_run_id——
+    按后者去探，探的是一把没人持有的锁，「旧 owner 已排空」名不副实。
+    这里按账面事实反查：`agent_runs.jsonl` 里同一书目录、还没有 ``ended``
+    终态的每个 run，逐一非阻塞探测它的 lease 并持到调用方事务结束。
+    """
+    from novel.orchestrator import agent
+
+    book = Path(novel_dir).resolve()
+    with ExitStack() as stack:
+        for record in agent.fold(agent.read_events(base)):
+            if record.ended is not None or record.start is None:
+                continue
+            try:
+                run_book = paths.find_novel_dir(base, record.start.sid)
+            except PathRefused:
+                continue
+            if run_book is None or Path(run_book).resolve() != book:
+                continue
+            stack.enter_context(_probe_process_lock(
+                owner_lease_path(base, record.run_id),
+                label=f'book {book.name!r} 的 AgentRun {record.run_id!r}'))
         yield
 
 
@@ -892,7 +921,8 @@ __all__ = [
     'env_with_claim', 'mark_drained', 'open_gate', 'owner_lease',
     'owner_lease_path', 'read_events',
     'read_tail_repair_records', 'reconcile_gate', 'reconcile_subject',
-    'release', 'repair_tail', 'require_active_claim', 'require_owner_stopped',
+    'release', 'repair_tail', 'require_active_claim',
+    'require_book_owners_stopped', 'require_owner_stopped',
     'snapshot',
     'tail_repair_dir', 'tail_repair_subject', 'unresolved',
 ]

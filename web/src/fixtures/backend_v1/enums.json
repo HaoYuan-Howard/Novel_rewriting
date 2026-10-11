@@ -252,7 +252,9 @@
   "--dry-run": "只打印将要发出去的东西，不调用、不写盘"
  },
  "paid_flags": {},
- "partial_rewrite_flags": [],
+ "partial_rewrite_flags": [
+  "free-recheck"
+ ],
  "valued_flags": {
   "--source": "stage0.remove 的原始小说路径（首次摄入；相对路径相对 cwd）"
  },
@@ -625,7 +627,7 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "源 core 与 Blueprint v13",
+    "input_workpack": "源 core 与 Blueprint v17",
     "generation_mode": "executor",
     "review_mode": "none",
     "review_scope": "机械校验通过即自动接受",
@@ -660,7 +662,7 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "Preserve checkpoint、身份投影与 Characters v4",
+    "input_workpack": "Preserve checkpoint、身份投影与 Characters v6",
     "generation_mode": "executor",
     "review_mode": "none",
     "review_scope": "机械校验通过即自动执行；CS-3 bind 退役——承载位由 wire 的 real 标注派生，双产物同组发布（semantic_binding 唯一 writer）",
@@ -694,7 +696,7 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "BodyDesign、Characters v4 与身份投影",
+    "input_workpack": "BodyDesign、Characters v6 与身份投影",
     "generation_mode": "executor",
     "review_mode": "none",
     "review_scope": "机械校验通过即自动执行；graph 唯一 publisher",
@@ -731,7 +733,7 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "PresentationGraph、SemanticBinding 与 Characters v4",
+    "input_workpack": "PresentationGraph、SemanticBinding 与 Characters v6",
     "generation_mode": "deterministic",
     "review_mode": "none",
     "review_scope": "Guard M1–M8 写前机械校验；零错误才放行",
@@ -836,7 +838,7 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "Characters v4 名称结构与 Blueprint v13",
+    "input_workpack": "Characters v6 名称结构与 Blueprint v17",
     "generation_mode": "executor",
     "review_mode": "none",
     "review_scope": "机械校验通过即 auto 定稿；ApplyNames 是替换唯一应用者",

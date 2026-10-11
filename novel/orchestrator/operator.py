@@ -155,7 +155,7 @@ def _next_from_snapshot(snapshot: OperatorReadSnapshot) -> OperatorNext:
     if decision.state == 'ready':
         # 延迟导入避免 permit 层反向复用 canonical_sha256 时形成 import 环。
         # 该 helper 只读取 exact external inputs；下面仍是本次规划唯一的
-        # active-surface CAS，绝不再采第二份七层 snapshot。
+        # active-surface CAS，绝不再采第二份六层 snapshot。
         from novel.orchestrator.execution_permit import (
             ready_execution_token_from_next,
         )

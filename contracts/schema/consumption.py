@@ -104,9 +104,6 @@ STR06_CONSUMPTION_PROJECTIONS: dict[str, ProjectionFamilySpec] = {
         coordinate=ProjectionCoordinate.DUAL),
 }
 
-#: 坐标枚举的闭环自检材料：六个族必须全部有坐标域。
-PROJECTION_COORDINATES = ProjectionCoordinate
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 字段级送达登记（R0）：delivery_mode 七档、消费者五类、章范围六则。
@@ -957,7 +954,7 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     # ── HookContext（楔子写手唯一输入）────────────────────────────────────
     'hook_context.contract_version': _spec(
         'hook_context.contract_version', consumers=(_A,), scope=_HOOK,
-        mode=DeliveryMode.AUDIT_ONLY,         note='当前 Hook prompt 整份 JSON 倾倒；R2 分层渲染后清零'),
+        mode=DeliveryMode.AUDIT_ONLY, note='派生上下文版本；不进阅读面'),
     'hook_context.provenance': _spec(
         'hook_context.provenance', consumers=(_A,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY, note='来源账（exclude 传输位）'),
@@ -969,8 +966,8 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         mode=DeliveryMode.CREATIVE_GUIDANCE,
         note='视角人物（R2 解析为目标姓名后送达）'),
     'hook_context.opening_facts[].audience': _spec(
-        'hook_context.opening_facts[].audience', consumers=(_A,), scope=_HOOK,
-        mode=DeliveryMode.AUDIT_ONLY, note='获准面分组（机械位）'),
+        'hook_context.opening_facts[].audience', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.MUST_RESPECT, note='世界成立、视角可知与读者获准知道分别送达'),
     'hook_context.opening_facts[].established_by': _spec(
         'hook_context.opening_facts[].established_by', consumers=(_A,),
         scope=_HOOK, mode=DeliveryMode.AUDIT_ONLY,         note='来源锚；' + _ID_PENDING),
@@ -982,6 +979,12 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     'hook_context.materials[].beat_ref': _spec(
         'hook_context.materials[].beat_ref', consumers=(_A,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY, note=_ID_PENDING),
+    'hook_context.materials[].emphasis': _spec(
+        'hook_context.materials[].emphasis', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='展开行动反应或简短带过必要前提'),
+    'hook_context.materials[].transition': _spec(
+        'hook_context.materials[].transition', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.MUST_RESPECT, note='按声明定位入场、连续推进或跳时转场'),
     'hook_context.materials[].presentation': _spec(
         'hook_context.materials[].presentation', consumers=(_H,), scope=_HOOK,
         mode=DeliveryMode.MUST_REALIZE,
@@ -995,18 +998,36 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     'hook_context.forbidden_reveals': _spec(
         'hook_context.forbidden_reveals', consumers=(_H, _V), scope=_HOOK,
         mode=DeliveryMode.GUARD_ONLY, note='禁止提前兑现的揭示（禁区）'),
-    'hook_context.design_brief': _spec(
-        'hook_context.design_brief', consumers=(_H,), scope=_HOOK,
-        mode=DeliveryMode.CREATIVE_GUIDANCE, note='材料组织方式'),
-    'hook_context.delivery_brief': _spec(
-        'hook_context.delivery_brief', consumers=(_H,), scope=_HOOK,
-        mode=DeliveryMode.CREATIVE_GUIDANCE, note='文风机制与口吻'),
-    'hook_context.target_chars': _spec(
-        'hook_context.target_chars', consumers=(_H, _V), scope=_HOOK,
-        mode=DeliveryMode.MUST_RESPECT, note='Hook 篇幅目标'),
-    'hook_context.hard_max_chars': _spec(
-        'hook_context.hard_max_chars', consumers=(_H, _V), scope=_HOOK,
-        mode=DeliveryMode.MUST_RESPECT, note='Hook 硬上限（validator 检查面）'),
+    'hook_context.reader_expectation.kind': _spec(
+        'hook_context.reader_expectation.kind', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='事实、行动或关系期待的类型；无未来答案'),
+    'hook_context.reader_expectation.focus': _spec(
+        'hook_context.reader_expectation.focus', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='读者继续阅读的期待；未来依据不进上下文'),
+    'hook_context.local_focus': _spec(
+        'hook_context.local_focus', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='只指导表现重点，不作为另一套事件事实'),
+    'hook_context.book_style': _spec(
+        'hook_context.book_style', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='正式正文设计的全书风格'),
+    'hook_context.expression_mechanisms[].ex_id': _spec(
+        'hook_context.expression_mechanisms[].ex_id', consumers=(_A,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY, note='正式表达决定的来源；不进阅读面'),
+    'hook_context.expression_mechanisms[].statement': _spec(
+        'hook_context.expression_mechanisms[].statement', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='正式书级表达决定的已选机制'),
+    'hook_context.character_voices[].char_id': _spec(
+        'hook_context.character_voices[].char_id', consumers=(_A,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY, note='声线所属人物；渲染成许可显示面'),
+    'hook_context.character_voices[].voice': _spec(
+        'hook_context.character_voices[].voice', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='正式人物声线的执行机制'),
+    'hook_context.scene_voices[].scene_ref': _spec(
+        'hook_context.scene_voices[].scene_ref', consumers=(_A,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY, note='场景声线来源；不进阅读面'),
+    'hook_context.scene_voices[].voice': _spec(
+        'hook_context.scene_voices[].voice', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='所选材料场景的正式声线'),
     'hook_context.usable_surfaces[].char_id': _spec(
         'hook_context.usable_surfaces[].char_id', consumers=(_A,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY, note=_ID_PENDING),
@@ -1049,6 +1070,18 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'hook_context.avoid_lines', consumers=(_H,), scope=_HOOK,
         mode=DeliveryMode.MUST_RESPECT,
         note='材料所引场 delivery.avoid 的并集：楔子不得违背正文设计已声明的禁区'),
+    # rc24 篇幅包络：锚定书级章预算（compiler 派生，I-21），不绑定源引子长度。
+    # 目标区间是创作指导（随请求送达），硬上限是机械拒收面（validator，免费可复验）。
+    'hook_context.length_low': _spec(
+        'hook_context.length_low', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='楔子篇幅目标区间下界（非空白字符）'),
+    'hook_context.length_high': _spec(
+        'hook_context.length_high', consumers=(_H,), scope=_HOOK,
+        mode=DeliveryMode.CREATIVE_GUIDANCE, note='楔子篇幅目标区间上界（非空白字符）'),
+    'hook_context.length_cap': _spec(
+        'hook_context.length_cap', consumers=(_H, _V), scope=_HOOK,
+        mode=DeliveryMode.MUST_RESPECT,
+        note='楔子篇幅硬上限：validator 拒收超限稿（同一 Context 有限重写），人工 wire 免费采用'),
     # ── NameMapV5（改名面；不经任何写手）──────────────────────────────────
     'name_map.contract_version': _spec(
         'name_map.contract_version', consumers=(_N, _A), scope=_NAME,

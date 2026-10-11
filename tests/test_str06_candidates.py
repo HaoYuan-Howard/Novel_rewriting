@@ -331,8 +331,8 @@ def test_workflow_check_detects_drift_and_tampering():
 
 
 def test_runtime_config_is_the_formal_source_and_identity_bound():
-    """Hook 长度／篇幅带／取整粒度有正式来源，且进契约身份（配置变化换身份）。"""
-    assert STR06_RUNTIME_CONFIG.hook_hard_max_chars > STR06_RUNTIME_CONFIG.hook_target_chars
+    """正文篇幅配置有正式来源；Hook 没有字数闸或冻结的长度选择。"""
+    assert not {'hook_target_chars', 'hook_hard_max_chars'} & set(STR06_RUNTIME_CONFIG._fields)
     assert 0 < STR06_RUNTIME_CONFIG.length_band_low < STR06_RUNTIME_CONFIG.length_band_high
     assert 'config' in json.loads(json.dumps({
         'config': STR06_RUNTIME_CONFIG._asdict()})), '配置必须可序列化进身份'
@@ -534,7 +534,7 @@ def test_plan_reuse_never_hides_a_full_purchase_behind_an_empty_narrow_review():
     assert broken.candidate == 'c', '仍记下最优候选供留痕，但不从它起步再买一轮'
 
 
-def test_canonical_appellation_form_ignores_apposition_punctuation_and_surface_choice():
+def test_canonical_appellation_form_preserves_mentions_and_ignores_punctuation_and_surface_choice():
     from novel.stages.candidates import canonical_appellation_form
 
     people = {'fu_jun': ('夫君', '陆大哥', '陆兄'), 'yun_niang': ('苏芸娘', '芸娘', '苏姑娘')}
@@ -542,9 +542,9 @@ def test_canonical_appellation_form_ignores_apposition_punctuation_and_surface_c
     for variant in ('芸娘嫁入陆家，陆大哥立下旧约。', '苏姑娘嫁入陆家；陆兄立下旧约',
                     '芸娘 嫁入 陆家 ， 夫君 立下 旧约'):
         assert canonical_appellation_form(variant, people) == same, variant
-    # 同位语折叠：同一人物的两个相邻登记称谓压成一个记号
+    # 规范形没有独立同位语证据：两次提及不得仅因归属同人就压成一个记号。
     people_with_kin = {'a': ('裴书远', '表弟')}
-    assert canonical_appellation_form('表弟裴书远来了', people_with_kin) == \
+    assert canonical_appellation_form('表弟裴书远来了', people_with_kin) != \
         canonical_appellation_form('裴书远来了', people_with_kin)
     assert canonical_appellation_form('裴书远来了', people_with_kin) == \
         canonical_appellation_form('表弟来了', people_with_kin)
@@ -553,6 +553,86 @@ def test_canonical_appellation_form_ignores_apposition_punctuation_and_surface_c
     # 多义字面（同一称谓归属两人）显式拒绝——规范形不猜归属
     with pytest.raises(ValueError, match='唯一归属'):
         canonical_appellation_form('夫君来了', {'fu_jun': ('夫君',), 'other': ('夫君',)})
+
+
+@pytest.mark.parametrize('before,after', [
+    ('陆大哥陆大哥，快来！', '陆大哥，快来！'),
+    ('陆大哥陆兄，快来！', '陆兄，快来！'),
+    ('夫君，快来！', '夫君夫君，快来！'),
+])
+def test_repeated_mentions_are_not_proven_equivalent_for_free_reuse(before, after):
+    """提及次数变化不能借称谓规范形绕过承载拍复核，已有候选仍走窄臂。"""
+    from novel.stages.candidates import (
+        CandidateAssessment, canonical_appellation_form, entry_equivalent,
+        plan_reuse, upstream_diff,
+    )
+
+    people = {'fu_jun': ('夫君', '陆大哥', '陆兄')}
+    assert canonical_appellation_form(before, people) != canonical_appellation_form(after, people)
+    base = _ob('event_core', 'a1', before)
+    diff = upstream_diff({'obligations': [base]},
+                         {'obligations': [{**base, 'statement': after}]})
+    assert diff.changed and not any(entry_equivalent(e, people) for e in diff.changed)
+    target = ('scenes', 0, 'beats', 0)
+    plan = plan_reuse([CandidateAssessment(
+        entry='purchased', ordinal=1, compatible=True, has_lineage=True,
+        diff=diff, changed_equivalent=False, preflight_passed=True,
+        carriers={diff.changed[0].key: (target,)})])
+    assert plan.action == 'narrow_review' and plan.candidate == 'purchased'
+    assert [item.path for item in plan.targets] == [target]
+
+
+@pytest.mark.parametrize('before_name,after_name,action', [
+    ('夫君夫君', '夫君', 'narrow_review'),
+    ('夫君', '夫君夫君', 'narrow_review'),
+    ('夫君陆大哥', '夫君', 'narrow_review'),
+    ('夫君夫君', '陆大哥陆大哥', 'carried_forward'),
+])
+@pytest.mark.stage_scope('stage4')
+def test_mention_count_changes_reach_real_design_reuse_consumer(
+        tmp_path, before_name, after_name, action):
+    """真实 Design 重入：增删提及复核承载拍；保留次数的别称替换仍零调用沿用。"""
+    from dataclasses import replace
+
+    from novel.stages.chain import run_body_design
+    from tests.str06_facilities import carry_forward_ask, json_ask, republish_checkpoint
+    from tests.test_str06_candidate_preflight import _design_ctx, _prepare, _reopened_session
+
+    ctx, _, transport, _ = _prepare(tmp_path)
+    repo = ctx.repository
+    original = repo.read_model('runtime/preserve_checkpoint.json').obligations[0].statement
+    assert '夫君' in original
+
+    def change_statement(name):
+        return lambda cp: cp.model_copy(update={'obligations': tuple(
+            o.model_copy(update={'statement': original.replace('夫君', name, 1)})
+            if index == 0 else o for index, o in enumerate(cp.obligations))})
+
+    republish_checkpoint(repo, change_statement(before_name))
+    session = _reopened_session(repo, transport)
+    ctx = _design_ctx(ctx, session)
+    run_body_design(ctx)
+    before_design = repo.read_model('stage4/design/body_design.json')
+    calls = transport.calls.count('design')
+    seen = {}
+
+    def recording_ask(owner, prompt, validate, patch=None, **kwargs):
+        seen['review_targets'] = kwargs.get('review_targets')
+        return json_ask(session)(owner, prompt, validate, patch=patch)
+
+    republish_checkpoint(repo, change_statement(after_name))
+    ctx = replace(ctx, ask=recording_ask, carry_forward=carry_forward_ask(session))
+    result = run_body_design(ctx)
+    assert result['reuse']['action'] == action
+    assert transport.calls.count('design') == calls + int(action == 'narrow_review')
+    after_design = repo.read_model('stage4/design/body_design.json')
+    if action == 'narrow_review':
+        paths = {item.path for item in seen['review_targets']}
+        assert ('scenes', 0, 'beats', 0) in paths
+        assert ('scenes', 1, 'beats', 0) not in paths
+        assert after_design.scenes[1] == before_design.scenes[1], '无关场字节不变'
+    else:
+        assert not seen and after_design == before_design
 
 
 def test_plan_reuse_prefers_green_then_fewest_root_causes_then_most_recent():

@@ -130,7 +130,8 @@ def test_the_matrix_actually_has_rows():
     """参数化表算空时，下面几十条会**全绿**——而那正是最坏的情况。"""
     assert len(CASES) >= 14, f'node × flag 只铺出 {len(CASES)} 行，节点表多半被清空了'
     # F8a 翻转：现役节点表 = stage0/stage1 两座 + str06. 节点（Stage6 整层
-    # 与旧 Stage2/4/5/7 链已入 RETIRED_NODES）。B2 五节点重建（2026-09-27）：
+    # 与旧 Stage2/4/5/7 链按非现役节点 legacy_incompatible 通则拒识）。
+    # B2 五节点重建（2026-09-27）：
     # Stage2 拆五 owner，11→14。加节点就来改这个数。
     assert len(NODES) == 15, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
 

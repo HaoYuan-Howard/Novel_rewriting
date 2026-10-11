@@ -90,8 +90,10 @@ def _hook_source_matches(source: MaterialSource, body: BodyDesign) -> bool:
     hook = getattr(body, 'hook', None)
     if hook is None:
         return False
-    if source.ref == 'hook' and source.field in {'design_brief', 'delivery_brief'}:
+    if source.ref == 'hook' and source.field == 'local_focus':
         return source.text == getattr(hook, source.field)
+    if source.ref == 'hook' and source.field == 'reader_expectation.focus':
+        return source.text == hook.reader_expectation.focus
     if source.field.startswith('materials/'):
         parts = source.field.split('/')
         if len(parts) != 3 or not parts[1].isdigit() or int(parts[1]) >= len(hook.materials):

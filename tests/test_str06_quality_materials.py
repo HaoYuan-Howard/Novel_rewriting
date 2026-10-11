@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""可改写细节的真实送达链与正式盘面免费恢复（rc21）。
+"""必要叙事条件、可改写细节的真实送达链与正式盘面免费恢复。
 
 fake 只返回语义回答，Preserve、Design、Binding、Stage4.compile、Stage5
 章写手仍走实际入口。材料来源身份与源锚点只留审计，细节文本仅作创作提示。
@@ -12,10 +12,9 @@ from copy import deepcopy
 
 import pytest
 
-from contracts.schema.hook import HookConstraints
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.paid_requests import digest
-from novel.stages.chain import ChainContext, run_compile_stage4
+from novel.stages.chain import ChainContext, run_compile_stage4, run_workflow
 from novel.stages.common import (
     _build_writer_packet, build_writer_packet, material_identities,
     project_chapter_packet, render_chapter_packet,
@@ -68,7 +67,6 @@ def _prepare(tmp_path, wires, *, through='stage4'):
         repository=repo, ask=_fake_ask(session), ask_text=_fake_text(session),
         ask_body=_fake_body(session), chapters=_chapters(), budget=2000,
         book_title='报恩', digest=digest,
-        hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360),
         length_band=(0.01, 0.05), concurrency=1,
     )
     return ctx, transport
@@ -184,6 +182,299 @@ def test_required_event_without_transfers_reaches_its_real_writer_position(tmp_p
     assert condition not in transport.requests['body_ch01'][0]
 
 
+CAUSAL_CONDITION = '周澄先提出账页齐全才能取货，陈禾发现缺页后决定先补账再出发'
+TRANSITION_CONDITION = '次日账页补齐后，陈禾从柜台走到后院门口，前后不是同一时刻'
+OPTIONAL_ACTION = '用摊开账册逐页清点的动作表现迟疑'
+DESIGN_COMMUNICATION_BRIDGE = '陈禾将缺页处指给周澄，当面说明自己先补账再出发'
+
+
+def _causal_material_wires(*, select_detail=False, invent_quantity=False,
+                          cause_in_statement=False):
+    """两章商铺故事：Design 补局部沟通，源条件与未知货量保持，动作细节可选。"""
+    from contracts.schema.grounding import _lock_id
+    from tests.str06_expression_inputs import sample_book_expression
+
+    chapters = [
+        {'chapter_ordinal': 1, 'text': '陈禾是商铺学徒，周澄是掌柜。陈禾在柜台核账。\n'
+         '周澄说账页齐全才能取货。\n'
+         '陈禾摊开账册逐页清点，发现缺页，决定先补账再出发。'},
+        {'chapter_ordinal': 2, 'text': '次日账页补齐，陈禾从柜台走到后院门口。\n'
+         '木箱中的货量尚未查明，陈禾留在门外等周澄来开箱。'},
+    ]
+    people = {
+        slug: {'canonical': name, 'surfaces': [{'surface': name, 'source_refs': ['e01_01']}]}
+        for slug, name in (('apprentice', '陈禾'), ('keeper', '周澄'))
+    }
+
+    def source_beat(event, segment, *, effects=(), boundary='continue',
+                    participants=('apprentice',)):
+        return {'event': event, 'participants': list(participants),
+                'source_refs': [segment], 'scene_boundary': boundary,
+                'temporal_mode': 'single', 'effects': list(effects),
+                'cognition': [], 'loops': []}
+
+    quantity_lock = _lock_id('kf_', 'b02_02.e1')
+    design = {
+        'protocol_version': 'stage4-design-v10',
+        'book_style': '第三人称叙述商铺日常，先写条件，再写人物的选择与行动。',
+        'initial_state': [{'domain': 'character', 'subjects': ['apprentice'],
+                           'key': 'occupation', 'value': '商铺学徒'}],
+        'initial_surfaces': [{'char_id': slug, 'surfaces': [entry['canonical']]}
+                             for slug, entry in people.items()],
+        'scenes': [
+            {'driver': {'focal_actor': 'apprentice', 'immediate_want': '尽早取货',
+                        'opposition': '账页缺失', 'turn': '决定先补账'},
+             'brief': '展开掌柜提出条件和学徒发现缺页的反应，收在暂缓出发的决定。',
+             'reads': [{'domain': 'character', 'subjects': ['apprentice'],
+                        'key': 'occupation'}],
+             'beats': [
+                 {'ev': '陈禾以商铺学徒的身份在柜台核账',
+                  'who': ['apprentice'], 'real': ['ob01']},
+                 {'ev': '周澄提出账页齐全才能取货的条件',
+                  'who': ['keeper', 'apprentice'], 'real': ['ob02']},
+                 {'ev': '陈禾发现缺页，因取货条件未满足而决定先补账再出发；'
+                        + DESIGN_COMMUNICATION_BRIDGE,
+                  'who': ['apprentice', 'keeper'], 'real': ['ob02'],
+                  'state': [{'at': 'apprentice', 'key': 'intent', 'val': '先补账再出发'}],
+                  **({'details': ['ob02.d01']} if select_detail else {})}]},
+            {'driver': {'focal_actor': 'apprentice', 'immediate_want': '完成取货',
+                        'opposition': '木箱尚未打开', 'turn': '在门外等掌柜开箱'},
+             'brief': '以次日补账完成后的行动接起，写从柜台到后院门口的移动，货量留待开箱。',
+             'reads': [{'domain': 'character', 'subjects': ['apprentice'],
+                        'key': 'occupation'}],
+             'beats': [
+                 {'ev': '次日账页补齐后，陈禾从柜台走到后院门口',
+                  'who': ['apprentice'], 'real': ['ob03']},
+                 {'ev': '木箱中的货量尚未查明，陈禾留在门外等周澄来开箱',
+                  'who': ['apprentice'], 'real': ['ob04'],
+                  'state': [{'at': 'world', 'key': 'possession', 'op': 'unknown',
+                             'lock': quantity_lock[:11]}]}]},
+        ],
+        'chapters': [{'purpose': '取货受阻后改为补账', 'scenes': 1},
+                     {'purpose': '补账完成后转到后院等待开箱', 'scenes': 1,
+                      'entry': {'transition': 'time_skip',
+                                'carryover': '次日补齐账页后，再从柜台前往后院。'}}],
+    }
+    if invent_quantity:
+        design['scenes'][1]['beats'][1]['state'].append(
+            {'at': 'world', 'key': 'possession', 'val': '木箱内有十件货物'})
+    wires = {
+        'book': {**sample_book_expression(people),
+                 'protocol_version': 'stage2-book-v7', 'characters': people,
+                 'initial_state': [{'target': {'kind': 'character', 'char_id': 'apprentice'},
+                                    'key': 'occupation', 'value': '商铺学徒',
+                                    'persistence': 'stable', 'source_refs': ['e01_01'],
+                                    'basis': [{'segment': 'e01_01', 'quote': '陈禾是商铺学徒'}]}],
+                 'world_constraints': []},
+        'ch01': {'protocol_version': 'stage2-chapters-v7', 'beats': [
+            source_beat('陈禾在柜台核账，周澄是掌柜。', 'e01_01', boundary='new'),
+            source_beat('周澄提出账页齐全才能取货的条件。', 'e01_02',
+                        participants=('keeper', 'apprentice')),
+            source_beat('陈禾摊开账册逐页清点，发现缺页，决定先补账再出发。', 'e01_03',
+                        effects=[{'target': {'kind': 'character', 'char_id': 'apprentice'},
+                                  'key': 'intent', 'op': 'set', 'value': '先补账再出发',
+                                  'modality': 'actual', 'basis': [{'segment': 'e01_03',
+                                      'quote': '决定先补账再出发'}]}])]},
+        'ch02': {'protocol_version': 'stage2-chapters-v7', 'beats': [
+            source_beat('次日账页补齐，陈禾从柜台走到后院门口。', 'e02_01', boundary='new'),
+            source_beat('木箱中的货量尚未查明，陈禾留在门外等周澄来开箱。', 'e02_02',
+                        effects=[{'target': {'kind': 'world'}, 'key': 'possession',
+                                  'op': 'unknown', 'value': None, 'modality': 'actual',
+                                  'basis': [{'segment': 'e02_02',
+                                             'quote': '木箱中的货量尚未查明'}]}])]},
+        'names': {'protocol_version': 'stage2-names-v6',
+                  'families': {'fam_chen': {'literal': '陈', 'forms': []},
+                               'fam_zhou': {'literal': '周', 'forms': []}},
+                  'people': {'apprentice': {'family_id': 'fam_chen', 'given': '禾', 'aliases': []},
+                             'keeper': {'family_id': 'fam_zhou', 'given': '澄', 'aliases': []}}},
+        'associate': {'protocol_version': 'stage2-associate-v5',
+                      'same_proposition': [], 'loop_pairing': [], 'cross_chapter_cause': [],
+                      'scene_continuation': [{'left': 'ch01.sc1', 'right': 'ch02.sc1',
+                                              'verdict': 'distinct'}]},
+        'preserve': {'protocol_version': 'stage4-preserve-v5', 'obligations': [
+            {'kind': 'initial_state', 'statement': '陈禾开场已是商铺学徒',
+             'anchors': ['s0_01'], 'must_preserve': True,
+             'satisfaction': '陈禾原本就是商铺学徒，不改成新来求职', 'requires': []},
+            {'kind': 'causal', 'statement': '取货条件未满足使陈禾决定先补账',
+             'anchors': ['b01_02.v1', 'b01_03.v1'], 'must_preserve': True,
+             'satisfaction': CAUSAL_CONDITION, 'requires': [],
+             'details': [{'anchor': 'b01_03.v1', 'text': OPTIONAL_ACTION}]},
+            {'kind': 'event_core', 'statement': '补账完成后陈禾前往后院',
+             'anchors': ['b02_01.v1'], 'must_preserve': True,
+             'satisfaction': TRANSITION_CONDITION, 'requires': [2]},
+            {'kind': 'world_fact', 'statement': '木箱中的货量尚未查明',
+             'anchors': ['b02_02.e1'], 'must_preserve': True,
+             'satisfaction': '等待开箱时货量保持未知，不补出确定数量', 'requires': []}]},
+        'design': design,
+        'hook_design': {'protocol_version': 'stage4-hook-design-v3',
+                        'pov': {'person': 'third', 'focalizers': ['narrator']},
+                        'opening_facts': [],
+                        'materials': [{'beat_ref': {'scene': 'sc01', 'beat': 'b01'},
+                                       'emphasis': 'develop', 'transition': 'start'}],
+                        'surface_releases': design['initial_surfaces'],
+                        'reader_expectation': {'kind': 'action', 'focus': '这次取货能顺利办成吗？',
+                                               'followup_refs': [{'scene': 'sc02', 'beat': 'b01'}]},
+                        'local_focus': '用克制的日常动作写出办事受阻的尴尬。'},
+    }
+    if cause_in_statement:
+        cause = wires['preserve']['obligations'][1]
+        cause['statement'] = CAUSAL_CONDITION
+        cause['satisfaction'] = '陈禾暂缓取货，先补账再出发'
+    return chapters, wires, quantity_lock
+
+
+class _CausalMaterialTransport(_MaterialTransport):
+    """只替模型返回合成回答，保留实际付费接受循环和章写手请求边界。"""
+
+    def send(self, request):
+        from novel.llm.transport import ChatResponse
+        owner = self._owner(request)
+        prose = {
+            'hook_writer': '陈禾坐在柜台边，一页页翻着账册。',
+            'body_ch01': '陈禾是商铺学徒，正在柜台核账。周澄说账页齐全才能取货。'
+                         '陈禾发现缺页，便决定先补账再出发。'
+                         + DESIGN_COMMUNICATION_BRIDGE + '。',
+            'body_ch02': '次日账页补齐，陈禾从柜台走到后院门口。木箱中的货量尚未查明，'
+                         '他留在门外等周澄来开箱。',
+        }
+        if owner not in prose:
+            return super().send(request)
+        self.requests.setdefault(owner, []).append(request.user)
+        self.calls.append(owner)
+        return ChatResponse(content=prose[owner], finish_reason='stop',
+                            usage={'prompt_tokens': 100, 'completion_tokens': 40}, model='fake')
+
+
+def _prepare_causal_materials(tmp_path, *, select_detail=False, invent_quantity=False,
+                              cause_in_statement=False):
+    chapters, wires, quantity_lock = _causal_material_wires(
+        select_detail=select_detail, invent_quantity=invent_quantity,
+        cause_in_statement=cause_in_statement)
+    transport = _CausalMaterialTransport(wires)
+    repo, session, _ = _make_session(tmp_path, wires, transport=transport)
+    run_workflow(repository=repo, chapters=chapters, ask=_fake_ask(session),
+                 ask_text=_fake_text(session), ask_body=_fake_body(session),
+                 budget=2000, through='stage5', book_title='商铺取货',
+                 length_band=(0.01, 0.2), concurrency=1)
+    return repo, transport, wires, quantity_lock
+
+
+def test_trigger_in_statement_reaches_the_writer_without_repeating_it_in_satisfaction(tmp_path):
+    """必要因果以联合材料交接，实际消费者不要求两字段重复也不采购 Preserve 返修。"""
+    repo, transport, _, _ = _prepare_causal_materials(tmp_path, cause_in_statement=True)
+    checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
+    cause = checkpoint.obligations[1]
+    assert cause.statement == CAUSAL_CONDITION
+    assert '账页齐全' not in cause.satisfaction
+    brief = repo.read_model('stage4/grounding/reconstruction_brief.json')
+    requirement = next(r for r in brief.requirements if r.summary == CAUSAL_CONDITION)
+    assert requirement.satisfaction == cause.satisfaction
+    assert CAUSAL_CONDITION in transport.requests['design'][0]
+    ir = repo.read_model('stage4/ir/writer_book_ir.json')
+    writer = build_writer_packet(project_chapter_packet(ir, 1))
+    assert any(CAUSAL_CONDITION in line for line in writer.must_realize)
+    assert CAUSAL_CONDITION in transport.requests['body_ch01'][0]
+    assert cause.satisfaction in transport.requests['body_ch01'][0]
+    assert all(transport.calls.count(owner) == 1
+               for owner in ('preserve', 'design', 'body_ch01', 'body_ch02'))
+
+
+@pytest.mark.parametrize('select_detail', [False, True], ids=['omit_soft_action', 'select_soft_action'])
+def test_necessary_cause_decision_and_transition_reach_the_actual_writer_request(
+        tmp_path, select_detail):
+    """源必要条件与 Design 局部沟通送达必写区；可选动作不改变义务与事实锁分母。"""
+    repo, transport, wires, quantity_lock = _prepare_causal_materials(
+        tmp_path, select_detail=select_detail)
+    checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
+    brief = repo.read_model('stage4/grounding/reconstruction_brief.json')
+    binding = repo.read_model('stage4/grounding/semantic_binding.json')
+    body = repo.read_model('stage4/design/body_design.json')
+    ir = repo.read_model('stage4/ir/writer_book_ir.json')
+    source_characters = repo.read_model('stage2/characters/characters.json')
+    source_blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
+    assert len(checkpoint.obligations) == len(binding.entries) == 4
+    assert [o.satisfaction for o in checkpoint.obligations][1:3] == [
+        CAUSAL_CONDITION, TRANSITION_CONDITION]
+    requirements = {r.summary: r for r in brief.requirements}
+    cause = requirements[checkpoint.obligations[1].statement]
+    transition = requirements[checkpoint.obligations[2].statement]
+    assert cause.satisfaction == CAUSAL_CONDITION
+    assert transition.satisfaction == TRANSITION_CONDITION
+    assert transition.requires_cores == (cause.core_id,)
+    assert (source_characters.initial_state[0].key,
+            source_characters.initial_state[0].value) == ('occupation', '商铺学徒')
+    assert source_blueprint.chapters[1].beats[1].effects[0].op == 'unknown'
+    assert all(DESIGN_COMMUNICATION_BRIDGE not in beat.event
+               for chapter in source_blueprint.chapters for beat in chapter.beats)
+    assert all(DESIGN_COMMUNICATION_BRIDGE not in evidence
+               for evidence in source_blueprint.evidence.values())
+    assert DESIGN_COMMUNICATION_BRIDGE not in checkpoint.model_dump_json()
+    assert (body.initial_state[0].key, body.initial_state[0].value) == ('occupation', '商铺学徒')
+    assert body.scenes[0].beats[2].event == wires['design']['scenes'][0]['beats'][2]['ev']
+    assert DESIGN_COMMUNICATION_BRIDGE in body.scenes[0].beats[2].event
+    assert DESIGN_COMMUNICATION_BRIDGE in ir.chapter(1).scenes[0].verification_ir.beats[2].event
+    assert body.scenes[1].beats[0].event == wires['design']['scenes'][1]['beats'][0]['ev']
+    assert [(f.kind, f.kf_id) for f in brief.fact_locks] == [('unknown_value', quantity_lock)]
+    assert [(d.key, d.op, d.value) for d in body.scenes[1].beats[1].target_delta] == [
+        ('possession', 'unknown', None)]
+    assert len(binding.fact_bindings) == 1
+    design_prompt = transport.requests['design'][0]
+    assert CAUSAL_CONDITION in design_prompt and TRANSITION_CONDITION in design_prompt
+    assert DESIGN_COMMUNICATION_BRIDGE not in design_prompt
+    assert OPTIONAL_ACTION in design_prompt
+    source_handles = [a.handle for o in checkpoint.obligations for a in o.anchors]
+    for handle in source_handles:
+        assert handle not in design_prompt
+    assert 'event_evidence' not in design_prompt and '"quotes"' not in design_prompt
+    for chapter, required, other in ((1, CAUSAL_CONDITION, TRANSITION_CONDITION),
+                                     (2, TRANSITION_CONDITION, CAUSAL_CONDITION)):
+        packet = project_chapter_packet(ir, chapter)
+        writer = build_writer_packet(packet)
+        event = body.scenes[chapter - 1].beats[2 if chapter == 1 else 0].event
+        assert any(required in line for line in writer.must_realize)
+        assert any(event in line for line in writer.must_realize)
+        assert all(required not in line for line in writer.creative_guidance)
+        assert all(other not in line for line in writer.must_realize)
+        request = transport.requests[f'body_ch{chapter:02d}'][0]
+        assert required in request
+        assert event in request
+        assert all(handle not in request for handle in source_handles)
+        assert 'event_evidence' not in request and '"quotes"' not in request
+        assert quantity_lock not in request
+    first_writer = build_writer_packet(project_chapter_packet(ir, 1))
+    assert any(DESIGN_COMMUNICATION_BRIDGE in line for line in first_writer.must_realize)
+    assert DESIGN_COMMUNICATION_BRIDGE in transport.requests['body_ch01'][0]
+    # 次章需要知道上一章怎样收尾；桥梁以已发生的承接送达，不再要求重演。
+    second_writer = build_writer_packet(project_chapter_packet(ir, 2))
+    assert all(DESIGN_COMMUNICATION_BRIDGE not in line for line in second_writer.must_realize)
+    assert any(DESIGN_COMMUNICATION_BRIDGE in line for line in second_writer.continuity)
+    assert any(OPTIONAL_ACTION in line for line in first_writer.creative_guidance) == select_detail
+    assert all(OPTIONAL_ACTION not in line for line in first_writer.must_realize)
+    assert (OPTIONAL_ACTION in transport.requests['body_ch01'][0]) == select_detail
+    second_request = transport.requests['body_ch02'][0]
+    assert '等待开箱时货量保持未知，不补出确定数量' in second_request
+    assert '木箱内有十件货物' not in second_request
+    assert all(transport.calls.count(owner) == 1
+               for owner in ('preserve', 'design', 'body_ch01', 'body_ch02'))
+
+
+def test_bridge_design_cannot_fill_an_unknown_fact_during_the_actual_acceptance_loop(tmp_path):
+    """有完整触发与转场也不授予补造事实权；坏候选在 Design 停住且不购买下游。"""
+    from novel.llm.paid_requests import ValidationStop
+
+    with pytest.raises(ValidationStop) as stopped:
+        _prepare_causal_materials(tmp_path, invent_quantity=True)
+    assert any(getattr(e, 'code', '') == 'fact_lock_ambiguous'
+               for e in stopped.value.context['issues'])
+    repo = Str06Repository(tmp_path / 'out' / 'run')
+    assert repo.path('runtime/preserve_checkpoint.json').exists()
+    assert not repo.path('stage4/design/body_design.json').exists()
+    assert not repo.path('stage4/grounding/semantic_binding.json').exists()
+    assert not repo.path('stage4/ir/writer_book_ir.json').exists()
+    assert not repo.path('stage5/body/ch01.txt').exists()
+    assert not repo.path('stage5/acceptance/body/ch01.json').exists()
+
+
 def test_preserve_preview_runs_without_checkpoint_and_keeps_conflicts_unpublishable(tmp_path):
     from novel.stages.review import dry_run_patch
     from tests.test_str06_preserve_gate import _prepared
@@ -191,8 +482,7 @@ def test_preserve_preview_runs_without_checkpoint_and_keeps_conflicts_unpublisha
     _ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires)
     assert not repo.path('runtime/preserve_checkpoint.json').exists()
     before = {p: p.read_bytes() for p in repo.root.rglob('*') if p.is_file()}
-    options = dict(evidence={}, budget=2000,
-                   hook_constraints=HookConstraints(target_chars=10, hard_max_chars=360), chapter_count=2)
+    options = dict(evidence={}, budget=2000, chapter_count=2)
     report = dry_run_patch(repo, 'preserve', wires['preserve'], **options)
     assert report['status'] == 'ran' and report['publishable'] and not report['errors']
     assert report['downstream']['status'] == 'not_run'

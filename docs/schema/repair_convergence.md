@@ -22,7 +22,7 @@ Gherkin 使用 [Cucumber 官方语法](https://cucumber.io/docs/gherkin/referenc
 | 同上 | RC-30～35 | 高影响源事实、叙述者与人物知情、Preserve限制依据及义务去重；目标行为，工程协议测试已落地；真实语义标定已执行并封口（2026-10-05，判官不满足启用硬规则，重开条件见 DECISIONS 同日行） |
 | 同上 | RC-36／38 | 已实现（2026-10-04，rc16，`stage4-design-v8`）：事实锁在已选状态上标注`lock`，映射随SemanticBinding发布且不复制value；`tests/test_str06_a4_design_locks.py`（CS-F2一节：真实v8入口的正反例与RC-38四行）、`tests/test_str06_fact_lock_stage.py`（真实Stage2→Preserve→body_design→compile链）、`tests/test_str06_design_slim.py`、`tests/test_str06_contracts.py` |
 | 同上 | RC-37／39 | **仅结构层已实现**：结构检查只报引用与模式的实际结果，语义对应未运行即保持unver；局部语义核验已随CS-F3离线标定封口（2026-10-05：判官不可启用，生产语义维持unver，重开条件见DECISIONS同日行） |
-| 同上 | RC-40～43 | 已实现Writer路径（2026-10-04，IR rc16／renderer v10）：只投影已证明唯一绑定人物的完整登记称谓，短姓／未登记表达不猜人物，留痕可观测，Design自有文本冲突不由compiler代选；`tests/test_str06_name_projection.py`、`tests/test_str06_material_repair.py`（归因仍按原字段）、`tests/test_str06_r10b_writer_packet.py`。**Hook材料尚未投影**，Stage7无需改动（新称谓创作不在本批，RC-42只证拒绝未登记别名） |
+| 同上 | RC-40～43 | 已实现Writer路径（2026-10-04，IR rc16／renderer v10）：只投影已证明唯一绑定人物的完整登记称谓，短姓／未登记表达不猜人物，留痕可观测，Design自有文本冲突不由compiler代选；`tests/test_str06_name_projection.py`、`tests/test_str06_material_repair.py`（归因仍按原字段）、`tests/test_str06_r10b_writer_packet.py`。**Hook材料投影已随 rc16（2026-10-05）落地**：释放面由 Hook Design 自选，`compile_hook_context` 按本场释放算好 `HookContext.withheld_bindings`，`render_hook_context` 在正向材料行与禁区行做同一确定性投影（上下文字段与来源文本不改，条目返修归因仍按原字段），留痕 `hook_name_projections`——对齐 `docs/BACKEND_CONTRACT.md` R-6.2 的「Hook 同尺投影」；新称谓创作不在本批，RC-42只证拒绝未登记别名 |
 | 同上 | RC-44～45 | `tests/test_str06_candidate_preflight.py`：同一候选聚合自身及继承材料问题，真实接受入口上游优先且失败不发布，免费恢复与已有Hook复验，依赖缺失明确未运行；验证记录见提交`edf965d7`说明及重置前（`eb5f0d5a`）的REQUIREMENTS |
 | 同上 | RC-47 | 已实现（2026-10-04；2026-10-05 CS-F1 收口）：Design错误在判定处带wire路径，最小完整父项／耦合字段合并／替换不重叠，合并后重跑完整预检，无法定位退整份；读取闭合→read行、确认闭合→初始行／know行（带结构化位置的判据在`read_closure`），Hook判据错误（材料、起笔事实、称谓释放、位置引用，含禁止揭示×材料的双侧路径）同约定接条目返修——Hook与Design共用`design_paths`的构造约定与定位器；`tests/test_str06_design_patch.py`（定位策略纯函数＋真实`patches`回答的stage用例，含读取闭合read行返修与Hook材料条目返修）、`tests/test_str06_product_entry.py`（真实子进程）。仍整份修订：全局覆盖闸与无路径错误类（缺省标注的责任拍须模型选择，不可条目定位） |
 | 同上 | RC-46／48／49 | 责任归因的语义面、版本恢复和分项成本验收；目标行为，未绑定绿证据前不得宣称实现 |
@@ -39,7 +39,8 @@ Gherkin 使用 [Cucumber 官方语法](https://cucumber.io/docs/gherkin/referenc
 共享预检在 `novel/stages/stage4/preflight.py`，旧账更正在 `novel/stages/issue_recovery.py`。
 计量解析和补证分别在 `novel/llm/usage.py` 与 `novel/llm/usage_audit.py`；对应
 `tests/test_llm.py`、`tests/test_str06_f7a_wiring.py`、`tests/test_repair_rounds.py`。
-新名称观察和Characters信封为v2，旧版须重建names后经compile重建，不能补空声明冒充核验。
+现役 names wire 为 `stage2-names-v6`，Characters 正式产物为 v6；历史 v2 是当时
+同一性留证的里程碑，不是当前接受版本。旧版按登记的重建边界处理，不能补空声明冒充核验。
 
 既有测试入口：`tests/test_str06_a5_positions.py`、`tests/test_str06_r3_selfheal.py`、
 `tests/test_str06_item_patch.py`、`tests/test_str06_product_entry.py` 与
@@ -108,9 +109,9 @@ RC-19收口追加`test_rc19_three_digit_chapter_can_persist_and_resume_its_revis
 |---|---|
 | 原文存在未登记的姓名异写 | Stage2 names 留原字面、原句与同一性理由，same 指向已登记人物称谓；unresolved 停止；compiler 只在证明的句段范围归一语义文本，下游不私改命题 |
 | 源称谓、源观察或证据确实错误 | 按正式来源回 Stage2 book／章观察；不根据目标章倒推源首现 |
-| Preserve自写摘要含不适用字面 | Preserve只能改自身wire字段，保留anchors和语义义务 |
-| 正确源命题被放在不适用目标拍位 | Design统一处理know拍位与目标称谓释放；compiler不替其选择 |
-| Design自写文本或默认keep表达冲突 | Design文本／expression_overrides与释放选择；不能修改继承源文来掩盖 |
+| Preserve自写摘要含裸姓、未登记别名等无法唯一认领的字面 | Preserve只能改自身wire字段，保留anchors和语义义务；已证明同人的自然混称不返修 |
+| 正确源命题的必保揭名认知被放在释放之前 | Design统一处理know拍位与目标称谓释放；普通带名材料先投影，compiler不替其选择 |
+| Design自写文本或默认keep表达经合法投影后仍冲突 | Design文本／expression_overrides与释放选择；不能修改继承源文来掩盖 |
 | Hook自有材料选择或释放冲突 | Hook Design；正文Design字段不可被Hook暗改 |
 | 正式设计正确、确定性投影有误 | code缺陷停止，修compiler／renderer；不消耗语义返修 |
 | 来源缺失、多义、摘要过期或码未登记 | 未决停止，给出具体缺口；不默认派Preserve或Design |
@@ -401,8 +402,10 @@ Binding、执行计划、Writer／Hook材料、恢复入口、契约守卫及真
 5. 整份新购只限闭集原因并留痕（RC-53）：没有候选；协议不兼容；章数或篇幅约束变化；候选无法按当前schema构造；
    上游是全新回答（与候选生成时的版本之间没有修订谱系）。
 
-**称谓规范形。** 把文本里每个唯一归属某人物的登记称谓换成该人物的记号，相邻的同一记号折叠为一个，再归一标点
-与空白。规范形相等，说明两段文本只差在用哪个登记称谓、有无同位语、标点空白。纯函数，复用现有字面扫描。
+**称谓规范形。** 把文本里每个唯一归属某人物的登记称谓逐次换成该人物的记号，保留每次提及，再归一标点
+与空白。规范形相等只说明登记称谓与标点空白的差异，不能证明完整故事语义等价。纯函数，复用现有字面扫描。
+相邻同人称谓可能是重复呼唤，不再折叠为一个记号；同位语增删若没有独立机械证据，也不能靠规范形免费证明
+等价，走受影响承载拍的既有窄复核。同次数的登记称谓替换仍可在完整预检通过后零调用沿用，不整份重购。
 差异摘要只能定位变化、不能判断等价：本根7条变化义务里只有3条能机械证明仅是换称谓，另4条是模型改写——
 不能证明的走受影响拍的一轮窄复核，既不零调用放行，也不整份新购。等价判定针对**整条目**：位置不变，自由文本
 字段（`statement`、`satisfaction`）规范形相等，其余字段（`must_preserve`、`requires`序号、字段集）逐字相等
@@ -437,13 +440,14 @@ cached行；重启按当前请求身份免费重放。人工wire采用与仓外�
 里按释放顺序的第一个」；分表后 renderer 依第 2 条先取已释放面、无释放才回落（渲染期不读 Characters，D2）。
 
 **位置。** 拍行按拍前缀，含本拍释放：本拍正式介绍之后同拍可用，拍前不可用。场级说明行取到场末，但不参与
-揭名判定。书级行取章首。释放前缀对全体人物有效并保留释放顺序（现状只收本场参与者且按字典序排，
-丈夫从第3章起在妻子视角的包里被叫作“哥”）。**Design原文闸不按位置**（2026-10-07用户裁定，见下）：
+揭名判定。书级行取章首。释放前缀对全体人物有效并保留释放顺序；H3前曾只收本场参与者且按字典序排，
+导致丈夫从第3章起在妻子视角的包里被叫作“哥”，此旧口径已退出。**Design原文闸不按位置**（2026-10-07用户裁定，见下）：
 本段的拍／场／章首取位只用于写手章包的显示面与必保揭名的拍位闸。
 
-**投影。** 内部材料用姓名指认人物时投影成显示面。两条文本规则：同位语折叠（“表弟裴书远”投影为“表弟”）；
-无损性守卫（若投影会把一句里同一人物两个不相邻的不同称谓压成一个，视为不可投影，归Design）。canonical字段与
-来源文本保持原样，投影只改送达字节并留痕；compiler不替Design提前释放姓名。
+**投影。** 内部材料用姓名指认人物时按唯一绑定逐次投影成显示面；同句自然混用不同登记称谓不拒收，
+保留各次提及及其中的行动、对白。只有原文独立邻接的显示面才折叠同位语（“表弟裴书远”→“表弟”），
+不能因前次投影生成相邻显示面，或另一登记称谓内部含相同显示面字样，而吞掉重复呼唤。canonical字段与来源文本保持原样，投影只改送达字节并留痕；
+compiler不替Design提前释放姓名，正式必保揭名、唯一归属与concealed边界仍受原闸保护。
 
 **Design原文闸按章判（裁决①的落地，2026-10-07用户裁定，取代H3的按位置口径）。** 写手拿到整章章包，正文最终闸
 （`body_checks`）也只按章判已释放称谓，章内谁先谁后不检查；投影绑定表（`ChapterIR.withheld_bindings`）同样是章级。
@@ -458,8 +462,8 @@ csf4只读重放：第2轮3→0（重新全绿，可零调用采用），第4轮
 
 - 识别：一条认知变化同时满足三项才算——所属命题被identity或reveal类必保义务引用；该命题的源证据句段正是某带名
   称谓在源文首次出现的句段；命题文本含该称谓。三项都来自已有类型化数据（义务类别、Blueprint的basis句段、
-  Characters的`source_refs`），不用文本共现作判定。本书命中“表弟的名字是裴书远”“裴书远的同窗的名字是沈知言”
-  两条，无误报（单看义务类别不够准：两条真揭名命题同时挂在identity与event_core义务下，identity义务也挂着非
+  Characters的`source_refs`），不用文本共现作判定；同人多个已登记称谓的普通混用不另造揭名要求。当时本书核查命中“表弟的名字是裴书远”“裴书远的同窗的名字是沈知言”
+  两条，该样本无误报（单看义务类别不够准：两条真揭名命题同时挂在identity与event_core义务下，identity义务也挂着非
   揭名命题）。
 - compiler把结果作为`requires_released`写在Brief的认知变化条目上（不暴露句段号，保持源盲）。
 - Design：该know所在拍必须已释放所列称谓，同拍释放合法；违例带路径、窄修。这类称谓不投影。
@@ -476,7 +480,7 @@ csf4只读重放：第2轮3→0（重新全绿，可零调用采用），第4轮
 | 残余 | 责任方与修法 |
 |---|---|
 | 已绑定称谓，但该人物在此处没有显示面 | Design：补一行释放或挪承载位 |
-| 必保揭名的know落在释放之前；无损性守卫触发 | Design：挪know拍位或释放 |
+| 必保揭名的know落在释放之前 | Design：挪know拍位或释放 |
 | Design自有字段里的裸姓、未登记别名 | Design：改该字段 |
 | 义务文本里的裸姓、未登记别名 | Preserve；正常情况下已被Preserve自闸前置拦下 |
 | 世界约束、来源缺失或多义 | 停止（现行规则） |
@@ -507,7 +511,7 @@ anchors／quotes，Hook材料里的姓名在渲染期已投影（本根17次）�
 | 覆盖 | 全部JSON节点都有条目定位器；跨节点回派与节点内返修同一协议，基底是owner已发布版本的修订对照wire。**已落地口径（H4，2026-10-06）**：定位器齐面——chapters（`chapter_patch_locate`，CS-patch）、Design／HookDesign（`locate_design_patches`）、Preserve（`locate_preserve_patches`）、associate（`associate_patch_locate`，配对条目）、book／names／naming（`book_patch_locate`／`names_patch_locate`／`naming_patch_locate`，与各自 compile 同源视图，不新增判据）；覆盖增删、构造期复检与协议字面量等**替换不了**的问题仍走整份出口，不静默漏项。**请求路径不重叠**：同一条目的父、子错误折叠到父条目（`novel/stages/common.py::group_located_errors`，book／names／naming 共用；chapters 的同名折叠在 `chapter_patch_locate`）；associate 的多句柄位置（同章／因果／续场的两端）只命中**同时含全部句柄**的那一行，未知句柄按所在字段定位，协议校验错误按 `loc` 的条目下标直达 |
 | 目标 | 固定路径；或**可选目标**：责任位置须由模型决定时（必保义务漏标、新增义务、需选释放位置），给出候选拍闭集，回答的路径必须落在闭集内（RC-58） |
 | 输入 | 协议规则＋失败条目＋依赖切片＋合法取值；切片只带必要的事实与状态，不带整份原请求，也不带前序材料全文 |
-| 输出与应用 | 只返回目标路径的替换；范围外改动拒绝；核对基底候选摘要；合并后跑完整验收，无关条目字节不变 |
+| 输出与应用 | 复核目标与错误定位目标合成后，`novel/llm/paid_requests.py::normalize_patch_targets` 在依赖切片前再次收口祖孙／重复路径：只折叠已有授权父项，合并全部问题，任一必选则父项必选。只返回目标路径的替换；范围外改动拒绝；核对基底候选摘要；合并后跑完整验收，无关条目字节不变 |
 | 反馈 | 按根因聚合成任务并附受影响位置 |
 | 无法定位 | 视为判据缺路径的工程缺陷：停并报规则码，不进整份重生；契约测试保证每个现役规则码或可定位、或有可选目标、或登记在整份闭集（RC-59）。**H2 裁定（第四态）**：Guard M1–M8 与 compile 依赖码落在确定性免费节点（`str06.stage4.compile`）的复跑面上，没有 Design wire 编辑位置——登记第四种处置 `stop`（按所在面正式路由回派或停机报码），不把它们塞进整份闭集冒充可修复；路由表与判据一一对应，`tests/test_str06_patch_routes.py` 双向核对码集合并静态验证每个 locate 码的发射点带 wire 路径。裁定全文见 `docs/DECISIONS.md` CS-H H2 行 |
 | 整份出口（闭集） | JSON：回答无法解码或整体形状失败、协议字面量不符。文本：篇幅带、空回答、包装。局部称谓、单条义务、编译缺陷不得进入 |
@@ -549,6 +553,41 @@ Preserve的条目返修（RC-64）沿用同一协议：定位器按`obligations[
 - 窄输入下模型的修复质量没有实测；额度内不收敛就停并报告，不回退整份。
 - 候选沿用保证结构对齐与机械预检；不能证明等价的变化靠一轮窄复核，语义仍是`unver`。
 - 无法定位即停，在判据清点完成前可能多停一次书；用规则码覆盖测试把它变成开发期红灯。
+
+## 2026-10-10 现役材料与生成边界
+
+本节同步现役 prompt、确定性投影与机械闸，不新增生产语义判官。Preserve 保存策略
+v10／wire v5、正文 renderer v12／写手协议 v11、正文 mechanical validator v3 分别
+承担材料选择、送达与包装识别；版本属于各自身份，不互相替代。
+
+- Preserve 必要触发、答话、限制、权衡与选择由 statement、satisfaction 和 requires
+  所指义务的联合材料交接；已经明确的前提不重复抄写。不同发生时点的必要前提分别
+  承载，可改写动作进可选 details，源 anchors 不能代替 source-blind 下游看得懂的语义。
+- Design 用已有事件、realization_brief 与 entry 组织目标演法；新增沟通、决定、信息
+  获得及后文依赖归 Design。写手可呈现自然移步、短转场与即时动作，但须延续既定
+  位置、感知通道与事件先后；补写钟点不得让出发早于触发决定，回溯须明示。
+- 同人多个唯一登记称谓逐次投影，普通共现不判揭名；每次提及与中间行动、对白保留。
+  写手投影的原文独立显示面同位语折叠与候选规范形的等价比较是不同职责，前者不能
+  授权后者压掉提及次数。已释放字面也不代表任意人物都可以这样称呼他人。
+- Hook 整拍禁揭仍与选用该拍冲突。具体事实地址的禁揭允许同拍其余材料，但每条
+  选中该拍的材料都须 withheld 隐藏该完整地址，或用 presentation 替代整拍投影；
+  其他地址的遮罩不顶替，起笔事实、阅读期待与其他条目仍各自复验。
+- 正文首行只有符合章标题边界才因标题字样拒收；“尾声未尽”等自然句子可用。
+  实际章号、标题、Markdown 标题与围栏仍属于包装失败。
+
+真实消费者反例由下表定位，是否执行及通过另按本批测试记录报告，不由文档签绿：
+
+| 边界 | 验证入口 |
+|---|---|
+| 联合交接与目标桥梁到达写手，未知事实不补值 | `tests/test_str06_quality_materials.py::test_trigger_in_statement_reaches_the_writer_without_repeating_it_in_satisfaction`、`test_necessary_cause_decision_and_transition_reach_the_actual_writer_request`、`test_bridge_design_cannot_fill_an_unknown_fact_during_the_actual_acceptance_loop` |
+| 混称与重复提及保持，Preserve 不为自然混称返修 | `tests/test_str06_name_projection.py::test_adjacent_name_mentions_are_not_folded_as_generated_appositions`、`tests/test_str06_preserve_gate.py::test_natural_mixed_names_reach_the_writer_packet_without_preserve_repair` |
+| 提及次数变化到真实沿用消费者，不再机械证明免费等价 | `tests/test_str06_candidates.py::test_mention_count_changes_reach_real_design_reuse_consumer`（含同次数别称替换的零调用对照） |
+| Hook 指定地址遮罩与独立泄漏闸 | `tests/test_str06_hook.py::test_same_beat_forbidden_fact_mask_reaches_hook_writer`、`test_canonical_hook_recheck_rejects_removed_fact_mask`、`test_same_beat_fact_mask_does_not_authorize_opening_or_answer` |
+| 普通首句与真实包装区分 | `tests/test_str06_body.py::test_title_words_in_a_natural_opening_are_not_wrappers`、`test_actual_heading_wrappers_are_still_rejected` |
+
+必要语义送达和机械通过不证明文学质量。因果自洽、人物转变、动作承接、时间措辞与
+实际称呼关系仍须联合阅读验收；首答格式通过与首答完整可用分别报告，返修和免费
+采用不得回写成历史首答成功。
 
 ## 数据流与职责
 

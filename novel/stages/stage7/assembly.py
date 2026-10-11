@@ -80,6 +80,10 @@ def _binding_problems(
         return ['回执绑定的是另一版写手视图（章包已重编译，须重购）']
     if receipt.get('validation_sha256') != identities.validation_sha256:
         return ['回执的验证输入摘要与当前编译不一致（禁用字面/称谓许可/篇幅带已变化）']
+    from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
+    if (receipt.get('validator_version') != BODY_VALIDATOR_VERSION
+            or tuple(receipt.get('mechanical_checks', ())) != BODY_MECHANICAL_CHECKS):
+        return ['回执的机械校验版本或检查项已变化，须先免费重验']
     if prose is None or sha256_text(prose) != receipt.get('prose_sha256'):
         return ['文本与回执 prose_sha256 脱钩']
     return []

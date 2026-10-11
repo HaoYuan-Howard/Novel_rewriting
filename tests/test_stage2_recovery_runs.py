@@ -6,8 +6,8 @@
 batch workpack／run_id 闭环（`novel.llm.stage2_runs` 与 `novel.stages.stage2.extract`，
 约 35 条用例）。那套机器随旧链整层退役：新链的「恢复运行」是**候选根自身的
 workflow 身份生命周期**（`novel/llm/paid_requests.py`）＋ 付费会话的续跑
-（`novel/llm/paid_requests.py::PaidRequestSession`）。旧反例的历史字节见 Git 与
-`contracts/schema/retirement.py` 的 delete 桶；本文件只保留新链上仍成立的
+（`novel/llm/paid_requests.py::PaidRequestSession`）。旧反例的历史字节见 Git；
+本文件只保留新链上仍成立的
 恢复运行纪律，并不复述已由 `tests/test_str06_f7a_wiring.py` 覆盖的
 init/resume/drift 正向面（那条已钉住「同代码复用、漂移滚动、源身份拒绝」）。
 

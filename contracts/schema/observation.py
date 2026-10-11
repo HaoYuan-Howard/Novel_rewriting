@@ -61,7 +61,6 @@ from contracts.schema.source import (
 #: basis 从逐字引文改为段 id——book wire 升 v6、chapters wire 升 v6、names
 #: 新增独立 wire 面 v4；canonical 三者不动（EvidenceQuote 仍是段号＋引文，
 #: 引文＝段全文，整段天然满足「quote 逐字在段内」），旧 canonical 盘面照读。
-STAGE2_OBSERVATION_PROTOCOL: Final = 'stage2-observation-v1'
 #: CS-S 1c（2026-10-07）：names canonical 升 v4——resolutions 增 `not_name`
 #: （变体候选的完整性证明）、构词 surface_forms 改由 compiler 派生（wire 不
 #: 再携带）；同名判定走新窄调用 wire `stage2-name-variants-v1`。

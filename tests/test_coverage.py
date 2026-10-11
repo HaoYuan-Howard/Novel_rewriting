@@ -585,7 +585,7 @@ def _schema_count_claims() -> dict[str, tuple[int, dict[str, int]]]:
     """逐层扫出 `docs/schema/<stage>.md` 宣称的条数与 sev 分布。
 
     ⚠ 缓存的是**仓内静态文档**的扫描结果，三条用例读到的必然是同一份：不加缓存时
-    这批 md（七层合计数百 KB）在一次 pytest 里被整整读三遍。
+    这批 md（六层合计数百 KB）在一次 pytest 里被整整读三遍。
     """
     claims: dict[str, tuple[int, dict[str, int]]] = {}
     for stage in _documented_stages():

@@ -46,7 +46,7 @@ from novel.errors import (
     ApprovalRequired, QueueConflict, UpstreamMissing,
 )
 from novel.orchestrator import jobs, state as st
-from novel.orchestrator.nodes import build_steps, flag_value, shell_line
+from novel.orchestrator.nodes import build_steps, shell_line
 
 #: 人做的那几个动作。**队列永不自动排它们**——「人看过之后的裁决」机器替不了。
 #: ⚠ 它们进 `blocked` 而不是被跳过：被跳过的闸门在界面上与「不需要它」长得一样。
@@ -99,24 +99,6 @@ WAITING_ON_REPLAN = 'queue:plan-changed'
 #: 免费复检与精确补尾，F7c），不经队列发布补尾 argv。blocked 即停在那里并如实
 #: 报告，不猜成可执行命令。
 DETERMINISTIC_RECOVERY_WAITING_ON: frozenset[str] = frozenset()
-
-
-def chapters_from_flags(flags: Sequence[str]) -> list[int] | None:
-    """取 Stage5 定向章列表；不带则是全书。
-
-    队列只会读自己冻结过的命令，但恢复时仍要关闭式校验：旧
-    `--deep/--shallow-rest` 快照必须走 replan，不得在这里被解释成新语义。
-    """
-    raw = flag_value(flags, '--chapters')
-    if raw is None:
-        return None
-    try:
-        values = [int(value) for value in raw.split(',')]
-    except ValueError as exc:
-        raise ApprovalRequired('--chapters 必须是逗号分隔的正整数章号') from exc
-    if values != sorted(set(values)) or any(value < 1 for value in values):
-        raise ApprovalRequired('--chapters 必须升序、去重且全为正整数')
-    return values
 
 
 def _stage_index(stage: str) -> int:

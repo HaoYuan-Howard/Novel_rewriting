@@ -11,11 +11,11 @@
 【绑定语义（rc6，2026-09-28 R2：身份拆分）】
 回执分别绑定三把摘要（`novel/stages/common.py::chapter_identities`）：
 
-  · `writer_view_sha256`——写手视图摘要：写手实际可见的章包阅读面（renderer
-    渲染字节），材料含 renderer 与写手协议版本。写手看到的变化（导演说明、
+  · `writer_view_sha256`——写手视图摘要：实际正文 system 与章包阅读面（renderer
+    渲染字节），材料含 renderer 与写手协议版本。写手看到的变化（正文 system、导演说明、
     义务、拍事实、篇幅目标、协议或渲染版本）⇒ 该章重购；
   · `validation_sha256`——验证输入摘要：禁用字面、称谓许可与篇幅带。验证
-    材料变化 ⇒ 旧机械验证不再成立，同样触发重做；
+    材料变化 ⇒ 旧机械验证不再成立，先免费重验原章稿；
   · `machine_view_sha256`——Machine 层摘要，**仅审计**：只改 Machine 层字段
     （写手不可见、验证器不消费的工程位，如消费身份摘要）不触发重购。
 
@@ -38,7 +38,22 @@ from pydantic import Field, model_validator
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 
-__all__ = ['ChapterLengthDisclosure', 'ChapterReceipt']
+__all__ = ['ChapterLengthDisclosure', 'ChapterReceipt',
+           'BODY_VALIDATOR_VERSION', 'BODY_MECHANICAL_CHECKS',
+           'RENDERER_VERSION', 'WRITER_PROTOCOL_VERSION', 'HOOK_VALIDATOR_VERSION']
+
+#: 机械规则的独立版本轴；规则变化必须换版，消费者先免费重验原章稿。
+#: v2（CS-H H3，RC-61）增加 required_literals：必保揭名承载章须出现称谓字面。
+#: v3：标题词须有标题边界，正文首句“尾声未尽”等自然用语不作包装标题。
+BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v3'
+#: 写手材料与机械回执共用的正式版本轴；运行时提示、身份与预算从此取值。
+RENDERER_VERSION = 'str06-render-v12'
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v11'
+HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v4'
+#: 回执宣告通过的机械检查项闭集。
+BODY_MECHANICAL_CHECKS = (
+    'non_empty', 'encoding', 'no_wrapper', 'withheld_literals', 'required_literals', 'length_band',
+)
 
 
 class ChapterLengthDisclosure(StrictModel):
@@ -67,12 +82,12 @@ class ChapterReceipt(StrictModel):
     writer_view_sha256: str = Field(
         min_length=64, max_length=64,
         description='写手视图摘要（rc6 身份拆分）：写手实际可见的章包阅读面'
-                    '（renderer 渲染字节，材料含 renderer 与写手协议版本）；'
+                    '（实际正文 system＋renderer 渲染字节，材料含 renderer 与写手协议版本）；'
                     '写手可见面变化使本章回执失效（重购）')
     validation_sha256: str = Field(
         min_length=64, max_length=64,
         description='验证输入摘要（rc6 身份拆分）：禁用字面、称谓许可与篇幅带；'
-                    '验证材料变化使旧机械验证不再成立（重做）')
+                    '验证材料变化使旧机械验证不再成立（先免费重验）')
     machine_view_sha256: str = Field(
         min_length=64, max_length=64,
         description='Machine 层摘要（仅审计，rc6）：只改 Machine 层字段不触发'

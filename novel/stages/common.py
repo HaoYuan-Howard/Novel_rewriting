@@ -48,7 +48,7 @@ from contracts.schema.context import (
     PriorSeriesEvent, StateEntry, SurfaceRelease, ThreadOpIR, UnansweredGuard, VerificationIR,
     WriterBrief, WriterContext, WriterDetail, WriterPacket, beats_ir,
 )
-from contracts.schema.hook import HookContext
+from contracts.schema.hook import HookContext, HookDesign
 from contracts.schema.design import BodyDesign
 from contracts.schema.execution import (
     EffectDomain, Establishment, ExecutionPlan, ExecutionSlice,
@@ -56,13 +56,13 @@ from contracts.schema.execution import (
 from contracts.schema.state import StateAddress, SurfaceIntroduction, WithheldNameBinding
 from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.workflow import STR06_RC_VERSION
+from contracts.schema.receipt import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure, render_form
 from novel.core.name_materials import FIRST_PERSON_ROLE_WORD
 from novel.core.name_materials import expand_surface_releases, family_form_literals, withheld_name_literals
 from novel.core.text import count_non_whitespace_chars, kp_statement
 from novel.core.material_trace import (
     MaterialIssue, MaterialLines, MaterialPart, MaterialSource, NameProjectionHit,
-    ProjectionBlock,
 )
 from novel.core.validation import ValidationMessage
 
@@ -191,26 +191,11 @@ def positive_material_issues(
     return tuple(issues)
 
 
-#: 句末标点（含分句与换行）：无损性守卫的「一句」边界（RC-60）。
-_SENTENCE_END = re.compile(r'[。！？；…!?\n;]')
-
-
-def _sentence_span_of(text: str, position: int) -> int:
-    """位置 → 所属句的序号（按句末标点切分；守卫的分组键，不切文本）。"""
-    sentence = 0
-    for match in _SENTENCE_END.finditer(text):
-        if match.end() <= position:
-            sentence += 1
-        else:
-            break
-    return sentence
-
-
 def project_withheld_names(
     text: str, *, bindings: Iterable['WithheldNameBinding'], display: Mapping[str, str],
-) -> tuple[str, tuple[NameProjectionHit, ...], tuple[ProjectionBlock, ...]]:
+) -> tuple[str, tuple[NameProjectionHit, ...]]:
     """正向材料行里的**完整登记称谓**按显示面确定性投影（CS-F2，RC-40/41；
-    CS-H H3 补同位语折叠与无损性守卫，RC-60）。
+    CS-H H3 补同位语折叠，RC-60）。
 
     只处理 `bindings`（已证明唯一绑定人物的完整登记称谓）。扫描沿用字面扫描的
     同一语义：绑定字面与包含它们的更长称谓（`enclosing`）一起长名优先认领，只替换
@@ -218,17 +203,14 @@ def project_withheld_names(
     显示面（`display` 无值）时保持原样，由后续字面检查如实报告缺口。短姓、关系
     称呼、未登记表达、源引文均不在绑定表内，绝不替换。纯函数：相同输入恒同输出。
 
-    两条文本规则（RC-60「投影」）：
-
-    · **同位语折叠**——替换后会与紧邻的同一字面连成重复（「表弟裴书远」投影为
-      「表弟」）时，丢弃该次替换、保留邻接的称谓，不再输出「表弟表弟」；
-    · **无损性守卫**——同一句里同一人物两个**不相邻的不同**绑定称谓都将换成同一
-      显示面时，视为不可投影：该人物在此句的投影全部拦下（`ProjectionBlock`
-      留痕），原文保留，归 owner 修（Design 挪拍位或改指称），不静默压缩。
+    已证明同一人物的不同称谓逐次替换，保留每次提及与其间的行动、对白和关系文本；
+    不用称谓共现或句式猜测揭名。必保揭名由正式证据和释放闸保护，已释放字面不在
+    绑定表中。同位语折叠仅消除原文已有的紧邻显示面（「表弟裴书远」→「表弟」），
+    不把前次替换生成的显示面当作原文，也不合并重复呼唤或隔着其他文本的提及。
     """
     table = {b.literal: b for b in bindings}
     if not table or not text:
-        return text, (), ()
+        return text, ()
     literals = set(table)
     for binding in table.values():
         literals.update(binding.enclosing)
@@ -238,60 +220,49 @@ def project_withheld_names(
                    for claim in claims
                    if claim.literal in table
                    and display.get(table[claim.literal].char_id, '')}
-    # 无损性守卫：按句分组，同一人物两个不相邻的不同称谓都将被替换 → 整句拦下。
-    blocked_starts: set[int] = set()
-    by_sentence: dict[int, list[tuple]] = {}
-    for claim in claims:
-        if claim.start not in replaceable:
-            continue
-        by_sentence.setdefault(_sentence_span_of(text, claim.start), []).append(
-            (claim.start, claim.end, claim.literal, replaceable[claim.start]))
-    for members in by_sentence.values():
-        by_char: dict[str, list[tuple]] = {}
-        for row in members:
-            by_char.setdefault(row[3], []).append(row)
-        for rows in by_char.values():
-            if len({row[2] for row in rows}) < 2:
-                continue
-            ordered = sorted(rows)
-            if any(b[0] - a[1] != 0 for a, b in zip(ordered, ordered[1:])):
-                blocked_starts.update(row[0] for row in rows)
+
+    def original_display(start: int, end: int, face: str, neighbor: Claim | None) -> bool:
+        """原文中的完整邻接显示面；另一已认领姓名内部的后缀不算同位语。"""
+        if start < 0 or end > len(text) or text[start:end] != face:
+            return False
+        if neighbor is None or neighbor.end <= start or end <= neighbor.start:
+            return True
+        return (neighbor.start == start and neighbor.end == end
+                and neighbor.literal not in table)
+
     out: list[str] = []
-    emitted = ''
     hits: list[NameProjectionHit] = []
-    blocks: list[ProjectionBlock] = []
     cursor = 0
-    for claim in claims:
+    for index, claim in enumerate(claims):
         if claim.start not in replaceable:
             continue
         char_id = replaceable[claim.start]
         replacement = display.get(char_id, '')
-        if claim.start in blocked_starts:
-            blocks.append(ProjectionBlock(claim.literal, char_id))
-            continue
         gap = text[cursor:claim.start]
-        # 同位语折叠：替换结果与紧邻的原文同面重复时丢弃替换，保留邻接称谓——
-        # 「表弟裴书远」投影为「表弟」，不输出「表弟表弟」。
-        if (emitted + gap).endswith(replacement) or text[claim.end:].startswith(replacement):
+        # 只折叠原文中已有的紧邻显示面；前次投影结果不提供同位语证据，否则
+        # 「陆大哥陆大哥，快来」会被吞成一次呼唤。长名认领也保护姓名内的后缀，
+        # 如「陆老爷陆兄」里的「老爷」仍属于前一姓名，不是独立的原文显示面。
+        before = claims[index - 1] if index else None
+        after = claims[index + 1] if index + 1 < len(claims) else None
+        if (original_display(claim.start - len(replacement), claim.start, replacement, before)
+                or original_display(claim.end, claim.end + len(replacement), replacement, after)):
             out.append(gap)
-            emitted += gap
             hits.append(NameProjectionHit(claim.literal, char_id, replacement))
             cursor = claim.end
             continue
         out.append(gap)
         out.append(replacement)
-        emitted += gap + replacement
         cursor = claim.end
         hits.append(NameProjectionHit(claim.literal, char_id, replacement))
     out.append(text[cursor:])
-    return ''.join(out), tuple(hits), tuple(blocks)
+    return ''.join(out), tuple(hits)
 
 
 
 def _hook_projection(context: HookContext):
     """Hook 渲染期的确定性称谓投影（CS-F2，rc16；CS-H H3 起显示面走 RC-60
-    解析）：与正文章包同一把尺（`project_withheld_names`，含同位语折叠与
-    无损性守卫）。绑定表随上下文携带（compile 按 Hook 自选的 surface_releases
+    解析）：与正文章包同一把尺（`project_withheld_names`，逐次投影与同位语折叠）。
+    绑定表随上下文携带（compile 按 Hook 自选的 surface_releases
     算好）；显示面＝该人物的 Hook 释放面首个——尚无释放的非 concealed 人物
     用 compile 期附带的回落纯称谓（concealed 不回落），第一人称聚焦人物用
     角色词「我（叙述者）」。"""
@@ -306,12 +277,30 @@ def _hook_projection(context: HookContext):
         return row[0] if row else ''
 
     def project(text: str):
-        projected, hits, _blocked = project_withheld_names(
+        projected, hits = project_withheld_names(
             text, bindings=context.withheld_bindings,
             display={b.char_id: display(b.char_id)
                      for b in context.withheld_bindings})
         return projected, hits
     return project
+
+
+_HOOK_TRANSITION_TEXT = {
+    'start': '从这一材料入场', 'continue': '接着上一材料继续',
+    'time_skip': '时间向后推进，明确交代转场', 'flashback': '倒回较早时点，明确标记回溯',
+    'return': '返回此前现场，明确接回当前行动', 'scene_cut': '切换现场，交代时间和关系',
+}
+_HOOK_EMPHASIS_TEXT = {'develop': '展开行动、对白和即时反应', 'brief': '简短带过，保留必要前提'}
+
+
+def hook_organization_summary(hook: HookDesign) -> str:
+    """监控面组织说明仅从正式选择生成；不是第二份剧情或语义真相。"""
+    lines = [f'材料{i + 1}：{_HOOK_TRANSITION_TEXT[item.transition]}；'
+             f'{_HOOK_EMPHASIS_TEXT[item.emphasis]}。'
+             for i, item in enumerate(hook.materials)]
+    lines.extend((f'阅读期待：{hook.reader_expectation.focus}',
+                  f'局部表现重点：{hook.local_focus}'))
+    return '\n'.join(lines)
 
 
 def _hook_render(context: HookContext) -> tuple[list[str], tuple[dict, ...]]:
@@ -354,18 +343,22 @@ def _hook_render(context: HookContext) -> tuple[list[str], tuple[dict, ...]]:
 
     focalizers = '、'.join(_focal_face(f) for f in context.pov.focalizers)
     parts = ['【起笔已成立的事实】（开场前已成立；自然带过，不作为任务交代）']
-    parts.extend(f'- {show(fact.text, f"opening_facts/{i}")}'
+    audiences = {'world': '世界已成立，人物未必知晓', 'pov': '视角人物可知',
+                 'reader': '读者获准知道，人物未必知晓'}
+    parts.extend(f'- [{audiences[fact.audience]}] {show(fact.text, f"opening_facts/{i}")}'
                  for i, fact in enumerate(context.opening_facts))
     parts.append('【必须写出的材料】（按给定顺序组织；不得重选或换序）')
     for i, material in enumerate(context.materials):
         index = i + 1
+        parts.append(f'- 材料{index}的呈现：{_HOOK_TRANSITION_TEXT[material.transition]}；'
+                     f'{_HOOK_EMPHASIS_TEXT[material.emphasis]}。')
         if material.presentation is not None:
             parts.append(f'- 材料{index}：{show(material.presentation, f"materials/{i}/presentation")}')
         else:
             parts.append(f'- 材料{index}：{show(material.event, f"materials/{i}/event")}')
             for j, delta in enumerate(material.deltas):
                 parts.append(f'  随材料成立：{show(delta, f"materials/{i}/deltas/{j}")}')
-    parts.append('【禁止提前兑现】（禁区：不得出现、不得暗示）')
+    parts.append('【禁止提前兑现】（禁区中的答案、后续结果不得出现或暗示）')
     parts.extend(f'- {show(line, f"forbidden_reveals/{i}")}'
                  for i, line in enumerate(context.forbidden_reveals))
     # 材料所引场的明确禁止（CS-H H3 判据⑥）：楔子不得违背正文设计已声明的禁区。
@@ -373,15 +366,37 @@ def _hook_render(context: HookContext) -> tuple[list[str], tuple[dict, ...]]:
         parts.append(f'- 材料所引场景的明确禁止：{show(line, f"avoid_lines/{i}")}')
     parts.append('【叙述与组织】')
     parts.append(f'- 视角：{person}，聚焦 {focalizers}')
-    parts.append(f'- 组织方式：{show(context.design_brief, "design_brief")}')
-    parts.append(f'- 文风与口吻：{show(context.delivery_brief, "delivery_brief")}')
+    parts.append(f'- 全书表达机制：{show(context.book_style, "book_style")}')
+    for i, mechanism in enumerate(context.expression_mechanisms):
+        parts.append(f'- 全书默认表达机制（按本楔子人称实现）：'
+                     f'{show(mechanism.statement, f"expression_mechanisms/{i}/statement")}')
+    for i, voice in enumerate(context.character_voices):
+        parts.append(f'- {_name(voice.char_id)}的声线：'
+                     f'{show(voice.voice, f"character_voices/{i}/voice")}')
+    for i, voice in enumerate(context.scene_voices):
+        labels = '、'.join(f'材料{j + 1}' for j, item in enumerate(context.materials)
+                          if item.beat_ref.split('#', 1)[0] == voice.scene_ref)
+        parts.append(f'- {labels}所在场的表达机制（按本楔子人称实现）：'
+                     f'{show(voice.voice, f"scene_voices/{i}/voice")}')
+    parts.append(f'- 局部表现重点：{show(context.local_focus, "local_focus")}')
+    expectations = {'fact': '尚未解答的事实问题', 'action': '尚未完成的行动',
+                    'relationship': '尚待发展的关系'}
+    parts.append(f'- 阅读期待（{expectations[context.reader_expectation.kind]}）：'
+                 f'{show(context.reader_expectation.focus, "reader_expectation/focus")}。'
+                 '让读者形成期待，不在楔子中兑现，也不暗示未来答案或结果。')
+    parts.append('- 最后一份材料是本楔子的截断边界，不继续写后文；'
+                 '末尾可落在动作、对白、即时反应或有依据的疑问上。')
     parts.append('【可用称谓】（只能使用这些字面）')
     surfaces = '、'.join(sorted({s for r in context.usable_surfaces
                                  for s in r.surfaces}))
     parts.append(f'- {surfaces}' if surfaces else '- （无）')
     parts.append('【交付要求】')
-    parts.append(f'- 篇幅目标约 {context.target_chars} 字，'
-                 f'绝对不得超过 {context.hard_max_chars} 字（标点计入，空白不计）。')
+    parts.append(
+        f'- 篇幅包络：目标 {context.length_low}–{context.length_high} 字、硬上限 '
+        f'{context.length_cap} 字（非空白字符，按本书章预算派生，不参照原文引子长度）。'
+        '在包络内按理解当前冲突所需的行动、对白和反应展开；每段推进局面或认识，'
+        '不为凑字数压缩或注水，必要前提足够清楚后停止解释，'
+        '在阅读期待最强的位置截断。')
     parts.append('请写出楔子。')
     return parts, tuple(hits)
 
@@ -420,8 +435,15 @@ def hook_material_issues(context: HookContext, *,
     text = render_hook_context(context)
     before, tail = text.split('【禁止提前兑现】', 1)
     positive = before + '【叙述与组织】' + tail.split('【叙述与组织】', 1)[1]
-    sources = [MaterialSource('hook', 'hook', field, getattr(context, field))
-               for field in ('design_brief', 'delivery_brief')]
+    sources = [MaterialSource('hook', 'hook', 'local_focus', context.local_focus),
+               MaterialSource('hook', 'hook', 'reader_expectation.focus', context.reader_expectation.focus),
+               MaterialSource('design', 'book', 'book_style', context.book_style)]
+    sources.extend(MaterialSource('design', voice.char_id, 'voice', voice.voice)
+                   for i, voice in enumerate(context.character_voices))
+    sources.extend(MaterialSource('design', voice.scene_ref, 'delivery.voice', voice.voice)
+                   for i, voice in enumerate(context.scene_voices))
+    sources.extend(MaterialSource('expression', mechanism.ex_id, 'statement', mechanism.statement)
+                   for mechanism in context.expression_mechanisms)
     sources.extend(MaterialSource('hook', fact.established_by, f'opening_facts/{i}', fact.text)
                    for i, fact in enumerate(context.opening_facts))
     for i, item in enumerate(context.materials):
@@ -542,13 +564,14 @@ def check_chapter_receipt(
     """章级回执与当前章包/正文的绑定核对（rc6 身份拆分）：旧回执配新输入必须拒绝。
 
     写手视图摘要（writer_view_sha256）与验证输入摘要（validation_sha256）分别
-    核对——写手可见面变化（导演说明、实际依赖、预算、协议或渲染版本）或验证
+    核对——写手可见面变化（正文 system、导演说明、实际依赖、预算、协议或渲染版本）或验证
     材料变化（禁用字面、称谓许可、篇幅带）都使**该章**回执失效；Machine 层
     摘要（machine_view_sha256）**不参与核对**（仅审计：只改 Machine 层字段不
     触发重购）。正文字节变化使回执与文本脱钩。不再绑定全书 IR 与前文链
     （D2，`R-7.4` 改写）：写手只收当前章包，各章独立有效、可集合恢复。
     逐份核对（I-16：回执不是第二份业务权威）。
     """
+    from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
     problems: list[str] = []
     if receipt.status != 'accepted':
         problems.append(f'回执状态为 {receipt.status}，不构成有效提交')
@@ -557,21 +580,12 @@ def check_chapter_receipt(
                         '（写手可见面变化使本章回执失效，须重购）')
     if receipt.validation_sha256 != identities.validation_sha256:
         problems.append('validation_sha256 与当前编译出的验证输入摘要不一致'
-                        '（禁用字面/称谓许可/篇幅带变化，须重做）')
+                        '（验证材料变化，须先免费重验）')
+    if receipt.validator_version != BODY_VALIDATOR_VERSION or tuple(receipt.mechanical_checks) != BODY_MECHANICAL_CHECKS:
+        problems.append('机械校验版本或检查项变化，须先免费重验')
     if receipt.prose_sha256 != prose_sha256:
         problems.append('prose_sha256 与章文本不匹配（回执与正文脱钩）')
     return problems
-
-
-def affected_chapters(
-    directly_affected_scenes: Iterable[str], graph: BodyDesign,
-) -> set[int]:
-    """场景级窄修复 → 章级失效范围：受影响场景所在的目标章。
-
-    第 k 章内任何场景输入变化 ⇒ 重编译后第 k 章章包变化 ⇒ 该章回执失效
-    （D2 章包绑定；无前文链传导，见 check_chapter_receipt）。"""
-    scene_chapter = {sid: ch.chapter_ordinal for ch in graph.chapters for sid in ch.scene_ids}
-    return {scene_chapter[sid] for sid in directly_affected_scenes if sid in scene_chapter}
 
 
 def directly_affected(
@@ -743,6 +757,9 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    - event：写"发生了什么"，并保住足以正确演出这一事件的语义——必要前因、关键指代
      （如"他那里"须写明指什么）、已成立的站位（谁在床上/床边/门外）、公开行为与内心
      反应的差别；不要混入动机分析或世界规则。
+     失言、答话和改变决定要保留原文给出的直接触发及回应对象，不能只摘最后一句或
+     最终态度；原文明示的权衡照实转述，不替人物分析未说明的原因。转场只记录实际
+     发生的移动、离开、返回与时间经过，叙述者误以为与客观已发生保持区别。
      转述对话/问句必须保真主客体：谁向谁借、谁问谁、借出方是谁，代词消解后写明对象，
      不得翻转施事与受事；身份关系必须写明归属（谁的同窗/表亲/好友），不得悬空成"同窗"；
    - 动作的范围与去向以原文为准：走了多远、去了哪里、交给了谁，原文写到哪就记到哪，
@@ -873,7 +890,7 @@ _PRESERVE_KIND_LINES = '\n'.join(
     f'- {kind}：{definition}' for kind, definition in PRESERVE_KIND_DEFS.items())
 
 PRESERVE_RULES = f"""任务：从源证据投影视图选择改写不可丢失的最小语义义务
-（保存策略 v8；wire 协议 stage4-preserve-v5）。
+（保存策略 v10；wire 协议 stage4-preserve-v5）。
 
 【输入的形状（源证据投影视图，R10a a2）】视图按「书级初态 → 世界约束 →
 逐章逐拍」给出源真值的原子，每原子一行：方括号内是**投影句柄**（书级初态
@@ -897,17 +914,17 @@ source_refs 所指窗口；邻句只供上下文，不能借它添加事件内�
 - event_core／character_arc／causal：写变化或关系（谁对谁从什么变成什么）；
 - reveal：写命题（谁在何时确认了什么）；
 - identity／world_fact／initial_state：写成立的事实；
-- statement 与 satisfaction 同时保留主客体、必要动机、公开说辞和真实想法的差别：
-  公开说辞与真实动机不一致时，两者都写。
+- statement、satisfaction 与 requires 合起来保留主客体、必要动机及公开说辞与真实
+  想法的差别；各字段按职责分工，不要求重复完整对白或同一条因果。
 
 【义务文本的称呼（statement／satisfaction／details.text）】
 人物使用人物表中的完整姓名或已登记且唯一归属的称谓；不要自行缩成裸姓、
 多人的姓氏并列或未登记别名。重复提及也写完整称呼，或使用主客体明确的无姓名表述。
 裸姓及多义带名面无法在写手材料中确定性投影，会被机械校验拒收。
-身份与别名映射只读人物表，不在义务里重复写“甲/乙指丙”的别名说明；
-statement／satisfaction 只写谁与谁的关系、行动、动机和验收条件。
-同一句不混用同一人物的不同带名称谓；改用统一的登记称谓或主体明确的纯关系称呼，
-使义务在姓名尚未揭示的目标位置也能无损呈现。源证据明确要求揭名时保留揭示事实与时点。
+身份与别名登记只读人物表，不在义务里另建一份映射；源情节中的正式揭名、身份
+揭示与人物关系仍按相应 kind 保留。statement／satisfaction 写关系、行动、动机和验收条件。
+同一人物的不同完整登记称谓可以自然混用，叙述与对白按交往关系选称呼；只要唯一归属
+明确，送达时逐次投影，不因同句共现拒收。源证据明确要求揭名时保留揭示事实与时点。
 家族集体指称照常保留，不改人物身份与称谓关系；源引文只读，不为此改写证据。
 
 【必须保住的两类反差】
@@ -921,12 +938,29 @@ statement／satisfaction 只写谁与谁的关系、行动、动机和验收条�
   owner 核实；不通过 satisfaction 补造知情、另编答案或要求目标设计迁就矛盾。
 
 【satisfaction 写页面上可核对的事实条件】
-写触发、行动、必要动机、公开说辞与真实想法的区别、后果及何时由谁获知。
+写改写后必须成立的条件；与 statement 及 requires 所指义务合起来，保住触发、行动、
+必要动机、公开说辞与真实想法的区别、后果及何时由谁获知，不重复已有的完整前提。
 用具体条件保住反差，不给人物强加“羞辱、悲凉、控制”等主题或情绪解释；语域由表达机制决定。
 可替换的道具、动作或台词形状放进可改写 details，不升成必保字面。
-必要铺垫与后果仍须独立成为条件，不能降成可选细节。重复行为分别保各次实例，
+必要铺垫与后果仍是正式保存条件，不能降成可选细节。重复行为分别保各次实例，
 需要回顾时另列回顾义务并明确它涵盖的实例，不把未来实例写进当前认知。
 loop 未收束的问题与 close 时的 resolution：悬念的铺设与兑现方式进 satisfaction。
+
+【源盲交接保住必要骨架（v10）】
+Design 只收到 statement／satisfaction／requires／details 和锁，不会看到你选中的
+事件原文、引文或 anchors。选中锚点不等于已交接其必要语义：必要触发、响应与结果
+须在正式交接材料合起来可理解；已经写进 statement 或 requires 所指义务的前提，
+不必在 satisfaction 再重复。保住具体骨架与必要因果，让 Design 组织连贯的目标故事。
+- 失言与答话：保住是谁对谁提出什么、对方回应什么，不能只保“失言、脸红、否认”；
+- 人物转变：保住源文明示的刺激、限制或权衡及新选择，不能只保“他终于答应”；
+- 突然出现与转场：保住已成立的位置、离开／返回、观察渠道与必要时间关系，不能
+  将“某人以为已离开”改成“某人客观一直在异地”，也不替缺失过程编造解释。
+自然概括允许省去不改变骨架、因果和知情边界的过程；不为每句对白、眼神或藏身路线
+另造义务，也不为解释突现机关而提前揭底。同一时点、同一作用的触发和响应可合写。
+较早且不可省的独立前提另用 requires 连接；可改写措辞与动作形状才放 details。
+例如“被拒绝完整合作后接受有限合作”须保住拒绝及接受的条件；具体拒绝台词可改写。
+必要因果不因原句可改写而降成软材料，软画面也不因入选而升成硬义务。
+Preserve 仍只保存源证据支持的语义；源文自身缺少连接，不在这里新造事实或动机。
 
 【义务边界（v5）】
 satisfaction 写正文必须成立的条件，也写哪些表现不足以兑现、哪些改法会改变因果。
@@ -990,10 +1024,13 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
   不要求回顾是全组最后一项；只回顾明确覆盖的实例。
 - wire 顶层：{{"protocol_version":"stage4-preserve-v5","obligations":[...],
   "series":[...],"evidence_conflicts":[...]}}（后两项可省略）。
+输出前将义务文本与所选原子核对一次：必要触发与响应、决定条件、说辞与真实
+想法的区别已进入源盲文本，未知未被补真。同一回答内完成核对，不输出自评分或核对表。
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/义务清单/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v10）。你是整书一次调用的结构设计者：只表达**选择、
+（wire 协议 stage4-design-v10）。目标是使必保条件组成可演出的完整故事，而非按义务
+逐条解释。你是整书一次调用的结构设计者：只表达**选择、
 结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一、默认值、
 知情增量的键与模式全部由 compiler 派生，你不输出任何 ID、编号或归一化数值
 （I-21）。机械字段（world_rules、expression 保留决定、narration、pov/voice、
@@ -1002,7 +1039,7 @@ entry 的 recap/锚点缺省）也由代码派生——你只写判断与例外�
 不机械等同于同场最终接受拍的阅读顺序；同场复合尝试与揭示可交错，跨场前置义务
 不得晚于依赖方。人物动机与阅读效果以义务为准：brief 与 voice 只做呈现表达，
 不得改写义务给出的事实、动机与满足条件。
-不增加无证据的人物偏好、价值判断或社会规则。
+不增加无证据的关键人物偏好、前史、价值准则或社会规则；局部连接性创作遵守下述边界。
 自由设计场景，但不为每条义务机械拆场。
 义务是原子验收条件，叙事拍是自然行动或转折，二者不一一对应。
 先按行动、感知通道、因果转折与章末停点组织事件，再把同时兑现的条件放在同一拍的 real 中；
@@ -1013,6 +1050,18 @@ entry 的 recap/锚点缺省）也由代码派生——你只写判断与例外�
 实例的第几次、间隔与前后条件也是语义内容，须在对应 ev/brief 中保留；仅分成两拍不等于已保留时点。
 不设置拍数目标或上限；保留全部必保条件、各次发生与真实反应，不用概括替代具体实例。
 目标状态只存会限制后续的持续事实；即时动作留在事件。初始态由你显式选择，不复制源书末态。
+
+【构思顺序与有限补桥】
+同一次设计中先组织目标故事，再附承载标注：确定每段连续行动的时空、参与者与感知
+通道，安排触发、行动／反应、权衡与选择、结果及章末停点，最后附 real／know／state
+和相对篇幅重点。不要先给每条义务占一拍，再用 brief 把碎片强行串起来。
+源盲条件没有给出必要连接时，可以设计局部行动、沟通和当下决策过程，使既有事件能
+自然接续。补桥只连接已有冲突与选择：不得改变关键事件、主体、关系、核心动机、结局、
+系列实例、明确时序、事实锁、知情／称谓授权，或回答原文刻意未解的问题。
+人物当下的权衡应立足已给出的诉求与处境，不新造爱情、仇恨、人格准则或幕后秘密。
+补出的连接是目标故事的正式行动，须落在 ev 及实际需要的 state／threads 中；brief
+只指导怎样演出，不能独自持有原因。不要把设计责任交给正文写手，不新增补桥清单或自评字段。
+必要衔接可以短写；不为每次停顿、眼神和小动作造状态、知情记录或额外义务。
 
 【义务承载标注（real，核心新增）】
 Brief.requirements 以 obNN 为键，包含完整语义、依赖 requires、锁与 satisfaction。
@@ -1058,6 +1107,8 @@ Brief.requirements 以 obNN 为键，包含完整语义、依赖 requires、锁�
   question→answered/dismissed；promise→fulfilled/broken/released。
 每条线只能 open 一次；advance/close 不得早于 open；close 之后不得再操作。
 结尾仍开放的线合法。
+progress／resolution 只结算该条目标、行动、问题或承诺，必须与实际 ev 和认知一致。
+一方兑现沟通承诺、另一方违背约定是不同结果；不能用“从未谈过”结算已经达成的约定。
 
 【拍上事实断言（state）】
 持续到后续的事实变化写在拍的 state：[{at, key, val, op?, modality?, lock?}]：
@@ -1098,9 +1149,16 @@ character_voices 声明，不举后段具体情节。
 【可改写细节（details）】
 requirements.details 给出 obNN.dNN 短引用与提示；拍上 details:["obNN.dNN",…]
 选择对该拍有用的机关、动作或台词形状。可以换道具、换措辞或省略；不因此新增
-必保条件，也不降低 satisfaction 中必要动机与铺垫的强度。提示只用于创作，不复述成说明句。
+必保条件，也不降低 statement／satisfaction／requires 联合交接的必要动机与铺垫。
+提示只用于创作，不复述成说明句。
 
 【场景与拍】
+场景是连续行动的控制单元，不能只按义务分组。明显跳时、切换地点或另起一轮互动时，
+拆成同章内的另一场，或在 ev 明写连续移动与必要时间经过；不要从上一位置直接跳到
+只有下一位置才成立的动作。多次重复过程可压缩，但其与单次关键行动的界线须清楚。
+ev 写清这一拍如何从前件走到结果：答话保留必要问句，改口保留刺激和条件，选择保留
+已确定的权衡与代价。主观判断标明是谁认为，不扩大成所有人的内心或客观世界事实。
+driver.turn 对应本场实际发生的转折；承诺只是承诺时，不写成已经完成的行动结果。
 每拍 release 只声明该位置首次允许的称谓 [{char_id,surfaces}]，不得一次放开
 该人物所有称谓；每个称谓字面只能取输入身份投影给出的可用称呼。
 initial_surfaces 是开场已放行的称谓面（同样的闭集约束）。
@@ -1139,9 +1197,17 @@ pov 缺省＝叙述唯一焦点（compiler 派生）；多焦点书才逐场写 
 不再当作尚未发生；读者获知附着于实际动作，不靠下一章重复陈述来补确认。
 不能一边要求“独自回味／事后回想”，一边又以同一在场对话的即时冲突继续。
 确需时间跳转或回顾时用对应 transition，并明确人物位置和动作怎样衔接。
+carryover 只描述本章首拍之前已经成立、仍影响开场的局面，不是本章梗概，不含本章
+后段才发生的结果。章内后续跳时放在对应 ev／brief，不提前放进章首承接。
 
 scene_weights（可选）：与场景等长的正数数组（相对篇幅重点）；缺省均匀。
+按核心冲突、决定转折与必要对白的展开需求分配重点，不按义务条数平均分配。
+在总篇幅约束内压缩重复过程、背景复述与无新变化的对话，给触发—反应—选择留空间；
+压缩不能删去必要前件、实例或结果。
 章切片总数恰好覆盖场景。每场／拍不生成编号。
+输出前沿目标阅读序核对：时间与位置能接上，回答有前问，改口有触发，人物可知渠道
+明确，线程结算与行动一致，章首只到首拍入口，补桥没有越过锁与骨架。再核对现有
+Schema、必保 real、know、释放与引用闭集；不另输出核对表或“已自洽”声明。
 返回一个 JSON object，不要围栏、不要解释。
 """
 
@@ -1296,25 +1362,38 @@ NAME_VARIANTS_RULES = """任务：判定疑似姓名异写候选。程序已从�
 处理）；不得在证据矛盾时强行归并；同一字面只答一次。
 输出 JSON 顶层：{{"protocol_version":"{protocol}","variants":[{{"literal":"…","verdict":"same|unresolved|not_name","char_id":…,"surface":…,"evidence_refs":["…"],"reason":"…"}}]}}"""
 
-HOOK_DESIGN_RULES = """任务：为整本小说设计读者入口（楔子）的结构设计。brief 明确入口知识、跳时定位与末尾悬念；POV 可以与正文不同，事实和披露边界一致。只输出设计 JSON，不写 prose
-（wire 协议 stage4-hook-design-v2）。事实只选择输入 facts 目录中的 fact_ref；
+HOOK_DESIGN_RULES = """任务：从正式正文设计中选择一个能迅速吸引读者的冲突单元，设计楔子的进入、呈现与截断。只输出设计 JSON，不写楔子正文
+（wire 协议 stage4-hook-design-v3）。事实只选择输入 facts 目录中的 fact_ref；
 不得自行生成地址、人物组合、状态键或引用编号。材料位置只选择 scene/beat 分量。
 目录每条保留建立位置、原值、op、modality、holder 与 knowledge_mode；这些是不同
 维度。世界事实已成立不自动代表人物或读者已经知道，不把不同原值猜成同一事实。
 
-你看到的骨架是正文设计（BodyDesign）：唯一事件真相。楔子不是 Scene 0，不是正文
-第一场的压缩版，而是从已设计好的故事中重新选择最有吸引力的一条进入路径。
+你看到的骨架是正文设计（BodyDesign）：唯一事件真相。楔子是高张力情节切片，
+不是完整场景的缩写版：默认选择一个清楚的冲突片段，通常取 2–4 拍、以其中一拍的
+develop 为呈现中心、其余 brief 补足理解前提；不把整场戏的起因、经过、结果与后续
+计划演完——正文负责完成情节，楔子负责制造阅读期待，提前演完既耗尽悬念，也会让
+正文对应章节重复叙述。让人物采取行动、对方作出反应、局面发生变化，并在冲突
+尚未解决时截断。
+材料要能直接写成小说，不能只有几个相隔很远的结果。不要为了展示全书卖点堆入多条支线。
+输入中的 opening_chapter 是第1章正式任务与材料位置的派生视图：比较楔子已经消耗的
+信息与第1章还会推进的内容，避免把第1章的完整行动与反应提前浓缩复述。无需改写正文设计。
 
 设计自由（明确授权）：
 - cold open：从故事任意位置的高张力画面或认知状态开场；
-- 倒叙、flash-forward、跨场景取材、合并、压缩，只要语义合法；
+- 倒叙、跨场景取材与压缩均允许，但每次切换必须服务同一冲突，有明确时间定位，
+  且理解所需的因果前提必须来自所选起笔事实或材料，不能交给写手补造；
 - materials 的排列按读者接收信息的顺序，可以不同于故事时序——这正是倒叙授权。
 
-materials（默认 2-4 条，按呈现序；这只是随篇幅调整的指引，不是机械闸）：每条
-{beat_ref:{"scene":...,"beat":...}, withheld:[fact_ref], presentation}。
-- 每加入一份材料，读者对局面的理解必须升级；最后一份材料必须能天然收束楔子；
-- 围绕一个核心冲突取材，并给读者留下一个未兑现的问题；
-- 不选只属于后期 payoff 的拍；人物对事件的完整处理（追问、伦理辩论、对峙）不属于楔子；
+materials（按呈现序，不规定条数）：每条
+{beat_ref:{"scene":...,"beat":...}, emphasis:"develop|brief",
+ transition:"start|continue|time_skip|flashback|return|scene_cut", withheld:[fact_ref], presentation}。
+- emphasis：develop=展开行动、对白与即时反应；brief=简短带过必要前提。
+- 第一条 transition=start；后续不得 start。continue 接同场相邻下一拍；time_skip
+  向后推进到较晚时点；flashback 倒回较早位置；return 在回溯后向前返回已呈现场景；
+  scene_cut 切到不同场景。切换的事实桥接依赖所选材料与起笔事实，不另写一套剧情。
+- 每份材料应推进同一冲突或补足理解所需的前提。末份材料是楔子的截断位置：
+  可停在动作、回应或局面即将改变之处，不要求把该场结局写完，也不要求替读者发问。
+- 截断精度沿用现有拍引用：选择足够细的末拍，不虚构拍内动作地址。
 - withheld：只选该拍 fact_refs 中不呈现的事实引用（隐藏侧面时用）；
 - presentation：只在该拍涉及隐藏身份（concealed 中人物）或需要隐藏侧面时给出，
   用一句话显式声明本材料呈现什么（不含隐藏人物的姓名字面）；否则省略，
@@ -1335,57 +1414,97 @@ opening_facts：按入口需要选择，允许合法空数组，不为凑条数�
 - 不选材料拍本次新建立或揭示的事实，不选禁区中的本次建立。初态已经成立的事实，
   不因后续材料再次写入同地址就变成新揭示；但起点前的值变化、解除或场作用域失效
   会使旧事实失效。后续改变值的事实必须保留后续原值，不得搬到 init。
+- 目录条目的 later_writes 列出同地址的全部后续写入（系统已算好，直接查表）：
+  world/pov 起笔事实必须选该地址在冷开起点前的**最后一次**写入——若 later_writes
+  中某次写入的位置不晚于你的起点，本条旧值已失效，改选符合时序的那一次写入
+  （或避开该地址）；scope=scene 的事实只在其所在场内有效，跨场起点不得引用。
 
 concealed：需要隐藏身份的人物 id 列表（没有给空数组）。
 surface_releases：楔子中允许使用的称谓 [{char_id, surfaces}]——只能从正文设计已
 声明的称谓面里选；隐藏人物不得释放。
+- 所选起笔事实与材料拍的命题/事件文本会进入写手视图；目录条目与拍上的
+  name_exposure 已按人物标出其中专名。name_exposure 涉及的每个人物都必须在
+  surface_releases 给出释放面（系统会把其登记字面替换为该释放面）；不能释放
+  （隐藏人物、楔子人物集之外）就换选条目，不得让未释放专名留在所选文本里。
 
 forbidden_reveals：后文真实存在、楔子不得提前兑现的关键揭示。显式二选一：
 {kind:"fact", fact_ref:"目录引用"} 或 {kind:"event", beat_ref:{scene:...,beat:...}}。
 fact 禁该位置的具体事实；event 禁整拍。不能与材料或起笔所选的同次揭示冲突。
 
-design_brief（120-300 字）：这些材料如何组织成楔子的写作要求，逐项覆盖——
-入口（从什么状态或画面进入）、哪些材料快速带过、冲突如何升级、重点展开哪里、
-给读者留下什么问题、在哪里切断。只谈组织方式，不谈措辞。
-delivery_brief（一句话）：文风机制与口吻（人称、节奏、对白密度），呈现自由交给写手。
+reader_expectation：让读者带去后文的一项明确期待。focus 描述期待，不复述未来答案。
+- 事实谜题：{kind:"fact", focus:"...", fact_ref:"目录引用"}。所选事实必须能真正
+  回答这个问题，且建立位置晚于全部材料；不能用人物怀疑、相信或含混反应冒充确证，
+  不能把源文未回答的问题设计成有答案的谜题。引用存在只证明位置合法，答案是否匹配
+  是你的语义责任。未来 fact_ref 只用于设计和校验，不会成为写手的故事材料。
+- 行动或关系期待：{kind:"action|relationship", focus:"...", followup_refs:[{scene:...,beat:...}]}。
+  选后文实际推进该行动或关系的拍，均须晚于全部材料；不要求唯一答案，但不能许诺
+  正文没有的发展。未来引用只用于校验，不投影给写手。focus 聚焦截断处尚未解决
+  的问题（在场人物即将到来的反应或决定），不另起下一轮剧情的悬念。
+- 不在材料、起笔事实或局部重点中提前兑现这项期待；与它冲突的揭示应列入禁区。
 
-只输出一个 JSON 对象（protocol_version 为 "stage4-hook-design-v2"；不要围栏、
+local_focus：只写表现重点，例如人物严肃措辞与荒唐行动的反差、表面克制与内心反应
+的落差。不得另行复述事件、增补动机、前史、桥接事实或结局。全书风格、人物声线与
+材料场景声线由正式设计投影，不再自拟 delivery_brief。
+
+只输出一个 JSON 对象（protocol_version 为 "stage4-hook-design-v3"；不要围栏、
 不要解释）：
-{"protocol_version":"stage4-hook-design-v2","pov":{...},"opening_facts":[...],"materials":[...],"concealed":[...],
- "surface_releases":[...],"forbidden_reveals":[...],"design_brief":"...","delivery_brief":"..."}"""
+{"protocol_version":"stage4-hook-design-v3","pov":{...},"opening_facts":[...],"materials":[...],"concealed":[...],
+ "surface_releases":[...],"forbidden_reveals":[...],"reader_expectation":{...},"local_focus":"..."}"""
 
-HOOK_WRITER_SYSTEM = """你是楔子写手（prose realizer）。楔子的结构设计已经全部完成，你的唯一职责是把它写成高质量的小说语言。
+HOOK_WRITER_SYSTEM = """你是小说楔子写手。把已设计的冲突单元写成一段能让读者继续翻页的小说。
+读者应看清眼前谁要做什么、受到什么阻力，并通过行动、对白和即时反应进入人物处境。
 
-输入按身份分区（违反任何一条即报废）：
-1.【必须写出的材料】是你的全部故事内容：按给定顺序组织，不得重新选择材料、不得改变顺序、不得把楔子扩写成正文第一场的完整戏；材料之外的事实、背景与人物前史一律不补造。
-2.【起笔已成立的事实】是开场前已成立的世界：自然带过，作为延续或背景使用，不作为写作任务逐条交代，也不复述成说明。
-3.【禁止提前兑现】是禁区：其中的任何信息不得出现、不得暗示；受保护的未决问题不回答、不点破，也不主动向读者提起。
+输入是你唯一的写作依据：
+1.【必须写出的材料】按给定顺序、展开重点和转场方式呈现。把事件写成发生中的戏，
+  不把几条梗概逐句扩写。保留理解所需的因果前提，转场交代时间和当前行动的联系。
+  不重新选材，不改变行为主体、结果、顺序或事实，不越过最后一份材料的截断位置。
+2.【起笔已成立的事实】自然融入必要前提，不逐条交代。世界成立、人物可知、读者获准
+  知道是不同权限：世界事实不自动成为视角人物的知识，人物怀疑、相信不写成确知。
+3.【禁止提前兑现】是禁区：其中的答案或后续结果不得出现、不得暗示；受保护的未决
+  问题不回答，不虚构线索或答案。让眼前局面形成期待，不强迫替读者发问。
 4.【可用称谓】之外的人名字面一律不得出现。已释放只表示字面可用，不表示任何人都能这样称呼；叙述、人物自称及对他人的称呼须符合当前说话人和对象的关系。
-5. 遵守文风与口吻要求：篇幅以目标为准，绝对不得超过硬上限。
+5.【叙述与组织】中的全书风格、人物与场景声线落实为实际表达机制，局部重点只指导
+  表现。不能因为楔子需要冲击力而把喜剧写成悲凉、把猜测写成秘密已经坐实。
 
-呈现自由（你的创意只在这里发挥）：句法、对白措辞、节奏、意象、语气、局部小动作。
-局部小动作只能服务气氛与人物状态，不得带出新的情节动作或结果（谁来了、谁走了、
-什么被拿走、什么被答应，都不属于你）。
-可以补措辞、对白、即时反应与局部动作；不得新增改变动机、行为主体、关系、时序、
+你的文学表达空间：组织句法与段落，取舍展开程度，写自然的对白、即时心理反应、
+停顿与局部动作。材料已有关键原话时保留它的信息和人物说话机制；新增对白措辞不能
+新增承诺、动机、告知或结果。用人物的反应表现反差，不由旁白解释情节多么荒唐。
+环境在改变处境、行动或感知时使用，避免独立堆景、空泛心跳与无依据的悲凉腔调。
+标点服务当前句子的节奏，破折号不承担反复制造悬念的任务。
+局部动作与感受不得新增改变动机、行为主体、关系、时序、
 知情条件或后续前提的事实。删去这句后若会改变读者对为什么发生、谁做了、前史是什么
 的理解，就属于新增事实，必须删去。
 
+篇幅遵循输入【交付要求】中的包络（目标区间内按冲突所需表达，硬上限不可越），
+不沿用源楔子的长度。保持简洁有力：每段都推进动作、人物反应或必要理解，
+删去重复解释与空转气氛。
+阅读期待通过尚未解决的局面形成，末句可以停在动作或一句话上；不为了收尾另造谜题，
+也不默认替读者问“究竟为什么”“他是不是早就知道”。
+
 直接输出楔子正文本身：不要标题，不要任何解释、前言、后缀，不要 markdown 围栏。"""
 
-BODY_WRITER_SYSTEM = """你是小说正文写手（prose realizer）。整本书的故事与呈现设计已经全部完成，
+BODY_WRITER_SYSTEM = """你是小说正文写手（prose realizer）。故事事实与连接性设计由 Stage4 负责，
 你的唯一职责是把给定章节写成高质量的小说正文。
 
-规则（违反任何一条即报废）：
-1. 你是 prose realizer，不是故事设计师：事实、事件、知情、义务与释放位置以输入为准，不新增、删除、替换；输入没写的背景、人物前史与后续伏笔一律不补造。
+写作约定：
+1. 保持输入的情节骨架、关键事件及其条件和结果、行为主体、动机、关系、知情、义务与释放位置。可按下文补充呈现所需的自然移步、短转场和即时动作；新的情节、沟通、决定、信息获得与后文依赖由设计给出，输入未给的背景、人物前史与后续伏笔不补造。
 2. 输入的用法分三类：「必须写出」在正文里实际完成（条目可拆开融入叙述，不逐条宣布、不要求逐条对应句子或段落）；「不可违背」「承接」「背景」遵守即可、不必复述成说明；「导演说明」之内是你的呈现自由。事实约束与导演说明冲突时以事实约束为准。
 3. 场景是控制单元：每场完成自己的拍序与结果即可，不要求每场独立铺背景、独立收束或总结。
 4. 只使用已释放的称谓面与已获准知道的信息；未释放的专名字面与提前知情一律不得出现。已释放只表示字面可用，不表示任何人都能这样称呼；叙述、人物自称及对他人的称呼须符合当前说话人和对象的关系。
-5. 知情与时态按输入措辞：怀疑不写成确知、听说不写成相信、计划与预计不写成已发生、原文未交代的（含禁区所列未回答的悬念）不补答案；反差与幽默通过话语、动作与内心反应的落差呈现，不写成解释性总结句。
+5. 知情与时态按输入措辞：怀疑不写成确知、听说不写成相信、计划与预计不写成已发生、输入未确定的（尤其禁区所列未回答的悬念）不补答案；反差与幽默通过话语、动作与内心反应的落差呈现，不写成解释性总结句。
 6. 逐拍结果须在对应拍结束时成立并实际写出；持续状态保持到后续转移替代或作用域结束，不能把各拍结果一律延长为章末同时成立。
 7. 遵守交付要求：一次给出本章完整正文，篇幅在给定区间内。
 8. 展开对白与回忆也受同一事实约束：不为了增加温情、戏剧性或解释人物，改写既定动机、告知时点或已完成的行为。承接中的已发生事实直接延续，不重新写成未知、未说出口或另一段前史。
 
 呈现自由（你的创意只在这里发挥）：在导演说明边界内组织场景节奏、展开与压缩，写具体的对白、动作、停顿与即时反应。
+已给出的触发、回应、权衡与选择要让读者在场景中看懂，不能只用“终于答应”“心里一动”
+交代转变。动作按已确定的位置、时点与感知通道衔接，直接延续已发生的答话和反应。
+可补自然移步、短转场和即时动作来呈现既定行动；涉及新的沟通、决定、信息获得或
+后文依赖的情节则以设计为准。补出的时间措辞须符合事件先后：先得到安排再行动，
+出发不能早于触发决定；确有回溯须明确标记。未定的具体钟点无需强行补写。
+即时反应可以展开，不能由脸红推成爱情、由沉默推成同意或由猜测推成幕后真相。
+篇幅优先留给核心冲突和决定过程，重复行为与既成背景可以简写；不以删去必要前件换取简洁。
+输出前核对本章事件、决定、转场、知情和称呼是否保持输入的条件与结果；只交正文，不输出核对过程。
 
 直接输出本章正文本身：不要章号、标题、场景标记，不要任何解释、前言、后缀，不要 markdown 围栏。"""
 
@@ -1757,12 +1876,11 @@ def consumption_closure(graph: BodyDesign,
                         fact_bindings: Iterable = ()) -> dict[tuple, tuple[int, ...]]:
     """全书消费闭包（R10b.3）：地址 → 消费者场序集合（升序）。
 
-    消费者闭集四类（背景投影的「后文仍被消费」判定面）：
+    消费者闭集三类（正文背景投影的「后文仍被消费」判定面）：
 
     · 后文场景的**声明读取**（`state_reads`——写手按 must_respect 消费）；
     · **读者确认目标**（reader set 的 `confirms` 地址——确认前该事实仍受
       「何时确认」约束，章包需要它的入场值）；
-    · **Hook 起笔/隐藏/禁揭地址**（书末消费，位置记全书场数）；
     · **锁承载**（拍上 `kp_*` 键＝该地址的知情承载；CS-F2 起事实锁的承载状态由
       Binding 的 `fact_bindings` 给出——升级与兑现都消费旧值边界）。
 
@@ -1770,9 +1888,9 @@ def consumption_closure(graph: BodyDesign,
     判定后文消费——同一地址先建立（sc01 起疑）后升级（sc02 确认）时，
     建立场序不是「后文」。纯函数、只报告位置：只写不被读的事实状态无
     消费者，留在其拍「必须写出」与 Machine IR，不再向后投影（C7）。
+    Hook 独立从正式故事投影；它的取材与禁区不得改变正文背景或章包身份。
     """
     positions: dict[tuple, list[int]] = {}
-    total_scenes = len(graph.scenes)
 
     def _consume(address: tuple, at: int) -> None:
         bucket = positions.setdefault(address, [])
@@ -1793,16 +1911,6 @@ def consumption_closure(graph: BodyDesign,
         at = scene_index.get(bound.beat_ref.split('#', 1)[0])
         if at is not None:
             _consume(bound.address.address(), at)
-    hook = getattr(graph, 'hook', None)
-    if hook is not None:
-        for fact in hook.opening_facts:
-            _consume(fact.address.address(), total_scenes)
-        for material in hook.materials:
-            for address in material.withheld:
-                _consume(address.address(), total_scenes)
-        for item in hook.forbidden_reveals:
-            if item.address is not None:
-                _consume(item.address.address(), total_scenes)
     return {address: tuple(sorted(buckets))
             for address, buckets in positions.items()}
 
@@ -1835,7 +1943,7 @@ def narrow_background(
       故事中已解除）；
     · 书级初态（`established_by == 'init'`）保留——人物立足点；
     · 拍建立的状态仅在**建立之后仍有消费者**（声明读取、读者确认目标、
-      Hook 地址、锁键；`consumers` 给出消费者场序集合）时保留——消费者
+      锁键；`consumers` 给出消费者场序集合）时保留——消费者
       位置必须晚于建立场（`scene_of` 解析 `established_by`）：建立拍自身
       已经在「必须写出」里，不构成后文消费。
 
@@ -1894,7 +2002,7 @@ def unanswered_guards(
     statement **逐字相同**的义务（同一段 canonical loop 文本的两个确定性
     投影——机械同一性，不是语义猜测），取其全部承载位（验收拍＋支撑拍）
     的最早者。无义务承载的悬念不进章包：链上没有承载它的义务，也就没有
-    「作答」的入口；保真约束由协议 v7 的「原文未交代不补答案」总条款托底。
+    「作答」的入口；保真约束由写手协议的「输入未确定不补答案」总条款托底。
     纯函数；只报告，不修复（I-24）。
     """
     questions = {lock.statement for lock in fact_locks
@@ -2190,21 +2298,25 @@ def project_context(*, scene_id: str, graph: BodyDesign,
 #: v10（2026-10-04 CS-F2，称谓投影）：正向材料行里已证明唯一绑定人物的完整登记称谓
 #: 按本场已释放称谓确定性投影（`project_withheld_names`）；短姓、关系称呼与未登记表达
 #: 不投影，仍按字面检查回派 owner。
-RENDERER_VERSION = 'str06-render-v11'
+#: v12：已证明同人的自然混称逐次投影，保持各次提及与中间文本；不以共现模拟揭名。
 
 #: 整书写作约定与自由度（Writer 协议，固定文本）。v7 按三类身份重写（必须写出／
 #: 必须遵守不必复述／写手自由）：场景是控制单元、反差不写成总结句、知情与
 #: 时态按输入措辞——「事实全对、处处交代」的对症条款。分区名用「」引用
 #: （阅读面的节标题用【】，二者不冲突）。v8明确逐拍结果与状态的有效时点。
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v9'
 WRITER_PROTOCOL = """\
 可补措辞、对白、即时反应和局部动作；不得新增或改变动机、行为主体、关系、历史、时序、知情条件或后文依赖的前件。\n本章写作输入按六个分区给出，归三类用法：
 【必须写出】在正文里实际完成：拍的事件、承载的义务满足条件、表达任务、线索的推进或收束。化进情节写出——不是提到关键词，也不逐条宣布；条目可拆开融入叙述，不要求逐条对应句子、段落或独立场景。
 【必须遵守、不必复述】「不可违背」（入场与拍级依赖的事实、知情边界、可用称谓与时点、世界规则、明确禁止）、「承接」（自然延续，不复述、不重新解释成说明）、「背景」（需要时才用的既成事实——是约束，不是写作任务）。遵守即可，不逐条提及；与导演说明冲突时以「不可违背」为准。
 【写手自由】「导演说明」之内的呈现选择：场景节奏、展开与压缩、具体的对白、动作、停顿与即时反应。
 场景是控制单元：每场完成自己的拍序与结果即可，不要求每场独立铺背景、独立收束或总结；全书质地一致，场级口吻按场执行。
-知情与时态按输入措辞：怀疑不写成确知、听说不写成相信、计划与预计不写成已发生、原文未交代的（含禁区所列未回答的悬念）不补答案。
+知情与时态按输入措辞：怀疑不写成确知、听说不写成相信、计划与预计不写成已发生、输入未确定的（尤其禁区所列未回答的悬念）不补答案。
 反差与幽默通过话语、动作与内心反应的落差呈现，不写成解释性总结句。
+决定转折按已给的触发、回应、权衡和选择展开；瞬时表情不能替代转变依据。场景衔接
+按已定时间、位置与感知通道表现，可补自然移步、短转场与即时动作，不另编前史、
+幕后沟通、决定或信息获得。补写的具体时点不能倒置触发与行动的先后；回溯须明示，
+未定钟点无需补写。
+篇幅优先给核心冲突和决策过程，重复过程与背景可以简写，必要前件和结果不能省略。
 「禁区」绝不触碰：未到时点的读者确认——既不提前兑现，也不主动向读者提起或提醒；受保护的未决问题不回答、不点破。
 会改变时间线、身份、前史或后续因果的设定：输入没给的不新增、不写具体；已给的保持原精度，不把两条独立事实合成新的前史。
 只使用已释放的称谓面；标明「第 N 拍起可用」的称谓不得提前使用。"""
@@ -2361,7 +2473,7 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
     # 显示面即取首个已释放称谓）。三类取位：书级行＝章首；场级说明行＝场末；
     # 拍行＝拍前缀（含本拍释放，拍前不可用）。第一人称叙述的聚焦人物用角色词
     # 「我（叙述者）」。投影仍只作用于章 IR 已证明唯一绑定人物的完整登记称谓，
-    # 来源文本保持原字段原样（CS-F2）；同位语折叠与无损性守卫见投影函数。
+    # 来源文本保持原字段原样（CS-F2）；逐次投影与同位语折叠见投影函数。
     first_person = brief.narration.person == 'first'
     focalizers = set(brief.narration.focalizers)
     carry = {r.char_id: r.surfaces for r in chapter.display_prefix}
@@ -2387,7 +2499,7 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
         return faces[0] if faces else fallback_face.get(char_id, '')
 
     def project(text: str):
-        projected, hits, _blocked = project_withheld_names(
+        projected, hits = project_withheld_names(
             text, bindings=chapter.withheld_bindings,
             display={b.char_id: _name(b.char_id) for b in chapter.withheld_bindings})
         return projected, hits
@@ -2728,10 +2840,10 @@ def packet_sha256(packet: ChapterWriterPacket) -> str:
 class ChapterIdentities(NamedTuple):
     """章回执的三把分层摘要（rc6 身份拆分，R2.1）。
 
-    · `writer_view_sha256`：写手实际可见的阅读面（renderer 渲染字节），材料含
-      renderer 与写手协议版本——变化 ⇒ 该章重购；
+    · `writer_view_sha256`：写手实际可见的阅读面（system 与 renderer 渲染字节），
+      材料含 renderer 与写手协议版本——变化 ⇒ 该章重购；
     · `validation_sha256`：验证输入（禁用字面、称谓许可、篇幅带）——变化 ⇒
-      旧机械验证不再成立，须重做；
+      旧机械验证不再成立，先免费重验原章稿；
     · `machine_view_sha256`：整包 Machine 层摘要，**仅审计**——只改 Machine 层
       字段不触发重购。
     """
@@ -2744,12 +2856,15 @@ class ChapterIdentities(NamedTuple):
 def chapter_identities(packet: ChapterWriterPacket) -> ChapterIdentities:
     """章包 → 回执三把分层摘要（rc6 唯一产地；纯函数）。
 
-    写手视图的材料是当前 renderer 的渲染字节＋renderer 版本＋写手协议版本
-    （协议版本随 RealizationContract 进包，这里显式进摘要材料以自证身份）。
+    写手视图的材料是实际正文 system＋当前 renderer 的渲染字节＋renderer
+    版本＋写手协议版本（协议版本随 RealizationContract 进包，这里显式进摘要
+    材料以自证身份）。system 取本模块的唯一常量，与调用边界使用的提示同源；
+    仅改 system 也必须使旧章回执失效，不能因章包或版本号未变而继续采用。
     R2 引擎批起渲染字节即 WriterPacket 六分区渲染（`render_chapter_packet`），
     分区内容变化 ⇒ 写手可见面变化 ⇒ 该章重购——正是绑定语义。
     """
     writer_material = {
+        'writer_system': BODY_WRITER_SYSTEM,
         'renderer_version': RENDERER_VERSION,
         'writer_protocol_version': packet.realization_contract.protocol_version,
         'writer_view_text': render_chapter_packet(packet),

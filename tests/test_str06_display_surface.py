@@ -6,7 +6,7 @@
   · 显示面解析函数四条规则（聚焦角色词／释放顺序首个／canonical-纯称谓回落／
     最早登记纯称谓回落）与 concealed 不回落；
   · 释放前缀保序、覆盖全体人物（被提及未出场人物投影——丈夫不再被叫作「哥」）；
-  · 投影的同位语折叠与无损性守卫；裸姓不投影；
+  · 同一人物自然混称逐次投影与同位语折叠；裸姓不投影；
   · 无显示面残余归 Design（`design_unreleased_reference`，带路径）。
 零付费：纯函数与真实 compile 入口。
 """
@@ -21,7 +21,6 @@ from novel.stages.common import (
     ReleasePrefixes, project_withheld_names, render_chapter_packet,
 )
 from tests.test_str06_hook import _characters
-from tests.test_str06_name_projection import _project_all
 
 
 # ───────────────────────── 显示面解析函数（RC-60 四条规则） ─────────────────────────
@@ -172,39 +171,46 @@ def test_first_person_focalizer_uses_the_role_word_in_the_packet():
     assert '苏芸娘确知' not in view and '芸娘确知' not in view
 
 
-# ───────────────────────── 投影：折叠、守卫、裸姓（判据①） ─────────────────────────
+# ───────────────────────── 投影：折叠、自然混称、裸姓（判据①） ─────────────────────────
 
 def test_apposition_folds_instead_of_doubling():
     """同位语折叠：「表弟裴书远」投影为「表弟」，不输出「表弟表弟」。"""
     bindings = (WithheldNameBinding(literal='裴书远', char_id='cousin'),)
-    text, hits, blocked = project_withheld_names(
+    text, hits = project_withheld_names(
         '表弟裴书远进门', bindings=bindings, display={'cousin': '表弟'})
     assert text == '表弟进门'
     assert [(h.literal, h.replacement) for h in hits] == [('裴书远', '表弟')]
-    assert blocked == ()
     # 姓名在前、称谓在后同样折叠。
-    text, _hits, blocked = project_withheld_names(
+    text, _hits = project_withheld_names(
         '裴书远表弟进门', bindings=bindings, display={'cousin': '表弟'})
-    assert text == '表弟进门' and blocked == ()
+    assert text == '表弟进门'
+    # 原文同位语之外还有一次姓名呼唤，不能因折叠后已输出「表弟」再吞一次。
+    for source in ('表弟裴书远裴书远，快来！', '裴书远裴书远表弟，快来！'):
+        text, hits = project_withheld_names(source, bindings=bindings, display={'cousin': '表弟'})
+        assert text == '表弟表弟，快来！'
+        assert [hit.literal for hit in hits] == ['裴书远', '裴书远']
 
 
 def test_bare_surname_is_never_projected():
     """裸姓不投影：短姓／家族构词不在绑定表内，保持原样留给字面检查。"""
     bindings = (WithheldNameBinding(literal='陆大哥', char_id='fu_jun'),)
-    text, hits, blocked = project_withheld_names(
+    text, hits = project_withheld_names(
         '陆与陆家同在，陆大哥在门口。', bindings=bindings, display={'fu_jun': '夫君'})
     assert text == '陆与陆家同在，夫君在门口。'
-    assert [h.literal for h in hits] == ['陆大哥'] and blocked == ()
+    assert [h.literal for h in hits] == ['陆大哥']
     assert '陆' in text and '陆家' in text
 
 
-def test_lossy_guard_keeps_original_and_reports_block():
-    """无损性守卫：一句内同一人物两个不相邻的不同称谓不可投影（原文保留＋留痕）。"""
-    text, hits, blocked = _project_all('陆大哥是陆兄的旧识，二人同在陆大哥门前。')
-    assert text == '陆大哥是陆兄的旧识，二人同在陆大哥门前。'
-    assert hits == ()
-    assert {(b.literal, b.char_id) for b in blocked} == {
-        ('陆大哥', 'fu_jun'), ('陆兄', 'fu_jun')}
+def test_display_projection_preserves_mixed_forms_and_quotation_context():
+    """姓名叙述与带名称呼同句出现时，只投影称谓，不删除行动或对白框架。"""
+    text, hits = project_withheld_names(
+        '陆大哥在外看房，娘子听见人说「陆兄不是外人」。',
+        bindings=(WithheldNameBinding(literal='陆大哥', char_id='fu_jun'),
+                  WithheldNameBinding(literal='陆兄', char_id='fu_jun')),
+        display={'fu_jun': '夫君'})
+    assert text == '夫君在外看房，娘子听见人说「夫君不是外人」。'
+    assert [(h.literal, h.char_id, h.replacement) for h in hits] == [
+        ('陆大哥', 'fu_jun', '夫君'), ('陆兄', 'fu_jun', '夫君')]
 
 
 # ───────────────────────── Hook：concealed 不回落 ─────────────────────────
@@ -212,11 +218,10 @@ def test_lossy_guard_keeps_original_and_reports_block():
 def test_hook_concealed_characters_do_not_fall_back_but_others_do():
     """concealed 人物不走第 3 步回落：未释放即无显示面；非 concealed 未释放者
     在 compile 期附带回落纯称谓（夫君）——两条边界都在 display_faces 里。"""
-    from contracts.schema.hook import HookConstraints
     from novel.stages.stage4.design import assemble_body_design
     from novel.stages.stage4.hook import assemble_hook_design, publish_graph
     from novel.stages.stage4.hook_context import compile_hook_context
-    from tests.factories import hook_wire_v2
+    from tests.factories import hook_wire_v3
     from tests.str06_expression_inputs import sample_narration, sample_requirements
     from tests.test_str06_hook import _body_wire, _hook_wire
     chars = _characters()
@@ -229,15 +234,14 @@ def test_hook_concealed_characters_do_not_fall_back_but_others_do():
 
     def build(concealed):
         hook, errors = assemble_hook_design(
-            hook_wire_v2(_hook_wire(concealed=concealed, surface_releases=[
+            hook_wire_v3(_hook_wire(concealed=concealed, surface_releases=[
                 {'char_id': 'yun_niang', 'surfaces': ['苏芸娘']}])),
             body=body, known_char_ids=known, name_projection=chars.name_projection(),
             name_structure=chars.name_structure)
         assert hook is not None and not errors, errors
         context, errors = compile_hook_context(
             publish_graph(body, hook), chars.name_projection(),
-            HookConstraints(target_chars=280, hard_max_chars=360),
-            chars.name_structure, {}, {}, characters=chars.core_view())
+            chars.name_structure, {}, {}, characters=chars.core_view(), total_budget=2000)
         assert context is not None and not errors, errors
         return context
 
@@ -251,7 +255,7 @@ def test_hook_concealed_characters_do_not_fall_back_but_others_do():
     assert 'fu_jun' not in faces['hidden']
     from novel.stages.common import hook_material_issues
     assert any(i.literal == '陆大哥' for i in hook_material_issues(
-        hidden_context.model_copy(update={'design_brief': '陆大哥的身份不露'}),
+        hidden_context.model_copy(update={'local_focus': '陆大哥的身份不露'}),
         internal_ids=set()))
 
 

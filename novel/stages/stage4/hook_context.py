@@ -3,10 +3,12 @@
 """hook_context —— HookContext 的确定性投影（F6；R2 引擎批补线程禁区）。
 
 【compiler 只解析引用、投影与格式化】
-不解释 design_brief／delivery_brief，不补猜缺失选择：POV、按 audience 分组的
+不解释 local_focus，不补猜缺失选择：POV、按 audience 分组的
 起笔事实、按设计序（呈现序）排列的材料投影、禁止揭示、可用称谓与 withheld
-专名字面全部从（完整 graph, 名称投影, 长度边界）确定性解析。同一 graph +
-同一投影 + 同一边界 ⇒ 同一 Context 字节（免费重建一致）。
+专名字面全部从（完整 graph, 名称投影）确定性解析。同一 graph +
+同一投影 ⇒ 同一 Context 字节（免费重建一致）。读者期待只投 kind/focus，
+答案和后续依据留在校验侧；表达机制与声线来自正式正文设计，不再用自由 brief
+重建事实。表达决定只投已选 statement，不复制 action 或决策理由。
 
 【事实渲染保留认知维度】起笔事实与材料 delta 渲染时写明 domain、holder 与
 knowledge_mode：「谁知道、怀疑还是听说」与「读者视角成立」是 Hook 写手判断
@@ -31,13 +33,14 @@ surface_releases（不是章释放表）在 compile 时算好，随上下文携�
 """
 from __future__ import annotations
 
-from typing import Mapping
+from typing import Final, Iterable, Mapping, Sequence
 
 from contracts.schema.context import SurfaceRelease
 from contracts.schema.design import PresentationGraph
 from contracts.schema.state import EffectDomain, WithheldNameBinding
 from contracts.schema.hook import (
-    HookConstraints, HookContext, HookMaterialView, HookOpeningFact,
+    HookContext, HookExpressionView, HookMaterialView, HookOpeningFact,
+    HookReaderExpectationFocus, HookSceneVoice,
 )
 from contracts.schema.source import (
     CharactersCore, NameProjection, NameStructure,
@@ -66,6 +69,40 @@ _KNOWLEDGE_MODES = {'known': '确知', 'suspected': '怀疑', 'heard': '听说',
 #: 效果域 → 人读措辞（「读者揭示」与人物知情分开）。
 _DOMAIN_LABELS = {'character': '人物', 'relation': '关系', 'knowledge': '知情',
                   'world': '世界', 'reader': '读者'}
+
+
+def hook_display_faces(releases: Mapping[str, Sequence[str]],
+                       structure: NameStructure | None,
+                       characters: CharactersCore | None,
+                       concealed: Iterable[str]) -> tuple[dict, tuple]:
+    """Hook 自选释放面 + 非隐藏人物回落纯称谓的显示面表（compile 期一次算好）。
+
+    显示面前缀（CS-H H3，RC-60）：每人按 Hook 自选释放顺序的面；尚无释放且非
+    concealed 的人物附回落纯称谓（concealed 不回落——隐藏人物不得借回落面获得
+    指称，其姓名保持原文、由字面检查如实报告）。渲染期不读 Characters（D2 同尺），
+    回落表在 compile 期算好随上下文携带。入参是 char_id → 本次自选释放面的映射
+    （wire 或 canonical 两侧各自转好）。compile_hook_context 与结构失败时的材料
+    预检（hook_candidate_material_errors）共用同一张表：预检必须按**同一把尺**
+    推演写手视图会看到什么，两处各算一套会把「预检说安全、验收判泄漏」变成常态。
+    返回（expand 后的释放面表，显示面行元组）。
+    """
+    concealed_ids = set(concealed)
+    display_names = expand_surface_releases(releases, structure)
+    display_rows = {char_id: list(surfaces) for char_id, surfaces in releases.items()}
+    fallbacks = appellation_fallbacks(characters, structure) if characters is not None else {}
+    for char_id, fallback in sorted(fallbacks.items()):
+        if fallback and char_id not in display_rows and char_id not in concealed_ids:
+            display_rows[char_id] = [fallback]
+    display_faces = tuple(
+        SurfaceRelease(char_id=cid, surfaces=tuple(dict.fromkeys(row)))
+        for cid, row in sorted(display_rows.items()) if row)
+    return display_names, display_faces
+
+
+def render_hook_fact_text(projection: NameProjection, key: tuple, delta,
+                          kp_statements: Mapping[str, str]) -> str:
+    """单条事实的写手视图渲染（诊断与审计共用 `_render_fact` 同一实现）。"""
+    return _render_fact(projection, key, delta, kp_statements)
 
 
 def _render_fact(projection: NameProjection, key: tuple, delta,
@@ -114,7 +151,8 @@ def _protected_thread_entries(graph: PresentationGraph, horizon, cast: set[str],
 
     · 线程在视界内开启（open 位置 ≤ 视界）且主体与楔子人物相关：
       - close 位置 > 视界 → 收束（resolution）不得提前兑现或暗示；
-      - 全书未收且 kind=question → 未决问题不得给出答案或暗示。
+      - 全书未收且 kind=question → 不回答、不虚构解答线索、不许诺后文解答；
+        问题本身可以由材料中的当前局面产生。
     · 视界后才开启的线不进禁区（楔子根本不该引入它；材料面另有纪律）；
       视界内已收束的线不进禁区（材料可见范围内已成事实）。
     """
@@ -136,25 +174,52 @@ def _protected_thread_entries(graph: PresentationGraph, horizon, cast: set[str],
             continue
         if close_pos is None:
             if kind == 'question':
-                entries.append(f'未决问题「{text}」不得在楔子中给出答案或暗示，'
-                               '也不主动向读者提起')
+                entries.append(f'未决问题「{text}」不得在楔子中给出答案或暗示答案，'
+                               '不得虚构解答线索或许诺后文会解答；'
+                               '问题本身可由当前局面产生')
         elif close_pos > horizon:
             entries.append(f'{_THREAD_KINDS[kind]}「{text}」的收束（{resolution}）'
                            '不得在楔子中提前兑现或暗示')
     return entries
 
 
+#: 楔子篇幅包络系数（rc24）：锚定章预算均值——目标区间 [0.40, 0.55]、机械硬
+#: 上限 0.70。锚定章预算而非源引子长度：引子可长可短甚至缺席，而书级预算已随
+#: 全书篇幅边界进入请求身份（R-5.3 同一预算源）。
+_HOOK_LENGTH_FACTORS: Final = (0.40, 0.55, 0.70)
+
+
+def hook_length_envelope(total_budget: int, chapter_count: int) -> tuple[int, int, int]:
+    """书级预算＋章数 → 楔子篇幅包络（low/high/cap，非空白字符，严格递增）。
+
+    与 `allocate_chapter_budgets` 同一预算源：avg = total/count，四舍五入；
+    极小预算退化时逐级抬 1 保序，保证任何正输入都有合法区间（I-21：机械
+    派生归 compiler，不让 LLM 生成、也不逐书手填）。
+    """
+    if total_budget < 1 or chapter_count < 1:
+        raise ValueError('篇幅包络需要正的书级预算与章数')
+    avg = total_budget / chapter_count
+    low, high, cap = (max(1, round(avg * factor)) for factor in _HOOK_LENGTH_FACTORS)
+    low = max(low, 1)
+    high = max(high, low + 1)
+    cap = max(cap, high + 1)
+    return low, high, cap
+
+
 def compile_hook_context(
-    graph: PresentationGraph, projection: NameProjection, constraints: HookConstraints,
+    graph: PresentationGraph, projection: NameProjection,
     structure: NameStructure | None = None,
     kp_statements: Mapping[str, str] = (),
     world_statements: Mapping[str, str] = (),
     characters: CharactersCore | None = None,
+    *, total_budget: int,
 ) -> tuple[HookContext | None, list[str]]:
-    """（完整 graph, 名称投影, 长度边界）→ HookContext。纯函数，不落盘。
+    """（完整 graph, 名称投影, 书级预算）→ HookContext。纯函数，不落盘。
 
     `characters`（CS-H H3）只用于显示面回落表的 compile 期计算（RC-60 第 3 步）；
-    缺席时无回落——未释放人物没有显示面，投影保持原文、由字面检查如实报告。"""
+    缺席时无回落——未释放人物没有显示面，投影保持原文、由字面检查如实报告。
+    `total_budget`（rc24）只用于篇幅包络派生：进 Context 字节即进请求身份——
+    换预算的请求不是同一请求，不沿用旧结论。"""
     hook = graph.hook
     # schema只保引用存在；恢复/重编同样先复验时序、隐藏与称谓释放授权。
     errors = validate_hook_design(
@@ -162,22 +227,12 @@ def compile_hook_context(
         name_projection=projection, name_structure=structure)
     if errors:
         return None, errors
-    display_names = expand_surface_releases({r.char_id: r.surfaces for r in hook.surface_releases}, structure)
-    # 显示面前缀（CS-H H3，RC-60）：每人按 Hook 自选释放顺序的面；尚无释放且非
-    # concealed 的人物附回落纯称谓（concealed 不回落——隐藏人物不得借回落面获得
-    # 指称，其姓名保持原文、由字面检查如实报告并归 Hook）。渲染期不读 Characters
-    # （D2 同尺），回落表在 compile 期算好随上下文携带。
-    concealed = set(hook.concealed)
-    fallbacks = appellation_fallbacks(characters, structure) if characters is not None else {}
-    display_rows = {r.char_id: list(r.surfaces) for r in hook.surface_releases}
-    for char_id, fallback in sorted(fallbacks.items()):
-        if fallback and char_id not in display_rows and char_id not in concealed:
-            display_rows[char_id] = [fallback]
-    display_faces = tuple(
-        SurfaceRelease(char_id=cid, surfaces=tuple(dict.fromkeys(row)))
-        for cid, row in sorted(display_rows.items()) if row)
+    display_names, display_faces = hook_display_faces(
+        {r.char_id: r.surfaces for r in hook.surface_releases},
+        structure, characters, set(hook.concealed))
+    faces_of = {row.char_id: row.surfaces[0] for row in display_faces}
     display_projection = projection.model_copy(update={'by_person': tuple(
-        entry.model_copy(update={'display': (display_rows.get(entry.char_id) or ('',))[0]})
+        entry.model_copy(update={'display': faces_of.get(entry.char_id, '')})
         for entry in projection.by_person)})
 
     def _render_or_error(projection_, key, delta, where) -> str | None:
@@ -221,7 +276,8 @@ def compile_hook_context(
     for item in hook.materials:
         if item.presentation is not None:
             materials.append(HookMaterialView(
-                beat_ref=item.beat_ref, presentation=item.presentation))
+                beat_ref=item.beat_ref, presentation=item.presentation,
+                emphasis=item.emphasis, transition=item.transition))
             continue
         beat = graph.beat(*item.beat_ref.split('#', 1))
         if beat is None:
@@ -237,7 +293,8 @@ def compile_hook_context(
             if text is not None:
                 rendered.append(text)
         materials.append(HookMaterialView(
-            beat_ref=item.beat_ref, event=beat.event, deltas=tuple(rendered)))
+            beat_ref=item.beat_ref, event=beat.event, deltas=tuple(rendered),
+            emphasis=item.emphasis, transition=item.transition))
 
     # 禁止揭示渲染：address 给定则渲染该事实，否则渲染该拍事件内核；
     # 随后把未到时点的线程收束机械并入禁区（E-3 读法 b，见模块头）。
@@ -304,14 +361,28 @@ def compile_hook_context(
         for scene in graph.scenes
         if scene.scene_id == item.beat_ref.split('#', 1)[0]
         for line in scene.delivery.avoid))
+    scene_refs = tuple(dict.fromkeys(item.beat_ref.split('#', 1)[0] for item in hook.materials))
+    scene_voices = tuple(
+        HookSceneVoice(scene_ref=scene_ref, voice=scene.delivery.voice)
+        for scene_ref in scene_refs for scene in graph.scenes if scene.scene_id == scene_ref)
 
     if errors:
         return None, errors
+    length_low, length_high, length_cap = hook_length_envelope(
+        total_budget, len(graph.chapters))
     return HookContext(
         pov=hook.pov, opening_facts=tuple(facts), materials=tuple(materials),
-        forbidden_reveals=tuple(forbidden), design_brief=hook.design_brief,
-        delivery_brief=hook.delivery_brief, target_chars=constraints.target_chars,
-        hard_max_chars=constraints.hard_max_chars, usable_surfaces=usable,
+        forbidden_reveals=tuple(forbidden), local_focus=hook.local_focus,
+        reader_expectation=HookReaderExpectationFocus(
+            kind=hook.reader_expectation.kind, focus=hook.reader_expectation.focus),
+        book_style=graph.book_style,
+        expression_mechanisms=tuple(
+            HookExpressionView(ex_id=decision.ex_id, statement=decision.statement)
+            for decision in graph.expression_decisions),
+        character_voices=tuple(v for v in graph.character_voices
+                               if v.char_id in cast and v.char_id not in set(hook.concealed)),
+        scene_voices=scene_voices, usable_surfaces=usable,
         withheld_literals=tuple(sorted(withheld)),
         withheld_bindings=bindings, display_faces=display_faces,
-        avoid_lines=tuple(avoid_lines)), []
+        avoid_lines=tuple(avoid_lines),
+        length_low=length_low, length_high=length_high, length_cap=length_cap), []

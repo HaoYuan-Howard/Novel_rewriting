@@ -2,28 +2,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, model_validator
 
 from contracts.invariants import OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.base import FrozenModel
 from contracts.schema.common import Sha256
-
-
-class PipelineArtifactVersionsV5(FrozenModel):
-    """Gate B 冻结快照；不能随新 producer 漂移。"""
-    characters: Literal[2] = 2
-    global_grounding: Literal[7] = 7
-    analyze_receipt: Literal[1] = 1
-    chapter_blueprints: Literal[10] = 10
-    knowledge_links: Literal[3] = 3
-    blind_candidate: Literal[5] = 5
-    blind_chapter_edit: Literal[3] = 3
-    evidence_binding: Literal[5] = 5
-    plan_chapters: Literal[6] = 6
-    plan_edit: Literal[6] = 6
-    writer_context: Literal[9] = 9
 
 
 class WorkflowTransitionRefV1(FrozenModel):
@@ -36,7 +21,8 @@ class PipelineArtifactVersionsV7(FrozenModel):
 
     ``knowledge_links`` 不再是成员；Stage4 A/B/Context 与绑定闭包随知识消费
     退役各升一版。人物、Global 与 Blueprint 形状未变，不额外升版。
-    旧 manifest 的 knowledge_links 记录只随 V4/V5/V6 类解码，不迁移。
+    knowledge_links 只存在于比 V7 更早的已删旧类时代（V4/V5/V6 类均已删除），
+    现役解码面（V7/V8/V9）无该成员、不迁移。
     """
 
     characters: Literal[2] = 2
@@ -195,6 +181,46 @@ class BudgetGrant(FrozenModel):
         return self
 
 
+class UpgradeRoundRefund(FrozenModel):
+    """2026-10-10 的旧契约返还记录；2026-10-11 起只读，现役用节点版本重置。
+
+    历史系统动作，不是人工追加：登记过 `refund_nodes` 的升级曾在 apply 时把本单元
+    可用轮次恢复到基础额度。历史轮、费用账与响应证据原样保留（成本权威仍是
+    `_service/ledger.jsonl`；本表只恢复**可用轮次**，不返还实际花费）。
+    同一升级对同一单元幂等：`upgrade_id` 唯一。
+    """
+
+    upgrade_id: Sha256
+    reason: str = Field(min_length=1, max_length=2000)
+    created_at: int = Field(ge=0)
+    before_ledger_sha256: Sha256
+    refunded_after_ordinal: int = Field(ge=0)
+    additional: int = Field(ge=1, le=4, strict=True)
+
+
+class LlmNodeVersionReset(FrozenModel):
+    """2026-10-11 裁决：全部 LLM 节点升版恢复基础额度；版本基线也必须落账。
+
+    additional=0 仍保存版本，防止先免费处理、后付费时重复恢复。同一版本
+    不重复追加；旧 V2 没有版本基线，首次显式迁移时恢复并建立当前版本基线。
+    """
+
+    upgrade_id: Sha256
+    versions: dict[str, Annotated[int, Field(ge=1, strict=True)]] = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=2000)
+    created_at: int = Field(ge=0)
+    before_ledger_sha256: Sha256
+    refunded_after_ordinal: int = Field(ge=0)
+    additional: int = Field(ge=0, le=4, strict=True)
+
+    @model_validator(mode='after')
+    def _versions(self) -> LlmNodeVersionReset:
+        if any(not key or type(value) is not int or value < 1
+               for key, value in self.versions.items()):
+            raise ValueError('节点版本分量必须有名称和显式正整数')
+        return self
+
+
 class WorkUnitProcessing(FrozenModel):
     """一次实际处理的来源；免费处理只记证据，绝不伪造内容轮次。"""
 
@@ -225,6 +251,9 @@ class WorkUnitLedgerV2(FrozenModel):
     scope: str = Field(min_length=1, max_length=160)
     base_content_limit: Literal[4] = 4
     grants: tuple[BudgetGrant, ...] = ()
+    # 升级轮次返还（2026-10-10 裁决）：加性字段，旧账缺省读作无返还；
+    # content_limit = base + Σgrants.additional + Σrefunds.additional。
+    refunds: tuple[UpgradeRoundRefund, ...] = ()
     turns: tuple[WorkUnitContentTurn, ...] = ()
     processing: tuple[WorkUnitProcessing, ...] = ()
     committed_through: int = Field(default=0, ge=0)
@@ -236,15 +265,33 @@ class WorkUnitLedgerV2(FrozenModel):
 
     @model_validator(mode='after')
     def _closed_turns(self) -> WorkUnitLedgerV2:
+        # 人工追加与升级返还按登记时间合并校验：追加只能在「当前额度（含此前
+        # 返还）已耗尽」时登记——先返还后追加的单元，追加的 authorized_after_
+        # ordinal 对合并序下的运行额度成立，而不是对「只数追加」的假额度。
         limit = self.base_content_limit
         intents: set[str] = set()
-        for grant in self.grants:
-            if grant.intent_id in intents or grant.authorized_after_ordinal != limit:
-                raise ValueError('追加授权必须唯一，且只能在已有额度耗尽后累计')
-            if grant.authorized_after_ordinal > len(self.turns):
-                raise ValueError('人工追加不得越过实际已用轮次')
-            intents.add(grant.intent_id)
-            limit += grant.additional
+        refund_ids: set[str] = set()
+        events = self._budget_events()
+        for _at, _kind_order, _index, row in events:
+            if isinstance(row, BudgetGrant):
+                if row.intent_id in intents or row.authorized_after_ordinal != limit:
+                    raise ValueError('追加授权必须唯一，且只能在已有额度耗尽后累计')
+                if row.authorized_after_ordinal > len(self.turns):
+                    raise ValueError('人工追加不得越过实际已用轮次')
+                intents.add(row.intent_id)
+                limit += row.additional
+            else:
+                if row.upgrade_id in refund_ids:
+                    raise ValueError('同一升级对同一工作单元的轮次返还必须唯一')
+                if row.refunded_after_ordinal > len(self.turns):
+                    raise ValueError('轮次返还不得越过实际已用轮次')
+                if not row.reason.strip():
+                    raise ValueError('轮次返还必须登记理由')
+                if isinstance(row, LlmNodeVersionReset) and row.additional != max(
+                        0, self.base_content_limit - (limit - row.refunded_after_ordinal)):
+                    raise ValueError('节点升版只能恢复基础可用额度，不能额外发放轮次')
+                refund_ids.add(row.upgrade_id)
+                limit += row.additional
         if len(self.turns) > self.content_limit:
             raise ValueError('工作单元内容预算超过上限')
         if self.committed_through > len(self.turns):
@@ -277,7 +324,64 @@ class WorkUnitLedgerV2(FrozenModel):
 
     @property
     def content_limit(self) -> int:
-        return self.base_content_limit + sum(grant.additional for grant in self.grants)
+        return (self.base_content_limit
+                + sum(grant.additional for grant in self.grants)
+                + sum(refund.additional for refund in self.refunds))
+
+
+    def _budget_events(self):
+        return sorted(
+            [*((row.created_at, 0, index, row) for index, row in enumerate(self.grants)),
+             *((row.created_at, 1, index, row) for index, row in enumerate(self.refunds))],
+            key=_budget_event_order)
+
+
+class WorkUnitLedgerV3(WorkUnitLedgerV2):
+    """唯一现役预算账；V2 只由 work_unit_ledger_of_payload 显式读取迁移。"""
+
+    schema_version: Literal[3] = 3
+    version_resets: tuple[LlmNodeVersionReset, ...] = ()
+
+    @property
+    def content_limit(self) -> int:
+        return super().content_limit + sum(row.additional for row in self.version_resets)
+
+    def _budget_events(self):
+        return sorted(
+            [*super()._budget_events(),
+             *((row.created_at, 2, index, row)
+               for index, row in enumerate(self.version_resets))],
+            key=_budget_event_order)
+
+    @model_validator(mode='after')
+    def _version_chain(self) -> WorkUnitLedgerV3:
+        previous: dict[str, int] = {}
+        ordinal = 0
+        for row in self.version_resets:
+            if (row.refunded_after_ordinal < ordinal
+                    or not set(previous) <= set(row.versions)
+                    or any(row.versions[key] < value for key, value in previous.items())
+                    or row.versions == previous):
+                raise ValueError('节点版本重置必须按单调升版顺序登记，不能重复或降版')
+            previous, ordinal = row.versions, row.refunded_after_ordinal
+        return self
+
+
+def work_unit_ledger_of_payload(payload: dict) -> WorkUnitLedgerV3:
+    """登记的 V2→V3 无损读迁移；不写盘、不重置额度、不补猜历史节点版本。"""
+    if payload.get('schema_version') == 2:
+        old = WorkUnitLedgerV2.model_validate(payload)
+        return WorkUnitLedgerV3.model_validate({**old.model_dump(mode='json'),
+                                               'schema_version': 3, 'version_resets': []})
+    return WorkUnitLedgerV3.model_validate(payload)
+
+
+def _budget_event_order(event):
+    _at, kind, index, row = event
+    ordinal = (row.authorized_after_ordinal if isinstance(row, BudgetGrant)
+               else row.refunded_after_ordinal)
+    # 同轮序的授权先于首次版本基线；同类保留 append 顺序，不依赖墙钟精度。
+    return ordinal, kind, index
 
 
 class WorkUnitBlobV1(FrozenModel):
@@ -575,15 +679,13 @@ from typing import Final, NamedTuple
 
 
 class CandidateRuntimeConfig(NamedTuple):
-    """候选链运行期配置的**正式来源**（F7c）：Hook 长度、章篇幅带与书级篇幅
+    """候选链运行期配置的**正式来源**（F7c）：章篇幅带与书级篇幅
     取整粒度。与付费调用额度（`--book-call-ceiling`、工作单元／整书总闸）是两件
     事：配置进 prompt 与 IR，从而进请求身份；额度只闸新购次数，不进语义身份。
 
     CLI 旗标可覆盖，但覆盖值同样经 prompt／IR 进入身份——配置变化不误用旧结果。
     """
 
-    hook_target_chars: int = 280
-    hook_hard_max_chars: int = 360
     length_band_low: float = 0.6
     length_band_high: float = 1.3
     #: 书级正文篇幅从源 MainText 章节总字数向上取整的粒度（保留全书篇幅边界）。
@@ -666,14 +768,20 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 # 三层知情、源盲重设计、节点和额度不变；旧质量契约不隐式迁移。
 # rc22（2026-10-09）：Preserve v5/policy 8 增有完整正式证据的独立事件锚点；
 # 事件承载行动及细节，状态/知情/悬念锁仍由各自原子派生；六类质量产物同批升版。
-STR06_RC_VERSION: Final = 'str06-rc22'
+# rc23（2026-10-10）：Hook 设计的材料呈现、衔接与阅读期待显式化；
+# graph 单独升版，正文设计保持 rc22；楔子取消字数约束并继承正式风格与声线。
+# rc24（2026-10-10）：HookContext 恢复按书级章预算派生的篇幅包络（目标区间
+# 随请求送达 + 硬上限机械拒收），并修订 Hook 设计选材倾向为高张力情节切片；
+# 正文设计保持 rc22。rc23「篇幅由叙事需要决定」的观察结论由包络修订。
+STR06_RC_VERSION: Final = 'str06-rc24'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
                           'str06-rc7', 'str06-rc8', 'str06-rc9', 'str06-rc10', 'str06-rc11',
                           'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15',
                           'str06-rc16', 'str06-rc17', 'str06-rc18', 'str06-rc19',
-                          'str06-rc20', 'str06-rc21', 'str06-rc22')
+                          'str06-rc20', 'str06-rc21', 'str06-rc22', 'str06-rc23',
+                          'str06-rc24')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒
@@ -700,12 +808,15 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 #: 原文未回答）；requirement 带 series 盲标记与 mechanism。kp/kf 键规则与
 #: 必保锁兑现归 assemble_body_design（revise_self）。
 STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v5'
-STAGE4_PRESERVE_POLICY_VERSION: Final = 8
+# 2026-10-10 用户授权有限补桥：Preserve 必要源因果完整交接，Design 只在
+# 骨架、事实、结局与知情/未知边界内补局部行动、沟通和决策；wire/canonical 不变。
+# v10：正式交接材料合起来保住骨架，不要求各字段重复因果；唯一登记称谓可自然混用。
+STAGE4_PRESERVE_POLICY_VERSION: Final = 10
 STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v5'
 # CS-3（2026-10-03）：`str06.stage4.bind` 退役——承载位由 design wire 的 real
 # 标注派生（stage4-design-v6 的面），stage4-bind-v1 wire 协议随之退役。
 # Hook v2：事实引用由代码目录给出；canonical 的位置＋地址形状保持不变。
-STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v2'
+STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v3'
 
 #: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`
 #: 是 typed 修复的显式 producer 边界（对齐正式 ExecutionEpochReason 的 continue）。

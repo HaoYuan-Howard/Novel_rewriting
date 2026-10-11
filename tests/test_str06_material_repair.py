@@ -156,11 +156,17 @@ def test_correction_preserves_history_and_refuses_stale_preview(tmp_path):
     from novel.stages.stage4 import assemble_hook_design, publish_graph
     from novel.stages.owner_revision import read_owner_issue_file, open_issue_record
     from tests.str06_facilities import make_context, synthetic_ref
-    from tests.factories import hook_wire_v2
+    from tests.factories import hook_wire_v3
     from tests.test_str06_hook import _hook_wire
     body, binding, brief, chars = _conflict()
     hook, errors = assemble_hook_design(
-        hook_wire_v2(_hook_wire(opening_facts=[], forbidden_reveals=[])),
+        hook_wire_v3(_hook_wire(
+            opening_facts=[], forbidden_reveals=[],
+            reader_expectation={
+                'kind': 'fact', 'focus': '夫君所谓赴文会的真实目的是什么？',
+                'answer': {'ref': {'scene': 'sc02', 'beat': 'b02'},
+                           'address': {'domain': 'knowledge', 'subjects': ['yun_niang'],
+                                       'holder': 'yun_niang', 'key': brief.propositions[0].kp_id}}})),
         body=body, known_char_ids=set(chars.characters),
         name_projection=chars.name_projection(), name_structure=chars.name_structure)
     assert not errors
@@ -315,11 +321,15 @@ def test_hook_owned_text_routes_only_with_formal_hook_proof():
     from contracts.schema.hook import HookDesign, HookMaterial
     body, binding, brief, _ = _conflict()
     hook = HookDesign(pov=body.narration,
-        materials=(HookMaterial(beat_ref=sorted(body.beat_refs())[0]),),
-        design_brief='以姓名线索开场', delivery_brief='保留疑问')
-    graph = PresentationGraph(**body.model_dump(), hook=hook)
-    for value, expected in [(hook.design_brief, 'hook_design'), ('凭空改写的提示', '')]:
+        materials=(HookMaterial(beat_ref=sorted(body.beat_refs())[0],
+                                emphasis='develop', transition='start'),),
+        reader_expectation={'kind': 'action', 'focus': '人物怎样查证线索',
+                            'followup_refs': [sorted(body.beat_refs())[-1]]},
+        local_focus='以姓名线索组织即时反应')
+    graph = PresentationGraph(**{**body.model_dump(), 'contract_version': 'str06-rc23'},
+                              hook=hook)
+    for value, expected in [(hook.local_focus, 'hook_design'), ('凭空改写的提示', '')]:
         problem = MaterialIssue('positive_material_leak', 'hook/writer_view', 0, value,
-            (MaterialSource('hook', 'hook', 'design_brief', value),))
+            (MaterialSource('hook', 'hook', 'local_focus', value),))
         repair, = plan_material_repairs([problem], body=graph, binding=binding, brief=brief)
         assert repair.owner == expected

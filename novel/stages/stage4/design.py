@@ -510,7 +510,7 @@ def _check_requires_released(body: BodyDesign, obligations: Mapping[str, Any],
 
     违例带 know 行 wire 路径（locate：挪 know 拍位或提前释放）；这类称谓不投影
     （释放即字面送达）。离线 v5 输入没有 know 行身份（与事实锁候选同尺），本闸
-    只在现役 v9 wire 上运行。
+    在带 know 标注的瘦 wire 展开后运行（现役 v10；已购 v9 经集中解码）。
     """
     required = {ref: change.requires_released
                 for ref, (_ob, change) in knowledge_change_index(obligations).items()

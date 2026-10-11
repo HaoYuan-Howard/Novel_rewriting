@@ -29,7 +29,10 @@ from contracts.artifacts import (
 )
 
 import os
+import re
+import weakref
 from pathlib import Path
+from typing import Any
 
 from contracts.invariants import (
     LEGACY_STAGE5_MODES, NODES, OPERATOR_REDO_STRATEGIES, RESUME_VERDICTS, STAGES,
@@ -39,7 +42,10 @@ from contracts.schema.orchestration import (
     ArtifactState, NovelOverview, OverviewSummary, OwnerIssueState, StageState,
 )
 from novel import paths, prov
-from novel.errors import ArtifactUnreadable, UpstreamMissing
+from novel.errors import (
+    ArtifactUnreadable, ProvenanceRefused, UnsealedArtifact, UpstreamMissing,
+    UpstreamStale,
+)
 from novel.llm.cache import CachePolicy
 from novel.llm.ledger import CostLedger
 from novel.run import RunContext
@@ -96,10 +102,6 @@ def _resolve_book_scoped(rel: str, novel_dir: str | os.PathLike[str]) -> str:
     return rel
 
 
-def stage_of(rel: str) -> str:
-    return rel.split('/', 1)[0]
-
-
 def required_artifacts(stage: str, *,
                        novel_dir: str | os.PathLike[str]) -> tuple[str, ...]:
     """这一层跑完了盘上该有哪几份。**本层各节点 `produces` 的并集，去掉逐份不定的那些。**
@@ -130,6 +132,62 @@ def required_artifacts(stage: str, *,
 #: 具体章回执 rel（模板含 ``{nn}`` 占位，不能直接参与相等比较）。
 _BODY_RECEIPT_RE = re.compile(r'stage5/acceptance/body/ch\d+\.json')
 
+#: 逐章身份核对里要就地归类（不中断完成度）的失败族：IR 上游已变（须先重跑
+#: compile）与读不出一样，都落 `unknown/consumed_unresolved`——把 UpstreamStale
+#: 穿透出去会让整条只读 overview 链崩溃，排不出「下一步跑 compile」。
+_BODY_PROBE_SWALLOWED = (
+    ArtifactUnreadable, UpstreamMissing, UpstreamStale, UnsealedArtifact,
+    ProvenanceRefused, OSError, ValueError, StopIteration,
+)
+
+
+class _BodyIdentityProbe:
+    """一次完成度调用内的逐章身份核对复用面（IR 装载一次，逐章只做投影）。
+
+    `overview_at` 冻结只读坐标的同调用纪律：全书章共享同一份 IR 校验结果，
+    不为每章重付一次 CommitBundle 扫描加整份 IR 模型校验。缓存不跨调用——
+    下一次 overview 重新探测，上游变化不会被旧结论遮住（I-16：缓存是派生物）。
+    """
+
+    def __init__(self, novel_dir) -> None:
+        self.repository = Str06Repository(novel_dir)
+        self._writer_ir: tuple[bool, Any] | None = None
+        self._identities: dict[int, Any] = {}
+
+    def identities(self, ordinal: int):
+        cached = self._identities.get(ordinal)
+        if cached is None:
+            from novel.stages.common import chapter_identities, project_chapter_packet
+            cached = chapter_identities(project_chapter_packet(self.writer_ir(), ordinal))
+            self._identities[ordinal] = cached
+        return cached
+
+    def writer_ir(self):
+        if self._writer_ir is None:
+            try:
+                self._writer_ir = (True, self.repository.check_model(
+                    'stage4/ir/writer_book_ir.json'))
+            except _BODY_PROBE_SWALLOWED as exc:
+                self._writer_ir = (False, exc)
+        ok, value = self._writer_ir
+        if not ok:
+            raise value
+        return value
+
+
+#: store 实例 → 其逐章身份探测（弱键：探测生命周期＝一次完成度调用）。
+#: 不改 `artifact_state` 的公开签名——测试桩常整体替换它，新 kwargs 会砸桩。
+_BODY_PROBES: 'weakref.WeakKeyDictionary[ArtifactStore, _BodyIdentityProbe]' = (
+    weakref.WeakKeyDictionary())
+
+
+def _body_probe(store: ArtifactStore) -> '_BodyIdentityProbe':
+    probe = _BODY_PROBES.get(store)
+    if probe is None:
+        probe = _BodyIdentityProbe(store.ctx.novel_dir)
+        _BODY_PROBES[store] = probe
+    return probe
+
 
 def _candidate_artifact_state(store: ArtifactStore, rel: str, st: os.stat_result, *,
                               invalid: bool, invalid_freshness, invalid_reason,
@@ -139,6 +197,8 @@ def _candidate_artifact_state(store: ArtifactStore, rel: str, st: os.stat_result
     与正式分支同一形状：`exists`／`readable`／`freshness`／`invalid` 四格分开，
     「不知道」不折成 fresh，也不折成 missing。章回执额外保留文件名与章序的跨路径
     绑定——`ch01.json` 里装一份合法的第 2 章，不能算第 1 章已完成。
+    正文身份核对经 store 绑定的 `_BodyIdentityProbe`（同一完成度调用内全书
+    共享一次 IR 装载与 CommitBundle 清单；见 `_BODY_PROBES`）。
     """
     try:
         report = store.candidate_freshness(rel)
@@ -146,6 +206,23 @@ def _candidate_artifact_state(store: ArtifactStore, rel: str, st: os.stat_result
     except (ArtifactUnreadable, UpstreamMissing):
         fresh, reason, ghosts = 'unknown', 'no_provenance', []
     readable = store.candidate_readable(rel)
+    body = re.fullmatch(r'stage5/body/ch(\d+)\.txt', rel)
+    if readable and fresh == 'fresh' and body is not None:
+        # 正文字节当前不代表写作输入仍当前；章包绑定是逐章权威，不按整本 IR hash 失效。
+        from novel.stages.common import check_chapter_receipt
+        probe = _body_probe(store)
+        repository = probe.repository
+        ordinal = int(body.group(1))
+        try:
+            receipt = repository.inspect_sealed_model(artifact_rel(STR06_STAGE5_BODY_RECEIPT, nn=ordinal))
+            identities = probe.identities(ordinal)
+            if receipt.chapter_ordinal != ordinal or receipt.status != 'accepted':
+                fresh, reason = 'unknown', 'no_provenance'
+            elif check_chapter_receipt(receipt, identities=identities,
+                                       prose_sha256=repository.file_sha256(repository.path(rel))):
+                fresh, reason = 'stale', 'consumed_changed'
+        except _BODY_PROBE_SWALLOWED:
+            fresh, reason = 'unknown', 'consumed_unresolved'
     if readable and _BODY_RECEIPT_RE.fullmatch(rel):
         try:
             payload = store.candidate_payload(rel)
@@ -252,9 +329,9 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def chapters_done(novel_dir: Path) -> list[int]:
-    """规范 `stage5/chNN.json` 已落盘的章号（`R-14.2`：续跑粒度是**章**）。
+    """规范 `stage5/body/ch{nn}.txt` 已落盘的章号（`R-14.2`：续跑粒度是**章**）。
 
-    ⚠⚠ **必须排除 `.INVALID.json` 与 `.rejected.json`。** `chNN.json` 的存在本身就是
+    ⚠⚠ **必须排除 `.INVALID` 孪生等失败留证。** 规范路径的存在本身就是
     「过了写作时的落盘闸门」这个语义（`_common.md` §5.1：先校验后落盘）——
     把被拦下的那一份数进去，就把这个语义**反过来**了：
     续跑会跳过一章**根本没写成的**稿子，而那一章的钱到时候还得花。

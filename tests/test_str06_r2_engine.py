@@ -682,8 +682,8 @@ def test_render_has_six_partitions_and_protocol_v5():
     for name in SECTIONS:
         assert f'【{name}】' in text
     # 协议 v7 按三类身份组织（六分区仍在）；版本常量由契约批登记
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v9'
-    assert RENDERER_VERSION == 'str06-render-v11'     # rc21：细节与系列前情的送达身份
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v11'
+    assert RENDERER_VERSION == 'str06-render-v12'     # 已登记同人混称逐次投影，不因句式阻断
     for name in SECTIONS:
         assert name in WRITER_PROTOCOL
     # 同章包 ⇒ 同字节
@@ -781,7 +781,6 @@ def test_build_writer_packet_is_the_partition_model():
 # ═════════════════ 六、Hook 分层渲染与线程收束禁区（E-3 读法 b） ═════════════════
 
 def _hook_pair():
-    from contracts.schema.hook import HookConstraints
     from novel.stages.stage4.hook import assemble_hook_design, publish_graph
     from novel.stages.stage4.hook_context import compile_hook_context
     body = _rich_design()
@@ -795,8 +794,10 @@ def _hook_pair():
              'audience': 'world'}],
         'materials': [
             {'beat_ref': {'scene': 'sc02', 'beat': 'b01'}, 'withheld': [],
+             'emphasis': 'develop', 'transition': 'start',
              'presentation': '深夜，一个身影翻出后墙'},
             {'beat_ref': {'scene': 'sc01', 'beat': 'b02'}, 'withheld': [],
+             'emphasis': 'brief', 'transition': 'flashback',
              'presentation': '新婚夜，丈夫低声说起一桩旧约'}],
         'concealed': ['fu_jun'],
         'surface_releases': [
@@ -805,18 +806,18 @@ def _hook_pair():
             {'ref': {'scene': 'sc02', 'beat': 'b02'},
              'address': {'domain': 'knowledge', 'subjects': ['fu_jun'],
                          'holder': 'yun_niang', 'key': 'secret'}}],
-        'design_brief': '从深夜冷开倒叙入新婚夜旧约，玉佩之谜不露。',
-        'delivery_brief': '第一人称冷面叙述，短句，不解释。',
+        'local_focus': '以冷面反应凸显旧约与夜行的反差。',
+        'reader_expectation': {'kind': 'action', 'focus': '她怎样查清夜行缘由',
+                               'followup_refs': [{'scene': 'sc02', 'beat': 'b02'}]},
     }
-    from tests.factories import hook_wire_v2
-    hook, errors = assemble_hook_design(hook_wire_v2(wire), body=body,
+    from tests.factories import hook_wire_v3
+    hook, errors = assemble_hook_design(hook_wire_v3(wire), body=body,
                                         known_char_ids={'yun_niang', 'fu_jun'},
                                         name_projection=_chars().name_projection())
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _chars().name_projection(),
-        HookConstraints(target_chars=280, hard_max_chars=360))
+        graph, _chars().name_projection(), total_budget=2000)
     assert context is not None and not errors, errors
     return graph, context
 
@@ -836,6 +837,10 @@ def test_hook_forbidden_zone_merges_unreached_thread_closes():
     assert '夺回家产' in forbidden and '家产已散，无力再争' in forbidden
     # th03（question，视界内开启、全书未收）：不得在楔子中给出答案
     assert '夫家为何避而不谈' in forbidden
+    unresolved = next(line for line in context.forbidden_reveals if '夫家为何避而不谈' in line)
+    assert '不得虚构解答线索或许诺后文会解答' in unresolved
+    assert '问题本身可由当前局面产生' in unresolved
+    assert '不主动向读者提起' not in unresolved
     # th04（promise，视界 sc02#b01 之后才开启）：不在禁区
     assert '再不隐瞒' not in forbidden and '夫君仍有一事瞒她' not in forbidden
 
@@ -917,7 +922,6 @@ def test_packet_metrics_file_is_registered_and_written(tmp_path, monkeypatch):
     assert spec.scope is DeliveryScope.NOT_DELIVERED
 
     # 真实链（fake transport）：compile 节点写出指标文件
-    from contracts.schema.hook import HookConstraints
     from novel.stages.chain import run_workflow
     from tests.str06_faults import looped_full_chain_wires
     from tests.str06_facilities import anchor_stub, json_ask, stub_body_runner, text_ask
@@ -931,9 +935,7 @@ def test_packet_metrics_file_is_registered_and_written(tmp_path, monkeypatch):
     stub_body_runner(monkeypatch)
     run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),
                  ask_text=text_ask(session), ask_body=ask_body, budget=2000,
-                 through='stage7', book_title='报恩',
-                 hook_constraints=HookConstraints(target_chars=10,
-                                                  hard_max_chars=360))
+                 through='stage7', book_title='报恩')
     metrics_path = repo.path(rel)
     assert metrics_path.is_file(), 'compile 必须写出 packet_metrics.json'
     import json

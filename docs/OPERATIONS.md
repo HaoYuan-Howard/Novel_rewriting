@@ -43,6 +43,50 @@ blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可�
 
 ## AgentRun 与流水线恢复
 
+所有 LLM 节点正式执行版本升版后，免费查看并同步现有单元额度：
+
+```powershell
+conda run -n novel_refactor python -m novel.orchestrator.llm_budget_upgrade --base <Output目录> --sid <sid>
+conda run -n novel_refactor python -m novel.orchestrator.llm_budget_upgrade --base <Output目录> --sid <sid> --apply
+```
+
+同步恢复至少基础四轮；同版本只一次，历史轮、费用、追加与 unknown 保留。V2 旧账首次
+同步建立版本基线并恢复，后续只按正式版本升版触发。入口零模型调用，不运行下游。
+原调用及免费采用也会在执行边界同步；只读查看不写账。整书总闸与付费/正文外发授权不变。
+
+
+已登记的现役同根升级先免费预览，再应用同一计划（不需要 API key、`--yes` 或外发授权）：
+
+```powershell
+conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录>
+conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录> `
+  --apply --subject-sha256 <预览SHA> --actor <操作者> --reason <升级依据>
+```
+
+预览输出附带 `rebuild_budgets`（重建节点的工作单元内容轮剩余额度，易变状态、
+不进计划指纹）。**应用前先核对**：`content_remaining` 为 0 的付费重建节点
+（如 hook_design）升级后第一步就会 `WorkUnitBudgetExhausted`——先对账那轮
+delivered、经跑书页追加额度或人工处置，再 apply，避免已交付的书停在
+「成书已归档、Hook 重建不了」。
+
+仅接受登记身份边。原产物和 workflow 原字节留在书内 `runtime/upgrades/<SHA>/`；
+不中断账与额度。升级同时收口锚定被归档产物的 open 回派账（rc22→rc23 即
+hook_design），typed 问题与轮数在 resolved 记录里留账。prepared 中断后以相同
+SHA 重放；代码或源身份漂移时明确阻断——**尚未归档任何文件**的恢复日志可显式
+放弃后重新规划：
+
+```powershell
+conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录> `
+  --abort-pending --actor <操作者> --reason <放弃依据>
+```
+
+已开始归档的日志没有放弃出路，必须重放同一计划至完成。升级与在跑的节点执行
+互斥（workflow 锁）；撞上时命令以显式终态退出并提示先停/等待，本次未写任何
+字节。rc22→rc23 之后重建 Hook Design、免费 Stage4 compile、Hook，再运行
+Stage5 body（逐章沿用／免费重验／局部恢复）和 Stage7 assemble。付费节点先用
+`--check-only` 核已购响应；新请求仍须原有的 `--yes` 与 `--allow-egress`
+授权，不在升级命令中购买。
+
 自动运行的暂停、恢复、停止和按原配置继续使用跑书页；Stage 页只读监控。工程诊断先查询
 `python -m novel.cli --help` 和目标子命令 `--help`。内部执行入口为
 `novel/orchestrator/run_step.py`；命名 scratch
@@ -281,6 +325,8 @@ patch-preview --owner chNN --candidate <wire文件> --request-profile <原请求
 生成提示或协议改变后，预检显式给 `--baseline-request-sha256 <已购摘要>`，仍捕获
 当前生产请求与完整接受闸；patch note 同时登记预检返回的 `applies_to_request_sha256`。
 未给当前应用摘要的旧 note 仍只允许同身份采用，不能伪造旧请求或暗改协议。
+显式双身份 note 也可用于内容未改的已购回答：核验原请求、响应与成本并通过当前完整
+接受闸后，以 owner patch 记录免费采用，不能因内容与原响应相同丢掉修订声明。
 `cross_cause` 预检还须给 `--upstream-associate-candidate <本轮身份wire>`，不拿旧
 盘面冒充本轮前置答案。章预检与生产共用包含真实回派范围的请求；Preserve 预检
 在 checkpoint 尚未发布时仍验证候选、姓名与 Brief，并分别报告冲突和 Design 未运行。
@@ -335,19 +381,11 @@ provider、model、reasoning_effort和thinking_mode。编排器从冻结profiles
 `tools/str06_review.py ... patch-preview`同样接受`--request-profile`，须与被审阅请求一致；
 显式effort冲突即拒绝，工具通过同一冻结函数构造实际请求身份，始终不授予付费权限。
 
-Hook v1 已购首答可显式换算为 v2，保持原文语义与原成本：
+Hook 当前协议为 `stage4-hook-design-v3`。旧 v1／v2 缺少正式组织选择和阅读期待，不能
+由代码猜补；原 v1→v2 换算入口已退出。保留旧响应、成本和原接受记录，当前运行需要
+以 v3 重新设计，再免费编译当前 HookContext（rc18）。新的付费或正文外发仍分别依
+本轮授权执行；免费复检不能购买缺失的现役回答。
 
-```powershell
-python -X utf8 -B -m tools.str06_review --base <输出根> --sid <sid> --save upgrade-hook `
-  --baseline-request-sha256 <原首答请求身份> `
-  --request-profile '{"provider":"deepseek","model":"deepseek-flash","reasoning_effort":"high","thinking_mode":"on"}'
-```
-
-工具核验原请求、响应与 ledger，捕获现役生产接受闸；即使正式 graph 尚未发布也运行
-完整确定性下游预检。通过才导出本书 `runtime/review/hook_v2_upgrade/` 下的
-`hook_design_wire.json` 与 `hook_design_patch_note.json`；失败只留诊断，不导出采用材料。
-不带 `--save` 只打印，不写盘。换算不新增模型调用，不覆盖历史首答的失败记录。
-采用走正常 Hook 节点，带 `--check-only --wire-dir <上述目录> --request-profile <同配置>`；
-该入口不得带 `--yes`／`--allow-egress`，缺已购绑定或当前完整闸失败就拒绝。采用会写正式
-graph 和修订证据，但不运行下一 compile 节点。首答通过率须另冻结真实新请求的首轮结果，
-不能把历史回答免费复验接受率记成首答通过率。
+Hook 不再接受固定字数目标／上限选项。字符数只作观察；评价应将楔子与实际第 1 章
+成对阅读，并记录冲突、因果、声线、阅读期待和重复。机械通过与免费恢复不证明文学
+质量，也不能把历史回答免费复验接受率记成新协议首答通过率。

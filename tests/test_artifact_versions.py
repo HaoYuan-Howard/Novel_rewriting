@@ -100,13 +100,13 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
     # 切换时新建的命名空间，盘上没有旧信封字节（旧路径整体退役，见
     # `contracts/artifacts.py::RETIRED_ARTIFACT_PATHS`）。形状破坏史由另外两条线
     # 承载，不在本表重复登记：
-    #   ① 模型自带 `contract_version` 字面量（Characters v4／ReconstructionBrief／
+    #   ① 模型自带 `contract_version` 字面量（Characters v6／ReconstructionBrief／
     #      SemanticBinding／ExecutionPlan／PresentationGraph／HookContext／
     #      WriterBookIR／ChapterReceipt／NameMap v5，与候选产物表逐字对账，
     #      `tests/test_str06_candidates.py` 守着）；
     #   ② 候选产物表的 `schema_version` RC 标签（rc2→rc3→rc4 的批次定格，
     #      `tests/test_str06_f7e_freeze.py` 钉住冻结基线）。
-    # 未声明 `contract_version` 的模型（Blueprints v12、CharactersCore 抽取）按
+    # 未声明 `contract_version` 的模型（Blueprints v17、CharactersCore 抽取）按
     # F8 义务在本注册表登记形状（即 `ARTIFACT_SPECS` 条目自身）——不往模型加非
     # exclude 字段：那会改 `model_dump` 字节，从而改 prompt 与 F7a 历史采用的
     # 已购请求身份。

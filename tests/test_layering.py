@@ -322,6 +322,10 @@ _WRITE_ALLOWED = {
         '写前校验代码与 permit、执行期还需有效 claim，既有不同字节拒绝覆盖。'
         '该导出不是小说产物、费用账或授权来源；小说修改仍由受控 CLI 经 Store 完成'),
     'novel/work_units.py': '只写 _service 运行预算、内容寻址回答和恢复证明，不写小说产物。',
+    'novel/orchestrator/upgrade_converters.py': (
+        '同根升级免费换算层的 wire 物化（裁决 2026-10-10）：写到操作员显式指定的'
+        '外部 --wire-dir（非书根、非 _service、非产物），供既有 --wire-dir 免费采用'
+        '通路消费；书内留痕走 store（converted 记录），同字节幂等、不同字节拒绝'),
     'novel/orchestrator/network_settings.py': (
         '只写 _service/network_settings.json 的网络偏好（c252e8b9 服务自有'
         '状态，非小说产物）；目录 mkdir 为首建该服务文件，小说产物仍全经 Store'),

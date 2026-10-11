@@ -166,7 +166,7 @@ def replay_preserve_round(wire: dict, chars, blueprint) -> dict:
         policy_version=STAGE4_PRESERVE_POLICY_VERSION,
         characters=chars.core_view(), blueprint=blueprint,
         provider='replay', model='replay', request_sha256='0' * 64)
-    gate = preserve_name_issues(checkpoint, chars, blueprint)
+    gate = preserve_name_issues(checkpoint, chars)
     problems = list(errors) + list(gate)
     return {
         'status': 'ran', 'passed': checkpoint is not None and not problems,

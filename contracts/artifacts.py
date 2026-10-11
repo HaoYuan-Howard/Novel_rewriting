@@ -132,7 +132,7 @@ RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
 #:   | 类 | 例 | 占位符由谁决定 | 完成度落点 |
 #:   |---|---|---|---|
 #:   | 轮次编号 | `stage5/review_{n}.json` | 盘上有几份 | `rounds_done[节点]` |
-#:   | 逐章 | `stage5/ch{nn}.json` | 计划里有哪些章 | `chapters_done` |
+#:   | 逐章 | `stage5/body/ch{nn}.txt` | 计划里有哪些章 | `chapters_done` |
 #:   | **书级** | `stage7/{title}_rewriting.txt` | **这本书是谁** | `artifacts[]`（解析后是具名的） |
 #:
 #: ⚠⚠ **这张表存在的理由**：前两类问「盘上有几份」，第三类问「它叫什么名字」——
@@ -177,9 +177,6 @@ STR06_STAGE2_OBS_ASSOCIATE = artifact_rel('stage2/observations/associate.json')
 STR06_STAGE2_BLUEPRINTS = artifact_rel('stage2/blueprints/chapter_blueprints.json')
 STR06_STAGE2_FOLD = artifact_rel('stage2/acceptance/fold.json')
 STR06_STAGE2_CHARACTERS = artifact_rel('stage2/characters/characters.json')
-# ⚠ B2 退役派生输入（2026-09-27，D3/D9）：只能识别与拒绝，不再提供读写。
-STR06_STAGE2_BOOK_EXTRACTION = RETIRED_ARTIFACT_PATHS['stage2.compiled.book_extraction']
-STR06_STAGE2_INPUT_SNAPSHOTS = RETIRED_ARTIFACT_PATHS['stage2.compiled.input_snapshots']
 STR06_PRESERVE_CHECKPOINT = artifact_rel('runtime/preserve_checkpoint.json')
 STR06_RECONSTRUCTION_BRIEF = artifact_rel('stage4/grounding/reconstruction_brief.json')
 STR06_SEMANTIC_BINDING = artifact_rel('stage4/grounding/semantic_binding.json')
@@ -320,13 +317,19 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc10（2026-09-28 R2 语义送达）：Design wire 升 stage4-design-v2——拍上线程
     # （threads）、书级 world_rules、章级 entry；四个静态跨章列表删除（AUD-04）。
     'stage4/design/body_design.json': 'str06-rc22',
-    'stage4/design/presentation_graph.json': 'str06-rc22',
+    # rc23：Hook 组织与阅读期待改为正式选择，正文载荷仍是 rc22。
+    'stage4/design/presentation_graph.json': 'str06-rc23',
     # rc16（2026-10-05 CS-F2）：HookContext 增 withheld_bindings（按 Hook 自选
     # surface_releases 算好的唯一绑定称谓表，渲染期投影）；旧 rc12 楔子上下文
     # 拒读，免费重编译。正文与楔子投影同尺（RC-40/41）。
     # rc17（2026-10-06 CS-H H3，RC-60）：HookContext 增 display_faces/avoid_lines
     # （显示面投影与材料所引场 avoid 并集）。
-    'stage4/context/hook/hook.json': 'str06-rc17',
+    # rc18：继承全书风格与人物声线；材料强调与跳时显式投影，取消字数边界。
+    # rc24（2026-10-10）：恢复按书级章预算派生的篇幅包络（length_low/high 目标
+    # 区间随请求送达写手 + length_cap 机械硬上限由 validator 拒收）——rc18 全
+    # 放开后写手按材料戏剧密度膨胀（选材收缩到 4 拍 1 develop 仍写满千字）；
+    # 不回到 rc22 前对全书写死的 280/360。旧上下文免费重编译。
+    'stage4/context/hook/hook.json': 'str06-rc24',
     # rc7 同批：BookBrief 带整书风格与稳定人物声线；PendingConfirmation 带事实
     # 地址（D4），投影按地址精确到消费该地址的章包。
     # rc8（2026-09-27 B4，D2）：ChapterIR 增章级验证材料（称谓许可、禁用字面
@@ -348,7 +351,7 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc5（rc8 同批）：回执改绑章包摘要＋请求身份＋验证版本＋改名前正文摘要，
     # 不再绑定全书 IR 与前文链（D2）；各章独立有效，支持集合恢复。
     # rc6（rc10 同批，R2 身份拆分）：packet_sha256 单摘要拆成写手视图摘要
-    # （writer_view_sha256，材料含 renderer 与写手协议版本）＋验证输入摘要
+    # （writer_view_sha256，材料含实际正文 system、renderer 与写手协议版本）＋验证输入摘要
     # （validation_sha256：禁用字面、称谓许可、篇幅带）＋Machine 审计摘要
     # （machine_view_sha256，仅审计不触发重购）。
     # rc17（2026-10-06 CS-H H3，RC-61）：BODY_VALIDATOR 升 v2——必保揭名必现

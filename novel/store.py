@@ -39,7 +39,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, NamedTuple, TypeVar, cast
+from typing import Any, Callable, Iterable, Iterator, NamedTuple, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -71,7 +71,6 @@ from novel.prov import FreshnessReport
 from novel.run import RunContext
 
 M = TypeVar('M', bound=BaseModel)
-T = TypeVar('T')
 
 
 def _rel_pattern(rel: str) -> re.Pattern[str]:
@@ -119,6 +118,36 @@ def _artifact_model(rel: str | None):
     return ARTIFACT_SPECS[rel].model if rel in ARTIFACT_SPECS else None
 
 
+def _inherited_llm_provenance(raw: bytes, rel: str):
+    """旧回执字节里的付费来源账；免费/缺席返回 None（维持免费账路径）。
+
+    免费重验只改回执的一部分，生成事实必须原样带下去——但只有旧账本身
+    合法可读时才继承；形状损坏在重验口关闭式拒绝，不静默降级成免费账。
+    """
+    from contracts.schema.common import LlmProvenance
+
+    def unique(pairs):
+        result: dict = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f'JSON 重复键：{key}')
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(raw.decode('utf-8-sig'), object_pairs_hook=unique)
+    except ValueError as exc:
+        raise ProvenanceRefused(f'免费重验的原回执不是合法 JSON：{rel}') from exc
+    previous = payload.get('_provenance') if isinstance(payload, dict) else None
+    if not isinstance(previous, dict) or 'model' not in previous:
+        return None
+    try:
+        return LlmProvenance.model_validate(previous)
+    except ValidationError as exc:
+        raise ProvenanceRefused(
+            f'免费重验的原回执来源账损坏：{rel}（{exc.errors(include_url=False)}）') from exc
+
+
 # ── 质量契约拒旧；未变化的 ExecutionPlan 独立保留登记迁移 ─────────────
 # 新增系列回顾与细节证据无法从旧盘面机械推导；显式检查载荷版本，防止模型
 # 默认值把缺失的旧版本标记补成当前版。版本值只取 contracts/artifacts.py。
@@ -128,6 +157,7 @@ _QUALITY_CONTRACT_SITES = frozenset({
     'stage4/grounding/semantic_binding.json',
     'stage4/design/body_design.json',
     'stage4/design/presentation_graph.json',
+    'stage4/context/hook/hook.json',
     'stage4/ir/writer_book_ir.json',
 })
 
@@ -141,7 +171,7 @@ def _require_current_quality_contract(spec: str | None, data: dict) -> None:
     if found != expected:
         raise ProvenanceRefused(
             f'{spec} 的质量契约版本不兼容：载荷 {found!r}，当前 {expected}。'
-            '旧产物或缺版本标记的产物不能补成新系列回顾与细节证据；'
+            '旧产物或缺版本标记的产物不能补成当前语义选择与证据；'
             '保留旧盘只读，按当前契约从所属 owner 重建')
 
 
@@ -261,18 +291,6 @@ def _memo_for_context(ctx: RunContext) -> _ReadonlySnapshotMemo | None:
         raise ValueError(
             f'readonly snapshot memo code is {memo.code}, not {ctx.code}')
     return memo
-
-
-def readonly_snapshot_value(
-    ctx: RunContext, key: tuple[object, ...], factory: Callable[[], T],
-) -> T:
-    """Memoize one pure readonly projection inside the active snapshot only."""
-    memo = _memo_for_context(ctx)
-    if memo is None:
-        return factory()
-    if key not in memo.values:
-        memo.values[key] = copy.deepcopy(factory())
-    return cast(T, copy.deepcopy(memo.values[key]))
 
 
 def _filesystem_path(path: Path) -> str:
@@ -2096,6 +2114,10 @@ class PublishItem(NamedTuple):
     #: 付费节点零模型参与的确定性产物（如 associate 无候选的空判定面）——
     #: 显式声明铸 FreeProvenance（CS-S Phase 2；不声明且无引用即拒）。
     declared_free: bool = False
+    #: 0 成本局部改写路径继承的旧来源账（免费重验回执）：生成事实
+    #: （prompts/model/adopted_models/usage）原样带下去，inputs 换成本次真读到的。
+    #: 给了它就不再现造账；与 `refs` 互斥（继承账与采用声明不许同时给）。
+    previous_provenance: Any = None
 
 
 class Str06Repository:
@@ -2131,6 +2153,10 @@ class Str06Repository:
     def __init__(self, root: Path, context=None):
         self.root = Path(root).resolve()
         self.context = context
+        # 免上下文（诊断/只读探测）实例的 CommitBundle 清单复用面：这类实例
+        # 结构上写不出新 bundle（发布与重验都经 context.commit_bundle 铸 seal），
+        # 完成度逐章核对不必为每章重付一次全量扫描。生产读写口不缓存。
+        self._sealed_bundle_listing: list | None = None
 
     def attach_context(self, context) -> None:
         self.context = context
@@ -2152,6 +2178,13 @@ class Str06Repository:
     @staticmethod
     def file_sha256(path: Path) -> str:
         return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def snapshot_file_sha256(self, rel: str) -> str:
+        """升级只读快照也覆盖 Stage0/1 原文件；不扩 STR-06 正式写入家族。"""
+        target = paths.artifact_path(self.root, rel).resolve()
+        if not target.is_relative_to(self.root):
+            raise PathRefused('升级快照文件越出书根')
+        return self.file_sha256(target)
 
     def read(self, rel: str) -> Any:
         path = self.path(rel)
@@ -2297,10 +2330,18 @@ class Str06Repository:
                 raise ProvenanceRefused(
                     f'{item.rel} 是已登记候选产物，但 repository 未附加上下文：'
                     '拒绝在无来源账的情况下写正式产物')
-            # 已登记产物落盘即带来源账；正文（text）的账在绑定它的回执上。
-            provenance = self.context.provenance_for(
-                _writer_of(spec), item.rel, refs=item.refs,
-                claim_usage=item.claim_usage, declared_free=item.declared_free)
+            if item.previous_provenance is not None:
+                if item.refs:
+                    raise ProvenanceRefused(
+                        f'{item.rel} 同时声明继承来源账与采用引用——继承账属于'
+                        ' 0 成本局部改写，二者互斥（I-35）')
+                provenance = self.context.rewrite_provenance(
+                    item.rel, item.previous_provenance)
+            else:
+                # 已登记产物落盘即带来源账；正文（text）的账在绑定它的回执上。
+                provenance = self.context.provenance_for(
+                    _writer_of(spec), item.rel, refs=item.refs,
+                    claim_usage=item.claim_usage, declared_free=item.declared_free)
             payload = {**payload, '_provenance': provenance.to_disk()}
         return (json.dumps(payload, ensure_ascii=False, indent=2,
                            allow_nan=False).encode('utf-8'), provenance)
@@ -2342,6 +2383,85 @@ class Str06Repository:
         if path.read_bytes() != data:
             raise ValueError('修订证据读回不一致')
         return path
+
+    def archive_upgrade_file(self, upgrade_id: str, rel: str, sha256: str) -> None:
+        """升级事务逐字归档后退出正式位；中断重放不能覆盖后来的新产物。
+
+        事务计划先耐久保存。归档和正式位均按计划的原字节摘要核对，历史
+        CommitBundle／已购响应保留。路径仍经 repository 的闭集检查。
+        """
+        if not re.fullmatch(r'[0-9a-f]{64}', upgrade_id):
+            raise PathRefused('升级身份必须是 SHA-256')
+        source = self.path(rel)
+        target = self.path(f'runtime/upgrades/{upgrade_id}/files/{rel}')
+        if source.exists():
+            data = source.read_bytes()
+            if hashlib.sha256(data).hexdigest() != sha256:
+                raise ProvenanceRefused(f'升级期间正式字节已变化：{rel}')
+            if target.exists() and target.read_bytes() != data:
+                raise ProvenanceRefused(f'升级历史证据已变化：{rel}')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            self._atomic_write(target, data)
+        if not target.exists() or self.file_sha256(target) != sha256:
+            raise ProvenanceRefused(f'升级缺少原字节归档：{rel}')
+        if source.exists():
+            if self.file_sha256(source) != sha256:
+                raise ProvenanceRefused(f'升级退出正式位前字节已变化：{rel}')
+            source.unlink()
+
+    def save_upgrade_evidence(self, upgrade_id: str, name: str, data: bytes) -> None:
+        """升级的原记录按原字节保存；同地址已有不同证据即停止。"""
+        if not re.fullmatch(r'[0-9a-f]{64}', upgrade_id) or name != 'workflow.json':
+            raise PathRefused('升级证据路径不符合登记')
+        target = self.path(f'runtime/upgrades/{upgrade_id}/{name}')
+        if target.exists() and target.read_bytes() != data:
+            raise ProvenanceRefused('升级原 workflow 证据已变化')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self._atomic_write(target, data)
+
+    def clear_upgrade_pending(self) -> None:
+        """升级完成后删除恢复日志；调用方先核对完成回执与 workflow。"""
+        self.path(paths.CONTRACT_UPGRADE_PENDING_REL).unlink()
+
+    def publish_chapter_recheck(self, rel: str, receipt: Any, prose_rel: str) -> None:
+        """免费重验只刷新接受回执；原正文、请求与采用链保持原身份。
+
+        回执的新 provenance 继承原章的生成事实（prompts／model／usage 原样，
+        inputs 换成本次验证真读到的，`partial_rewrite` 留痕）：正文的账在绑定
+        它的回执上，免费重验不能把「哪次付费产出」从正式位上抹掉；本次零调用，
+        也不现造任何模型事实。历史免费回执（本就没有模型账）维持 FreeProvenance。
+        新 seal 显式继承原章提交的 adoptions，避免免费重验令原已购轮失去正式
+        采用关系。
+        """
+        from novel.work_units import sealed_commit_bundles
+        before = self.path(rel).read_bytes()
+        prose_sha = self.file_sha256(self.path(prose_rel))
+        old = next((b for _, b in reversed(sealed_commit_bundles(self.root))
+                    if any(o.key == rel and o.sha256 == hashlib.sha256(before).hexdigest()
+                           for o in b.outputs)
+                    and any(o.key == prose_rel and o.sha256 == prose_sha for o in b.outputs)), None)
+        if old is None:
+            raise UnsealedArtifact('免费重验缺少原正文／回执的完整提交证据')
+        item = PublishItem(rel=rel, value=receipt, declared_free=True,
+                           previous_provenance=_inherited_llm_provenance(before, rel))
+        data, provenance = self._prepare_item(item)
+        bundle = self.context.commit_bundle(
+            node=old.node, rel=rel, artifact_sha256=hashlib.sha256(data).hexdigest(),
+            inputs=provenance.inputs, refs=(), run_id=self.context.ledger.run_id,
+            created_at=int(time.time()), outputs=(
+                CommitOutputRef(key=prose_rel, sha256=prose_sha),
+                CommitOutputRef(key=rel, sha256=hashlib.sha256(data).hexdigest())))
+        from contracts.schema.workflow import commit_bundle_seal
+        bundle['adoptions'] = [a.model_dump(mode='json') for a in old.adoptions]
+        bundle['seal'] = commit_bundle_seal(bundle)
+        history = self.path(f'runtime/rechecks/body/{hashlib.sha256(before).hexdigest()}.json')
+        history.parent.mkdir(parents=True, exist_ok=True)
+        if history.exists() and history.read_bytes() != before:
+            raise ProvenanceRefused('免费重验原回执证据损坏')
+        self._atomic_write(history, before)
+        # 先写 seal 后换回执：任一崩溃窗口都有覆盖当前字节的旧／新 seal。
+        self._write_commit_bundle(bundle)
+        self._atomic_write(self.path(rel), data)
 
     def write_text(self, rel: str, text: str) -> Path:
         """正文/文本产物的原子写（UTF-8）+ 回读核对；与 write 同一套语义。"""
@@ -2388,14 +2508,22 @@ class Str06Repository:
         """
         return self._read_checked_model(rel, consume=False)
 
-    def _read_checked_model(self, rel: str, *, consume: bool):
+    def inspect_sealed_model(self, rel: str):
+        """验封与 typed 读取，不展开整对象输入边；消费者须另证局部绑定。
+
+        章回执由当前章包的写手／验证摘要核对，不能因其他章 IR 的变动
+        先按全书文件边拒绝。此入口仍拒绝未封存与未知版本。
+        """
+        return self._read_checked_model(rel, consume=False, check_inputs=False)
+
+    def _read_checked_model(self, rel: str, *, consume: bool, check_inputs: bool = True):
         spec = candidate_artifact(rel)
         model = _artifact_model(spec)
         if spec is None or model is None:
             raise ProvenanceRefused(f'{rel} 未登记契约模型，不能按模型读')
         self._require_sealed(rel)
         data = self.read(rel) if consume else self.inspect(rel)
-        if not consume:
+        if not consume and check_inputs:
             self._refuse_stale(rel, data)
         if isinstance(data, dict):
             data = {k: v for k, v in data.items() if k != '_provenance'}
@@ -2422,11 +2550,18 @@ class Str06Repository:
         封存记录损坏（seal 不符）由 `sealed_commit_bundles` 关闭式上抛，不是
         「当它不存在」；组内缺文件、摘要不符与本条同走 `UnsealedArtifact`
         （fail fast，`I-34`），恢复入口免费：重跑所属 owner 重新发布并封存。
+        免上下文实例复用同一份清单装载（见 `__init__` 的 invariant）。
         """
         from novel.work_units import sealed_commit_bundles
 
+        if self.context is None and self._sealed_bundle_listing is not None:
+            bundles = self._sealed_bundle_listing
+        else:
+            bundles = sealed_commit_bundles(self.root)
+            if self.context is None:
+                self._sealed_bundle_listing = bundles
         digest = hashlib.sha256(self.path(rel).read_bytes()).hexdigest()
-        for _path, bundle in sealed_commit_bundles(self.root):
+        for _path, bundle in bundles:
             if any(output.key == rel and output.sha256 == digest
                    for output in bundle.outputs):
                 return

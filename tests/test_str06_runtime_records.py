@@ -22,7 +22,6 @@ import json
 
 import pytest
 
-from contracts.schema.hook import HookConstraints
 from contracts.schema.workflow import CommitBundleV1
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
 from novel.llm.paid_requests import (
@@ -284,8 +283,6 @@ def _run_chain(repo, base, transport, tmp_path, *, ceiling=None, node_filter=Non
                         ask=json_ask(session), ask_text=text_ask(session),
                         ask_body=body_ask(session),
                         budget=2000, through='stage7', book_title='报恩',
-                        hook_constraints=HookConstraints(target_chars=10,
-                                                         hard_max_chars=360),
                         length_band=(0.01, 0.05), node_filter=node_filter)
 
 
@@ -315,6 +312,66 @@ def test_commit_bundle_loss_replays_and_reseals_free(tmp_path):
     assert repo.path(final_rel).read_bytes() == final_before
     resealed = list((base / 'run' / 'runtime' / 'commit').rglob('*.json'))
     assert len(resealed) >= 12, '重跑必须把全部重写产物重新封存'
+
+
+@pytest.mark.stage_scope('stage4')
+@pytest.mark.stage_scope('stage5')
+@pytest.mark.stage_scope('stage7')
+def test_hook_revision_recompiles_free_without_invalidating_accepted_body(tmp_path):
+    """同一正文只调整楔子：原章恢复有效，新楔子回执才可交付。"""
+    from novel.errors import UpstreamStale
+    from novel.stages.chain import _committed_set, _packet_identities
+    from novel.stages.stage5 import context_sha256
+    from tests.str06_facilities import synthetic_ref
+    repo, base, transport = _wired_repo(tmp_path)
+    _run_chain(repo, base, transport, tmp_path)
+    before_ir = repo.read_model('stage4/ir/writer_book_ir.json')
+    before_identities = _packet_identities(before_ir)
+    before_hook_identity = context_sha256(repo.read_model('stage4/context/hook/hook.json'))
+    before_hook_receipt = repo.read_model('stage5/hook/receipt.json')
+    before_delivery_identity = repo.inspect('stage7/final/delivery_manifest.json')['delivery_identity']
+    body_rels = [f'stage5/{kind}/ch{ordinal:02d}.{extension}'
+                 for ordinal in before_identities
+                 for kind, extension in (('body', 'txt'), ('acceptance/body', 'json'))]
+    before_bytes = {rel: repo.path(rel).read_bytes() for rel in body_rels}
+    calls = len(transport.calls)
+    repo.context.begin_run()
+    repo.context.enter_node('str06.stage4.hook_design')
+    repo.read_model('stage4/design/body_design.json')
+    graph = repo.read_model('stage4/design/presentation_graph.json')
+    updated = graph.model_copy(update={'hook': graph.hook.model_copy(update={
+        'local_focus': '让对答先承接人物目的，再停在计划将要实行处'})})
+    repo.write('stage4/design/presentation_graph.json', updated,
+               owners=('design', 'hook_design'), refs=(synthetic_ref('hook_design'),))
+    _run_chain(repo, base, transport, tmp_path,
+               node_filter=('str06.stage4.compile', 'str06.stage5.body'))
+    after_ir = repo.read_model('stage4/ir/writer_book_ir.json')
+    after_identities = _packet_identities(after_ir)
+    assert after_identities == before_identities
+    assert context_sha256(repo.read_model('stage4/context/hook/hook.json')) != before_hook_identity
+    committed, receipts = _committed_set(repo, after_identities, tuple(after_identities))
+    assert set(committed) == set(receipts) == set(after_identities)
+    assert {rel: repo.path(rel).read_bytes() for rel in body_rels} == before_bytes
+    assert len(transport.calls) == calls, '正文接受与免费编译不触发新购'
+    # 原 Hook 仍是旧 Context 的正式提交：真实 Stage7 必须先拒绝过期回执，
+    # 不能仅因正文已接受就继续交付旧楔子。
+    with pytest.raises(UpstreamStale, match='stage5/hook/receipt.json'):
+        _run_chain(repo, base, transport, tmp_path,
+                   node_filter=('str06.stage7.assemble',))
+    assert len(transport.calls) == calls
+    transport.hook_text = '苏芸娘停在空房门前，旧约忽然多了一重疑处。'
+    report = _run_chain(repo, base, transport, tmp_path,
+                        node_filter=('str06.stage5.hook', 'str06.stage7.assemble'))
+    after_hook_receipt = repo.read_model('stage5/hook/receipt.json')
+    assert after_hook_receipt.hook_context_sha256 == context_sha256(
+        repo.read_model('stage4/context/hook/hook.json'))
+    assert after_hook_receipt.request_identity != before_hook_receipt.request_identity
+    assert after_hook_receipt.prose_sha256 != before_hook_receipt.prose_sha256
+    assert report['assembly']['status'] == 'ready' and report['accepted_body']
+    assert report['committed_chapters'] == sorted(before_identities)
+    assert repo.inspect('stage7/final/delivery_manifest.json')['delivery_identity'] != before_delivery_identity
+    assert {rel: repo.path(rel).read_bytes() for rel in body_rels} == before_bytes
+    assert transport.calls[calls:] == ['hook_writer'], '只有新 Context 的 Hook 请求新增外发'
 
 
 # ─── R6 统一发布权威：免费产物同样封存；正式读取校验 seal 与摘要（AUD-05） ──────
@@ -464,8 +521,6 @@ def test_budget_competition_stops_at_ceiling_with_attempt_accounting(tmp_path):
                      ask=json_ask(session), ask_text=text_ask(session),
                      ask_body=body_ask(session),
                      budget=2000, through='stage7', book_title='报恩',
-                     hook_constraints=HookConstraints(target_chars=10,
-                                                      hard_max_chars=360),
                      length_band=(0.01, 0.05))
     from novel.work_units import read_book_budget, sealed_commit_bundles
     assert read_book_budget(base, 'run').used == 2, '恰好停在第二笔外发，不静默超限'

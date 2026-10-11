@@ -62,6 +62,77 @@ def _established_at(body: BodyDesign, ref: str, key: tuple) -> bool:
     return established_fact(hook_facts(body), ref, key) is not None
 
 
+def _validate_transitions(materials: list[dict], positions: dict) -> list[str]:
+    """只核对显式跳时声明与拍序；合法声明不证明因果或阅读质量。"""
+    errors: list[str] = []
+    presented_scenes: set[str] = set()
+    flashed_back = False
+    previous = None
+    for index, material in enumerate(materials):
+        ref = material.get('beat_ref')
+        position = positions.get(ref)
+        transition = material.get('transition')
+        valid = transition == 'start' if index == 0 else transition != 'start'
+        if index and position is not None and previous is not None:
+            if transition == 'continue':
+                valid = position == (previous[0], previous[1] + 1)
+            elif transition == 'time_skip':
+                valid = position > previous
+            elif transition == 'flashback':
+                valid = position < previous
+            elif transition == 'return':
+                valid = (flashed_back and position > previous
+                         and ref.split('#', 1)[0] in presented_scenes)
+            elif transition == 'scene_cut':
+                valid = position[0] != previous[0]
+        if not valid:
+            errors.append(_issue(
+                f'材料 {ref} 的 transition={transition} 与呈现位置不符；'
+                '首材料须 start，承接须同场相邻后拍，跳时向后、倒叙向前，'
+                '返回须在倒叙后回到已呈现场，切场须换场',
+                'hook_transition', ('materials', index, 'transition'), ('materials', index)))
+        if (index and transition == 'flashback' and valid
+                and previous is not None and position is not None):
+            flashed_back = True
+        if isinstance(ref, str) and ref in positions:
+            presented_scenes.add(ref.split('#', 1)[0])
+        previous = position
+    return errors
+
+
+def _validate_reader_expectation(expectation: dict, *, facts, positions: dict,
+                                 horizon: tuple | None) -> list[str]:
+    """期待依据必须真实且在材料之后；不把依据存在误报为回答了 focus。"""
+    errors: list[str] = []
+    path = ('reader_expectation',)
+    if expectation.get('kind') == 'fact':
+        answer = expectation.get('answer') or {}
+        ref = answer.get('ref')
+        key = _address_key(answer.get('address'))
+        fact = established_fact(facts, ref, key) if key is not None else None
+        if fact is None:
+            errors.append(_issue('事实期待的答案必须引用一次真实 set 建立，且带具体地址',
+                                 'hook_expectation_fact', path, path))
+        elif (fact.delta.domain.value == 'knowledge'
+              and fact.delta.knowledge_mode != 'known'):
+            errors.append(_issue('事实期待不能把怀疑、听说或相信作为确定答案',
+                                 'hook_expectation_knowledge', path, path))
+        refs = [ref]
+    else:
+        refs = list(expectation.get('followup_refs') or ())
+        if not refs or len(set(refs)) != len(refs):
+            errors.append(_issue('行动／关系期待须有非空且不重复的后续承载拍',
+                                 'hook_expectation_followup', path, path))
+    for ref in refs:
+        if ref not in positions:
+            errors.append(_issue(f'期待依据引用不存在的后续拍：{ref}',
+                                 'hook_expectation_ref', path, path))
+        elif horizon is not None and positions[ref] <= horizon:
+            errors.append(_issue(f'期待依据 {ref} 必须晚于全部材料的最大故事视界',
+                                 'hook_expectation_horizon', path, path))
+    return errors
+
+
 def _delta_subjects(body: BodyDesign, ref: str) -> set[str]:
     beat = _beat(body, ref)
     subjects: set[str] = set()
@@ -155,8 +226,9 @@ def validate_hook_payload(
                             'hook_presentation_leak', ('materials', k, char_id),
                             ('materials', k)))
 
-    # 禁止揭示：引用真实；与材料不冲突——同一拍不得既是材料又是禁 reveal；
-    # 材料若未以 presentation 或 withheld 隐藏被禁地址，即视为冲突。
+    # 禁止揭示：引用真实；无 address 是整拍禁区，同拍不得作为材料。
+    # 具体事实只禁止该地址；presentation 替代全拍投影，或 withheld 隐藏该地址
+    # 后仍可使用同拍其余材料，未隐藏的事实才与材料冲突。
     forbidden_refs: list[str] = []
     forbidden_addresses: list[tuple] = []
     for k, item in enumerate(wire.get('forbidden_reveals') or []):
@@ -179,7 +251,7 @@ def validate_hook_payload(
             errors.append(_issue(
                 f'禁止揭示引用不存在的拍：{ref}', 'hook_forbidden_ref',
                 ('forbidden_reveals', k), ('forbidden_reveals', k)))
-        if ref in material_refs:
+        if key is None and ref in material_refs:
             errors.append(_issue(
                 f'禁止揭示与材料冲突：同一拍 {ref} 既是材料又禁止揭示',
                 'hook_forbidden_conflict', ('forbidden_reveals', k, ref),
@@ -202,6 +274,10 @@ def validate_hook_payload(
     # 后续同地址更新不等于同一次揭示；起点前已失效的旧值仍须拒绝。
     material_positions = [positions.get(r) for r in material_refs]
     timing_known = all(p is not None for p in material_positions) if material_positions else False
+    errors.extend(_validate_transitions(materials, positions))
+    errors.extend(_validate_reader_expectation(
+        wire.get('reader_expectation') or {}, facts=facts, positions=positions,
+        horizon=max(material_positions) if timing_known else None))
     for k, item in enumerate(wire.get('opening_facts') or []):
         ref = item.get('ref')
         key = _address_key(item.get('address'))

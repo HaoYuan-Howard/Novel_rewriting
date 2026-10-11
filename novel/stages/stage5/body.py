@@ -16,8 +16,8 @@ IR。验证材料（称谓许可、禁用字面）已在 compile 时算好并随
 即停该章，不重写、不进候选。
 
 【回执绑定（rc6 身份拆分）】
-章回执分别绑定写手视图摘要（`writer_view_sha256`，材料含 renderer 与写手协议
-版本）、验证输入摘要（`validation_sha256`：禁用字面、称谓许可、篇幅带）与
+章回执分别绑定写手视图摘要（`writer_view_sha256`，材料含实际正文 system、
+renderer 与写手协议版本）、验证输入摘要（`validation_sha256`：禁用字面、称谓许可、篇幅带）与
 Machine 审计摘要（`machine_view_sha256`，仅审计不触发重购）；不再绑定全书 IR
 与前文链（`R-7.4` 改写）。
 
@@ -365,3 +365,23 @@ def _outcome(packet: ChapterWriterPacket, prose: str, identity: str,
     return ChapterOutcome(prose=prose, receipt=receipt, attempts=tuple(attempts),
                           request_identity=identity, length_disclosed=disclosed,
                           ref=ref)
+
+
+def recheck_chapter(packet: ChapterWriterPacket, prose: str,
+                    receipt: ChapterReceipt) -> ChapterReceipt | None:
+    """当前验证规则免费复验原稿；写手输入／正文字节不符不构造新接受。"""
+    identities = chapter_identities(packet)
+    if (receipt.status != 'accepted'
+            or receipt.chapter_ordinal != packet.chapter.chapter_ordinal
+            or receipt.protocol_version != WRITER_PROTOCOL_VERSION
+            or receipt.renderer_version != RENDERER_VERSION
+            or receipt.writer_view_sha256 != identities.writer_view_sha256
+            or receipt.prose_sha256 != sha256_text(prose)):
+        return None
+    errors = chapter_prose_validator(packet)(prose)
+    if errors and not (receipt.length_disclosed and all(str(e).startswith('[length_band]') for e in errors)):
+        return None
+    contract = packet.realization_contract
+    return _outcome(packet, prose, receipt.request_identity, [],
+                    contract.band_low, contract.band_high, contract.target_chars,
+                    disclosed=bool(errors)).receipt

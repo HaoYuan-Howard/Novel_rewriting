@@ -46,6 +46,7 @@ from novel.errors import (
     Stage0BodyRejected,
     TooFewChapters,
     UnsupportedRunMode,
+    UpgradeRefused,
     UpstreamMissing,
     UpstreamStale,
     UpstreamUnproven,
@@ -103,6 +104,11 @@ STATUS: dict[type[NovelError], int] = {
     #: 网络偏好 CAS 冲突（c252e8b9）：expected_revision 不匹配说明另一标签页
     #: 已保存——数据说这一步不该覆盖，同 agent-profiles 的 CAS 冲突同因。
     NetworkSettingsConflict: 409,
+    #: 同根契约升级的流程性停点（预览漂移／变化未登记／恢复未完成／缺执行者
+    #: 理由／与在跑执行争用锁）：当前根状态说这一步不该继续，重取预览、重放
+    #: 同一计划或先停在跑的执行即可解开。409 而非 500：与记录损坏的
+    #: `ProvenanceRefused`（5xx 家族）分开——这一族不是 bug。
+    UpgradeRefused: 409,
     #: 删除是维护动作；目标忙、确认面变化或移动失败都不得半删后伪装成功。
     BookTrashFailed: 409,
     #: agent 并发闸满了（`agent.MAX_CONCURRENT`）。**与 `JobConflict` 同码不同因**：

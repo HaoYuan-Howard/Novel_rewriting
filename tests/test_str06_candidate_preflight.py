@@ -10,7 +10,6 @@ from copy import deepcopy
 import pytest
 
 from contracts.schema.grounding import OutputConstraints
-from contracts.schema.hook import HookConstraints
 from novel.llm.paid_requests import digest
 from novel.llm.transport import ChatResponse
 from novel.stages.chain import ChainContext, run_body_design, run_preserve, run_workflow
@@ -145,8 +144,7 @@ def test_free_preview_before_any_design_publish_uses_same_candidate_checks(tmp_p
     _bad_design(wires['design'])
     direct = inspect_design_candidate(wires['design'], **args).report()
     preview = dry_run_patch(ctx.repository, 'design', wires['design'], evidence={},
-                            budget=2000, chapter_count=2, length_band=ctx.length_band,
-                            hook_constraints=HookConstraints(target_chars=100, hard_max_chars=360))
+                            budget=2000, chapter_count=2, length_band=ctx.length_band)
     assert preview['status'] == 'ran', '没有正式Binding或Hook不妨碍候选预检'
     assert preview['candidate_preflight'] == direct
     assert preview['errors'] == direct['errors'] + direct['material_errors']
@@ -170,8 +168,7 @@ def test_free_preview_rechecks_existing_hook_against_changed_candidate(tmp_path)
     run_body_design(ctx)
     run_hook_design(ctx)
     before = ctx.repository.path('stage4/design/presentation_graph.json').read_bytes()
-    args = dict(evidence={}, budget=2000, chapter_count=2, length_band=ctx.length_band,
-                hook_constraints=ctx.hook_constraints)
+    args = dict(evidence={}, budget=2000, chapter_count=2, length_band=ctx.length_band)
     good = dry_run_patch(ctx.repository, 'design', wires['design'], **args)
     assert good['candidate_preflight']['checks'][-1]['status'] == 'passed'
     assert good['candidate_preflight']['passed'] and not good['errors']
@@ -219,8 +216,7 @@ def test_owner_patch_preview_rechecks_existing_hook_surface_release_rules(tmp_pa
         validate=lambda w: list(inspect_design_candidate(w, **candidate_args).errors),
         dry_run=lambda w: dry_run_patch(
             ctx.repository, 'design', w, evidence={}, budget=ctx.budget,
-            chapter_count=len(ctx.chapters), length_band=ctx.length_band,
-            hook_constraints=ctx.hook_constraints))
+            chapter_count=len(ctx.chapters), length_band=ctx.length_band))
     assert not preview['owner_errors'], '错误来自候选与旧Hook组合，不是Design自身'
     downstream = preview['downstream']
     report = downstream['candidate_preflight']
@@ -365,6 +361,89 @@ def _ledger_rows(repo, purpose='design'):
             if line.strip() and _json.loads(line).get('purpose') == purpose]
 
 
+@pytest.mark.stage_scope('stage4')
+def test_purchased_v9_narrow_failure_accepts_current_v10_full_fallback(tmp_path):
+    """旧候选窄修失败后，整份兜底的请求和完整接受闸使用当前协议。"""
+    import json
+    import re
+
+    from novel.stages import candidates
+    from novel.stages.chain import _record_design_candidates
+    from novel.stages.common import design_rules, pack_prompt
+    from novel.stages.stage4 import preserve_revision_wire, project_design_input
+    from tests.test_str06_body import _RoutingTransport
+
+    ctx, wires, transport, args = _prepare(tmp_path)
+    repo = ctx.repository
+    current = deepcopy(wires['design'])
+    wires['design']['protocol_version'] = 'stage4-design-v9'
+    prompt = pack_prompt(design_rules(protocol='stage4-design-v9'),
+                         brief=project_design_input(args['brief'], args['obligations'],
+                                                    protocol='stage4-design-v9'))
+    wire, _ref = ctx.ask('design', prompt, lambda w: list(inspect_design_candidate(w, **args).errors))
+    inspection = inspect_design_candidate(wire, **args)
+    assert inspection.passed
+    _record_design_candidates(ctx, produced={candidates.wire_sha256(wire): inspection.report()},
+        upstream_wire=preserve_revision_wire(repo.read_model('runtime/preserve_checkpoint.json')))
+    republish_checkpoint(repo, lambda cp: cp.model_copy(update={
+        'obligations': tuple(o.model_copy(update={'statement': o.statement + '，且夫君许诺必归'})
+                             for o in cp.obligations)}))
+
+    class FallbackTransport(_RoutingTransport):
+        def __init__(self):
+            super().__init__(wires)
+            self.requests = []
+
+        def send(self, request):
+            assert self._owner(request) == 'design'
+            self.calls.append('design')
+            self.requests.append(request.user)
+            # 闭集必选目标漏答会退整份，不绕过补丁协议来模拟成功。
+            answer = {'patches': []} if len(self.requests) == 1 else current
+            return ChatResponse(content=json.dumps(answer, ensure_ascii=False), finish_reason='stop',
+                                usage={'prompt_tokens': 10, 'completion_tokens': 10}, model='fake')
+
+    fallback = FallbackTransport()
+    result = run_body_design(_design_ctx(ctx, _reopened_session(repo, fallback)))
+    assert result['reuse']['action'] == 'narrow_review'
+    assert len(fallback.requests) == 2
+    assert '【窄返修】' in fallback.requests[0]
+    assert re.search(r'"const"\s*:\s*"stage4-design-v9"', fallback.requests[0])
+    assert '【修订要求】' in fallback.requests[1]
+    assert re.search(r'"const"\s*:\s*"stage4-design-v10"', fallback.requests[1])
+    assert result['candidate_preflight']['passed'] is True
+    assert repo.read_model('stage4/design/body_design.json').scenes
+    assert repo.read_model('stage4/grounding/semantic_binding.json').entries
+    registry = candidates.load_registry(repo, 'design')
+    assert any(e['wire_sha256'] == candidates.wire_sha256(current)
+               and e['last_preflight']['passed'] and e['upstream_version'] for e in registry.candidates)
+
+
+@pytest.mark.stage_scope('stage4')
+def test_fresh_design_request_still_rejects_v9_response(tmp_path):
+    """没有已购兼容基底时，普通当前请求仍只接受当前 wire。"""
+    import json
+
+    from tests.test_str06_body import _RoutingTransport
+
+    ctx, wires, _transport, _args = _prepare(tmp_path)
+
+    class FreshTransport(_RoutingTransport):
+        def send(self, request):
+            assert self._owner(request) == 'design'
+            self.calls.append('design')
+            answer = deepcopy(wires['design'])
+            if len(self.calls) == 1:
+                answer['protocol_version'] = 'stage4-design-v9'
+            return ChatResponse(content=json.dumps(answer, ensure_ascii=False), finish_reason='stop',
+                                usage={'prompt_tokens': 10, 'completion_tokens': 10}, model='fake')
+
+    transport = FreshTransport(wires)
+    result = run_body_design(_design_ctx(ctx, _reopened_session(ctx.repository, transport)))
+    assert transport.calls == ['design', 'design'], '旧版首答应被拒，并请求当前版整份修订'
+    assert result['candidate_preflight']['passed'] is True
+
+
 def _lineage_only_mutation(checkpoint):
     """只改 lineage.character_ids（去掉 fu_jun）：设计 prompt 的 participants 变
     （请求身份变），修订对照 wire 的条目（kind/statement/anchors/must/satisfaction/
@@ -429,7 +508,7 @@ def test_identity_change_without_entry_change_carries_forward_with_zero_calls(tm
 
 
 def test_changed_entry_with_equal_canonical_form_carries_forward_with_zero_calls(tmp_path):
-    """② 变化条目的称谓规范形相等 → 同样零调用采用（换登记称谓／同位语不算语义变化）。"""
+    """② 变化条目的称谓规范形相等 → 同样零调用采用（只换登记称谓，保留提及次数）。"""
     ctx, wires, transport, _ = _prepare(tmp_path)
     repo = ctx.repository
     session = _reopened_session(repo, transport)
