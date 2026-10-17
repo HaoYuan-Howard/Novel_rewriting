@@ -113,7 +113,7 @@ def test_observation_artifacts_are_registered_with_independent_versions():
     assert ARTIFACT_SPECS['stage2/observations/associate.json']
     assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc20'
     # R2（语义送达）起 RC 版式头升 rc10；associate 冻结在 rc9（R1 身份）不动。
-    assert STR06_RC_VERSION == 'str06-rc25'     # 身份文本协议；Stage2 独立维持 rc20。
+    assert STR06_RC_VERSION == 'str06-rc26'     # 命名前移批；Stage2 独立维持 rc20。
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/compiled/execution_plan.json'] == 'str06-rc14'
     for rel in ('runtime/preserve_checkpoint.json',
                 'stage4/grounding/reconstruction_brief.json',

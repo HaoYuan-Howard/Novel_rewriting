@@ -657,7 +657,7 @@ def test_r2_version_constants():
     )
     from novel.stages.common import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
-    assert STR06_RC_VERSION == 'str06-rc25'          # HookContext 篇幅包络独立升版；正文契约不变。
+    assert STR06_RC_VERSION == 'str06-rc26'          # 命名前移批升版式头；Design 形状本批不变。
     assert 'str06-rc10' in STR06_RC_LABELS
     assert RENDERER_VERSION == 'str06-render-v13'
     assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v12'

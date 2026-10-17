@@ -19,7 +19,7 @@
 【送达面（本文件的 canonical 面）】字段登记只覆盖送达链的正式产物：
 `WriterBookIR`（`stage4/ir/writer_book_ir.json`）＋派生章包的
 `RealizationContract`＋`HookContext`（`stage4/context/hook/hook.json`）＋
-`NameMapV5`（`stage7/naming/name_map.json`）。回执是输出不是送达，不在面内。
+`NameMapV6`（`stage4/naming/name_map.json`）。回执是输出不是送达，不在面内。
 
 【与 R2 的边界】当前 renderer（v4）仍把 VerificationIR 以 JSON 倾倒进 prompt，
 因此 `established_by`、`beat_ref`、字段名等 audit 材料今天确实可见——这些条目在
@@ -55,7 +55,7 @@ from contracts.schema.context import (
 )
 from contracts.schema.grounding import EventEvidence, ObligationAnchor, SourceDetail
 from contracts.schema.hook import HookContext, HookOpeningFact, HookPov
-from contracts.schema.naming import NameMapV5
+from contracts.schema.naming import NameMapV6
 from contracts.schema.state import EffectDomain, StateAddress
 from novel.stages.common import (
     build_writer_packet, packet_sha256, project_chapter_packet, render_chapter_packet,
@@ -110,7 +110,7 @@ def _delivery_face() -> set[str]:
     _face_paths('writer_book_ir', WriterBookIR, face)
     _face_paths('chapter_packet.realization_contract', RealizationContract, face)
     _face_paths('hook_context', HookContext, face)
-    _face_paths('name_map', NameMapV5, face)
+    _face_paths('name_map', NameMapV6, face)
     # packet_metrics.json 是 dict 落盘的观测面（I-38：不进领域 schema，无模型可
     # 走）；以文件级路径进面——登记为 audit_only／not_delivered。
     face.add('stage4/acceptance/packet_metrics.json')
@@ -1167,7 +1167,7 @@ def test_selected_details_and_prior_series_reach_only_their_declared_writer_sect
 
 def test_name_map_mutation_never_reaches_body_packets(green_ir):
     """naming_only 面：NameMap 的任何变异都不触碰正文章包（Apply 才是消费点）。"""
-    name_map = NameMapV5.model_validate({
+    name_map = NameMapV6.model_validate({
         'entries': [{'char_ref': 'fu_jun', 'name': {'family': '顾'},
                      'aliases': {}, 'keep_reason': None}]})
     before = _digests(green_ir)

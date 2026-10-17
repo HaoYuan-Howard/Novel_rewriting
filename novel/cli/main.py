@@ -393,7 +393,7 @@ _STR06_THROUGH = {
     'str06.stage4.hook_design': 'stage4',
     'str06.stage4.compile': 'stage4',
     'str06.stage5.hook': 'stage5', 'str06.stage5.body': 'stage5',
-    'str06.stage7.naming': 'stage7', 'str06.stage7.assemble': 'stage7',
+    'str06.stage4.naming': 'stage4', 'str06.stage7.assemble': 'stage7',
 }
 
 

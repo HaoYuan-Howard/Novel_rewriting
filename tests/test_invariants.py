@@ -145,7 +145,7 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
         'str06.stage4.compile': 'canonical',
         'str06.stage5.hook': 'canonical',
         'str06.stage5.body': 'canonical',
-        'str06.stage7.naming': 'canonical',
+        'str06.stage4.naming': 'canonical',
         'str06.stage7.assemble': 'canonical',
         'str06.stage2.associate': 'owner_revision',
         'str06.stage4.preserve': 'owner_revision',

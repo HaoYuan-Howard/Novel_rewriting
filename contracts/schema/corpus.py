@@ -34,12 +34,12 @@ CURRENT_CORPUS_PAID_NODES: tuple[str, ...] = (
     'str06.stage2.chapters',
     'str06.stage2.names',
     'str06.stage2.associate',
+    'str06.stage4.naming',
     'str06.stage4.preserve',
     'str06.stage4.body_design',
     'str06.stage4.hook_design',
     'str06.stage5.hook',
     'str06.stage5.body',
-    'str06.stage7.naming',
 )
 
 #: 成书的模板 rel（「记模板、哈希实体」：盘上是 `stage7/<书名>_rewriting.txt`，
@@ -102,8 +102,8 @@ def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
         # str06.stage5.hook。
         'stage5/hook/hook.txt',
         'stage5/hook/receipt.json',
-        # str06.stage7.naming。
-        'stage7/naming/name_map.json',
+        # str06.stage4.naming（命名前移批，rc26）。
+        'stage4/naming/name_map.json',
         # ⚠⚠ **成书这一条登记的是模板 rel，不是盘上那个文件名。**
         #   盘上它叫 `stage7/<书名>_rewriting.txt`，而本清单**刻意不含书名**
         #   （本模块 docstring 的 "text-free"；`docs/schema/corpus.md`）——它要能提交进 git。

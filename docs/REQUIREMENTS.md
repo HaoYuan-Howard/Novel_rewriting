@@ -229,11 +229,19 @@ Stage0～Stage2 源 schema 与正式字节不变；`str06.stage4.naming` 前移�
 
 | 批次 | 内容 | 状态 |
 |---|---|---|
-| A 冻结新契约 | rc26；登记新命名节点、产物、普通名称默认可用与身份例外规则；明确退役判据 | 未开始 |
+| A 冻结新契约 | 命名节点前移登记（str06.stage4.naming＋stage4/naming/name_map.json＋NameMap v6）、模块迁 stage4 包、版式头升 rc26、登记 naming-forward-rc25-rc26 同根升级边（含升级器 preserve checkpoint 归档缺口修复）、判据/计数/冻结基线重钉 | **已完成**（2026-10-18） |
 | B 打通目标材料 | 命名前移；Preserve 生成目标表述；关闭源自由文本直接流入 Design、Binding、正文及 Hook 的入口 | 未开始 |
 | C 切换正文与装配 | 删 identity-text 协议、候选覆盖硬闸、两类区间回执及末端替换；修订普通正文回执与交付身份 | 未开始 |
 | D 恢复与公开读面 | 闭合存量升级、历史账读取、预算、CLI、API 和监控页 | 未开始 |
 | E 验收与删除旧路径 | 完成工程验证及真实正文验收，删除失去消费者的代码和测试 | 未开始 |
+
+批次 A 工程验证（2026-10-18，fake transport、零付费）：契约五文件（docs_references／
+coverage／rules_registry／hard_counterexamples／ingest_fixtures）与 naming／store／
+views／api／cli／orchestrator／corpus／work_units／beacon／product_entry／f7e_freeze
+等 40 个受影响文件全绿；冻结契约身份随节点前移重钉为
+`7f6cfc22efdae5de37718d6226241becb6623376bef68af081e08b38f0298d75`（13 节点／10 付费，
+Stage7 腿只剩 assemble）；旧 `stage7/naming/name_map.json` 进
+`RETIRED_ARTIFACT_PATHS` 拒读。前端夹具同步新节点 id；typecheck/test/seams 随批验证。
 
 两个已确认工程缺口（随批次 D 闭合）：① `novel/orchestrator/contract_upgrade.py` 的 `_files`
 无条件保留 `runtime/preserve_checkpoint.json`，须改为服从归档集合，防止同一文件同时进入保留和

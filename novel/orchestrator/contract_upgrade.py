@@ -63,9 +63,14 @@ def _files(repository: Str06Repository, registration: ContractUpgradeSpec
     retained = {p for stage in ('stage0', 'stage1', 'stage2', 'stage4', 'stage5', 'stage7')
                 for p in (repository.root / stage).rglob('*')
                 if p.is_file() and '_rounds' not in p.parts} - archive
-    checkpoint = repository.path('runtime/preserve_checkpoint.json')
-    if checkpoint.is_file():
-        retained.add(checkpoint)
+    # 已购 Preserve checkpoint 只在**未登记归档**时保留（rc26 命名前移边登记
+    # 归档旧 checkpoint，从新命名节点重建）：无条件保留会让同一文件同时进入
+    # 保留与归档两份清单——保留集按旧字节复验、归档集又要把它挪走，计划自相
+    # 矛盾（2026-10-18 命名前移批登记的工程缺口）。
+    checkpoint_rel = 'runtime/preserve_checkpoint.json'
+    if (repository.path(checkpoint_rel).is_file()
+            and repository.path(checkpoint_rel) not in archive):
+        retained.add(repository.path(checkpoint_rel))
 
     def rows(files: set[Path]) -> tuple[UpgradeFile, ...]:
         return tuple(UpgradeFile(rel=p.relative_to(repository.root).as_posix(),

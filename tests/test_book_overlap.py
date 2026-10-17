@@ -11,7 +11,7 @@ import pytest
 from contracts.artifacts import str06_body_receipt_rel, str06_body_rel
 from contracts.invariants import BOOK_BLOCK_SEP
 from contracts.schema import encode_artifact
-from contracts.schema.naming import NameMapV5
+from contracts.schema.naming import NameMapV6
 from contracts.schema.receipt import (
     BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION, ChapterReceipt,
     RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
@@ -63,7 +63,7 @@ def _fixture(tmp_path):
             'people': {char_id: {'family_id': f'fam_{char_id}', 'given': None,
                                  'aliases': [], 'surface_forms': {'白': '{family}'}}
                        for char_id in ('first', 'second')}}})
-    names = NameMapV5.model_validate({'entries': [
+    names = NameMapV6.model_validate({'entries': [
         {'char_ref': 'first', 'name': {'family': '沈'}},
         {'char_ref': 'second', 'name': {'family': '柳'}}]})
     declared = (
@@ -78,7 +78,7 @@ def _fixture(tmp_path):
         '我心里明白，白天的雨会让石阶湿滑，因此仍须慢慢行走。',
         second.text)
     _write_artifact(novel_dir, 'stage2/characters/characters.json', characters)
-    _write_artifact(novel_dir, 'stage7/naming/name_map.json', names)
+    _write_artifact(novel_dir, 'stage4/naming/name_map.json', names)
     _write_artifact(novel_dir, 'stage1/main_text.json', MainText.model_validate([
         {'chapter_ordinal': ordinal, 'text': original.text}
         for ordinal, original in enumerate(originals, 1)]))
@@ -172,7 +172,7 @@ def test_missing_receipt_is_unmeasured_and_missing_name_map_is_not_an_empty_mapp
     rows = measure(tmp_path, '123')['chapters']
     assert len(rows) == 2 and rows[0]['overlap'] is None and rows[0]['why']
     assert rows[1]['overlap'] == 1.0
-    artifact_path(novel_dir, 'stage7/naming/name_map.json').unlink()
+    artifact_path(novel_dir, 'stage4/naming/name_map.json').unlink()
     with pytest.raises(SystemExit, match='无法度量'):
         measure(tmp_path, '123')
 

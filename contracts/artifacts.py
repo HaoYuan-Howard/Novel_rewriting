@@ -37,7 +37,8 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage2/blueprints/chapter_blueprints.json': 'stage2/blueprints/chapter_blueprints.json',
     'stage2/acceptance/fold.json': 'stage2/acceptance/fold.json',
     'stage2/characters/characters.json': 'stage2/characters/characters.json',
-    # ── Stage4（preserve／body_design／hook_design／bind／compile）──
+    # ── Stage4（naming／preserve／body_design／hook_design／compile）──
+    'stage4/naming/name_map.json': 'stage4/naming/name_map.json',
     'runtime/preserve_checkpoint.json': 'runtime/preserve_checkpoint.json',
     'stage4/grounding/reconstruction_brief.json': 'stage4/grounding/reconstruction_brief.json',
     'stage4/grounding/semantic_binding.json': 'stage4/grounding/semantic_binding.json',
@@ -55,8 +56,7 @@ ARTIFACT_PATHS: Final[dict[str, str]] = {
     'stage5/hook/receipt.json': 'stage5/hook/receipt.json',
     'stage5/body/ch{nn}.txt': 'stage5/body/ch{nn}.txt',
     'stage5/acceptance/body/ch{nn}.json': 'stage5/acceptance/body/ch{nn}.json',
-    # ── Stage7（naming／assemble）──
-    'stage7/naming/name_map.json': 'stage7/naming/name_map.json',
+    # ── Stage7（assemble）──
     'stage7/final/{title}_rewriting.txt': 'stage7/final/{title}_rewriting.txt',
     'stage7/final/delivery_manifest.json': 'stage7/final/delivery_manifest.json',
 }
@@ -108,6 +108,9 @@ RETIRED_ARTIFACT_PATHS: Final[dict[str, str]] = {
     # ── 旧 Stage7 链 ──
     'stage7.name_map': 'stage7/name_map.json',
     'stage7.name_map_edit': 'stage7/name_map_edit.json',
+    # 命名前移批（2026-10-18，rc26）：str06.stage7.naming 退役，末端产物路径
+    # 只读拒识；存量根经 rc25→rc26 同根升级归档重建，不静默采用旧字节。
+    'stage7.naming_name_map': 'stage7/naming/name_map.json',
     'stage7.book': 'stage7/{title}_rewriting.txt',
     # ── 更早的退役项（原样保留）──
     'stage2.blueprint_relation_edit': 'stage2/blueprint_relation_edit.json',
@@ -192,7 +195,7 @@ STR06_HOOK_TEXT = artifact_rel('stage5/hook/hook.txt')
 STR06_HOOK_RECEIPT = artifact_rel('stage5/hook/receipt.json')
 STR06_STAGE5_BODY = artifact_rel('stage5/body/ch{nn}.txt')
 STR06_STAGE5_BODY_RECEIPT = artifact_rel('stage5/acceptance/body/ch{nn}.json')
-STR06_NAME_MAP = artifact_rel('stage7/naming/name_map.json')
+STR06_NAME_MAP = artifact_rel('stage4/naming/name_map.json')
 STR06_DELIVERY_MANIFEST = artifact_rel('stage7/final/delivery_manifest.json')
 
 
@@ -357,7 +360,9 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc17（2026-10-06 CS-H H3，RC-61）：BODY_VALIDATOR 升 v2——必保揭名必现
     # 字面与场景标记进章级机械校验，回执 validator_version 随行。
     'stage5/acceptance/body/ch{nn}.json': 'str06-rc25',
-    'stage7/naming/name_map.json': 'str06-rc12',
+    # rc26（2026-10-18 命名前移批）：str06.stage4.naming 前移，NameMap v6 落
+    # stage4/naming/name_map.json；旧 stage7 末端路径与 NameMapV5 字节拒读。
+    'stage4/naming/name_map.json': 'str06-rc26',
     'stage7/final/{title}_rewriting.txt': 'str06-rc12',
     'stage7/final/delivery_manifest.json': 'str06-rc12',
 }

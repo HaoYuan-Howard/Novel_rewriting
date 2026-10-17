@@ -79,7 +79,7 @@ PROFILED_LLM_RUNS: dict[str, tuple[frozenset[str], ...]] = {
     'str06.stage4.hook_design': (frozenset(),),
     'str06.stage5.hook': (frozenset(),),
     'str06.stage5.body': (frozenset(),),
-    'str06.stage7.naming': (frozenset(),),
+    'str06.stage4.naming': (frozenset(),),
 }
 
 PROFILED_LLM_NODES = tuple(PROFILED_LLM_RUNS)
@@ -317,8 +317,12 @@ def check_node(stage: str) -> str:
 
     ⚠⚠ F8b 翻转：新链的复检是**节点级**（每个 `str06.` 节点自带
     `--check-only`，见 `docs/schema/str06.md`），stage2／4／5 各有多座桥。
-    层的代表桥取 NODES 顺序第一座——零座仍是登记错误（忘了给节点登记
-    跑法），多座不再断言恰好一座；真正的复检调度走节点级入口。
+    层的代表桥取 NODES 顺序第一座——零座对**层复检路由**是登记错误（忘了给
+    节点登记跑法），多座不再断言恰好一座；真正的复检调度走节点级入口。
+
+    ⚠ 命名前移批（2026-10-18）后 stage7 只剩确定性 `str06.stage7.assemble`
+    （`--check-only` 是付费复检跑法，确定性节点不挂），零桥是合法形态；
+    只要一个 ctx 前缀的只读投影用 `probe_node`，不要来这里。
     """
     nodes = check_nodes(stage)
     if not nodes:
@@ -326,6 +330,24 @@ def check_node(stage: str) -> str:
             f'{stage} 有 0 个节点接受 `--check-only`：'
             f'忘了给它登记跑法（`contracts/invariants.py::NODES` 的 flags）')
     return nodes[0]
+
+
+def probe_node(stage: str) -> str:
+    """层内**只读探测**的代表节点：首座 `--check-only`，零座回落该层首节点。
+
+    与 `check_node` 的分工：那个服务「层复检路由」（零座＝登记错误），本函数
+    服务「只要一个 `readonly_ctx` 前缀」的投影消费方（inbox／旁路账）——
+    `readonly_ctx` 的 node 只影响错误信息前缀，不承载复检调度语义。命名前移批
+     （2026-10-18）起 stage7 没有 `--check-only` 节点，这些消费方不能因此
+    整层爆炸；层本身没有登记任何节点仍是 KeyError。
+    """
+    nodes = check_nodes(stage)
+    if nodes:
+        return nodes[0]
+    stage_nodes = tuple(n for n, s in NODES.items() if s.stage == stage)
+    if not stage_nodes:
+        raise KeyError(f'{stage} 没有登记任何节点（`contracts/invariants.py::NODES`）')
+    return stage_nodes[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

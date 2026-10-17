@@ -22,7 +22,7 @@ stage6.prepare，改按 Stage5 有效接受回执过滤。`rename_materials` 写
 
 【R0 字段级送达登记（2026-09-28，首版 PLAN.md「以小说质量为中心」批次 R0；Git 2fc03832）】
 六族投影回答「哪类信息给谁」；`STR06_FIELD_DELIVERY` 把粒度降到**字段**：送达链
-canonical 产物（WriterBookIR／RealizationContract／HookContext／NameMapV5）的每个
+canonical 产物（WriterBookIR／RealizationContract／HookContext／NameMapV6）的每个
 叶子字段都要登记消费者、受影响章范围与 `delivery_mode`（七档，见枚举）。守卫在
 `tests/test_str06_semantic_delivery.py`：未登记即红、变异只动登记章、变异值只进
 对应送达面、写手视图无 audit_only 内容。同一字段的 delivery_mode 可按投影规则
@@ -100,7 +100,7 @@ STR06_CONSUMPTION_PROJECTIONS: dict[str, ProjectionFamilySpec] = {
         name='rename_materials',
         shape_note='Naming 只消费名称结构与稳定身份的只读投影；ApplyNames 是替换的'
                    '唯一应用者（权限分界：投影不落交付，Apply 不改映射）',
-        source_owners=('str06.stage2.compile', 'str06.stage7.naming'),
+        source_owners=('str06.stage2.compile', 'str06.stage4.naming'),
         coordinate=ProjectionCoordinate.DUAL),
 }
 
@@ -1106,7 +1106,7 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'hook_context.length_cap', consumers=(_H, _V), scope=_HOOK,
         mode=DeliveryMode.MUST_RESPECT,
         note='楔子篇幅硬上限：validator 拒收超限稿（同一 Context 有限重写），人工 wire 免费采用'),
-    # ── NameMapV5（改名面；不经任何写手）──────────────────────────────────
+    # ── NameMapV6（改名面；不经任何写手）──────────────────────────────────
     'name_map.contract_version': _spec(
         'name_map.contract_version', consumers=(_N, _A), scope=_NAME,
         mode=DeliveryMode.AUDIT_ONLY, note='交付变换版本（审计位）'),

@@ -122,6 +122,8 @@ from novel.stages.stage4 import (
     preserve_name_issues, preserve_patch_slice, project_brief,
     project_design_input, project_preserve_view, preserve_revision_wire,
     publish_graph,
+    apply_bound_names, compile_name_map, compile_bound_replacements,
+    naming_patch_locate, naming_projection,
 )
 from contracts.schema.orchestration import LegacyLlmProfile
 from novel.stages.stage4 import (
@@ -141,9 +143,8 @@ from novel.stages.stage5 import (
     resolve_hook_prose,
 )
 from novel.stages.stage7 import (
-    apply_bound_names, assemble_delivery, build_delivery_manifest, chapter_access,
-    compile_name_map, compile_bound_replacements,
-    naming_patch_locate, naming_projection, verify_chapter_receipts,
+    assemble_delivery, build_delivery_manifest, chapter_access,
+    verify_chapter_receipts,
 )
 from novel.store import PublishItem, Str06Repository
 from novel.work_units import read_book_budget, require_workflow
@@ -161,13 +162,17 @@ __all__ = [
 #: B2 五节点重建（D9）：Stage2 五 owner（book／chapters／names／associate／
 #: compile）runner 已全部落地，本序与 NODE_RUNNERS 双向闭合
 #: （对账在 `tests/test_str06_candidates.py`）。
+#: 命名前移批（2026-10-18，rc26）：str06.stage4.naming 从 Stage7 末端前移到
+#: Stage2 compile 之后、Preserve 之前——目标姓名是 Preserve 目标简报与设计链
+#: 的正式输入；节点总数不变（Stage7 naming 退役）。
 NODE_ORDER: tuple[str, ...] = (
     'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
     'str06.stage2.associate', 'str06.stage2.compile',
+    'str06.stage4.naming',
     'str06.stage4.preserve', 'str06.stage4.body_design',
     'str06.stage4.hook_design', 'str06.stage4.compile',
     'str06.stage5.hook', 'str06.stage5.body',
-    'str06.stage7.naming', 'str06.stage7.assemble',
+    'str06.stage7.assemble',
 )
 
 #: --through 腿 → 跑到哪个节点为止（含）。
@@ -2230,7 +2235,7 @@ def run_body(ctx: ChainContext) -> dict:
                 k for k, r in committed_receipts.items() if r.get('length_disclosed')]}
 
 
-# ─── stage7 naming ───────────────────────────────────────────────────────────
+# ─── stage4 naming（命名前移批，2026-10-18）─────────────────────────────────
 
 def run_naming(ctx: ChainContext) -> dict:
     repository = ctx.repository
@@ -2249,7 +2254,7 @@ def run_naming(ctx: ChainContext) -> dict:
     name_map, errors = compile_name_map(nw, chars)
     if errors:
         raise ValueError(errors)
-    repository.write('stage7/naming/name_map.json', name_map, owners=('naming',),
+    repository.write('stage4/naming/name_map.json', name_map, owners=('naming',),
                      refs=(naming_ref,))
     return {'entries': len(name_map.entries)}
 
@@ -2266,7 +2271,7 @@ def run_assemble(ctx: ChainContext) -> dict:
     writer_ir = repository.read_model('stage4/ir/writer_book_ir.json')
     graph = repository.read_model('stage4/design/presentation_graph.json')
     chars = repository.read_model('stage2/characters/characters.json')
-    name_map = repository.read_model('stage7/naming/name_map.json')
+    name_map = repository.read_model('stage4/naming/name_map.json')
     hook_context = repository.read_model('stage4/context/hook/hook.json')
     binding = repository.read_model('stage4/grounding/semantic_binding.json')
     receipt = repository.read_model('stage5/hook/receipt.json')
@@ -2339,7 +2344,7 @@ def run_assemble(ctx: ChainContext) -> dict:
             chapter_prose=chapter_prose,
             hook_prose_sha256=hook_sha,
             name_map_sha256=repository.file_sha256(
-                repository.path('stage7/naming/name_map.json')),
+                repository.path('stage4/naming/name_map.json')),
             total_length_budget=ctx.budget)
         repository.publish((
             PublishItem(rel=final_rel, text=final_bytes.decode('utf-8')),
@@ -2357,13 +2362,13 @@ NODE_RUNNERS: dict[str, Callable[[ChainContext], dict]] = {
     'str06.stage2.names': run_names,
     'str06.stage2.associate': run_associate,
     'str06.stage2.compile': run_compile,
+    'str06.stage4.naming': run_naming,
     'str06.stage4.preserve': run_preserve,
     'str06.stage4.body_design': run_body_design,
     'str06.stage4.hook_design': run_hook_design,
     'str06.stage4.compile': run_compile_stage4,
     'str06.stage5.hook': run_hook,
     'str06.stage5.body': run_body,
-    'str06.stage7.naming': run_naming,
     'str06.stage7.assemble': run_assemble,
 }
 

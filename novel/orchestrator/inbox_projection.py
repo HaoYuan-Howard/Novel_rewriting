@@ -62,7 +62,7 @@ from novel.errors import (
 from novel.orchestrator.inspection import (
     OperatorReadSnapshot, capture_operator_snapshot, read_surface_seal,
 )
-from novel.orchestrator.nodes import check_node
+from novel.orchestrator.nodes import probe_node
 from novel.orchestrator.state import (
     readonly_ctx,
 )
@@ -173,7 +173,9 @@ def inbox_from_snapshot(
 
     for stage in STAGES:
         # ctx/store 仍用于本层旁路账；报告只取 snapshot 中已经跑过的那一份。
-        ctx = readonly_ctx(novel_dir, check_node(stage), code)
+        # probe_node：stage7 命名前移后没有 `--check-only` 节点，只读投影
+        # 只要一个 ctx 前缀（见 nodes.probe_node 的分工说明）。
+        ctx = readonly_ctx(novel_dir, probe_node(stage), code)
         store = ArtifactStore(ctx)
 
         # 「有人看过并决定不修」是**逐层各一份账**（2026-08-15 裁决：层由文件路径承载）

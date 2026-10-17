@@ -85,8 +85,10 @@ STR06_PATH_FAMILIES: Final[dict[str, PathFamily]] = {
     # 登记在同一家族（同 stage4.grounding 的先例）。
     'str06.stage5.hook': PathFamily(
         prefix='stage5/hook/', kind='prose+audit', writer_owner='stage5.hook_writer'),
-    'str06.stage7.naming': PathFamily(
-        prefix='stage7/naming/', kind='canonical', writer_owner='stage7.naming'),
+    # 目标命名前置（2026-10-18，rc26）：name_map 从 Stage7 末端前移到 Stage4，
+    # 成为 Preserve 与设计链的正式输入；家族随节点迁移。
+    'str06.stage4.naming': PathFamily(
+        prefix='stage4/naming/', kind='canonical', writer_owner='stage4.naming'),
     # 交付目录混居两职：final 正文是 prose，组装报告与 diff proof 是 audit。
     'str06.stage7.final': PathFamily(
         prefix='stage7/final/', kind='prose+audit', writer_owner='stage7.assembly'),

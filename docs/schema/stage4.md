@@ -1,6 +1,9 @@
 # Stage 4 当前契约
 
-Stage4 在新链（STR-06，F8a 激活）有四个节点：三个付费节点
+Stage4 在新链（STR-06，F8a 激活）有五个节点：命名前移批（2026-10-18，rc26）起
+`str06.stage4.naming`（NameMap v6 赋值，置于 Stage2 compile 之后、Preserve 之前——
+目标姓名经 `stage4/naming/name_map.json` 进入本层目标简报与设计链；旧
+`str06.stage7.naming` 退役）→ 三个付费节点
 `str06.stage4.preserve`（保存策略义务）→ `str06.stage4.body_design`（目标故事与
 导演说明，同节点双产物发布 SemanticBinding——CS-3 起 bind 节点退役，义务承载位由
 design wire 的 real 标注派生）→ `str06.stage4.hook_design`
@@ -44,6 +47,7 @@ Preserve 现役保存策略为 v11，wire 为 `stage4-preserve-v6`。源盲交�
 
 | 路径 | 模型 | 生产节点 | 内容 |
 |---|---|---|---|
+| `stage4/naming/name_map.json` | `NameMapV6` | `str06.stage4.naming` | 名称位赋值（char_ref → 目标名／保留；命名前移批落本层） |
 | `runtime/preserve_checkpoint.json` | `PreserveCheckpoint` | `str06.stage4.preserve` | 保存策略义务（已购证据；checkpoint 存储不是下游读取接口） |
 | `stage4/grounding/reconstruction_brief.json` | `ReconstructionBrief` | `str06.stage4.preserve` | ReconstructionBrief 确定性投影 |
 | `stage4/design/body_design.json` | `BodyDesign` | `str06.stage4.body_design` | 目标故事与导演说明（正式派生产物；hook_design 的单节点输入） |
@@ -152,6 +156,8 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `chapter_plan_shape` | hard | 目标章数等于源章数、章序 1..N 连续非空；允许跨章重构 |
 | `length_budget_conserved` | hard | 章预算 largest-remainder 分配、总和守恒 |
 | `preserve_compile` | hard | Preserve checkpoint 编译闭合 |
+| `name_map_compile` | hard | NameMap v6 编译闭合（名称位一致、无姓氏冲突、保留项合法） |
+| `naming_quality_unver` | unver | 新名的阅读质量未经语义评审 |
 | `preserve_name_literal_gate` | hard | Preserve 自闸：statement／satisfaction／details[].text 的裸姓、未登记别名等无法唯一认领的字面带义务或细节条目路径窄修；唯一绑定的自然混称合法，不推断揭名 |
 | `binding_mechanical` | hard | CS-3：binding 派生错误并入 body_design 的 ask 同节点修订轮（≤2）；real 覆盖闸漏标即拦；耗尽/无进展 fail-fast |
 | `hook_design_mechanical` | hard | Hook 设计机械校验＋graph 唯一发布 |
@@ -180,7 +186,7 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `answer_reuse_four_conditions` | hard | R10a §二.4：已购回答复用四条件——模型输入未变→复用；验收条件变化→免费机械复验；实际写作材料变化→按请求身份判断新回答；仅审计/展示变化→不触发付费重写 |
 | `writer_packet_background_narrowing` | hard | R10b §R10b.3：背景投影规则——写手面背景只投书级初态立足点＋建立之后仍被消费的当前状态（消费者＝正文声明读取/读者确认目标/锁键）；unset/unknown 不作背景；补齐面（依赖边生成）保持全量 |
 
-当前注册表共 **33 条**：**31 hard、1 metric、1 unver**（rc21 新增系列概括与细节引用闭集两条 hard）。唯一注册表为
+当前注册表共 **35 条**：**32 hard、1 metric、2 unver**（rc21 新增系列概括与细节引用闭集两条 hard；2026-10-18 命名前移批迁入 name_map_compile 与 naming_quality_unver 两条）。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。
 
 2026-10-17 身份引用文本现役协议与旧源输入边界见 [name_text.md](name_text.md)。本批输出使用 rc25；身份选择的语义准确性保持未评。

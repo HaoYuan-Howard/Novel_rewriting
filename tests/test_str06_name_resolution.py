@@ -85,7 +85,7 @@ def _supplement_case():
 def test_source_surface_supplement_reaches_characters_and_bound_stage7(tmp_path):
     """Names→Stage2真实发布→Stage7真实改名：遗漏简称进入同一Characters真源。"""
     from novel.core.name_text import resolve_name_text
-    from novel.stages.stage7.naming import apply_bound_names, compile_bound_replacements, compile_name_map
+    from novel.stages.stage4.naming import apply_bound_names, compile_bound_replacements, compile_name_map
     chapters, wires = _supplement_case()
     before = deepcopy(wires['book'])
     repo = _run(tmp_path, chapters, wires, _AcceptingAsk(wires))

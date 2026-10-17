@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""test_str06_naming —— F6a NameMap v5／名称结构／ApplyNames／Assembly 反例。
+"""test_str06_naming —— F6a NameMap v6／名称结构／ApplyNames／Assembly 反例。
 
 【验证边界】复姓不被截成首字；同姓亲属同 family_id（新姓一致）；同姓不同人
 （各用各的 family_id）；独立化名显式赋值；纯称谓不进应改名集；漏项／合法
@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
+from contracts.schema.naming import NameAssignment, NameMapV6, TargetName
 from contracts.schema.name_text import NameMention
 from contracts.schema.source import (
     CharactersArtifactV6, CharactersCore, NameStructure,
@@ -23,7 +23,7 @@ from novel.core.name_text import resolve_name_text
 from novel.stages.stage2.names import (
     compile_name_structure, surname_construction_probe,
 )
-from novel.stages.stage7.naming import (
+from novel.stages.stage4.naming import (
     apply_bound_names, compile_bound_replacements, compile_name_map,
     diff_proof, naming_projection,
 )
@@ -711,7 +711,7 @@ def test_bound_replacements_keep_person_identity_instead_of_rejecting_shared_sur
         'zhao_b': second.model_copy(update={'surface_forms': {**second.surface_forms, '赵先生': '{family}先生'}}),
     }})
     chars = chars.model_copy(update={'name_structure': structure})
-    mapping = NameMapV5(entries=(
+    mapping = NameMapV6(entries=(
         NameAssignment(char_ref='zhao_a', name=TargetName(family='林', given='青'), aliases={}),
         NameAssignment(char_ref='zhao_b', name=TargetName(family='周', given='竹'), aliases={}),
         *(NameAssignment(char_ref=char_id, keep_reason='本例明确保留')

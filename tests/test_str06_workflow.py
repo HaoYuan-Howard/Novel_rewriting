@@ -99,6 +99,10 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
         'world_constraints': []}
     wires = {
         'book': book,
+        # 命名前移批（2026-10-18）：naming 在 Stage4 腿执行，全链反例须提供其 wire。
+        'naming': {'entries': [
+            {'char_ref': 'yun', 'name': {'family': '苏', 'given': '婉'},
+             'aliases': {}, 'keep_reason': None}]},
         'ch01': {'protocol_version': PV, 'beats': [
             _obs_beat('云娘提出约定，夫君知晓真相。', ('e01_01',),
                       participants=('yun', 'fu_jun'),
@@ -417,6 +421,10 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
          'satisfaction': '正文呈现确认时点与反应', 'requires': [1]}]})
     wires = {
         'book': book, 'ch01': ch01,
+        # 命名前移批（2026-10-18）：naming 在 Stage4 腿执行，全链反例须提供其 wire。
+        'naming': {'entries': [
+            {'char_ref': 'yun', 'name': {'family': '苏', 'given': '婉'},
+             'aliases': {}, 'keep_reason': None}]},
         'names': {
             'protocol_version': 'stage2-names-v7',
             'families': {'fam_yun': {'literal': '云', 'forms': []}},

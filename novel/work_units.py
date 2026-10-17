@@ -1362,7 +1362,8 @@ def executor_scope(node: str, purpose: str, progress: Any = None) -> str:
     if node in ('str06.stage2.book', 'str06.stage2.names',
                 'str06.stage2.associate', 'str06.stage4.preserve',
                 'str06.stage4.body_design', 'str06.stage4.hook_design',
-                'str06.stage5.hook', 'str06.stage7.naming'):
+                'str06.stage4.naming',
+                'str06.stage5.hook'):
         return 'book'
     if node in ('str06.stage2.chapters', 'str06.stage5.body'):
         chapter = getattr(progress, 'chapter_ordinal', None)

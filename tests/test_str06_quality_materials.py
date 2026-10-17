@@ -273,6 +273,12 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
         design['scenes'][1]['beats'][1]['state'].append(
             {'at': 'world', 'key': 'possession', 'val': '木箱内有十件货物'})
     wires = {
+        # 命名前移批（2026-10-18）：naming 在 Stage4 腿执行，全链反例须提供其 wire。
+        'naming': {'entries': [
+            {'char_ref': 'apprentice', 'name': {'family': '柳', 'given': '明'},
+             'aliases': {}, 'keep_reason': None},
+            {'char_ref': 'keeper', 'name': {'family': '宋', 'given': '玉'},
+             'aliases': {}, 'keep_reason': None}]},
         'book': {**sample_book_expression(people),
                  'protocol_version': 'stage2-book-v7', 'characters': people,
                  'initial_state': [{'target': {'kind': 'character', 'char_id': 'apprentice'},

@@ -140,9 +140,9 @@
     "produced": true
    },
    {
-    "node": "str06.stage7.naming",
+    "node": "str06.stage4.naming",
     "stage": "stage7",
-    "owner": "stage7.naming",
+    "owner": "stage4.naming",
     "paid": true,
     "produced": true
    },
@@ -246,7 +246,7 @@
      "reasoning_tokens": null
     },
     {
-     "node": "str06.stage7.naming",
+     "node": "str06.stage4.naming",
      "rows": 1,
      "new_paid_rows": 1,
      "cached_rows": 0,

@@ -4,7 +4,7 @@
 
 【验证边界】fake transport 全链造一个合成候选根，逐个监控面核对盘面事实：
 Characters v6、Blueprint v17、graph／binding（Hook 与导演说明）、WriterBookIR
-导航、章正文与章回执（机械范围／语义未评／篇幅披露）、Hook 与回执、NameMap v5、
+导航、章正文与章回执（机械范围／语义未评／篇幅披露）、Hook 与回执、NameMap v6、
 成书 manifest 与下载、Run 节点图与 ledger 成本，以及 run 面的失败形状
 （failure_kind／detail／ExecutionError 的 error_* 六字段，I-36）、章级失败留证
 （`runtime/body_failures.json`）与 Stage7 集合核对五态报告

@@ -44,7 +44,7 @@ from contracts.schema.receipt import (
     HOOK_VALIDATOR_VERSION, RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
 )
 from novel.core.name_text import validate_name_mentions, validate_name_text_spans
-from novel.stages.stage7.naming import apply_bound_names
+from novel.stages.stage4 import apply_bound_names
 # 跨 stage 只走包级公开面（守卫见
 # `tests/test_layering.py::test_cross_stage_imports_stay_on_the_package_surface`）：
 # Stage7 装配消费 Stage5 的篇幅口径与文本 SHA。

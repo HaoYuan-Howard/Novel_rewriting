@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
-from contracts.schema.naming import NAMING_VALIDATOR_VERSION, NameAssignment, NameMapV5, TargetName
+from contracts.schema.naming import NAMING_VALIDATOR_VERSION, NameAssignment, NameMapV6, TargetName
 from contracts.schema.source import (
     BlueprintsArtifactV17, CharactersArtifactV6, render_form,
 )
@@ -83,7 +83,7 @@ def naming_projection(
 
 def compile_name_map(
     wire: dict[str, Any], characters: CharactersArtifactV6,
-) -> tuple[NameMapV5 | None, list[str]]:
+) -> tuple[NameMapV6 | None, list[str]]:
     """Naming wire（{'entries': [...]}）→ NameMap v5（full 由 compiler 拼接）。"""
     _map, located = _compile_name_map_located(wire, characters)
     return _map, [message for _paths, message in located]
@@ -109,7 +109,7 @@ def naming_patch_locate(
 
 def _compile_name_map_located(
     wire: dict[str, Any], characters: CharactersArtifactV6,
-) -> tuple[NameMapV5 | None,
+) -> tuple[NameMapV6 | None,
            list[tuple[tuple[tuple[str | int, ...], ...] | None, str]]]:
     """`compile_name_map` 的定位视图：每条错误一项 ``(挂到的条目路径元组, 消息)``
     （None＝wire 级，退整份）。冲突类错误一条消息挂多个条目，**错误列表仍只有一条**
@@ -235,7 +235,7 @@ def _compile_name_map_located(
         filled.append(entry.model_copy(update={
             'name': TargetName(family=entry.name.family, given=entry.name.given,
                                full=full)}))
-    return NameMapV5(entries=tuple(filled)), issues
+    return NameMapV6(entries=tuple(filled)), issues
 
 
 def _check_name_conflicts(entries, characters, structure) -> list[tuple[str, tuple[str, ...]]]:
@@ -313,7 +313,7 @@ def _check_name_conflicts(entries, characters, structure) -> list[tuple[str, tup
 # ───────────────────────── 替换表（纯函数）与应用 ─────────────────────────
 
 def compile_bound_replacements(
-    characters: CharactersArtifactV6, name_map: NameMapV5,
+    characters: CharactersArtifactV6, name_map: NameMapV6,
 ) -> tuple[dict[str, dict[str, str]], list[str]]:
     """按人物身份编译登记称谓，含合法保留的恒等项，不凭字面选择 owner。
 

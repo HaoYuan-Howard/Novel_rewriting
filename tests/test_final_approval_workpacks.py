@@ -8,8 +8,8 @@
 Stage2/4/5/6/7 链随 STR-06 切换整层删除，`stage7.rename` 节点移入
 关闭式拒识（STR-06 关闭批：RETIRED_NODES 名册已随存量解码面删除）。
 
-**接管者**：新链命名职责是 `str06.stage7.naming`
-（`novel/stages/stage7/naming.py::compile_name_map`／`diff_proof`），其反例
+**接管者**：新链命名职责是 `str06.stage4.naming`
+（`novel/stages/stage4/naming.py::compile_name_map`／`diff_proof`），其反例
 由 ``tests/test_str06_naming.py`` 持有——改名表编译、残留扫描与交付重放
 稳定都在那里。本文件只守退役面：producer 不复活、旧节点不可调度、终审
 工作包写入口不可达。
@@ -62,9 +62,10 @@ def test_retired_stage7_submodules_stay_deleted_inside_the_new_package():
 
     root = Path(stage7.__file__).parent
     present = sorted(p.stem for p in root.glob('*.py'))
-    assert present == ['__init__', 'assembly', 'naming'], (
+    assert present == ['__init__', 'assembly'], (
         f'novel/stages/stage7/ 的模块面变了：{present}；'
-        f'新链 Stage7 只许 __init__／assembly／naming')
+        f'命名前移批（2026-10-18）后新链 Stage7 只许 __init__／assembly'
+        f'（naming 随 str06.stage4.naming 迁往 stage4 包）')
     for name in _RETIRED_STAGE7_SUBMODULES:
         assert name not in present, f'旧 Stage7 producer 模块复活：{name}'
 
@@ -93,7 +94,7 @@ def test_stage7_rename_node_is_retired_and_not_schedulable():
 
 def test_new_chain_naming_is_the_takeover():
     """新链命名职责在场，且其反例由 tests/test_str06_naming.py 持有。"""
-    from novel.stages.stage7 import naming
+    from novel.stages.stage4 import naming
 
     for entry in ('compile_name_map', 'compile_bound_replacements',
                   'apply_bound_names', 'diff_proof',
@@ -110,7 +111,7 @@ def test_workpack_schema_carriers_stay_deleted():
 
     旧载体只为「无 producer 的解码形状」存活，而 decode_artifact 对
     `stage7/name_map.json` 一律关闭式拒识 ⇒ 载体结构上不可达。现役工作包
-    形状归 `contracts/schema/naming.py`（`NameMapV5`）与 `hook.py`（HookReceipt）。
+    形状归 `contracts/schema/naming.py`（`NameMapV6`）与 `hook.py`（HookReceipt）。
     """
     import contracts.schema.api as api
 

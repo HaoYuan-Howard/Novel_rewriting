@@ -261,7 +261,7 @@ def test_previous_workflow_manifest_is_refused_without_rewriting(tmp_path):
 
 
 def test_saved_response_cannot_be_replaced_or_tampered(tmp_path):
-    budget = WorkUnitBudget(tmp_path, '42', 'str06.stage7.naming')
+    budget = WorkUnitBudget(tmp_path, '42', 'str06.stage4.naming')
     turn = budget.reserve(sha('a'), run_id='first')
     digest = budget.save_response(turn.turn_id, {'candidate': 1})
     with pytest.raises(WorkUnitRefused, match='不能覆盖'):

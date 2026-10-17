@@ -158,7 +158,7 @@ def test_cli_rejects_retired_stage2_recovery_flags_without_touching_history(tmp_
 def test_stage7_approve_cli_is_retired(tmp_path, capsys):
     """批次 B4 → F8b-3：stage7.approve 的人工终审闸随旧链整层退役。
 
-    新链没有「人逐项核验后 approve」这一步：交付由 `str06.stage7.naming` /
+    新链没有「人逐项核验后 approve」这一步：交付由 `str06.stage4.naming` /
     `str06.stage7.assemble` 自动完成，机械判定归 check 报告。CLI 面上该
     节点名已不在 choices，程序化面按「非现役节点」通则落 legacy_incompatible。
     """
@@ -732,7 +732,7 @@ _PROFILED_RUN_CASES = (
     pytest.param('str06.stage4.hook_design', [], {}, id='stage4-hook-design'),
     pytest.param('str06.stage5.hook', [], {}, id='stage5-hook'),
     pytest.param('str06.stage5.body', [], {}, id='stage5-body'),
-    pytest.param('str06.stage7.naming', [], {}, id='stage7-naming'),
+    pytest.param('str06.stage4.naming', [], {}, id='stage4-naming'),
 )
 
 

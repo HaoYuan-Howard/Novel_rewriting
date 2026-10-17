@@ -15,7 +15,7 @@ from novel.stages.stage2 import (
     book_patch_locate, compile_book_observation, compile_name_structure,
     names_patch_locate,
 )
-from novel.stages.stage7 import compile_name_map, naming_patch_locate
+from novel.stages.stage4 import compile_name_map, naming_patch_locate
 from tests.test_str06_stage2_owners import EVIDENCE, _book_wire
 
 
@@ -189,7 +189,7 @@ def test_names_patch_locate_returns_none_for_coverage_problems():
 
 def _naming_wire(chars) -> dict:
     """对 `_chars` 夹具的合法命名 wire（全部应改名人物各一条）。"""
-    from novel.stages.stage7 import naming_projection
+    from novel.stages.stage4 import naming_projection
     rename_set = naming_projection(chars)['rename_set']
     entries = []
     for ref in rename_set:

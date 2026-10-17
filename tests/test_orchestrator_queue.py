@@ -136,7 +136,7 @@ def test_unwritten_hook_lands_an_ordinary_paid_todo_instead_of_a_blocker(
     (queue_base / 'book-a').mkdir()      # build_steps 解析书目录即可，无需产物
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['str06.stage5.hook', 'str06.stage7.naming'])
+        lambda _until: ['str06.stage5.hook', 'str06.stage4.naming'])
     overview = SimpleNamespace(stages=[
         SimpleNamespace(stage='stage5', artifacts=[]),
         SimpleNamespace(stage='stage7', artifacts=[]),
@@ -151,7 +151,7 @@ def test_unwritten_hook_lands_an_ordinary_paid_todo_instead_of_a_blocker(
 
     assert blocked == []
     assert [item.node for item in todo] == [
-        'str06.stage5.hook', 'str06.stage7.naming']
+        'str06.stage5.hook', 'str06.stage4.naming']
     hook = todo[0]
     assert hook.waiting_on is None
     assert hook.steps and any(step.paid for step in hook.steps), \
@@ -164,7 +164,7 @@ def test_current_hook_stays_skipped_and_downstream_naming_runs(
     """Hook 已落盘且 current 时 `str06.stage5.hook` 维持 SKIP，下游命名照跑。"""
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['str06.stage5.hook', 'str06.stage7.naming'])
+        lambda _until: ['str06.stage5.hook', 'str06.stage4.naming'])
     overview = SimpleNamespace(stages=[
         SimpleNamespace(stage='stage5', artifacts=[]),
         SimpleNamespace(stage='stage7', artifacts=[]),
@@ -181,7 +181,7 @@ def test_current_hook_stays_skipped_and_downstream_naming_runs(
         until_stage='stage7', follow_check=False)
 
     assert blocked == []
-    assert [item.node for item in todo] == ['str06.stage7.naming']
+    assert [item.node for item in todo] == ['str06.stage4.naming']
 
 
 def test_upstream_stuck_never_builds_downstream_paid_commands(
@@ -194,7 +194,7 @@ def test_upstream_stuck_never_builds_downstream_paid_commands(
     monkeypatch.setattr(
         Q, 'nodes_up_to',
         lambda _until: [
-            'str06.stage5.body', 'str06.stage5.hook', 'str06.stage7.naming'])
+            'str06.stage5.body', 'str06.stage5.hook', 'str06.stage4.naming'])
     monkeypatch.setattr(
         Q.st, 'overview', lambda _base, _sid: SimpleNamespace(stages=[
             SimpleNamespace(stage='stage5', artifacts=[])]))
@@ -216,7 +216,7 @@ def test_upstream_stuck_never_builds_downstream_paid_commands(
 
     assert todo == []
     assert [item.node for item in blocked] == [
-        'str06.stage5.body', 'str06.stage5.hook', 'str06.stage7.naming']
+        'str06.stage5.body', 'str06.stage5.hook', 'str06.stage4.naming']
     assert all(
         item.waiting_on == Q.WAITING_ON_RESUME_DECISION for item in blocked)
     assert all(item.steps == [] for item in blocked)
@@ -291,7 +291,7 @@ def test_retired_closure_gate_leaves_new_chain_planning_untouched(
     assert importlib.util.find_spec('novel.orchestrator.approvals') is None
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['str06.stage5.hook', 'str06.stage7.naming'])
+        lambda _until: ['str06.stage5.hook', 'str06.stage4.naming'])
     overview = SimpleNamespace(stages=[
         SimpleNamespace(stage='stage5', artifacts=[]),
         SimpleNamespace(stage='stage7', artifacts=[]),
@@ -308,14 +308,14 @@ def test_retired_closure_gate_leaves_new_chain_planning_untouched(
         until_stage='stage7', follow_check=False)
 
     assert blocked == [] and [item.node for item in todo] == [
-        'str06.stage7.naming']
+        'str06.stage4.naming']
 
 
 @pytest.mark.parametrize(
     ('node', 'artifact_rel_path'),
     [
         ('str06.stage4.hook_design', 'stage4/design/presentation_graph.json'),
-        ('str06.stage7.naming', 'stage7/naming/name_map.json'),
+        ('str06.stage4.naming', 'stage4/naming/name_map.json'),
     ],
 )
 def test_live_invalid_blocks_the_node_without_freezing_a_default_paid_argv(
@@ -512,7 +512,7 @@ def test_queue_does_not_auto_rerun_invalid_blueprint_after_characters_are_ready(
     """
     monkeypatch.setattr(
         Q, 'nodes_up_to',
-        lambda _until: ['str06.stage2.compile', 'str06.stage7.naming'])
+        lambda _until: ['str06.stage2.compile', 'str06.stage4.naming'])
 
     def artifact(rel, *, exists=True, invalid=False):
         return ArtifactState(
@@ -544,7 +544,7 @@ def test_queue_does_not_auto_rerun_invalid_blueprint_after_characters_are_ready(
 
     assert todo == []
     assert [item.node for item in blocked] == [
-        'str06.stage2.compile', 'str06.stage7.naming']
+        'str06.stage2.compile', 'str06.stage4.naming']
     assert all(item.steps == [] for item in blocked)
     assert all(item.waiting_on == Q.WAITING_ON_INBOX for item in blocked)
 
@@ -1477,7 +1477,7 @@ def test_landed_red_stops_its_lane_without_becoming_a_process_failure(
         queue_base, monkeypatch):
     _seed(queue_base, 'q-red-one-book', [
         _item('book-a', 'str06.stage5.hook', 'red'),
-        _item('book-a', 'str06.stage7.naming', 'must-not-run'),
+        _item('book-a', 'str06.stage5.body', 'must-not-run'),
         _item('book-b', 'stage0.remove', 'other-book-runs'),
     ])
     monkeypatch.setattr(Q, '_live_disposition', _always_pending)

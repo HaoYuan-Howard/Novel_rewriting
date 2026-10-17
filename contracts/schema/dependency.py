@@ -37,6 +37,11 @@ STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         forbids=('novel.stages.stage4', 'novel.stages.stage4.*',
                  'novel.stages.stage5', 'novel.stages.stage5.*')),
     DependencyRule(
+        module='novel.stages.stage4.naming',
+        allows=('contracts.schema.*', 'novel.stages.common', 'novel.core.text',
+                'novel.core.name_text'),
+        forbids=('novel.llm', 'novel.llm.*')),
+    DependencyRule(
         module='novel.stages.stage4.design',
         allows=('contracts.schema.grounding', 'contracts.schema.design',
                 'contracts.schema.consumption'),
@@ -92,7 +97,7 @@ _STAGE457 = (
     'novel.stages.stage4.hook', 'novel.stages.stage4.hook_context',
     'novel.stages.stage5.hook_writer', 'novel.stages.stage5.body',
     'novel.stages.stage5.body_checks',
-    'novel.stages.stage7.naming', 'novel.stages.stage7.assembly',
+    'novel.stages.stage4.naming', 'novel.stages.stage7.assembly',
 )
 
 STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
@@ -129,7 +134,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
                  'novel.stages.stage4.fold', 'novel.stages.stage4.guard',
-                 'novel.stages.stage5.hook_writer', 'novel.stages.stage7.naming',
+                 'novel.stages.stage5.hook_writer', 'novel.stages.stage4.naming',
                  'novel.stages.stage7.assembly')),
     # Hook validator只读规范payload/canonical输入；禁止依赖任何生产或编译模块
     # （design_paths 是判据问题的构造约定，同上不属生产/编译面）。
@@ -172,11 +177,12 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
                 'novel.core.name_text'),
         forbids=('novel.llm', 'novel.llm.*')
         + tuple(m for m in _STAGE457 if m != 'novel.stages.stage5.hook_writer')),
-    # naming／assembly 禁止 import design／grounding／compile／book_ir／hook
-    # （计划原文）；两者共用 common（literal_scan），assembly 复用 naming 的纯函数。
-    # F5 起 assembly 消费 body_checks（篇幅口径）与 body（前文拼接/文本 SHA）。
+    # naming（2026-10-18 命名前移批起住 stage4 包）／assembly 禁止 import
+    # design／grounding／compile／book_ir／hook（计划原文）；两者共用 common
+    # （literal_scan），assembly 复用 naming 的纯函数。F5 起 assembly 消费
+    # body_checks（篇幅口径）与 body（前文拼接/文本 SHA）。
     DependencyRule(
-        module='novel.stages.stage7.naming',
+        module='novel.stages.stage4.naming',
         allows=('contracts.schema.*', 'novel.stages.common', 'novel.core.text', 'novel.core.name_text'),
         forbids=('novel.llm', 'novel.llm.*',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
@@ -186,10 +192,10 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         module='novel.stages.stage7.assembly',
         allows=('contracts.schema.*', 'novel.stages.common',
                 'novel.core.name_text',
-                'novel.stages.stage7.naming', 'novel.stages.stage5',
+                'novel.stages.stage4', 'novel.stages.stage5',
                 'novel.stages.stage5.body_checks', 'novel.stages.stage5.body'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.stage5.hook_writer',
-                 'novel.stages.stage2.names',
+                 'novel.stages.stage2.names', 'novel.stages.stage4.naming',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
                  'novel.stages.stage4.hook')),

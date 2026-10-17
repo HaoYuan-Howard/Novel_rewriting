@@ -411,7 +411,7 @@ def test_full_chain_from_http_upload_to_stage7_delivery(base, monkeypatch):
         'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
         'str06.stage2.associate', 'str06.stage4.preserve',
         'str06.stage4.body_design', 'str06.stage4.hook_design',
-        'str06.stage5.hook', 'str06.stage5.body', 'str06.stage7.naming'}
+        'str06.stage5.hook', 'str06.stage5.body', 'str06.stage4.naming'}
     assert all(row['sid'] == '联调样本_9001' for row in paid)
     # Supervisor 走到 pipeline_complete 才终验：STR-06 关闭批改接后终验读
     # 候选根 delivery manifest 并核对成书字节——交付完成时回答
@@ -485,14 +485,20 @@ def test_legacy_book_is_refused_at_every_product_entry_face(base, monkeypatch, c
         cli._cmd_run(SimpleNamespace(node='stage4.plan'))
 
     # ③ 规划面：旧双臂层及其下游全部 legacy_incompatible 阻断，且不冻结任何付费 argv。
+    # 命名前移批（2026-10-18）后 str06.stage4.naming 在旧 Stage5 双臂层**之前**，
+    # 旧书从它继续新链是合法恢复路 ⇒ 进 todo 不进 blocked；stage5 及其后的节点
+    # 才踩 legacy 面。
     plan = queue.plan(base, ['9002'], until_stage='stage7')
     blocked = {item.node: item for item in plan.blocked}
     assert blocked, '旧书必须在规划面被挡住'
     for node in ('str06.stage5.hook', 'str06.stage5.body',
-                 'str06.stage7.naming', 'str06.stage7.assemble'):
+                 'str06.stage7.assemble'):
         assert blocked[node].waiting_on == 'legacy_incompatible', node
         assert blocked[node].steps == [], 'blocker 不得冻结默认付费 argv'
     assert blocked['str06.stage7.assemble'].waiting_on == 'legacy_incompatible'
+    todo_nodes = {item.node for item in plan.items}
+    assert 'str06.stage4.naming' in todo_nodes, '命名在旧双臂层之前，应可续跑'
+    assert 'str06.stage7.naming' not in todo_nodes | set(blocked), '旧命名节点已退役'
 
     # ④ 完成度面：旧书只读识别，不当成 missing、不触发静默付费重跑。
     overview = state.overview(base, '9002')
@@ -777,7 +783,7 @@ def test_service_full_chain_real_subprocess_and_restart_readback(base, tmp_path,
         'str06.stage2.associate', 'str06.stage4.preserve',
         'str06.stage4.body_design',
         'str06.stage4.hook_design', 'str06.stage5.hook', 'str06.stage5.body',
-        'str06.stage7.naming'}
+        'str06.stage4.naming'}
 
     # Golden 收集消费同一套正式请求账和采用证据，不把文件存在当自动完成。
     from tests.golden import capture_execution
@@ -1101,7 +1107,9 @@ def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
                 'stage4/ir/writer_book_ir.json', 'stage5/hook/hook.txt'):
         assert (book / rel).is_file(), rel
     assert not (book / 'stage5/body').exists(), '停在正文前不得落任何正文'
-    assert not (book / 'stage7/naming/name_map.json').exists()
+    # 命名前移批（2026-10-18）：str06.stage4.naming 在正文之前，停在正文前时
+    # 目标姓名产物应已落盘（它是 Preserve 与设计链的正式输入）。
+    assert (book / 'stage4/naming/name_map.json').is_file()
     rows = _ledger_rows(base)
     paid = [row for row in rows if row['sid'] == book.name and not row['cached']]
     from contracts.invariants import NODES
@@ -1109,7 +1117,7 @@ def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
     assert {row['node'] for row in paid} == {
         node for node in before_body if NODES[node].paid}, (
         '应恰好是正文之前跑过的付费节点（两个 compile 免费、不入账）')
-    assert len(paid) == 9, '语义层含 ch01/ch02 两次章观察共 9 次外发（bind 退役）'
+    assert len(paid) == 10, '语义层含 ch01/ch02 两次章观察与命名共 10 次外发（bind 退役）'
     assert not any(row['purpose'].startswith('body_') for row in rows), \
         '正文一行都没有'
     record = next(row for row in agent.records(base) if row.run_id == run_id)
@@ -1165,16 +1173,16 @@ def test_agent_run_pauses_before_body_cli_canary_then_continuation_delivers(
     assert continued_run != run_id, '续跑是新 run，不是恢复同一个 run 记录'
     assert agent.wait(continued_run, 1800), '续跑未在时限内收口'
 
-    # 新增 ledger 行恰好是 body_ch01 一行加 naming 一行：其余付费节点（book、
-    # 章观察、names、associate、四个 Stage4 节点、hook）与 canary 的 body_ch02
-    # 零新行（已提交章不进待补集合，不重购）。
+    # 命名前移批（2026-10-18）后 naming 在正文之前、首跑已落盘：续跑新增
+    # ledger 行恰好是 body_ch01 一行；其余付费节点（book、章观察、names、
+    # associate、五个 Stage4 节点、hook）与 canary 的 body_ch02 零新行
+    # （已提交章不进待补集合，不重购）。
     fresh = [row for row in _ledger_rows(base)[len(rows_before):]
              if row['sid'] == book.name]
     fresh_paid = [row for row in fresh if not row['cached']]
-    assert sorted(row['purpose'] for row in fresh_paid) == ['body_ch01', 'naming'], \
+    assert sorted(row['purpose'] for row in fresh_paid) == ['body_ch01'], \
         fresh_paid
-    assert sorted({row['node'] for row in fresh_paid}) == [
-        'str06.stage5.body', 'str06.stage7.naming']
+    assert sorted({row['node'] for row in fresh_paid}) == ['str06.stage5.body']
     # canary 章的回执与正文字节在整跑后不变（已提交章的采用与恢复身份稳定）。
     assert (book / 'stage5/acceptance/body/ch02.json').read_bytes() == canary_receipt
     assert (book / 'stage5/body/ch02.txt').read_bytes() == canary_prose

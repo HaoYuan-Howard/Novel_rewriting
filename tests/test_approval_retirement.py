@@ -87,7 +87,7 @@ def test_cli_has_no_approval_subcommand(tmp_path, capsys):
 @pytest.mark.parametrize('node, rel', [
     ('str06.stage5.body', 'stage5/ch01.json'),
     ('str06.stage5.hook', 'stage5/review.json'),
-    ('str06.stage7.naming', 'stage6/hook.json'),
+    ('str06.stage4.naming', 'stage6/hook.json'),
 ])
 @pytest.mark.parametrize('payload', [
     {'_schema_version': 2, 'measurable': {'body': {}, 'hook': {}}},

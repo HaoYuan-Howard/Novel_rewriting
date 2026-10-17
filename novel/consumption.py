@@ -165,7 +165,7 @@ CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     'str06.stage5.hook': {
         STR06_HOOK_CONTEXT: artifact_payload,
     },
-    'str06.stage7.naming': {
+    'str06.stage4.naming': {
         STR06_STAGE2_CHARACTERS: artifact_payload,
         STR06_STAGE2_BLUEPRINTS: artifact_payload,
     },

@@ -200,7 +200,7 @@ NEW_STAGE_MODULES = (
     'novel/stages/stage4/hook_context.py',
     'novel/stages/stage5/__init__.py', 'novel/stages/stage5/body.py',
     'novel/stages/stage5/body_checks.py', 'novel/stages/stage5/hook_writer.py',
-    'novel/stages/stage7/__init__.py', 'novel/stages/stage7/naming.py',
+    'novel/stages/stage7/__init__.py', 'novel/stages/stage4/naming.py',
     'novel/stages/stage7/assembly.py',
     'novel/stages/common.py', 'novel/stages/chain.py',
 )

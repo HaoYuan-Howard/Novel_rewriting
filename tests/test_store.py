@@ -36,7 +36,7 @@ from contracts.schema import (
     ArtifactVersionError, InputEdge, LlmProvenance, Usage, artifact_spec,
     decode_artifact, encode_artifact,
 )
-from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
+from contracts.schema.naming import NameAssignment, NameMapV6, TargetName
 from contracts.schema.source import (
     CharacterEntry, SurfaceWindow,
 )
@@ -63,12 +63,12 @@ from tests.str06_expression_inputs import (
 
 # B5 换轨（双真源发布后）：Characters/Blueprint 的唯一 writer 是免费的
 # str06.stage2.compile，其投影面是四份观察——旧的「names 写 characters」采样面
-# 失去执行对象。本文件通用事务夹具改取 str06.stage7.naming 的 NameMap v5
+# 失去执行对象。本文件通用事务夹具改取 str06.stage4.naming 的 NameMap v6
 # （付费 producer，注册消费 canonical Characters 整份载荷）——store 事务机制
 # 不挑载体，但来源账后置条件要求读边有注册投影。
-PLAN_REL = STR06_NAME_MAP                    # 'stage7/naming/name_map.json'
-PLAN_MODEL = NameMapV5
-PLAN_NODE = 'str06.stage7.naming'
+PLAN_REL = STR06_NAME_MAP                    # 'stage4/naming/name_map.json'
+PLAN_MODEL = NameMapV6
+PLAN_NODE = 'str06.stage4.naming'
 UPSTREAM = STR06_STAGE2_CHARACTERS          # 'stage2/characters/characters.json'
 #: 两级只读 memo 用例的 (node, rel)：三级家族路径进不了 `store.read` 的两级
 #: 输入键（`paths.check_rel`，见 `PathRefused`），记账边由 `_record_upstream_edge`
@@ -234,8 +234,8 @@ def _plan_ctx(base: Path, sid: str = '123', *, paid: bool = True) -> RunContext:
 
 def _plan(ctx: RunContext, *, marker: str = '计划一',
           inputs: dict | None = None, origin: str | None = None,
-          model: type[BaseModel] | None = None) -> NameMapV5:
-    """一份最小合法 NameMap v5；``marker`` 是各事务测试的内容哨兵。
+          model: type[BaseModel] | None = None) -> NameMapV6:
+    """一份最小合法 NameMap v6；``marker`` 是各事务测试的内容哨兵。
 
     ``inputs`` 显式钉来源边（现役 producer 的账由真实运行记录，测试按需复刻）；
     ``origin`` 用于三态键落盘形态的用例（非 None 三态键必须出现在盘上）。
@@ -244,7 +244,7 @@ def _plan(ctx: RunContext, *, marker: str = '计划一',
     if inputs is not None:
         provenance = provenance.model_copy(update={
             'inputs': {key: InputEdge.model_validate(row) for key, row in inputs.items()}})
-    return (model or NameMapV5)(
+    return (model or NameMapV6)(
         entries=(NameAssignment(char_ref='char_001',
                                 name=TargetName(family=marker)),),
         provenance=provenance)
@@ -526,7 +526,7 @@ DOWNSTREAM_FAMILY = (
     ('str06.stage4.preserve', STR06_RECONSTRUCTION_BRIEF, STR06_STAGE2_CHARACTERS),
     ('str06.stage4.body_design', STR06_BODY_DESIGN, STR06_STAGE2_CHARACTERS),
     ('str06.stage4.hook_design', STR06_PRESENTATION_GRAPH, STR06_STAGE2_CHARACTERS),
-    ('str06.stage7.naming', STR06_NAME_MAP, STR06_STAGE2_CHARACTERS),
+    ('str06.stage4.naming', STR06_NAME_MAP, STR06_STAGE2_CHARACTERS),
     ('str06.stage7.assemble', STR06_DELIVERY_MANIFEST, STR06_STAGE2_CHARACTERS),
 )
 
@@ -1051,9 +1051,9 @@ def test_projection_marks_missing_character_maps_empty(malformed: object):
     assert stage2_main_text([]) == []
 
 
-def test_stage7_naming_projection_tracks_role_sent_to_rename_prompt():
+def test_stage4_naming_projection_tracks_role_sent_to_rename_prompt():
     """改名消费人物登记整份载荷；身份与证据引用一并进 NameMap 的过期判定。"""
-    project = projection_for('str06.stage7.naming', STR06_STAGE2_CHARACTERS)
+    project = projection_for('str06.stage4.naming', STR06_STAGE2_CHARACTERS)
     assert project is artifact_payload
     view = _extraction_payload()
     before = project(view)
@@ -2248,7 +2248,7 @@ def test_seen_rounds_counts_the_invalid_and_the_gaps():
     base = _book()
     ctx = _plan_ctx(base)
     st = ArtifactStore(ctx)
-    rounds = base / '书名_123' / 'stage7' / 'naming' / '_rounds'
+    rounds = base / '书名_123' / PLAN_REL.rsplit('/', 1)[0] / '_rounds'
     rounds.mkdir(parents=True)
     (rounds / 'name_map.r1.json').write_bytes(b'{}')
     (rounds / 'name_map.r3.json').write_bytes(b'{}')       # ← r2 被人挪走了
@@ -2304,7 +2304,7 @@ def test_freshness_reads_raw_and_survives_an_artifact_that_no_longer_validates()
     """
     base = _book()
     st = ArtifactStore(_plan_ctx(base))
-    (base / '书名_123' / 'stage7' / 'naming').mkdir(parents=True, exist_ok=True)
+    (base / '书名_123' / PLAN_REL.rsplit('/', 1)[0]).mkdir(parents=True, exist_ok=True)
     root_clean_sha1 = prov.content_sha1(
         (base / '书名_123' / 'stage0' / 'clean_text.txt').read_bytes())
     malformed = {
@@ -2329,7 +2329,7 @@ def test_a_bad_key_in_current_provenance_does_not_blow_up_the_report():
     「有一条边指向已删文件」不该升级成「报告出不来」。"""
     base = _book()
     st = ArtifactStore(_plan_ctx(base))
-    (base / '书名_123' / 'stage7' / 'naming').mkdir(parents=True, exist_ok=True)
+    (base / '书名_123' / PLAN_REL.rsplit('/', 1)[0]).mkdir(parents=True, exist_ok=True)
     root_clean_sha1 = prov.content_sha1(
         (base / '书名_123' / 'stage0' / 'clean_text.txt').read_bytes())
     malformed = {
@@ -2763,7 +2763,7 @@ def test_execution_plan_migration_is_pure_and_keeps_its_independent_version(vers
     original = copy.deepcopy(source)
     migrated = _upgrade_rc12_payload('stage4/compiled/execution_plan.json', source)
     assert source == original, '内存迁移不能修改输入或封存字节'
-    assert STR06_RC_VERSION == 'str06-rc25'
+    assert STR06_RC_VERSION == 'str06-rc26'
     assert migrated['contract_version'] == 'str06-rc14', '全局版式头不决定独立产物版本'
     scene = migrated['scenes'][0]
     reader = scene['establishments'][0]

@@ -611,7 +611,7 @@ const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
   { node: 'str06.stage4.compile', label: 'Stage4 确定性编译：ExecutionPlan／Guard／WriterBookIR／HookContext', paid: false },
   { node: 'str06.stage5.hook', label: 'Stage5 Hook 成文（同 Context 有限重写＋机械验）', paid: true },
   { node: 'str06.stage5.body', label: 'Stage5 按章正文成文（机械检查＋有限重写＋章级回执）', paid: true },
-  { node: 'str06.stage7.naming', label: 'Stage7 Naming（NameMap v5 赋值；Apply 归 assembly）', paid: true },
+  { node: 'str06.stage4.naming', label: 'Stage4 目标命名（NameMap v6 赋值；置于 Preserve 之前）', paid: true },
   { node: 'str06.stage7.assemble', label: 'Stage7 改名替换与成书装配（TXT 先落盘、manifest 最后提交）', paid: false },
 ]
 

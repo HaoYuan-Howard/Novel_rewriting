@@ -302,6 +302,7 @@
    "R-3"
   ],
   "stage4": [
+   "R-10",
    "R-5",
    "R-6"
   ],
@@ -321,13 +322,13 @@
   "str06.stage2.names",
   "str06.stage2.associate",
   "str06.stage2.compile",
+  "str06.stage4.naming",
   "str06.stage4.preserve",
   "str06.stage4.body_design",
   "str06.stage4.hook_design",
   "str06.stage4.compile",
   "str06.stage5.hook",
   "str06.stage5.body",
-  "str06.stage7.naming",
   "str06.stage7.assemble"
  ],
  "progress_phases": [
@@ -613,6 +614,40 @@
     "approval_projection": []
    }
   },
+  "str06.stage4.naming": {
+   "label": "Stage4 目标命名（NameMap v6 赋值；置于 Preserve 之前）",
+   "paid": true,
+   "stage": "stage4",
+   "section": "R-10",
+   "flags": [
+    "--check-only"
+   ],
+   "produces": [
+    "stage4/naming/name_map.json"
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "Characters v6 名称结构与 Blueprint v17",
+    "generation_mode": "executor",
+    "review_mode": "none",
+    "review_scope": "机械校验通过即 auto 定稿；目标姓名前移后是 Preserve 与设计链的正式输入",
+    "repair_actions": [
+     "stop"
+    ],
+    "repair_owners": [
+     "str06.stage4.naming"
+    ],
+    "session_scope": "executor:book",
+    "recovery_entries": [
+     "saved_response",
+     "historical_adoption",
+     "owner_patch"
+    ],
+    "executor_content_limit": 4,
+    "approval_bindings": [],
+    "approval_projection": []
+   }
+  },
   "str06.stage4.preserve": {
    "label": "Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影",
    "paid": true,
@@ -816,40 +851,6 @@
     "session_scope": "executor:chapter",
     "recovery_entries": [
      "committed_set_recovery",
-     "saved_response",
-     "historical_adoption",
-     "owner_patch"
-    ],
-    "executor_content_limit": 4,
-    "approval_bindings": [],
-    "approval_projection": []
-   }
-  },
-  "str06.stage7.naming": {
-   "label": "Stage7 Naming（NameMap v5 赋值；Apply 归 assembly）",
-   "paid": true,
-   "stage": "stage7",
-   "section": "R-10",
-   "flags": [
-    "--check-only"
-   ],
-   "produces": [
-    "stage7/naming/name_map.json"
-   ],
-   "lifecycle": {
-    "unit_kind": "book",
-    "input_workpack": "Characters v6 名称结构与 Blueprint v17",
-    "generation_mode": "executor",
-    "review_mode": "none",
-    "review_scope": "机械校验通过即 auto 定稿；ApplyNames 是替换唯一应用者",
-    "repair_actions": [
-     "stop"
-    ],
-    "repair_owners": [
-     "str06.stage7.naming"
-    ],
-    "session_scope": "executor:book",
-    "recovery_entries": [
      "saved_response",
      "historical_adoption",
      "owner_patch"
@@ -1088,6 +1089,30 @@
    "required_inputs": []
   },
   {
+   "kind": "str06.stage4.naming",
+   "label": "Stage4 目标命名（NameMap v6 赋值；置于 Preserve 之前）",
+   "extra": null,
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage4/naming/name_map.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage4.naming",
+   "label": "Stage4 目标命名（NameMap v6 赋值；置于 Preserve 之前） --check-only",
+   "extra": [
+    "--check-only"
+   ],
+   "paid": false,
+   "free_flag": "--check-only",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
    "kind": "str06.stage4.preserve",
    "label": "Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影",
    "extra": null,
@@ -1208,30 +1233,6 @@
   {
    "kind": "str06.stage5.body",
    "label": "Stage5 按章正文成文（机械检查＋有限重写＋章级回执） --check-only",
-   "extra": [
-    "--check-only"
-   ],
-   "paid": false,
-   "free_flag": "--check-only",
-   "writes": "",
-   "writes_disk": false,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "str06.stage7.naming",
-   "label": "Stage7 Naming（NameMap v5 赋值；Apply 归 assembly）",
-   "extra": null,
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage7/naming/name_map.json",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "str06.stage7.naming",
-   "label": "Stage7 Naming（NameMap v5 赋值；Apply 归 assembly） --check-only",
    "extra": [
     "--check-only"
    ],

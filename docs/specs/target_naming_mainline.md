@@ -9,9 +9,10 @@
 2026-10-18 立项。时点事实：版式 `str06-rc25`；现役 13 个 str06 节点
 （`contracts/invariants.py::NODES`：stage2 五 owner、stage4 四节点、stage5 两节点、stage7 两节点）；
 末端改名链为 `str06.stage7.naming`（产物 `stage7/naming/name_map.json`，
-`contracts/schema/naming.py::NameMapV5`，wire 见 `novel/stages/chain.py::run_naming`＋
+`contracts/schema/naming.py::NameMapV6`，wire 见 `novel/stages/chain.py::run_naming`＋
 `novel/stages/common.py::NAMING_RULES`）→ `str06.stage7.assemble`（单遍替换＋装配，
-`novel/stages/stage7/naming.py::apply_bound_names`／`diff_proof`／`compile_bound_replacements`）。
+`novel/stages/stage4/naming.py::apply_bound_names`／`diff_proof`／`compile_bound_replacements`；
+模块已随节点前移迁入 stage4 包）。
 
 ## 1. 目标与已确定的取舍
 
@@ -53,7 +54,7 @@ Stage2 继续拥有源人物身份、名称结构、亲属关系、事实及原�
 零调用完成。
 
 旧 Stage7 naming 节点退出现役。`apply_bound_names`／`diff_proof`／`compile_bound_replacements`
-（末端替换证明链）随装配切换删除（§3 批次 C）。
+（末端替换证明链，`novel/stages/stage4/naming.py`）随装配切换删除（§3 批次 C）。
 
 ### 2.2 Preserve 与目标故事设计
 

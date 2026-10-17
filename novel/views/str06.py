@@ -408,7 +408,7 @@ def naming_view(base: str | os.PathLike[str], candidate: str) -> Str06NamingView
     run = _run_dir(base, candidate)
     if run is None:
         return Str06NamingView(present=False)
-    payload = _inspect(run, 'stage7/naming/name_map.json')
+    payload = _inspect(run, 'stage4/naming/name_map.json')
     if payload is None:
         return Str06NamingView(present=False)
     entries = tuple(

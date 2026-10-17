@@ -68,7 +68,7 @@ ARTIFACTS = [
     # `.INVALID` 孪生（str06 bind 的 typed witness）一起吞进正式章样本。
     ('stage5/acceptance/body/chNN.json',
      'stage5/acceptance/body/ch[0-9]*[0-9].json'),
-    ('stage7/naming/name_map.json',  'stage7/naming/name_map.json'),
+    ('stage4/naming/name_map.json',  'stage4/naming/name_map.json'),
     ('stage7/final/delivery_manifest.json',
      'stage7/final/delivery_manifest.json'),
 ]

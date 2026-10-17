@@ -51,8 +51,8 @@ def llm_node_versions(node: str) -> dict[str, int]:
             'context': _number(hook.HookContext.model_fields['contract_version'].default),
             'renderer': _number(receipt.RENDERER_VERSION),
             'validator': _number(receipt.HOOK_VALIDATOR_VERSION)},
-        'str06.stage7.naming': {
-            'canonical': _number(naming.NameMapV5.model_fields['contract_version'].default),
+        'str06.stage4.naming': {
+            'canonical': _number(naming.NameMapV6.model_fields['contract_version'].default),
             'validator': _number(naming.NAMING_VALIDATOR_VERSION)},
     }
     paid = {key for key, spec in NODES.items() if spec.paid}

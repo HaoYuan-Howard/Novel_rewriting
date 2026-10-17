@@ -67,20 +67,20 @@ def test_registered_write_carries_provenance_by_node_cost(tmp_path):
 
 
 def test_llm_provenance_records_adopted_model_and_prompts(tmp_path):
-    repo = _repo(tmp_path, node='str06.stage7.naming')
+    repo = _repo(tmp_path, node='str06.stage4.naming')
     ref = AdoptionRef(owner='naming', model='deepseek-chat',
                       prompts={'system': '系统', 'user': '用户'})
-    repo.write('stage7/naming/name_map.json', {'entries': []}, refs=(ref,))
-    provenance = repo.inspect('stage7/naming/name_map.json')['_provenance']
+    repo.write('stage4/naming/name_map.json', {'entries': []}, refs=(ref,))
+    provenance = repo.inspect('stage4/naming/name_map.json')['_provenance']
     assert provenance['model'] == 'fake' and provenance['adopted_models'] == ['deepseek-chat']
     assert any(k.startswith('naming.') for k in provenance['prompts'])
     LlmProvenance.model_validate(provenance)
 
 
 def test_paid_write_without_adoption_evidence_is_refused(tmp_path):
-    repo = _repo(tmp_path, node='str06.stage7.naming')
+    repo = _repo(tmp_path, node='str06.stage4.naming')
     with pytest.raises(ProvenanceRefused, match='显式采用引用'):
-        repo.write('stage7/naming/name_map.json', {'entries': []})
+        repo.write('stage4/naming/name_map.json', {'entries': []})
 
 
 def test_unregistered_runtime_write_has_no_provenance(tmp_path):
@@ -92,7 +92,7 @@ def test_unregistered_runtime_write_has_no_provenance(tmp_path):
 def test_repository_refuses_registered_write_without_context(tmp_path):
     repo = Str06Repository(tmp_path / 'run')
     with pytest.raises(ProvenanceRefused, match='未附加上下文'):
-        repo.write('stage7/naming/name_map.json', {'entries': []})
+        repo.write('stage4/naming/name_map.json', {'entries': []})
     # 未登记路径仍按路径准入先行拒绝，不依赖上下文。
     from novel.errors import PathRefused
     with pytest.raises(PathRefused):
@@ -101,12 +101,12 @@ def test_repository_refuses_registered_write_without_context(tmp_path):
 
 def test_provenance_field_never_enters_model_dump(tmp_path):
     """exclude=True：prompt／请求字节与 F5e 已购身份逐字不变。"""
-    from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
-    model = NameMapV5(entries=[NameAssignment(char_ref='c1',
+    from contracts.schema.naming import NameAssignment, NameMapV6, TargetName
+    model = NameMapV6(entries=[NameAssignment(char_ref='c1',
                                               name=TargetName(family='萧', given='知言',
                                                               full='萧知言'))])
     assert 'provenance' not in model.model_dump(mode='json')
-    round_trip = NameMapV5.model_validate(
+    round_trip = NameMapV6.model_validate(
         {**model.model_dump(mode='json'), '_provenance': {
             'code': 'c' * 40, 'root_clean_sha1': 'a' * 40, 'inputs': {}}})
     assert round_trip.provenance is not None

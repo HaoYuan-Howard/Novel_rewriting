@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""novel.stages.stage7 —— STR-06 新链 Stage7：命名与成书装配。
+"""novel.stages.stage7 —— STR-06 新链 Stage7：成书装配。
 
 【本地块】
-  · `naming.py`   NameMap v5 赋值与确定性替换／残留硬闸（`str06.stage7.naming`）。
-  · `assembly.py` 改名替换与成书装配：TXT 先落盘、manifest 最后提交
-                  （`str06.stage7.assemble`）。
+  · `assembly.py` 成书装配：核对章回执链后直接装配已接受正文，TXT 先落盘、
+                  manifest 最后提交（`str06.stage7.assemble`）。
+  · 命名前移批（2026-10-18，rc26）：`naming.py` 随 `str06.stage4.naming`
+    迁往 `novel/stages/stage4/naming.py`，本包不再承载命名。
 
 【包级公开面】跨 stage 只许 `from novel.stages.stage7 import X`；深路径 import
 本包内部模块一律禁止（守卫见
@@ -18,17 +19,9 @@ from novel.stages.stage7.assembly import (
     BodyAccess, DeliveryOutcome, assemble_delivery, build_delivery_manifest,
     chapter_access, delivery_identity, verify_chapter_receipts,
 )
-from novel.stages.stage7.naming import (
-    NAMING_VALIDATOR_VERSION, apply_bound_names, compile_name_map,
-    compile_bound_replacements,
-    diff_proof, naming_patch_locate,
-    naming_projection,
-)
 
 __all__ = [
-    'BodyAccess', 'DeliveryOutcome', 'NAMING_VALIDATOR_VERSION', 'apply_bound_names',
+    'BodyAccess', 'DeliveryOutcome',
     'assemble_delivery', 'build_delivery_manifest', 'chapter_access',
-    'compile_bound_replacements', 'compile_name_map',
-    'delivery_identity', 'diff_proof', 'naming_patch_locate', 'naming_projection',
-    'verify_chapter_receipts',
+    'delivery_identity', 'verify_chapter_receipts',
 ]

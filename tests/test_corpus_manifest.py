@@ -133,8 +133,8 @@ def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
         node for node, spec in NODES.items() if spec.paid)
     assert tuple(
         node for node in CURRENT_CORPUS_PAID_NODES if NODES[node].stage == 'stage4'
-    ) == ('str06.stage4.preserve', 'str06.stage4.body_design',
-          'str06.stage4.hook_design')
+    ) == ('str06.stage4.naming', 'str06.stage4.preserve',
+          'str06.stage4.body_design', 'str06.stage4.hook_design')
     # 2 书 × 10 付费节点 = 20 条 production dispatch。
     assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 20
     required = required_current_corpus_artifacts(17)
@@ -149,11 +149,12 @@ def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
 
     stage4_paid_outputs = {
         rel
-        for node in ('str06.stage4.preserve', 'str06.stage4.body_design',
-                     'str06.stage4.hook_design')
+        for node in ('str06.stage4.naming', 'str06.stage4.preserve',
+                     'str06.stage4.body_design', 'str06.stage4.hook_design')
         for rel in NODES[node].produces
     }
     assert stage4_paid_outputs == {
+        'stage4/naming/name_map.json',
         'runtime/preserve_checkpoint.json',
         'stage4/grounding/reconstruction_brief.json',
         'stage4/design/body_design.json',
@@ -271,7 +272,7 @@ def test_manifest_pins_the_real_run_dispatch_topology_and_required_flags():
     #   反向由下面那条「多一个 flag 就拒」覆盖：production 命令只许带 `--base --yes`。
     raw = _manifest_raw()
     index = next(i for i, command in enumerate(raw['commands'])
-                 if 'str06.stage7.naming' in command)
+                 if 'str06.stage4.naming' in command)
     raw['commands'][index] += ' --advisory'
     with pytest.raises(ValidationError, match='flags 必须恰为'):
         CorpusManifest.model_validate(raw)
@@ -318,7 +319,7 @@ def test_manifest_rejects_incomplete_books_ledger_and_artifact_hashes():
         CorpusManifest.model_validate(raw)
 
     raw = _manifest_raw()
-    raw['books'][0]['ledger']['nodes'].pop('str06.stage7.naming')
+    raw['books'][0]['ledger']['nodes'].pop('str06.stage4.naming')
     with pytest.raises(ValidationError, match='nodes'):
         CorpusManifest.model_validate(raw)
 

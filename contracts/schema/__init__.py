@@ -126,7 +126,7 @@ from contracts.schema.design import (
 from contracts.schema.hook import HookContext, HookReceipt
 from contracts.schema.book_ir import WriterBookIR
 from contracts.schema.receipt import ChapterReceipt
-from contracts.schema.naming import NameMapV5
+from contracts.schema.naming import NameMapV6
 
 class ArtifactVersionError(ValueError):
     """一份产物不是当前注册版本。错误恒带文件与版本。
@@ -225,7 +225,8 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     'stage2/observations/associate.json': ArtifactSpec(AssociateObservation, 1),
     'stage2/blueprints/chapter_blueprints.json': ArtifactSpec(BlueprintsArtifactV17, 1),
     'stage2/characters/characters.json': ArtifactSpec(CharactersArtifactV6, 2),
-    # Stage4：目标故事与确定性编译（preserve／body_design／hook_design／bind／compile）
+    # Stage4：目标命名（命名前移批，rc26）与目标故事设计、确定性编译
+    'stage4/naming/name_map.json': ArtifactSpec(NameMapV6, 1),
     'runtime/preserve_checkpoint.json': ArtifactSpec(PreserveCheckpoint, 1),
     'stage4/grounding/reconstruction_brief.json': ArtifactSpec(ReconstructionBrief, 1),
     'stage4/grounding/semantic_binding.json': ArtifactSpec(SemanticBinding, 1),
@@ -237,8 +238,7 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # Stage5：按章正文与 Hook 回执（body／hook）
     'stage5/hook/receipt.json': ArtifactSpec(HookReceipt, 1),
     'stage5/acceptance/body/ch{nn}.json': ArtifactSpec(ChapterReceipt, 1),
-    # Stage7：命名与交付（naming／assemble）
-    'stage7/naming/name_map.json': ArtifactSpec(NameMapV5, 1),
+    # Stage7：交付（assemble）
     # ⚠ 自由形态派生记录（input_snapshots／fold／guard 两份／delivery_manifest）
     #   与三份正文（hook.txt／ch{nn}.txt／{title}_rewriting.txt）只登记路径
     #   （`contracts/artifacts.py::ARTIFACT_PATHS`），不进本表：它们的形状由唯一

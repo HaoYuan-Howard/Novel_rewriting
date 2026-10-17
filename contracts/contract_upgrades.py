@@ -99,4 +99,38 @@ IDENTITY_TEXT_UPGRADE: Final[ContractUpgradeSpec] = {
     ),
 }
 
-REGISTERED_UPGRADES: Final = (HOOK_UPGRADE, HOOK_ENVELOPE_UPGRADE, IDENTITY_TEXT_UPGRADE)
+#: rc26（2026-10-18 命名前移批，执行文档 docs/specs/target_naming_mainline.md §4）：
+# str06.stage7.naming 前移为 str06.stage4.naming，产物落 stage4/naming/name_map.json
+# （NameMap v6）。保留 Stage0～Stage2、原始证据、已购响应、历史轮次与成本账；
+# 归档旧 Preserve checkpoint、Brief、旧末端 name_map 及全部 Stage4～Stage7 目标
+# 产物，从新目标命名节点重建目标链。不恢复内容额度；不用移动文件／删除标记／
+# 重新序列化把旧语义稿转换成新稿。
+NAMING_FORWARD_UPGRADE: Final[ContractUpgradeSpec] = {
+    'id': 'naming-forward-rc25-rc26',
+    'source_identity': '9bb731fa6a2a8198163baafcba1998b905c1120427586223e806e2d6cb7f3900',
+    'target_identity': '7f6cfc22efdae5de37718d6226241becb6623376bef68af081e08b38f0298d75',
+    'source_version': 'str06-rc25',
+    'target_version': 'str06-rc26',
+    'rebuild_nodes': (
+        'str06.stage4.naming', 'str06.stage4.preserve', 'str06.stage4.body_design',
+        'str06.stage4.hook_design', 'str06.stage4.compile',
+        'str06.stage5.hook', 'str06.stage5.body', 'str06.stage7.assemble',
+    ),
+    # 2026-10-11 裁决：LLM 节点版本升版的基础额度恢复走统一入口，本表只登记
+    # 产物升级时调用统一同步的范围——本批版本轴变化的只有 naming（NameMapV5→v6、
+    # canonical 12→26、产物路径换桩）；preserve 及下游节点的版本轴在批次 B/C
+    # 才动，其归档产物不经本边恢复额度（§4：不恢复内容额度）。
+    'refund_nodes': ('str06.stage4.naming',),
+    'archive_patterns': (
+        'runtime/preserve_checkpoint.json', 'stage4/grounding/*',
+        'stage4/design/*', 'stage4/compiled/*', 'stage4/ir/*',
+        'stage4/context/hook/*', 'stage4/acceptance/*', 'stage4/acceptance/guard/*',
+        'stage5/body/*', 'stage5/acceptance/body/*', 'stage5/hook/*',
+        'stage7/naming/name_map.json', 'stage7/final/*',
+        'runtime/delivery/*', 'runtime/workflow_status.json',
+    ),
+}
+
+REGISTERED_UPGRADES: Final = (
+    HOOK_UPGRADE, HOOK_ENVELOPE_UPGRADE, IDENTITY_TEXT_UPGRADE, NAMING_FORWARD_UPGRADE,
+)

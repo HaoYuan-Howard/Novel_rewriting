@@ -123,8 +123,8 @@ def test_check_observation_only_downgrades_expected_unavailable_errors():
 def test_read_surface_seal_ignores_unregistered_documents(
         monkeypatch, tmp_path):
     novel_dir = tmp_path / 'FQ_测试书_book-1'
-    (novel_dir / 'stage7' / 'naming').mkdir(parents=True)
-    artifact = novel_dir / 'stage7' / 'naming' / 'name_map.json'
+    (novel_dir / 'stage4' / 'naming').mkdir(parents=True)
+    artifact = novel_dir / 'stage4' / 'naming' / 'name_map.json'
     artifact.write_text('v1', encoding='utf-8')
     review = novel_dir / '测试书_review.md'
     review.write_text('draft v1', encoding='utf-8')
@@ -164,7 +164,7 @@ def test_surface_seal_ignores_legacy_report_files_but_keeps_active_artifact(
     assert I.read_surface_seal(
         tmp_path, 'book-1') == before
 
-    active = novel_dir / 'stage7' / 'naming' / 'name_map.json'
+    active = novel_dir / 'stage4' / 'naming' / 'name_map.json'
     active.parent.mkdir(parents=True, exist_ok=True)
     active.write_text('{}', encoding='utf-8')
     assert I.read_surface_seal(

@@ -460,7 +460,8 @@ def test_stage_sections_is_not_the_naive_stage_number():
     # 正文之前，故声明序为 R-8、R-7）；stage7＝命名与交付（R-10）。
     assert STAGE_SECTIONS['stage2'] == ('R-2', 'R-3'), 'stage2 有两个节点（源语义 / 名称结构）'
     assert 'stage3' not in STAGE_SECTIONS, 'Stage3 已整层退役，R-4 不再映射到产物层'
-    assert STAGE_SECTIONS['stage4'] == ('R-5', 'R-6'), 'stage4 有两组节点（目标故事 / 确定性编译）'
+    assert STAGE_SECTIONS['stage4'] == ('R-10', 'R-5', 'R-6'), (
+        'stage4 有三组节点（目标命名 / 目标故事 / 确定性编译；命名前移批 2026-10-18 起 R-10 归 stage4）')
     assert STAGE_SECTIONS['stage5'] == ('R-8', 'R-7'), 'stage5 有两个节点（Hook 成文 / 按章正文）'
     assert STAGE_SECTIONS['stage7'] == ('R-10',)
 

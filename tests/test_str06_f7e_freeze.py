@@ -160,17 +160,27 @@ from novel.llm.paid_requests import candidate_contract_identity
 # rc24（2026-10-10 已有 Hook 篇幅包络批）：HookContext 单独升 rc24，
 # 正文 Design/IR 不变；补齐现役表的冻结记录，不改节点、配置或正文契约。
 # rc25（2026-10-17 用户授权）：身份文本、补充称谓、片段来源与按身份改名。
-FROZEN_CONTRACT_IDENTITY = '9bb731fa6a2a8198163baafcba1998b905c1120427586223e806e2d6cb7f3900'
+# rc26 批次 A（2026-10-18 命名前移批，用户批准的执行文档
+# docs/specs/target_naming_mainline.md）：str06.stage7.naming 前移为
+# str06.stage4.naming（置于 Stage2 compile 之后、Preserve 之前），NameMap v5→v6
+# （contract_version str06-rc12→str06-rc26），产物路径 stage7/naming/→
+# stage4/naming/name_map.json，旧路径进 RETIRED_ARTIFACT_PATHS 拒读；模块随节点
+# 迁入 novel/stages/stage4/naming.py。节点总数仍 13（Stage7 腿只剩 assemble）。
+# RC 版式头与全链统一 rc26 随批次 D 的 rc25→rc26 同根升级边落地（避免出现
+# 无升级路径的拒读窗口）；旧候选根按契约表漂移只读拒收，原因见 REQUIREMENTS
+# 「目标命名前置与普通正文主链」节。
+FROZEN_CONTRACT_IDENTITY = '7f6cfc22efdae5de37718d6226241becb6623376bef68af081e08b38f0298d75'
 
-#: 冻结时的节点集合（CS-3 bind 退役后 13 个：stage0/1 两座＋Stage2 五节点＋
-#: Stage4 四＋Stage5 两＋Stage7 两；bind 的承载位决定并入 body_design）。
+#: 冻结时的节点集合（命名前移批后 13 个：stage0/1 两座＋Stage2 五节点＋
+#: Stage4 五（含 naming）＋Stage5 两＋Stage7 一；bind 的承载位决定并入
+#: body_design，旧 str06.stage7.naming 退役）。
 FROZEN_NODES = (
     'str06.stage2.associate', 'str06.stage2.book', 'str06.stage2.chapters',
     'str06.stage2.compile', 'str06.stage2.names',
     'str06.stage4.body_design', 'str06.stage4.compile',
-    'str06.stage4.hook_design', 'str06.stage4.preserve',
+    'str06.stage4.hook_design', 'str06.stage4.naming', 'str06.stage4.preserve',
     'str06.stage5.body', 'str06.stage5.hook',
-    'str06.stage7.assemble', 'str06.stage7.naming',
+    'str06.stage7.assemble',
 )
 
 #: 冻结时的运行期配置（进契约身份；与付费调用额度是两件事）。
@@ -231,7 +241,7 @@ def test_frozen_rc_version_label():
     # rc17：CS-H H3 称谓面＋H4 associate v3；rc18：CS-S Phase 1 死字段收口；
     # rc19：CS-S Phase 2 观察面收敛（facts／know.fact／associate v4／D-5／fold 时间线）；
     # rc20：CS-S Phase 3 收官（CHANGE_KEYS 闭集／access／reader 派生／associate v5）。
-    assert STR06_RC_VERSION == 'str06-rc25'
+    assert STR06_RC_VERSION == 'str06-rc26'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是

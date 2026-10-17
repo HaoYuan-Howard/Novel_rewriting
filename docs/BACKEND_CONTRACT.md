@@ -396,24 +396,26 @@ Hook 的必要选择进入 Stage4 正式 Design（`R-5.6`），经 HookContext �
 | R-9.1 | 【已退役】stage6.prepare／hook／approve 三节点与其产物家族、批准绑定、API/UI 面随 Stage6 整层退役；`contracts/artifacts.py::RETIRED_ARTIFACT_PATHS` 登记旧路径拒读。 | `不适用`（退役条款，无可执行机械义务） |
 | R-9.2 | 【已退役】stage6.semantic 双盲判官随 2026-09-15 全自动裁决退役；依赖它的三条判据（hook_semantic_contradiction／hook_candidate_contradiction／hook_quality_rank）不再注册。 | `不适用`（退役条款，无可执行机械义务） |
 
-### R-10 · 命名与交付（stage7 · naming／assemble）
+### R-10 · 命名与交付（stage4 · naming／stage7 · assemble）
 
-`str06.stage7.naming` 只做 NameMap v5 赋值（读名称结构与 Blueprint 的只读投影）；
+`str06.stage4.naming` 只做 NameMap v6 赋值（读名称结构与 Blueprint 的只读投影；
+命名前移批 2026-10-18 起置于 Stage2 compile 之后、Preserve 之前——目标姓名经
+`stage4/naming/name_map.json` 进入目标简报与设计链，旧 `str06.stage7.naming` 退役）；
 `str06.stage7.assemble` 是替换与装配的唯一应用者：章回执链核对 → 按身份提及确定性改名
 → 残留检查 → TXT 先落盘 → manifest 最后提交。Stage7 不改写 Stage5 任何字节；
 交付可确定性重放，同输入同字节。
 
 | # | 要求 | 谁在查 |
 |---|---|---|
-| R-10.1 | NameMap v5 编译闭合：名称位一致、无姓氏冲突、保留项合法（带理由）。 | `HARD`（`novel/stages/stage7/naming.py::compile_name_map`） |
-| R-10.2 | 改名仅消费回执中绑定 char_id 的具体身份提及；同字面不同人物可有不同映射，普通义区间逐字保留。缺声明表、非法区间、正文不一致或无映射均拒绝；全部差异必须恰为已声明提及的确定性变换。此机械证明不代签提及标注的语义正确性。 | `HARD`（`novel/stages/stage7/naming.py::apply_bound_names`＋`novel/stages/stage7/naming.py::diff_proof`）+ `B-21` 披露面 |
+| R-10.1 | NameMap v6 编译闭合：名称位一致、无姓氏冲突、保留项合法（带理由）。 | `HARD`（`novel/stages/stage4/naming.py::compile_name_map`） |
+| R-10.2 | 改名仅消费回执中绑定 char_id 的具体身份提及；同字面不同人物可有不同映射，普通义区间逐字保留。缺声明表、非法区间、正文不一致或无映射均拒绝；全部差异必须恰为已声明提及的确定性变换。此机械证明不代签提及标注的语义正确性。 | `HARD`（`novel/stages/stage4/naming.py::apply_bound_names`＋`novel/stages/stage4/naming.py::diff_proof`）+ `B-21` 披露面 |
 | R-10.3 | 章回执集合核对（D2，rc8；B4 后半补五态；rc6 身份拆分）：逐章回执状态、当前编译出的写手视图摘要（`writer_view_sha256`，材料含实际正文 system、renderer 与写手协议版本）、验证输入摘要（`validation_sha256`：禁用字面、称谓许可、篇幅带）与正文 hash 绑定；Machine 层摘要（`machine_view_sha256`）仅审计不参与核对——只改 Machine 层字段不触发重购。有效／缺失／拒绝／未知／失效（绑定不成立的接受态回执）五态分开按 item 报告（I-42），不静默跳过；集合齐备才装配就绪（not_ready 显式，不落新交付），某章失效不截断其他章有效性。 | `HARD`（`novel/stages/stage7/assembly.py::verify_chapter_receipts`／`chapter_access`，共用 `_binding_problems`） |
 | R-10.4 | TXT 先落盘、manifest 最后提交；manifest 与文件 hash 逐字一致，消费者核对 manifest 才算就绪。 | `HARD`（`novel/stages/stage7/assembly.py::build_delivery_manifest`） |
 | R-10.5 | 同输入交付字节一致（确定性重放）；重放只允许缓存与登记的历史采用，零新购。 | `HARD`（`novel/stages/stage7/assembly.py::assemble_delivery`） |
 | R-10.6 | 新名的阅读质量未经语义评审，保持未评披露。 | `INFO`（`naming_quality_unver` 明示 `UNVER`，进交付披露）；新名质量没有确定性判据，见 `B-22` |
 | R-10.7 | 全书相对书级目标的偏差无条件报出（±10% 读数，度量不是门）；逐章篇幅披露与未评语义分开报告。 | `度量`（`novel/stages/stage7/assembly.py::build_delivery_manifest`） |
-| R-10.8 | `NameMapV5` 与交付 manifest 的盘上形状由 `ARTIFACT_SPECS`／唯一 writer 契约治理；NameMap 是交付变换契约，接受正文、回执与已购证据独立保护。 | `载体`（`contracts/schema/naming.py::NameMapV5`） |
-| R-10.9 | Stage7 不回写 Stage5：名称映射按稳定人物身份及登记构词编译，装配只变换已声明提及；换 NameMap 只影响交付，正文与语义声明保留。 | `结构`（`novel/stages/stage7/naming.py::compile_bound_replacements`） |
+| R-10.8 | `NameMapV6` 与交付 manifest 的盘上形状由 `ARTIFACT_SPECS`／唯一 writer 契约治理；NameMap 是交付变换契约，接受正文、回执与已购证据独立保护。 | `载体`（`contracts/schema/naming.py::NameMapV6`） |
+| R-10.9 | Stage7 不回写 Stage5：名称映射按稳定人物身份及登记构词编译，装配只变换已声明提及；换 NameMap 只影响交付，正文与语义声明保留。 | `结构`（`novel/stages/stage4/naming.py::compile_bound_replacements`） |
 | R-10.10 | **章标记与分章身份**：成书按阅读序逐章加「第N章」一行（章号由系统添加，写手协议据此约定不写章号），引子放最前、不加标题；交付身份由有序的 `(chapter_ordinal, prose_sha256)`、Hook 成文 hash、改名映射与保留字面、`ASSEMBLY_FORMAT_VERSION` 派生——拼接相同但分章不同 ⇒ 身份不同。章回执绑定不含章号的改名前正文摘要（rc5）。 | `HARD`（`novel/stages/stage7/assembly.py::assemble_delivery`／`delivery_identity`） |
 
 ### R-11 · 人工审阅、模型权限与确定性调度
@@ -733,9 +735,9 @@ reasoning 是 completion 的子口径，不再累加。统一解析顶层与 com
 | 非正文剔除（`stage0`，**12 条现役**；2026-10-08 删 `s0_correctness`） | R-0 |
 | 分章（`stage1`，**9 条现役**） | R-1 |
 | 源语义与名称结构（`stage2`，**18 条现役**；CS-S 1b 删 R-2.13／R-2.15） | R-2、R-3 |
-| 目标故事与确定性编译（`stage4`，**33 条现役**） | R-5、R-6（含 Guard M1–M8） |
+| 目标命名、目标故事与确定性编译（`stage4`，**35 条现役**） | R-5、R-6、R-10（命名） |
 | 按章正文与 Hook（`stage5`，**9 条现役**） | R-7、R-8 |
-| 命名与交付（`stage7`，**8 条现役**） | R-10 |
+| 命名与交付（`stage7`，**6 条现役**） | R-10（交付） |
 
 `tests/test_coverage.py` 校验双向关联、逐节精确条目数、逐层计数及无遗漏；structural/carrier 的
 实现归属仍由对应 R 行点名，不能因没有注册 Rule 就称它没有任何校验。人审和真正盲区分别明示，B 不冒充测试。

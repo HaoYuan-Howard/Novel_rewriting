@@ -102,7 +102,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
     # 承载，不在本表重复登记：
     #   ① 模型自带 `contract_version` 字面量（Characters v6／ReconstructionBrief／
     #      SemanticBinding／ExecutionPlan／PresentationGraph／HookContext／
-    #      WriterBookIR／ChapterReceipt／NameMap v5，与候选产物表逐字对账，
+    #      WriterBookIR／ChapterReceipt／NameMap v6，与候选产物表逐字对账，
     #      `tests/test_str06_candidates.py` 守着）；
     #   ② 候选产物表的 `schema_version` RC 标签（rc2→rc3→rc4 的批次定格，
     #      `tests/test_str06_f7e_freeze.py` 钉住冻结基线）。

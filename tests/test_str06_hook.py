@@ -936,7 +936,7 @@ def test_dependency_rule_scan_actually_finds_violations():
 def test_new_families_admitted_and_rest_refused():
     assert check_rel_family('stage5/hook/hook.txt')
     assert check_rel_family('stage5/hook/receipt.json')
-    assert check_rel_family('stage7/naming/name_map.json')
+    assert check_rel_family('stage4/naming/name_map.json')
     assert check_rel_family('stage7/final/rewritten.txt')
     assert check_rel_family('stage4/context/hook/hook.json')
     with pytest.raises(PathRefused):
@@ -1063,7 +1063,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monke
     before = {rel: repo.path(rel).read_bytes() for rel in (
         'stage4/design/presentation_graph.json', 'stage4/context/hook/hook.json',
         'stage4/ir/writer_book_ir.json',
-        'stage5/hook/hook.txt', 'stage7/naming/name_map.json',
+        'stage5/hook/hook.txt', 'stage4/naming/name_map.json',
         'runtime/delivery/hook_renamed.txt')}
     counter.clear()
     run_workflow(repository=repo, chapters=chapters,

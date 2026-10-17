@@ -142,18 +142,18 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
                     content_used=1, content_limit=4, content_remaining=3, state='delivered',
                     recovery_action='replay_response')
     monkeypatch.setattr(run.work_units, 'list_unit_views', lambda *_args: [
-        row('str06.stage7.naming', 'executor', 'book'),
+        row('str06.stage4.naming', 'executor', 'book'),
         # 历史 commander 行保留只读解码，但不得进入当前恢复动作面。
-        row('str06.stage7.naming', 'commander', 'book'),
+        row('str06.stage4.naming', 'commander', 'book'),
         row('stage6.hook', 'executor', 'book')])
     # 阻断面：next_handler=human，任何模型工作单元都不投影恢复动作。
     frontier = RunResumeFrontierView(
-        state='blocked', node='str06.stage7.naming', seq=list(NODES).index('str06.stage7.naming') + 1,
-        label=NODES['str06.stage7.naming'].label, resume_verdict='run', why='等人名表恢复',
-        waiting_on='inbox:invalid', paid=False, writes='stage7/naming/name_map.json',
+        state='blocked', node='str06.stage4.naming', seq=list(NODES).index('str06.stage4.naming') + 1,
+        label=NODES['str06.stage4.naming'].label, resume_verdict='run', why='等人名表恢复',
+        waiting_on='inbox:invalid', paid=False, writes='stage4/naming/name_map.json',
         next_handler='human', review_states=reviews,
-        verified_skipped_nodes=list(NODES)[:list(NODES).index('str06.stage7.naming')],
-        verified_skipped_count=list(NODES).index('str06.stage7.naming'))
+        verified_skipped_nodes=list(NODES)[:list(NODES).index('str06.stage4.naming')],
+        verified_skipped_count=list(NODES).index('str06.stage4.naming'))
     monkeypatch.setattr(operator, 'progress_read_snapshot',
                         lambda *_args: nullcontext((SimpleNamespace(stages=[]), frontier)))
     response = c.get('/api/novels/42/run')
@@ -162,12 +162,12 @@ def test_run_projects_current_review_states_and_only_current_role_recovery(clien
     assert response.json()['current_recovery_actions'] == []
     # executor lane：只有与 next_handler 同角色的当前节点工作单元进入恢复动作。
     frontier = RunResumeFrontierView(
-        state='blocked', node='str06.stage7.naming', seq=list(NODES).index('str06.stage7.naming') + 1,
-        label=NODES['str06.stage7.naming'].label, resume_verdict='run', why='人名表待重采',
-        waiting_on='resume:manual-decision', paid=True, writes='stage7/naming/name_map.json',
+        state='blocked', node='str06.stage4.naming', seq=list(NODES).index('str06.stage4.naming') + 1,
+        label=NODES['str06.stage4.naming'].label, resume_verdict='run', why='人名表待重采',
+        waiting_on='resume:manual-decision', paid=True, writes='stage4/naming/name_map.json',
         next_handler='executor', review_states=reviews,
-        verified_skipped_nodes=list(NODES)[:list(NODES).index('str06.stage7.naming')],
-        verified_skipped_count=list(NODES).index('str06.stage7.naming'))
+        verified_skipped_nodes=list(NODES)[:list(NODES).index('str06.stage4.naming')],
+        verified_skipped_count=list(NODES).index('str06.stage4.naming'))
     response = c.get('/api/novels/42/run')
     assert response.status_code == 200
     # 恢复动作标签 = scope: recovery_action；只有当前节点 executor 轮进入。

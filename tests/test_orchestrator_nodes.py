@@ -244,8 +244,8 @@ def test_node_specific_write_effects_table_is_empty_on_the_new_chain():
     assert N.write_effect('str06.stage5.body', ['--check-only']) == ''
     assert N.write_effect('str06.stage4.compile', []) == \
         ' · '.join(NODES['str06.stage4.compile'].produces)
-    assert N.write_effect('str06.stage7.naming', []) == \
-        ' · '.join(NODES['str06.stage7.naming'].produces)
+    assert N.write_effect('str06.stage4.naming', []) == \
+        ' · '.join(NODES['str06.stage4.naming'].produces)
 
 
 # ───────────────────────── 那条命令（R-11.8 · R-12.3） ─────────────────────────
@@ -765,10 +765,12 @@ def test_every_stage_has_a_check_bridge_and_check_node_picks_the_first():
         'stage1': ('stage1.partition',),
         'stage2': ('str06.stage2.book', 'str06.stage2.chapters',
                    'str06.stage2.names', 'str06.stage2.associate'),
-        'stage4': ('str06.stage4.preserve', 'str06.stage4.body_design',
-                   'str06.stage4.hook_design'),
+        'stage4': ('str06.stage4.naming', 'str06.stage4.preserve',
+                   'str06.stage4.body_design', 'str06.stage4.hook_design'),
         'stage5': ('str06.stage5.hook', 'str06.stage5.body'),
-        'stage7': ('str06.stage7.naming',),
+        # 命名前移批（2026-10-18）：stage7 只剩确定性 assemble（无 --check-only），
+        # 零桥是合法形态——层内只读探测走 `probe_node` 回落该层首节点。
+        'stage7': (),
     }
     for stage in sorted(STAGES):
         got = N.check_nodes(stage)
@@ -776,7 +778,11 @@ def test_every_stage_has_a_check_bridge_and_check_node_picks_the_first():
             f'{stage} 的 `--check-only` 桥变了：{got}\n'
             f'→ 0 个：忘了给它登记跑法（`NODES[...].flags`）；'
             f'→ 顺序漂移：消费方拿 `check_node` 的代表桥建只读上下文')
-        assert N.check_node(stage) == got[0]
+        if got:
+            assert N.check_node(stage) == got[0]
+        else:
+            assert N.probe_node(stage) == next(
+                n for n, s in NODES.items() if s.stage == stage)
     assert N.check_nodes('stage3') == ()
     with pytest.raises(KeyError, match='0 个节点'):
         N.check_node('stage3')

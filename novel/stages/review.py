@@ -31,9 +31,9 @@ from novel.stages.stage5 import (
     validate_hook_prose, sha256_text,
 )
 from novel.stages.stage7 import (
-    assemble_delivery, chapter_access, compile_name_map, compile_bound_replacements,
-    verify_chapter_receipts,
+    assemble_delivery, chapter_access, verify_chapter_receipts,
 )
+from novel.stages.stage4 import compile_name_map, compile_bound_replacements
 from novel.stages.common import (
     chapter_identities, project_chapter_packet, validate_writer_materials, validate_hook_materials,
     material_identities,
@@ -262,7 +262,7 @@ def _design_preview(repository, candidate, checkpoint, brief, chars, *, budget,
 def _delivery_preview(repository, owner, candidate, chars) -> dict:
     ir = repository.read_model('stage4/ir/writer_book_ir.json')
     hook = repository.read_model('stage4/context/hook/hook.json')
-    name_map = repository.read_model('stage7/naming/name_map.json')
+    name_map = repository.read_model('stage4/naming/name_map.json')
     if owner == 'naming':
         name_map, errors = compile_name_map(candidate, chars)
         if errors:

@@ -500,7 +500,7 @@ _EXECUTOR_PROFILE_HTTP_CASES = (
     ('str06.stage4.hook_design', (), 2),
     ('str06.stage5.hook', (), 2),
     ('str06.stage5.body', (), 2),
-    ('str06.stage7.naming', (), 2),
+    ('str06.stage4.naming', (), 2),
 )
 
 
@@ -867,10 +867,10 @@ def test_stage4_jobs_need_no_approval_prepare_any_more(client, monkeypatch, node
 
 def test_revalidate_preview_with_real_audit_values_matches_the_strict_plan(client, base):
     flags = ['--check-only']
-    request = {'sid': '42', 'node': 'str06.stage7.naming', 'flags': flags}
+    request = {'sid': '42', 'node': 'str06.stage4.naming', 'flags': flags}
     response = client.post('/api/jobs/preview', json=request)
     assert response.status_code == 200, response.text
-    strict = J.plan_start('str06.stage7.naming', '42', flags, base=base)
+    strict = J.plan_start('str06.stage4.naming', '42', flags, base=base)
     assert response.json() == json.loads(strict.model_dump_json())
 
 
@@ -878,7 +878,7 @@ def test_revalidate_preview_with_real_audit_values_matches_the_strict_plan(clien
 
 def _fake_started(base, sid) -> str:
     """手写一条只有 `started` 的事件——**「服务重启前它是死是活我们不知道」那一态**。"""
-    start = J.plan_start('str06.stage7.naming', sid, ['--check-only'], base=base)
+    start = J.plan_start('str06.stage4.naming', sid, ['--check-only'], base=base)
     job_id = J.new_job_id(now=1)
     J.append_event(base, J.JobEvent(job_id=job_id, kind='started', ts=1, start=start))
     return job_id

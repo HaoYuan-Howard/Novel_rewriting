@@ -88,7 +88,7 @@ RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
     RecoveryRunPolicy('str06.stage4.hook_design', _t('--check-only'), _STR06),
     RecoveryRunPolicy('str06.stage5.hook', _t('--check-only'), _STR06),
     RecoveryRunPolicy('str06.stage5.body', _t('--check-only'), _STR06),
-    RecoveryRunPolicy('str06.stage7.naming', _t('--check-only'), _STR06),
+    RecoveryRunPolicy('str06.stage4.naming', _t('--check-only'), _STR06),
 )
 
 

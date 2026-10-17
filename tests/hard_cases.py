@@ -191,7 +191,7 @@ def _hook_withheld() -> list:
 def _name_map_conflict() -> list:
     """同姓不同人不得合并：NameMap 编译闭合拒绝。"""
     from tests.test_str06_naming import _chars, _naming_wire
-    from novel.stages.stage7.naming import compile_name_map
+    from novel.stages.stage4.naming import compile_name_map
 
     wire = _naming_wire([
         {'char_ref': 'c1', 'name': '苏瑶', 'family': '苏', 'kept_reason': None},
@@ -204,7 +204,7 @@ def _name_map_conflict() -> list:
 def _naming_residual() -> list:
     """已绑定人物提及缺改名或保留决定，交付变换拒绝。"""
     from contracts.schema.name_text import NameMention
-    from novel.stages.stage7.naming import apply_bound_names
+    from novel.stages.stage4.naming import apply_bound_names
     _text, errors = apply_bound_names(
         '苏姑娘推门进屋。', (NameMention(start=0, end=3, char_id='yun', surface='苏姑娘'),),
         {'other': {'苏姑娘': '苏瑶'}})
@@ -245,7 +245,7 @@ CASES: dict[str, Case] = {
     'body_chapter_complete': Case('stage5', _body_empty, '[non_empty]'),
     'body_withheld_literals': Case('stage5', _body_withheld, '[name_text_reference]'),
     'hook_mechanical': Case('stage5', _hook_withheld, '[name_text_reference]'),
-    'name_map_compile': Case('stage7', _name_map_conflict, 'naming 条目形状非法'),
+    'name_map_compile': Case('stage4', _name_map_conflict, 'naming 条目形状非法'),
     'naming_residual': Case('stage7', _naming_residual, '没有登记的改名或保留决定'),
     'assembly_chapter_chain': Case('stage7', _chain_broken, 'prose_sha256 脱钩'),
 }
@@ -771,7 +771,7 @@ def _names_structure_uncovered() -> list:
 def _names_coverage_missing_entry() -> list:
     """应改名集合覆盖源名称结构：NameMap 漏项即拒。"""
     from tests.test_str06_naming import _chars
-    from novel.stages.stage7.naming import compile_name_map
+    from novel.stages.stage4.naming import compile_name_map
     _map, errors = compile_name_map(
         {'entries': [{'char_ref': 'chen_yan', 'name': {'family': '沈', 'given': '砚'}}]},
         _chars())

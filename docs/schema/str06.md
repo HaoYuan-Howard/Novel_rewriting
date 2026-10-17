@@ -824,7 +824,7 @@ B2 第三步；旧联合抽取 `source.py` 已随 B5/S-05 整包删除，反例�
 graph publisher，B3 后半归位）、`novel/stages/stage4/compile.py`、`novel/stages/stage4/book_ir.py`、
 `novel/stages/stage4/hook_context.py`（B3 后半归位）、`novel/stages/stage4/guard.py`、
 `novel/stages/stage5/body.py`（按章 writer）、`novel/stages/stage5/body_checks.py`、
-`novel/stages/stage5/hook_writer.py`、`novel/stages/stage7/naming.py`、
+`novel/stages/stage5/hook_writer.py`、`novel/stages/stage4/naming.py`、
 `novel/stages/stage7/assembly.py`；跨 stage 共用原语与 renderer 住
 `novel/stages/common.py`；薄编排与设施装配住 `novel/stages/chain.py`（CS-3 bind 退役后 13 节点执行序；
 全部 runner 在位——含 `run_associate`／`run_compile`（B2 第三步）、

@@ -27,6 +27,10 @@ SOURCE = 'a' * 64
 # 此边的真实历史执行版本。只改变版本声明，不改任何原轮、响应、采用或费用证据；
 # 不能把当前执行账仅换 workflow 标签后，期待同版本再次恢复额度。
 SOURCE_NODE_VERSION_OVERRIDES = {
+    # 命名前移批（2026-10-18）：naming 版本轴随 NameMapV5→v6 与产物路径换桩
+    # （canonical 12→26）；旧根账上记的是换桩前版本，同步据此恢复基础额度。
+    'str06.stage4.naming': {'canonical': 12, 'validator': 1,
+                            'artifact:stage4/naming/name_map.json': 12},
     'str06.stage4.body_design': {'wire': 10, 'artifact:stage4/design/body_design.json': 22},
     'str06.stage4.hook_design': {'wire': 3, 'artifact:stage4/design/presentation_graph.json': 23},
     'str06.stage5.body': {'protocol': 11, 'renderer': 12, 'validator': 3,
@@ -399,7 +403,7 @@ def test_upgrade_from_rejected_body_design_candidate_runs_current_author_protoco
 
     _old_workflow(repo)
     plan = _preview(repo)
-    assert plan.rebuild_nodes[0] == 'str06.stage4.body_design'
+    assert plan.rebuild_nodes[0] == 'str06.stage4.naming'
     assert not any(row.rel == 'stage4/design/body_design.json' for row in plan.archive)
     receipt = _apply(repo, plan)
     assert unit._read().turns == turns
@@ -417,9 +421,14 @@ def test_upgrade_from_rejected_body_design_candidate_runs_current_author_protoco
     session = PaidRequestSession(repo, context.ledger, transport, yes=True,
                                 allow_source_export=True, provider='fake', sid=repo.root.name)
     calls = len(transport.calls)
-    _run(repo, session, node_filter=('str06.stage4.body_design',))
+    # 升级归档旧 Preserve checkpoint／Brief：重跑从 preserve 起（命名前移批
+    # 的登记重建链第一项即 str06.stage4.naming，其新路径产物已在场则跳过）。
+    _run(repo, session, node_filter=('str06.stage4.preserve', 'str06.stage4.body_design'))
     current = repo.read_model('stage4/design/body_design.json')
-    assert current.contract_version == EDGE['target_version']
+    # 产物契约版本标签按自身形状轴走（命名前移批不换 Design 形状，仍 rc25）；
+    # 「当前协议」由现役模型字面量承载，不随 epoch 目标版本（版式头）混淆。
+    from contracts.schema.design import BodyDesign
+    assert current.contract_version == BodyDesign.model_fields['contract_version'].default
     assert transport.calls[calls:] == ['design']
     historical_turns = unit._read().turns[:len(turns)]
     assert len(historical_turns) == len(turns)
@@ -659,9 +668,13 @@ def test_open_hook_design_issue_is_resolved_when_product_archived(tmp_path):
     assert not repo.path('stage4/design/presentation_graph.json').exists()
     assert repo.path(f'runtime/upgrades/{receipt["subject_sha256"]}/files/'
                      'stage4/design/presentation_graph.json').read_bytes() == graph_bytes
-    _run(repo, session, node_filter=EDGE['rebuild_nodes'][:3])
+    rebuild = list(EDGE['rebuild_nodes'])
+    _run(repo, session,
+         node_filter=rebuild[:rebuild.index('str06.stage4.hook_design') + 1])
     graph = repo.inspect('stage4/design/presentation_graph.json')
-    assert graph['contract_version'] == EDGE['target_version']
+    # 命名前移批不换 Design/Graph 形状：产物契约版本标签保持 rc25，世代身份由
+    # epoch 与契约表承载（EDGE['target_version'] 是版式头，不是每个产物的标签）。
+    assert graph['contract_version'] == 'str06-rc25'
 
 
 def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
@@ -687,6 +700,10 @@ def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
         ask_text_once(session, 'hook_writer', text_request, lambda _: [])
     unit = WorkUnitBudget(repo.root.parent, 'run', 'str06.stage5.hook', 'executor', 'book')
     old_ledger = unit._read()
+    # 登记返还范围（版本轴本批变化的节点）的单元：命名前移批是 naming。
+    refund_unit = WorkUnitBudget(repo.root.parent, 'run', EDGE['refund_nodes'][0],
+                                 'executor', 'book')
+    old_refund_ledger = refund_unit._read()
     old_budget = read_book_budget(repo.root.parent, 'run')
     assert old_ledger.turns[-1].state == 'unknown'
     # 预览附带的重建额度投影与账面一致：应用前就能看见「第一步会不会撞额度」。
@@ -697,13 +714,21 @@ def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
     assert hook_view['content_used'] == len(old_ledger.turns)
     assert hook_view['content_remaining'] == hook_view['content_limit'] - len(old_ledger.turns)
     _old_workflow(repo)
+    pre = unit._read()
+    pre_refund = refund_unit._read()
     receipt = _apply(repo, _preview(repo))
-    # 裁决「升级清账」：轮次返还入账；历史轮（含 unknown）与费用总闸原样保留。
+    # 裁决「升级清账」：历史轮（含 unknown）与费用总闸原样保留。
     refunded = unit._read()
     assert refunded.turns == old_ledger.turns
-    assert len(refunded.version_resets) == len(old_ledger.version_resets) + 1
-    assert refunded.content_limit == old_ledger.content_limit + refunded.version_resets[-1].additional
     assert read_book_budget(repo.root.parent, 'run') == old_budget
+    # hook 的版本轴本批未变（命名前移只换 naming 轴）⇒ 不新增重置、不返还；
+    # 登记返还范围内的单元才新增一次版本基线重置并恢复基础额度，历史轮不动。
+    assert refunded.version_resets == pre.version_resets
+    new_refund_ledger = refund_unit._read()
+    assert new_refund_ledger.turns == pre_refund.turns
+    assert len(new_refund_ledger.version_resets) == len(pre_refund.version_resets) + 1
+    assert (new_refund_ledger.content_limit
+            == pre_refund.content_limit + new_refund_ledger.version_resets[-1].additional)
     _, context = init_or_resume_candidate_workflow(repository=repo, base=repo.root.parent,
         code=prov.code_version(), root_sha1='a' * 40, source_identity=SOURCE,
         task_id='task-1', configured_model='fake', created_at=1759000001)
@@ -762,7 +787,12 @@ def test_operator_and_agent_resume_same_root_to_delivery(tmp_path, monkeypatch):
           actor='测试', reason='同根恢复真实自动编排入口')
     next_action = operator.next_action(base, '9001')
     assert next_action.state == 'ready' and next_action.action is not None
-    assert next_action.action.node == EDGE['rebuild_nodes'][0]
+    # 首节点＝重建链上第一个产物被归档的节点。命名前移批的合成根已跑过新链，
+    # 新路径 name_map 在场 ⇒ naming 跳过，从被归档的 preserve 续跑。
+    first_missing = next(
+        n for n in EDGE['rebuild_nodes']
+        if not all(repo.path(rel).is_file() for rel in NODES[n].produces))
+    assert next_action.action.node == first_missing
     _assert_archived_bytes(repo, receipt,
         {path.relative_to(repo.root).as_posix(): data for path, data in original.items()})
     box = {'dispatched': [], 'processes': []}
@@ -810,10 +840,17 @@ def test_cli_subprocess_preview_and_apply_are_free_and_reachable(tmp_path):
 
 # ──────────── 裁决「升级清账」：登记节点轮次返还（2026-10-10） ────────────
 
-def _exhausted_hook_unit(repo):
+def _exhausted_refund_unit(repo):
+    """耗尽**本边 refund_nodes 第一个节点**的单元（边驱动，不钉死具体节点）。
+
+    命名前移批（2026-10-18）起该节点是 str06.stage4.naming（版本轴随
+    NameMapV5→v6 换桩）；历史边曾为 str06.stage5.hook。测试只验证「登记
+    返还范围＋版本轴变化 ⇒ 恢复基础额度」的机制，节点身份跟随边。
+    """
     from novel import work_units
     base, sid = repo.root.parent, repo.root.name
-    budget = work_units.WorkUnitBudget(base, sid, 'str06.stage5.hook')
+    node = EDGE['refund_nodes'][0]
+    budget = work_units.WorkUnitBudget(base, sid, node)
     for i in range(4):
         reservation = budget.reserve('a' * 64, run_id=f'r{i}')
         budget.finish(reservation.turn_id, outcome='failed',
@@ -825,11 +862,11 @@ def _exhausted_hook_unit(repo):
 
 def test_apply_refunds_registered_unit_rounds_to_base(tmp_path):
     repo = _minimal(tmp_path)
-    budget = _exhausted_hook_unit(repo)
+    budget = _exhausted_refund_unit(repo)
     plan = _preview(repo)
     receipt = _apply(repo, plan)
     row = next(r for r in receipt['round_refunds']
-               if r['node'] == 'str06.stage5.hook')
+               if r['node'] == EDGE['refund_nodes'][0])
     assert row['status'] == 'refunded' and row['additional'] == 4
     assert budget.remaining == 4 and budget.used == 4
     ledger = budget._read()
@@ -841,7 +878,7 @@ def test_apply_refunds_registered_unit_rounds_to_base(tmp_path):
     # 重放幂等：同一升级不重复返还。
     again = _apply(repo, plan)
     row2 = next(r for r in again['round_refunds']
-                if r['node'] == 'str06.stage5.hook')
+                if r['node'] == EDGE['refund_nodes'][0])
     assert row2['status'] == 'already_refunded' and budget.remaining == 4
 
 

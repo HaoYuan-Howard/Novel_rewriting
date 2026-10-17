@@ -40,8 +40,9 @@ def _ev(ts, node, phase, exit_code=None, sid='42', note=None, *,
 def test_pipeline_steps_match_the_skill_table():
     """进度节点逐项来自 NODES；贵贱仍只有 `is_paid` 一处算。"""
     assert PIPELINE_STEPS == tuple(NODES)
-    # 批次 B4：stage7.approve 退役；rename 后直接 assemble。
-    assert PIPELINE_STEPS[-2:] == ('str06.stage7.naming', 'str06.stage7.assemble')
+    # 批次 B4：stage7.approve 退役；命名前移批（2026-10-18）后 naming 进
+    # Stage4，Stage7 腿只剩正文与装配两步。
+    assert PIPELINE_STEPS[-2:] == ('str06.stage5.body', 'str06.stage7.assemble')
     assert {n for n in PIPELINE_STEPS if N.is_paid(n, ())} == {
         n for n in NODES if N.is_paid(n, ())}
 
@@ -190,12 +191,12 @@ def test_event_view_projects_exit_two_and_crash_without_browser_inference():
 def test_fold_takes_the_latest_event_per_node():
     """修复回路里同一节点会跑多次——进度只关心最近一次，历史在 events_tail。"""
     events = [
-        _ev(10, 'str06.stage7.naming', 'start'),
-        _ev(20, 'str06.stage7.naming', 'end', exit_code=2),
-        _ev(30, 'str06.stage7.naming', 'start'),
-        _ev(40, 'str06.stage7.naming', 'end', exit_code=0),
+        _ev(10, 'str06.stage4.naming', 'start'),
+        _ev(20, 'str06.stage4.naming', 'end', exit_code=2),
+        _ev(30, 'str06.stage4.naming', 'start'),
+        _ev(40, 'str06.stage4.naming', 'end', exit_code=0),
     ]
-    [step] = [s for s in beacon.fold(events, now=50) if s.node == 'str06.stage7.naming']
+    [step] = [s for s in beacon.fold(events, now=50) if s.node == 'str06.stage4.naming']
     assert step.beacon == 'ok' and step.last_ts == 40
 
 

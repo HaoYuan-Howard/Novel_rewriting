@@ -921,6 +921,21 @@ NODES: Final[dict[str, NodeSpec]] = {
             '未决项拒绝发布并按 item 报告（D8）；双真源唯一 writer（D9）',
             ('recompute', 'stop'), ('str06.stage2.compile',), 'none',
             ('deterministic_replay',), 0)),
+    # 目标命名前置（2026-10-18，命名前移批）：str06.stage4.naming 从 Stage7
+    # 末端前移到 Stage2 compile 之后、Preserve 之前——目标姓名是 Preserve 目标
+    # 简报与设计链的正式输入，不再由末端改名回填。产物改为
+    # stage4/naming/name_map.json（NameMap v6）；旧 str06.stage7.naming 退役，
+    # 历史工作单元转只读（删除条件见 docs/REQUIREMENTS.md）。
+    'str06.stage4.naming': NodeSpec(
+        'stage4', 'R-10', True, 'Stage4 目标命名（NameMap v6 赋值；置于 Preserve 之前）',
+        flags=('--check-only',),
+        operator_redo='canonical',
+        produces=('stage4/naming/name_map.json',),
+        lifecycle=NodeLifecycleSpec(
+            'book', 'Characters v6 名称结构与 Blueprint v17', 'executor', 'none',
+            '机械校验通过即 auto 定稿；目标姓名前移后是 Preserve 与设计链的正式输入',
+            ('stop',), ('str06.stage4.naming',), 'executor:book',
+            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage4.preserve': NodeSpec(
         'stage4', 'R-5', True, 'Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影',
         flags=('--check-only',),
@@ -995,16 +1010,6 @@ NODES: Final[dict[str, NodeSpec]] = {
             ('stop',), ('str06.stage5.body',), 'executor:chapter',
             ('committed_set_recovery', 'saved_response', 'historical_adoption',
              'owner_patch'), 4)),
-    'str06.stage7.naming': NodeSpec(
-        'stage7', 'R-10', True, 'Stage7 Naming（NameMap v5 赋值；Apply 归 assembly）',
-        flags=('--check-only',),
-        operator_redo='canonical',
-        produces=('stage7/naming/name_map.json',),
-        lifecycle=NodeLifecycleSpec(
-            'book', 'Characters v6 名称结构与 Blueprint v17', 'executor', 'none',
-            '机械校验通过即 auto 定稿；ApplyNames 是替换唯一应用者',
-            ('stop',), ('str06.stage7.naming',), 'executor:book',
-            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage7.assemble': NodeSpec(
         'stage7', 'R-10', False, 'Stage7 改名替换与成书装配（TXT 先落盘、manifest 最后提交）',
         produces=('stage7/final/{title}_rewriting.txt',
@@ -1081,10 +1086,10 @@ def approval_scope_allowed(node: str, scope: str) -> bool:
 LLM_EXECUTOR_NODES: Final = (
     'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
     'str06.stage2.associate',
+    'str06.stage4.naming',
     'str06.stage4.preserve', 'str06.stage4.body_design',
     'str06.stage4.hook_design',
     'str06.stage5.body', 'str06.stage5.hook',
-    'str06.stage7.naming',
 )
 AgentAvailability = Literal['ready', 'missing', 'unknown', 'unauthenticated']
 

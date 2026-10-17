@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from contracts.artifacts import str06_body_receipt_rel, str06_body_rel  # noqa: E402
 from contracts.invariants import BOOK_BLOCK_SEP  # noqa: E402
 from contracts.schema import decode_artifact  # noqa: E402
-from contracts.schema.naming import NameMapV5  # noqa: E402
+from contracts.schema.naming import NameMapV6  # noqa: E402
 from contracts.schema.receipt import (  # noqa: E402
     BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION, ChapterReceipt,
     RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
@@ -40,7 +40,7 @@ from novel.core.name_materials import name_candidate_literals  # noqa: E402
 from novel.core.name_text import validate_resolved_name_text  # noqa: E402
 from novel.core.text import window_overlap  # noqa: E402
 from novel.paths import artifact_path, book_txt_rel, resolve_novel_dir  # noqa: E402
-from novel.stages.stage7 import apply_bound_names, compile_bound_replacements  # noqa: E402
+from novel.stages.stage4 import apply_bound_names, compile_bound_replacements  # noqa: E402
 
 
 def split_book(text: str) -> dict[int, str]:
@@ -118,7 +118,7 @@ def measure(base: Path, sid: str) -> dict:
         source = MainText.model_validate(_read_payload(novel_dir, 'stage1/main_text.json'))
         characters = CharactersArtifactV6.model_validate(
             _read_payload(novel_dir, 'stage2/characters/characters.json'))
-        names = NameMapV5.model_validate(_read_payload(novel_dir, 'stage7/naming/name_map.json'))
+        names = NameMapV6.model_validate(_read_payload(novel_dir, 'stage4/naming/name_map.json'))
         replacements, errors = compile_bound_replacements(characters, names)
         if errors:
             raise ValueError('身份改名决定不闭合：' + '；'.join(errors))

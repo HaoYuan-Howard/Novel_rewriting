@@ -117,7 +117,7 @@ def test_pipeline_complete_and_unknown_flag_recovery_fail_closed(
     _stable(monkeypatch)
     complete = _next(tmp_path, state='pipeline_complete')
     with pytest.raises(UnsupportedRunMode, match='pipeline_complete'):
-        P.permit_from_next(complete, 'str06.stage7.naming', ['--check-only'])
+        P.permit_from_next(complete, 'str06.stage4.naming', ['--check-only'])
 
     # stage1.partition 的 --dry-run 过 NODES 旗标面但不在恢复表：
     # 「旗标合法但不是登记的恢复组合」仍必须关闭式拒绝。
@@ -152,7 +152,7 @@ def test_recovery_cannot_jump_past_the_current_blocker(monkeypatch, tmp_path):
         tmp_path, state='blocked', node='stage1.partition',
         waiting_on=Q.WAITING_ON_INBOX)
     with pytest.raises(UnsupportedRunMode, match='位于当前 blocker'):
-        P.permit_from_next(current, 'str06.stage7.naming', ['--check-only'])
+        P.permit_from_next(current, 'str06.stage4.naming', ['--check-only'])
 
 
 def test_policy_tables_are_closed_and_all_rows_are_free_rechecks():
@@ -183,7 +183,7 @@ def test_paid_recovery_rows_are_gone_and_drift_is_rejected():
     assert not {'--revise', '--reviewer-rewrite'} & set(VALUED_FLAGS)
     assert '--rebind-review' not in FREE_ENTRIES
     assert '--rebind-review' not in VALUED_FLAGS
-    for node in ('str06.stage2.book', 'str06.stage5.body', 'str06.stage7.naming'):
+    for node in ('str06.stage2.book', 'str06.stage5.body', 'str06.stage4.naming'):
         assert '--rebind-review' not in NODES[node].flags
 
 
@@ -214,11 +214,11 @@ def test_operator_permit_captures_one_snapshot_then_uses_the_permit_layer(
         P, 'permit_from_next',
         lambda got, node, flags: calls.append(('permit', got, node, flags)) or 'ok')
 
-    assert O.permit(tmp_path, SID, 'str06.stage7.naming', ['--check-only']) == 'ok'
+    assert O.permit(tmp_path, SID, 'str06.stage4.naming', ['--check-only']) == 'ok'
     assert calls == [
         ('capture', tmp_path, SID),
         ('next', 'snapshot'),
-        ('permit', current, 'str06.stage7.naming', ['--check-only']),
+        ('permit', current, 'str06.stage4.naming', ['--check-only']),
     ]
 
 

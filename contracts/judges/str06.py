@@ -232,9 +232,9 @@ _unver('body_semantics_unver', 'stage5',
 _metric('body_length_reading', 'stage5',
         '逐章实际篇幅与预算偏差读数（披露面，不是门）', 'R-7.7')
 
-# ── Stage7 命名与交付 ────────────────────────────────────────────────────────
-_hard('name_map_compile', 'stage7',
-      'NameMap v5 编译闭合（名称位一致、无姓氏冲突、保留项合法）', 'R-10.1')
+# ── Stage4 目标命名与 Stage7 交付 ───────────────────────────────────────────
+_hard('name_map_compile', 'stage4',
+      'NameMap v6 编译闭合（名称位一致、无姓氏冲突、保留项合法）', 'R-10.1')
 _hard('naming_residual', 'stage7',
       '回执身份提及与映射闭合、按提及精确改名、零表外改动', 'R-10.2')
 _hard('assembly_chapter_chain', 'stage7',
@@ -247,7 +247,7 @@ _hard('delivery_replayable', 'stage7',
 _hard('delivery_chapter_markers', 'stage7',
       '成书按阅读序逐章加「第N章」，交付身份对分章敏感', 'R-10.10',
       fix=_FIX_ASSEMBLE)
-_unver('naming_quality_unver', 'stage7',
+_unver('naming_quality_unver', 'stage4',
        '新名的阅读质量未经语义评审，保持未评披露', 'R-10.6', disclosable_unver=True)
 _metric('book_length_deviation', 'stage7',
         '全书相对书级目标的偏差读数（±10% 无条件报告）', 'R-10.7')

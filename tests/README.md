@@ -133,7 +133,7 @@ CS-H H2 起的规则码清点由 `tests/test_str06_patch_routes.py` 承担（uni
 ```powershell
 # 小改：已知精确用例，或根据修改文件选择单元 / contract 消费链
 conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract tests/test_str06_naming.py
-conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract --changed novel/stages/stage7/naming.py
+conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract --changed novel/stages/stage4/naming.py
 
 # Stage4 重构：本层及传递下游的单元/contract，然后阶段职责测试
 conda run -n novel_refactor python -m pytest -n 0 --test-layer unit_contract --test-stage stage4 --affected
@@ -143,7 +143,7 @@ conda run -n novel_refactor python -m pytest -n 0 --test-layer stage --test-stag
 conda run -n novel_refactor python -m pytest -n 0 --test-layer stage --test-stage stage4 --collect-only --selection-report .test_cache/stage4-selection.json
 
 # 定向回归复用原用例，不另建回归副本
-conda run -n novel_refactor python -m pytest -n 0 --test-layer regression --changed novel/stages/stage7/naming.py
+conda run -n novel_refactor python -m pytest -n 0 --test-layer regression --changed novel/stages/stage4/naming.py
 
 # 隔离迁移：登记范围补充导入消费者；先查看实际收集，再去掉 --collect-only 执行
 conda run -n novel_refactor python -m pytest -n 0 --changed novel/stages/stage5/hook_context.py --collect-only --selection-report .test_cache/str06-selection.json

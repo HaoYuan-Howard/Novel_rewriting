@@ -514,7 +514,7 @@ function HookPane({ hook }: { hook: NonNullable<Monitor['hook']['data']> }) {
 function NamingPane({ naming }: { naming: NonNullable<Monitor['naming']['data']> }) {
   return (
     <Panel>
-      <PaneHeader title={'NameMap v5 · 交付变换契约'} meta={<Mono>{naming.entries.length} 人</Mono>} />
+      <PaneHeader title={'NameMap v6 · 交付变换契约'} meta={<Mono>{naming.entries.length} 人</Mono>} />
       <ul className={'m-0 flex list-none flex-col gap-6 px-18 py-16 text-tag'}>
         {naming.entries.map((entry) => (
           <li key={entry.char_ref} className={'flex flex-wrap items-baseline gap-8'}>

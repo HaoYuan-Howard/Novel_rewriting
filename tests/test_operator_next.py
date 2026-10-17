@@ -378,10 +378,10 @@ def test_cli_json_keeps_blocked_and_complete_at_exit_zero(
     action = None
     if state == 'blocked':
         action = OperatorAction(
-            node='str06.stage7.naming', flags=['--check-only'], resume_verdict='run',
+            node='str06.stage4.naming', flags=['--check-only'], resume_verdict='run',
             why='命名残留需 0 成本复检后交付',
-            waiting_on='str06.stage7.naming', paid=False,
-            writes='stage7/naming/name_map.json', action_sha256='c' * 64)
+            waiting_on='str06.stage4.naming', paid=False,
+            writes='stage4/naming/name_map.json', action_sha256='c' * 64)
     result = OperatorNext(
         base=str(tmp_path), sid='book-1', code_version='code-v1',
         surface_seal='a' * 64, state=state,
