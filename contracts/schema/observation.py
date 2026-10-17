@@ -39,7 +39,7 @@ from __future__ import annotations
 import re
 from typing import Annotated, Any, Final, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, model_serializer, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.source import (
@@ -64,7 +64,7 @@ from contracts.schema.source import (
 #: CS-S 1c（2026-10-07）：names canonical 升 v4——resolutions 增 `not_name`
 #: （变体候选的完整性证明）、构词 surface_forms 改由 compiler 派生（wire 不
 #: 再携带）；同名判定走新窄调用 wire `stage2-name-variants-v1`。
-STAGE2_NAMES_PROTOCOL: Final = 'stage2-names-v4'
+STAGE2_NAMES_PROTOCOL: Final = 'stage2-names-v5'
 #: CS-S Phase 2（2026-10-07）：book canonical 升 v6——增 `facts`（书级命题
 #: 词表：statement＋basis＋known_at_start，F 编号 f{nn} 由 compile 按列表序
 #: 派发）；初始知情由 facts 的 known_at_start 承载（1b 删的 InitialFact.
@@ -134,7 +134,7 @@ STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v10'
 #: 里：候选由代码给出（无候选＝零调用），判定走独立窄调用 wire
 #: `stage2-name-variants-v1`。旧 v5 结构回答（带 surface_forms／resolutions）
 #: 按版本字面量拒收，不做推断采用。
-STAGE2_NAMES_WIRE_PROTOCOL: Final = 'stage2-names-v6'
+STAGE2_NAMES_WIRE_PROTOCOL: Final = 'stage2-names-v7'
 
 #: names 的**变体窄调用 wire 面**（CS-S 1c 新增）：输入＝代码生成的候选清单
 #: （锚＝≥3 字含姓名部件的登记 surface、同首字编辑距离 1、未登记、非任一登记
@@ -580,6 +580,13 @@ class CrossCauseWire(StrictModel):
 
 # ───────────────────────── names 观察（str06.stage2.names） ─────────────────────────
 
+class AdditionalNameSurfaceWire(StrictModel):
+    """既有人物的补充源称谓；人物归属由语义声明，证据仅选段，不抄窗口。"""
+
+    surface: str = Field(min_length=1)
+    evidence_refs: tuple[SegmentRef, ...] = Field(min_length=1)
+
+
 class PersonNameStructureWire(StrictModel):
     """结构答案里一个人物的 wire 面（CS-S 1c）：无 `surface_forms`（构词模板
     由 compiler 派生，I-20/I-21）、无 resolutions 字段（模型无处凭空造同一性
@@ -590,13 +597,14 @@ class PersonNameStructureWire(StrictModel):
     given: str | None = None
     aliases: tuple[AliasEntry, ...] = ()
     form_overrides: dict[str, str | None] = Field(default_factory=dict)
+    additional_surfaces: tuple[AdditionalNameSurfaceWire, ...]
 
 
 class NamesStructureWire(StrictModel):
-    """`str06.stage2.names` 的结构 wire 面（v6）：families（含家族级 forms）
-    ＋people（部件与歧义例外）。每个 surface 的构词模板由 compiler 派生。"""
+    """`str06.stage2.names` 的结构 wire 面（v7）：部件、补充源称谓及歧义例外。
+    人物闭集不变；新增称谓必须选源证据段，构词模板由 compiler 派生。"""
 
-    protocol_version: Literal['stage2-names-v6']
+    protocol_version: Literal['stage2-names-v7']
     families: dict[str, FamilyEntry] = Field(min_length=1)
     people: dict[str, PersonNameStructureWire]
 
@@ -637,7 +645,39 @@ class NamesObservation(StrictModel):
     唯一 writer。v2 增加有证据的名称同一性判断，未决时禁止下游归一；v4
     （CS-S 1c）：构词模板由 compiler 派生进 structure、同一性判定来自变体
     窄调用（resolutions 增 not_name——完整性证明，不参与归一）。
+    v5 保存 Book 既有人物的有证据补充称谓；源称谓只在这里观察，免费 compile
+    并入 Characters。v4 集中只读兼容保留原身份，不宣称源称谓已完整观察。
     """
 
-    protocol_version: Literal['stage2-names-v4']
+    protocol_version: Literal['stage2-names-v4', 'stage2-names-v5']
     structure: NameStructure
+    additional_surfaces: dict[str, tuple[SurfaceMention, ...]]
+
+    @model_validator(mode='before')
+    @classmethod
+    def _explicit_surface_observation_version(cls, value):
+        """集中只读 v4：保留历史协议身份，不把旧观察冒充已查过的空补充面。"""
+        if isinstance(value, dict):
+            protocol = value.get('protocol_version')
+            if protocol == 'stage2-names-v4':
+                if 'additional_surfaces' in value:
+                    raise ValueError('names v4 不得携带 v5 的补充称谓声明')
+                return {**value, 'additional_surfaces': {}}
+            if protocol == 'stage2-names-v5' and 'additional_surfaces' not in value:
+                raise ValueError('names v5 必须显式声明 additional_surfaces（没有则给空对象）')
+        return value
+
+    @model_serializer(mode='wrap')
+    def _keep_historical_identity(self, handler):
+        if self.protocol_version == 'stage2-names-v4' and self.additional_surfaces:
+            raise ValueError('names v4 内部对象含补充称谓声明，拒绝丢弃证据或伪签历史身份')
+        data = handler(self)
+        if self.protocol_version == 'stage2-names-v4':
+            data.pop('additional_surfaces', None)
+        return data
+
+    @model_validator(mode='after')
+    def _historical_surface_scope(self):
+        if self.protocol_version == 'stage2-names-v4' and self.additional_surfaces:
+            raise ValueError('names v4 不得暗含补充称谓声明')
+        return self

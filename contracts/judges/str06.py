@@ -212,7 +212,7 @@ _hard('writer_packet_background_narrowing', 'stage4',
 _hard('body_chapter_complete', 'stage5',
       '每章正文完整（非空、编码合法、无章节标题/编号/任务术语外壳）', 'R-7.1')
 _hard('body_withheld_literals', 'stage5',
-      '未释放专名不得出现在正文（重写耗尽后无合法候选即停止，不披露放行）', 'R-7.2')
+      '身份文本声明、候选覆盖及称谓授权闭合；未决不当泄漏、硬失败不披露放行', 'R-7.2')
 _hard('body_required_literals', 'stage5',
       '必保揭名的承载章正文必现该称谓字面（RC-61；缺字面即拒，走段落级修句，'
       '不披露放行）', 'R-7.8')
@@ -236,7 +236,7 @@ _metric('body_length_reading', 'stage5',
 _hard('name_map_compile', 'stage7',
       'NameMap v5 编译闭合（名称位一致、无姓氏冲突、保留项合法）', 'R-10.1')
 _hard('naming_residual', 'stage7',
-      'ApplyNames 单遍替换后旧名零残留（遵守 claimed/kept）', 'R-10.2')
+      '回执身份提及与映射闭合、按提及精确改名、零表外改动', 'R-10.2')
 _hard('assembly_chapter_chain', 'stage7',
       '章回执链核对（逐章 IR 身份+前文链+正文 hash）', 'R-10.3', fix=_FIX_ASSEMBLE)
 _hard('delivery_manifest', 'stage7',
@@ -287,14 +287,18 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'patch_shape': 'whole_answer',               # patch 轮回答不是 {"patches":[…]}／范围外路径
     'design_protocol_literal': 'whole_answer',   # wire protocol_version 字面量不符（I-13）
     'hook_protocol_literal': 'whole_answer',     # hook wire 协议字面量不符
-    'design_wire_shape': 'whole_answer',         # v9 wire 整体 pydantic 形状失败
-    'hook_wire_key_whitelist': 'whole_answer',   # hook wire 顶层未知字段（协议外键）
+    'design_wire_root_shape': 'whole_answer',    # 根结构缺失/额外键；无法授权局部对象
+    'hook_wire_root_shape': 'whole_answer',      # Hook 根结构/协议字段形状
     'book_design_construct': 'whole_answer',     # canonical BodyDesign 组装失败（形状面）
     'hook_construct': 'whole_answer',            # canonical HookDesign 组装失败（形状面）
 
     # ── Design wire 定位面（判据在判定处带 v9 wire 路径） ─────────────────────
+    'design_wire_shape': 'locate',              # schema 推导结构最小替换单位；非原始错误键
     'design_wire_expand': 'locate',
     'design_expression_ref': 'locate',
+    'name_text_syntax': 'locate',
+    'name_text_reference': 'locate',
+    'name_text_unclassified': 'locate',
     'design_unknown_char': 'locate',
     'design_unregistered_surface': 'locate',
     'design_confirm_unestablished': 'locate',
@@ -331,8 +335,8 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'positive_material_leak': 'locate',
     'internal_id_leak': 'locate',
     'material_name_leak': 'stop',             # 材料归因回派（route_owner_issue）
+    'wire_shape_unlocatable': 'stop',          # 无法证明真实JSON路径/替换能力；禁止购买整份掩盖
     # CS-H H3（RC-64）：Preserve 自闸——义务文本里的裸姓／未登记别名。
-    'preserve_name_literal': 'locate',        # obligations[i] 条目返修（最小可替换单元）
     'preserve_event_evidence': 'locate',      # 完整事件证据缺口，保留义务条目定位
     'preserve_detail_shape': 'locate',        # 可改写细节形状；只修出错条目
     'preserve_detail_anchor': 'locate',       # 细节须引用源投影视图的正式锚点

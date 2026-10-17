@@ -13,6 +13,9 @@ from novel.core.name_materials import expand_surface_releases
 from novel.stages.common import claim_spans, uncovered_occurrences
 
 
+_NAME_TEXT_CODES = frozenset({'name_text_syntax', 'name_text_reference', 'name_text_unclassified'})
+
+
 @dataclass(frozen=True)
 class MaterialRepair:
     action: str
@@ -146,6 +149,8 @@ def _source_owner(source: MaterialSource, *, brief: ReconstructionBrief, literal
     if source.kind == 'hook':
         if not _hook_source_matches(source, body):
             return '', '材料来源与正式Hook字段未闭合，须核验确定性投影'
+        if source.field.endswith('/event'):
+            return 'hook_design', '所选正文事件只读；仅修订Hook选材、presentation或释放，不得改写正文事件'
         return 'hook_design', '修订Hook自有呈现／材料选择与Hook称谓释放，正文设计不可被暗改'
     if source.kind == 'world':
         return '', '继承世界约束与全书正向投影冲突，不能购买Design去改只读约束'
@@ -197,10 +202,20 @@ def plan_material_repairs(
     """一条结果保留全部命中来源；缺失／不同owner多义／未登记均停止。"""
     result: list[MaterialRepair] = []
     for problem in issues:
+        explanations = [_source_owner(source, brief=brief, body=body, binding=binding, literal=problem.literal)
+                        for source in problem.sources]
+        identity_error = problem.code in _NAME_TEXT_CODES
+        if identity_error:
+            explanations = [('', '只读源命题或派生投影的身份声明不闭合，目标owner无权改写；须核验原来源')
+                            if source.kind in {'knowledge', 'world', 'projection'} else explanation
+                            for source, explanation in zip(problem.sources, explanations)]
         # CS-H H3（RC-60 残余归属表第一行）：已绑定称谓但该人物全书无显示面
         # ——补释放／挪承载位归 Design，先于按文本来源的归因（唯一修复面是
         # Design 的释放声明，改义务或 Hook 文本都修不了「没有可指称的面」）。
-        if problem.code == 'positive_material_leak' \
+        # 无显示面只能解释已证明来自正式字段的提及；模板／无来源／过期投影
+        # 即使碰巧含同一字面，也不能借全书名称结构获得一个付费修订 owner。
+        if problem.code == 'positive_material_leak' and explanations \
+                and all(owner for owner, _reason in explanations) \
                 and _no_display_anywhere(problem.literal, body, structure):
             positions = _release_positions(body, problem.literal, structure)
             fields = sorted({f'{s.ref}/{s.field}' for s in problem.sources})
@@ -218,8 +233,6 @@ def plan_material_repairs(
             action, target = route_owner_issue('material_name_leak', material_owner='design')
             result.append(MaterialRepair(action, 'design', target, issue))
             continue
-        explanations = [_source_owner(source, brief=brief, body=body, binding=binding, literal=problem.literal)
-                        for source in problem.sources]
         owners = {owner for owner, _ in explanations}
         owner = next(iter(owners)) if len(owners) == 1 and '' not in owners else ''
         internal_id = problem.code == 'internal_id_leak'
@@ -239,7 +252,7 @@ def plan_material_repairs(
         if internal_id and any(source.kind == 'knowledge' for source in problem.sources):
             owner = ''
             explanations.append(('', '内部句柄出自源命题文本，目标设计无权改写；须核验上游观察'))
-        if problem.code not in ('positive_material_leak', 'internal_id_leak'):
+        if problem.code not in {'positive_material_leak', 'internal_id_leak', *_NAME_TEXT_CODES}:
             owner = ''
         action, target = route_owner_issue('material_name_leak', material_owner=owner)
         positions = _release_positions(body, problem.literal, structure)
@@ -254,10 +267,14 @@ def plan_material_repairs(
             'sources': [asdict(source) for source in problem.sources],
             'target_release_positions': list(positions),
             'material_identity': problem.identity,
+            'validation_code': problem.code,
         }
         # 反馈只含目标坐标／源盲句柄；来源诊断不把源拍证据送进Design prompt。
         label = f'目标第{problem.chapter_ordinal}章' if problem.chapter_ordinal else 'Hook'
-        if internal_id:
+        if identity_error:
+            message = (f'{label}材料身份文本声明未闭合（{problem.code}）；'
+                       f'字段={fields or "未决"}。{problem.reason or problem.message}；{reasons}')
+        elif internal_id:
             message = (f'{label}材料含内部句柄 {problem.literal!r}（代号不是可读文字，'
                        f'须改写为自然语言指称）；字段={fields or "未决"}。{reasons}')
         else:

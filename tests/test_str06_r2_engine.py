@@ -27,6 +27,8 @@
 """
 from __future__ import annotations
 
+import json
+
 from contracts.schema.design import ChapterEntry, TargetDelta
 from contracts.schema.state import EffectDomain, StateRead
 from novel.stages.common import (
@@ -682,8 +684,8 @@ def test_render_has_six_partitions_and_protocol_v5():
     for name in SECTIONS:
         assert f'【{name}】' in text
     # 协议 v7 按三类身份组织（六分区仍在）；版本常量由契约批登记
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v11'
-    assert RENDERER_VERSION == 'str06-render-v12'     # 已登记同人混称逐次投影，不因句式阻断
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v12'
+    assert RENDERER_VERSION == 'str06-render-v13'     # 身份引用与普通义声明贯通写手材料
     for name in SECTIONS:
         assert name in WRITER_PROTOCOL
     # 同章包 ⇒ 同字节
@@ -692,19 +694,25 @@ def test_render_has_six_partitions_and_protocol_v5():
 
 def test_writer_view_carries_no_internal_ids_or_field_names():
     """写手视图清零：无 场景/拍 复合 ID、线程 id、established_by、字段名、
-    char slug、禁用字面、知情模式 slug。"""
+    禁用字面、知情模式 slug；人物句柄只允许出现在正式身份协议目录。"""
     _body, _binding, _plan, ir = _rich_ir()
     for ordinal in (1, 2, 3):
         text = _render(ir, ordinal)
+        material, _marker, identity_catalog = text.partition('【合法身份引用】')
+        assert _marker
+        assert json.loads(identity_catalog.strip()) == {
+            row.char_id: list(row.surfaces) for row in ir.chapters[ordinal - 1].released_names}
+        for char_id in ('yun_niang', 'fu_jun'):
+            assert char_id not in material
         for token in ('sc01', 'sc02', 'sc03', 'sc04', 'b01', 'b02', 'b03',
                       'th01', 'th02', 'th03', 'th04',
                       'established_by', 'execution_slice_sha256', 'lineage',
                       'blueprint_refs', 'marital_status', 'jade_secret',
-                      'yun_niang', 'fu_jun', 'known', 'suspected',
+                      'known', 'suspected',
                       'contract_version', 'release_schedule'):
             assert token not in text, f'第{ordinal}章渲染泄漏 {token!r}'
-        # 禁用字面（第 1 章未释放的专名构词）不进阅读面
-        for literal in ('陆大哥', '陆家', '苏姑娘'):
+        # 禁用面不送写手；陆家由现役家族构词释放规则授权，不再冒充禁用字面。
+        for literal in ir.chapters[0].withheld_literals:
             assert literal not in _render(ir, 1), literal
 
 
@@ -851,9 +859,14 @@ def test_hook_prompt_is_layered_without_json_dump():
     from novel.stages.stage5.hook_writer import build_hook_user_prompt
     _graph, context = _hook_pair()
     prompt = build_hook_user_prompt(context)
+    material, marker, identity_catalog = prompt.partition('【合法身份引用】')
+    assert marker
+    assert json.loads(identity_catalog.strip()) == {
+        row.char_id: list(row.surfaces) for row in context.usable_surfaces}
+    assert 'yun_niang' not in material
     assert 'HookContext:' not in prompt and '```' not in prompt
     for token in ('contract_version', 'established_by', 'sc02', 'b01',
-                  'audience', 'yun_niang', 'first'):
+                  'audience', 'first'):
         assert token not in prompt, f'Hook 渲染泄漏 {token!r}'
     # withheld_literals 是 validator 材料，不进阅读面（列表字面不出现）
     assert '陆大哥' not in prompt and '陆家' not in prompt

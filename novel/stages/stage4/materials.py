@@ -1,4 +1,9 @@
-"""Design 自有文本与正式写作材料的正向分区验证；不改写、不做语义代猜。
+"""Design 作者文本与正式写作材料的验证；不改写、不做语义代猜。
+
+v11 作者用身份引用/普通义片段声明每次候选出现；原始 wire 的独立检查不依赖
+canonical 构造成功。候选未声明只报 name_text_unclassified，绝不据裸姓名部件
+宣布发生泄漏。canonical 保留原标记，材料检查按明确人物投影显示面，普通义
+区间不参与姓名守卫；内部句柄仍必须独立拒收。旧未标记材料只查完整登记称谓。
 
 CS-F1（RC-46/47）：每条泄漏问题在判定处带上**站点**（Design 哪个字段产生了这段文本），
 调用方（`design.py`）按自己手里的 v8 wire 把站点换成可编辑的 JSON 路径，局部修订据此
@@ -18,27 +23,28 @@ Design 的中间文本不该比它要指导的正文更严。章内后释放的�
 
 · `design_unreleased_reference`——已绑定称谓，但该人物在此处没有显示面
   （本章末仍无释放且无回落纯称谓）：补一行释放或挪承载位／改写该字段指称；
-· `positive_material_leak`——裸姓、未登记别名等不可投影字面：改该字段。
+· `positive_material_leak`——未释放的完整登记称谓残余：改该字段或其合法释放。
 
 两类都带路径（locate）；义务文本里的同类残余归 Preserve（自闸随 H3d 前置），
 不在本模块的 Design 分区出现。
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable, Iterable, Mapping
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure
-from contracts.schema.state import WithheldNameBinding
 from novel.core.material_trace import MaterialPart
 from novel.core.name_materials import (
-    appellation_fallbacks, display_surface, withheld_name_bindings,
+    appellation_fallbacks, display_surface, expand_surface_releases,
+    material_name_permissions, name_candidate_literals, withheld_name_bindings,
 )
+from novel.core.name_text import resolve_name_text
 from novel.stages.common import (
     ReleasePrefixes, positive_material_issues, project_withheld_names,
     withheld_name_literals,
 )
-from novel.stages.stage4.book_ir import chapter_surface_releases
+from novel.stages.stage4.book_ir import chapter_name_releases, chapter_surface_releases
 from novel.stages.stage4.design_paths import design_issue
 
 #: 站点：Design 字段的稳定坐标（不含 wire 结构）。第一位是种类，其余是该种类的坐标。
@@ -46,6 +52,80 @@ Site = tuple
 
 #: 站点 → wire 路径的解析器；返回 None 表示该字段不是 Design 可编辑的（派生自上游）。
 SiteResolver = Callable[[Site], 'tuple | None']
+
+
+def _text_fields(value: Any, fields: Iterable[str], path: tuple):
+    if isinstance(value, dict):
+        for field in fields:
+            text = value.get(field)
+            if isinstance(text, str):
+                yield (*path, field), text
+
+
+def _rows(value: Any) -> tuple | list:
+    return value if isinstance(value, (list, tuple)) else ()
+
+
+def design_wire_text_fields(wire: Mapping[str, Any]):
+    """明确列出 Design 作者的自然语言；不遍历 ID、状态键、引用或登记称谓。"""
+    yield from _text_fields(wire, ('book_style',), ())
+    for field, texts in (('character_voices', ('voice',)),
+                         ('expression_overrides', ('reason', 'target_statement')),
+                         ('initial_state', ('value',))):
+        for i, row in enumerate(_rows(wire.get(field))):
+            yield from _text_fields(row, texts, (field, i))
+    for si, scene in enumerate(_rows(wire.get('scenes'))):
+        if not isinstance(scene, dict):
+            continue
+        path = ('scenes', si)
+        yield from _text_fields(scene, ('brief',), path)
+        yield from _text_fields(scene.get('driver'), ('immediate_want', 'opposition', 'turn'),
+                                (*path, 'driver'))
+        for ai, text in enumerate(_rows(scene.get('avoid'))):
+            if isinstance(text, str):
+                yield (*path, 'avoid', ai), text
+        for bi, beat in enumerate(_rows(scene.get('beats'))):
+            if not isinstance(beat, dict):
+                continue
+            beat_path = (*path, 'beats', bi)
+            yield from _text_fields(beat, ('ev',), beat_path)
+            for ti, row in enumerate(_rows(beat.get('state'))):
+                yield from _text_fields(row, ('val',), (*beat_path, 'state', ti))
+            for ti, row in enumerate(_rows(beat.get('threads'))):
+                yield from _text_fields(row, ('text', 'progress', 'resolution'),
+                                        (*beat_path, 'threads', ti))
+    for ci, chapter in enumerate(_rows(wire.get('chapters'))):
+        yield from _text_fields(chapter, ('purpose',), ('chapters', ci))
+        if isinstance(chapter, dict):
+            yield from _text_fields(chapter.get('entry'), ('carryover',),
+                                    ('chapters', ci, 'entry'))
+
+
+def name_text_field_issues(text: str, *, path: tuple,
+                           surfaces: Mapping[str, Iterable[str]] | None,
+                           candidates: Iterable[str] = ()) -> list:
+    """语法/身份引用/词法候选未决分别报码，全部保留当前作者的可编辑路径。"""
+    resolved = resolve_name_text(text, surfaces, candidate_literals=candidates)
+    return [design_issue(
+        str(error), code=error.code, location=(*path, error.start, error.literal),
+        paths=(path,), context={'name_text_start': error.start,
+                                'name_text_end': error.end,
+                                'literal': error.literal}) for error in resolved.errors]
+
+
+def design_wire_name_text_issues(wire: Mapping[str, Any], *,
+                                 projection: NameProjection | None,
+                                 structure: NameStructure | None,
+                                 registered_surfaces: Mapping[str, Iterable[str]] | None,
+                                 require_classification: bool) -> list:
+    """自有文本先独立校验；know/real 或 canonical 构造失败不遮住本轮可修问题。"""
+    candidates = (name_candidate_literals(projection, structure)
+                  if require_classification and projection is not None else ())
+    surfaces = (expand_surface_releases(registered_surfaces, structure)
+                if registered_surfaces is not None else None)
+    return [issue for path, text in design_wire_text_fields(wire)
+            for issue in name_text_field_issues(
+                text, path=path, surfaces=surfaces, candidates=candidates)]
 
 
 def design_internal_ids(body: BodyDesign) -> set[str]:
@@ -76,6 +156,8 @@ def validate_design_materials(
 
     def display_at(faces: dict[str, tuple[str, ...]]) -> dict[str, str]:
         chars = set(faces) | {cid for cid, face in fallbacks.items() if face}
+        if first_person:
+            chars |= focalizers
         return {
             char_id: display_surface(
                 char_id, faces.get(char_id, ()), structure=structure,
@@ -100,6 +182,7 @@ def validate_design_materials(
         for i, rule in enumerate(body.world_rules):
             add(f'world_rules/{i}', rule, ('world_rule', i))
         released = chapter_surface_releases(body, chapter.chapter_ordinal, structure)
+        released_names = chapter_name_releases(body, chapter.chapter_ordinal, structure)
         available = {r.char_id for r in body.initial_surfaces}
         for prior in body.chapters:
             if prior.chapter_ordinal <= chapter.chapter_ordinal:
@@ -133,27 +216,37 @@ def validate_design_materials(
         # 字面检查面与绑定表同源：`released`（含登记家族构词，陆家＝{family}家）是
         # 正文章包的章级称谓许可，绑定表只收本章仍被扣留的完整登记称谓。
         withheld = withheld_name_literals(projection, released, structure)
-        bindings = tuple(
-            WithheldNameBinding(literal=literal, char_id=char_id, enclosing=enclosing)
-            for literal, char_id, enclosing in withheld_name_bindings(
-                withheld, structure, released))
-        binding_of = {b.literal: b for b in bindings}
+        bindings = withheld_name_bindings(structure, released_names)
+        binding_of = {b.literal: b for b in bindings if b.unmarked_unique}
         prefix = f'ch{chapter.chapter_ordinal:02d}/'
         # 显示面取章末（RC-60 第 2～4 条的解析不变，只是取位按章）。
         display = display_at(prefixes.chapter_end_faces(chapter.chapter_ordinal))
         # 先投影再查：同一人物的各次提及分别投影，残余才进字面检查。
         projected: dict[str, MaterialPart] = {}
+        surfaces = (expand_surface_releases(
+                    {cid: tuple(person.surface_forms) for cid, person in structure.people.items()}, structure)
+                    if structure is not None else None)
         for key, text in parts.items():
+            if '[[' in text or ']]' in text:
+                for error in resolve_name_text(text, surfaces).errors:
+                    issues.append(_site_issue(
+                        error.message, code=error.code, literal=error.literal,
+                        chapter=chapter, where=prefix + key, prefix=prefix,
+                        sites=sites, resolve=resolve, inherited=set()))
             new_text, _hits = project_withheld_names(
                 text, bindings=bindings, display=display)
+            # 保留原来的独立 name/text 片段。提前解码会把相邻两人“白”“若”拼成
+            # 第三人的“白若”，也会把某一人的已释放面错误授予同形的另一人。
             projected[prefix + key] = MaterialPart(new_text)
         # keep 的文本由 Brief 回填，直接重写场景不会改变它；诊断指出 wire
         # 中显式改写表达的入口，不替模型改语义，不扩大/缩小原判据。
         inherited = {item.ex_id for item in body.expression_decisions
                      if item.action == 'keep'}
-        for issue in positive_material_issues(
-                projected, released=released, withheld=withheld,
-                internal_ids=internal, chapter_ordinal=chapter.chapter_ordinal):
+        material_issues = positive_material_issues(
+            projected, released=released, withheld=withheld, internal_ids=internal,
+            chapter_ordinal=chapter.chapter_ordinal,
+            name_permissions=material_name_permissions(released_names, display))
+        for issue in material_issues:
             if issue.code != 'positive_material_leak':
                 issues.append(_site_issue(
                     issue.message, code=issue.code, literal=issue.literal,

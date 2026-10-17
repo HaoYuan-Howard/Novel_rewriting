@@ -23,7 +23,8 @@ Stage7 装配经本公开面消费 `count_body_chars`／`sha256_text`。
 from __future__ import annotations
 
 from novel.stages.stage5.body import (
-    AnsweredText, ChapterAttempt, ChapterOutcome, recheck_chapter, sha256_text, write_chapter,
+    AnsweredText, ChapterAttempt, ChapterOutcome, recheck_chapter, resolve_chapter_prose,
+    sha256_text, write_chapter,
 )
 from novel.stages.stage5.body_checks import (
     BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION, MAX_BODY_REWRITES,
@@ -32,7 +33,7 @@ from novel.stages.stage5.body_checks import (
 from novel.stages.stage5.hook_writer import (
     HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt, build_rewrite_user_prompt, context_sha256,
-    validate_hook_prose,
+    resolve_hook_prose, validate_hook_prose,
 )
 
 __all__ = [
@@ -41,5 +42,6 @@ __all__ = [
     'MAX_REWRITES', 'MECHANICAL_CHECKS',
     'build_hook_user_prompt', 'build_rewrite_user_prompt', 'chapter_prose_validator',
     'context_sha256', 'count_body_chars',
-    'recheck_chapter', 'sha256_text', 'validate_chapter_prose', 'validate_hook_prose', 'write_chapter',
+    'recheck_chapter', 'resolve_chapter_prose', 'resolve_hook_prose', 'sha256_text', 'validate_chapter_prose',
+    'validate_hook_prose', 'write_chapter',
 ]

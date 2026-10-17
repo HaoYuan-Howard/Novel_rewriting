@@ -25,7 +25,7 @@ manifest、当前输入及文件 hash，不能仅凭 TXT 存在宣称就绪。
 交付（质量改进批次 A4）。章回执绑定不含章号的改名前正文摘要。
 
 【身份分离】
-交付身份由（逐章正文 hash, Hook 回执 prose hash, 替换表, 保留字面, 组装格式
+交付身份由（逐章正文 hash, Hook 回执 prose hash, 两类身份声明表, 人物称谓映射, 组装格式
 版本）派生，与 Stage5 回执、Hook 回执分离：换 NameMap 不使任何接受回执失效，
 只改变交付身份。同一输入字节 + 同一映射 + 同一组装契约 ⇒ 相同交付字节。当前
 发布使用「文件先落盘、manifest 最后提交」。
@@ -33,16 +33,61 @@ manifest、当前输入及文件 hash，不能仅凭 TXT 存在宣称就绪。
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any, Iterable, Mapping, NamedTuple
 
-from novel.stages.stage7.naming import apply_names, check_residual
+from pydantic import ValidationError
+
+from contracts.schema.name_text import NameMention, NameTextSpan
+from contracts.schema.receipt import (
+    BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION, HOOK_MECHANICAL_CHECKS,
+    HOOK_VALIDATOR_VERSION, RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
+)
+from novel.core.name_text import validate_name_mentions, validate_name_text_spans
+from novel.stages.stage7.naming import apply_bound_names
 # 跨 stage 只走包级公开面（守卫见
 # `tests/test_layering.py::test_cross_stage_imports_stay_on_the_package_surface`）：
 # Stage7 装配消费 Stage5 的篇幅口径与文本 SHA。
 from novel.stages.stage5 import count_body_chars, sha256_text
 
 #: 成书组装格式版本：章标记与拼接规则变化必须换版（进交付身份）。
-ASSEMBLY_FORMAT_VERSION = 'str06-assembly-v2'
+ASSEMBLY_FORMAT_VERSION = 'str06-assembly-v3'
+
+
+def _receipt_name_records(
+    receipt: Mapping[str, Any], text: str,
+) -> tuple[tuple[NameMention, ...], list[str]]:
+    """旧回执缺字段显式拒绝；合法空声明必须在当前协议回执中明确给出。"""
+    if 'name_mentions' not in receipt or 'non_name_spans' not in receipt:
+        return (), ['回执缺人物提及或普通义声明，须按当前身份文本协议重建']
+    if any(not isinstance(receipt[field], (list, tuple))
+           for field in ('name_mentions', 'non_name_spans')):
+        return (), ['回执人物提及与普通义声明必须是显式数组']
+    try:
+        mentions = tuple(NameMention.model_validate(row) for row in receipt['name_mentions'])
+        ordinary = tuple(NameTextSpan.model_validate(row) for row in receipt['non_name_spans'])
+    except (TypeError, ValidationError) as exc:
+        return (), [f'回执身份声明形状失败：{exc}']
+    errors = [issue.message for issue in validate_name_mentions(text, mentions)]
+    errors.extend(issue.message for issue in validate_name_text_spans(text, ordinary))
+    errors.extend(issue.message for issue in validate_name_text_spans(
+        text, sorted((*mentions, *ordinary), key=lambda span: (span.start, span.end))))
+    if '[[' in text or ']]' in text:
+        errors.append('正式纯正文仍含身份协议定界符')
+    return mentions, errors
+
+
+def _has_current_checks(receipt: Mapping[str, Any], expected: tuple[str, ...]) -> bool:
+    checks = receipt.get('mechanical_checks')
+    return isinstance(checks, (list, tuple)) and tuple(checks) == expected
+
+
+def _name_binding_identity(receipt: Mapping[str, Any]) -> str:
+    """使用同一 canonical 声明形状派生身份，不依赖 list/tuple 或模型实例表示。"""
+    return json.dumps([
+        [NameMention.model_validate(row).model_dump() for row in receipt['name_mentions']],
+        [NameTextSpan.model_validate(row).model_dump() for row in receipt['non_name_spans']],
+    ], ensure_ascii=False, sort_keys=True, separators=(',', ':'))
 
 
 class BodyAccess(NamedTuple):
@@ -63,7 +108,7 @@ class BodyAccess(NamedTuple):
 
 
 def _binding_problems(
-    receipt: Mapping[str, Any], *, identities, prose: str | None,
+    receipt: Mapping[str, Any], *, ordinal: int, identities, prose: str | None,
 ) -> list[str]:
     """单章绑定核对（共用实现，rc6 身份拆分）：状态有效 → 写手视图摘要一致 →
     验证输入摘要一致 → 正文 hash 一致。
@@ -76,17 +121,21 @@ def _binding_problems(
     """
     if receipt.get('status') != 'accepted':
         return [f'回执状态为 {receipt.get("status")!r}']
+    if type(receipt.get('chapter_ordinal')) is not int or receipt['chapter_ordinal'] != ordinal:
+        return [f'回执章序 {receipt.get("chapter_ordinal")!r} 与当前章序 {ordinal} 不一致']
     if identities is None or receipt.get('writer_view_sha256') != identities.writer_view_sha256:
         return ['回执绑定的是另一版写手视图（章包已重编译，须重购）']
     if receipt.get('validation_sha256') != identities.validation_sha256:
         return ['回执的验证输入摘要与当前编译不一致（禁用字面/称谓许可/篇幅带已变化）']
-    from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
+    if (receipt.get('protocol_version') != WRITER_PROTOCOL_VERSION
+            or receipt.get('renderer_version') != RENDERER_VERSION):
+        return ['回执的写手协议或渲染版本已变化，须按当前协议重建']
     if (receipt.get('validator_version') != BODY_VALIDATOR_VERSION
-            or tuple(receipt.get('mechanical_checks', ())) != BODY_MECHANICAL_CHECKS):
+            or not _has_current_checks(receipt, BODY_MECHANICAL_CHECKS)):
         return ['回执的机械校验版本或检查项已变化，须先免费重验']
     if prose is None or sha256_text(prose) != receipt.get('prose_sha256'):
         return ['文本与回执 prose_sha256 脱钩']
-    return []
+    return _receipt_name_records(receipt, prose)[1]
 
 
 def chapter_access(
@@ -106,6 +155,8 @@ def chapter_access(
     与 `chapter_prose` 时，接受态回执逐一核对绑定（Stage7 集合核对入口）。
     """
     accepted, missing, rejected, unknown, stale = [], [], [], [], []
+    if (identities_by_ordinal is None) != (chapter_prose is None):
+        raise ValueError('章回执绑定核对必须同时提供当前章包身份与正文')
     verify = identities_by_ordinal is not None and chapter_prose is not None
     for ordinal in expected_ordinals:
         receipt = receipts.get(ordinal)
@@ -114,7 +165,7 @@ def chapter_access(
             continue
         if receipt.get('status') == 'accepted':
             if verify and _binding_problems(
-                    receipt, identities=identities_by_ordinal.get(ordinal),
+                    receipt, ordinal=ordinal, identities=identities_by_ordinal.get(ordinal),
                     prose=chapter_prose.get(ordinal)):
                 stale.append(ordinal)
             else:
@@ -156,6 +207,7 @@ def verify_chapter_receipts(
     for ordinal in sorted(receipts):
         for problem in _binding_problems(
                 receipts[ordinal],
+                ordinal=ordinal,
                 identities=identities_by_ordinal.get(ordinal),
                 prose=chapter_prose.get(ordinal)):
             problems.append(f'第{ordinal}章{problem}')
@@ -196,13 +248,15 @@ def build_delivery_manifest(
     }
 
 
-def _sorted_mapping(replacements: Mapping[str, str]) -> list[str]:
-    return [f'{k}=>{replacements[k]}' for k in sorted(replacements)]
+def _sorted_mapping(replacements: Mapping[str, Mapping[str, str]]) -> list[str]:
+    return [json.dumps([key, replacements[key]], ensure_ascii=False, sort_keys=True)
+            for key in sorted(replacements)]
 
 
 def delivery_identity(
     *, chapter_digests: Iterable[str], hook_prose_sha256: str,
-    replacements: Mapping[str, str], kept_literals: Iterable[str],
+    replacements: Mapping[str, Mapping[str, str]], kept_literals: Iterable[str],
+    name_bindings: Iterable[str] = (),
 ) -> str:
     """交付身份：与 Stage5/Hook 回执分离，换 NameMap 只变这一位。
 
@@ -212,6 +266,7 @@ def delivery_identity(
     parts = [ASSEMBLY_FORMAT_VERSION, hook_prose_sha256]
     parts.extend(chapter_digests)
     parts.extend(_sorted_mapping(replacements))
+    parts.extend(name_bindings)
     parts.extend(f'keep:{k}' for k in sorted(kept_literals))
     return hashlib.sha256('\x1f'.join(parts).encode('utf-8')).hexdigest()
 
@@ -229,13 +284,15 @@ def assemble_delivery(
     *, chapter_prose: Mapping[int, str] | None, body: BodyAccess,
     hook_prose: str | None, hook_receipt: Mapping[str, Any] | None,
     hook_context_sha256: str,
-    replacements: Mapping[str, str],
+    replacements: Mapping[str, Mapping[str, str]],
     kept_literals: tuple[str, ...] = (),
+    chapter_receipts: Mapping[int, Mapping[str, Any]] | None = None,
+    identities_by_ordinal: Mapping[int, Any] | None = None,
 ) -> DeliveryOutcome:
-    """终态组装（纯函数）：改名 → 残留检查 → 按章组装与身份。
+    """终态组装（纯函数）：回执身份表核对 → 按具体提及改名 → 分章组装。
 
     任何 not_ready 都不产字节、不产身份；`hook_renamed_text` 只在 hook 改名
-    已通过残留检查而 body 侧未就绪时给出（落盘归 runtime/delivery/）。
+    已通过身份变换检查而 body 侧未就绪时给出（落盘归 runtime/delivery/）。
     """
     if not chapter_prose or not body.ready:
         detail = 'body_not_implemented' if not chapter_prose else (
@@ -268,27 +325,46 @@ def assemble_delivery(
         return DeliveryOutcome(
             status='not_ready', reason='hook_prose_mismatch', body=body,
             delivery_bytes=None, delivery_identity=None, hook_renamed_text=None)
-    renamed_hook, hook_claims = apply_names(hook_prose, dict(replacements))
-    problems = check_residual(renamed_hook, dict(replacements), hook_claims, kept_literals)
+    if (hook_receipt.get('validator_version') != HOOK_VALIDATOR_VERSION
+            or not _has_current_checks(hook_receipt, HOOK_MECHANICAL_CHECKS)):
+        return DeliveryOutcome(
+            status='not_ready', reason='hook_validator_mismatch', body=body,
+            delivery_bytes=None, delivery_identity=None, hook_renamed_text=None)
+    hook_mentions, problems = _receipt_name_records(hook_receipt, hook_prose)
+    if not problems:
+        renamed_hook, problems = apply_bound_names(hook_prose, hook_mentions, replacements)
     if problems:
         return DeliveryOutcome(
-            status='not_ready', reason='hook_residual: ' + '；'.join(problems),
+            status='not_ready', reason='hook_name_bindings: ' + '；'.join(problems),
             body=body, delivery_bytes=None, delivery_identity=None,
             hook_renamed_text=None)
     renamed_chapters: dict[int, str] = {}
     for ordinal in sorted(chapter_prose):
-        renamed, claims = apply_names(chapter_prose[ordinal], dict(replacements))
-        problems = check_residual(renamed, dict(replacements), claims, kept_literals)
+        receipt = (chapter_receipts or {}).get(ordinal)
+        if receipt is None:
+            problems = ['缺章级人物提及回执']
+        elif identities_by_ordinal is None:
+            problems = ['缺当前章包身份，状态分类不能代替绑定核对']
+        else:
+            problems = _binding_problems(
+                receipt, ordinal=ordinal, identities=identities_by_ordinal.get(ordinal),
+                prose=chapter_prose[ordinal])
+            if not problems:
+                mentions, _record_errors = _receipt_name_records(receipt, chapter_prose[ordinal])
+                renamed, problems = apply_bound_names(chapter_prose[ordinal], mentions, replacements)
         if problems:
             return DeliveryOutcome(
                 status='not_ready',
-                reason=f'body_residual: 第{ordinal}章 ' + '；'.join(problems),
+                reason=f'body_name_bindings: 第{ordinal}章 ' + '；'.join(problems),
                 body=body, delivery_bytes=None, delivery_identity=None,
                 hook_renamed_text=renamed_hook)
         renamed_chapters[ordinal] = renamed
     identity = delivery_identity(
         chapter_digests=_chapter_digests(chapter_prose), hook_prose_sha256=hook_sha,
-        replacements=replacements, kept_literals=kept_literals)
+        replacements=replacements, kept_literals=kept_literals,
+        name_bindings=(_name_binding_identity(receipt)
+            for receipt in (hook_receipt, *(chapter_receipts[ordinal]
+                                           for ordinal in sorted(chapter_prose)))))
     text = '\n\n'.join(
         [renamed_hook] + [f'{_chapter_marker(ordinal)}\n{renamed_chapters[ordinal]}'
                           for ordinal in sorted(renamed_chapters)])

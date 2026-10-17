@@ -463,10 +463,16 @@ def _compile_source_truth(
             observation.model_dump(mode='json')['beats'], chapter=chapter))
     if undecided:
         return outcome
-    from novel.stages.stage2.names import normalize_name_observations, validate_name_resolutions
+    from novel.stages.stage2.names import (
+        extend_name_surfaces, normalize_name_observations, validate_name_resolutions,
+    )
     core, core_errors = character_core_view(book, evidence=evidence)
     if core_errors:
         outcome.errors.extend(core_errors)
+        return outcome
+    core, surface_errors = extend_name_surfaces(core, names, evidence=evidence)
+    if surface_errors:
+        errors.extend(surface_errors)
         return outcome
     errors.extend(validate_name_resolutions(names.structure, core, evidence=evidence))
     errors.extend(f'名称同一性未决：{r.literal}；{r.reason}' for r in names.structure.resolutions
@@ -490,6 +496,12 @@ def _compile_source_truth(
 
     def _cite(refs: Iterable[str]) -> None:
         cited.update(refs)
+
+    # Names 补充面可能来自章观察未另引的称呼句；其正式证据与其它源证据
+    # 同样进入唯一 Blueprint 窗口，不让 Characters 的新引用在下游悬空。
+    for mentions in names.additional_surfaces.values():
+        for mention in mentions:
+            _cite(mention.source_refs)
 
     for atom in book.initial_state:
         _cite(atom.source_refs)
@@ -529,6 +541,10 @@ def _compile_source_truth(
     # ① Characters core（称谓窗口走 Resolver 唯一实现；书级闸已在 book owner 聚合）。
     core, core_errors = character_core_view(book, evidence=evidence)
     errors.extend(core_errors)
+    if core is None:
+        return outcome
+    core, surface_errors = extend_name_surfaces(core, names, evidence=evidence)
+    errors.extend(surface_errors)
     if core is None:
         return outcome
     # 唯一关联登记表（R1 v2）：与 run_associate 的 prompt／闭集核对同一投影——

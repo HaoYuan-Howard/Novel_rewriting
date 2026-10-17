@@ -22,9 +22,11 @@ from novel.stages.common import (
 )
 from novel.stages.stage4.book_ir import compile_writer_book_ir
 from novel.stages.stage4.compile import compile_execution_plan, compile_issue
-from novel.stages.stage4.design import inspect_body_design
+from novel.stages.stage4.design import _wire_shape_issues, inspect_body_design
 from novel.stages.stage4.design_paths import design_issue, wire_paths_of
-from novel.stages.stage4.grounding import derive_semantic_binding, required_releases
+from novel.stages.stage4.grounding import (
+    derive_semantic_binding, preserve_name_issues, required_releases,
+)
 from novel.stages.stage4.guard import run_mechanical_guard
 from novel.stages.stage4.hook import publish_graph
 from novel.stages.stage4.hook_context import compile_hook_context
@@ -86,7 +88,7 @@ class DesignInspection:
         typed 问题（规则码、稳定位置、可编辑 wire 路径），局部返修的定位与覆盖
         核对照常工作；``wire_paths`` 只在该根因**每一处**发射都可编辑时才给——
         混有不可定位发射面（如 compile 侧同码扫描）的任务不带路径，`locate`
-        据此退整份返修，不用局部修复静默丢掉没有编辑位置的那一处。
+        据此拒绝局部计划并按正式路由停止或走登记出口，不静默漏掉那一处。
 
         任务身份（规则码＋责任面＋受影响位置集合）即无进展判定的尺子：候选字节
         变化（换了内容仍在同一处失败）不算进展，问题集严格缩小是进展。
@@ -103,7 +105,7 @@ def _root_cause_tasks(errors: Sequence[str], *, summary: str = '') -> list[str]:
     """错误列表 → 按根因聚合的任务 carrier（保序；同一根因的多处命中合成一个）。
 
     typed 问题（规则码＋责任面）分组；``wire_paths`` 只在该根因每一处发射都可
-    编辑时才给（混有不可定位发射面的任务不带路径，locate 据此退整份返修）。
+    编辑时才给（混有不可定位发射面时不签发局部计划，由正式路由处置）。
     存量字符串与材料归因消息按身份分组，身份与无进展判定同一把尺。``summary``
     （预检摘要）附在首个任务上——未运行信息随实际问题展示，不单独计数。
     """
@@ -123,12 +125,23 @@ def _root_cause_tasks(errors: Sequence[str], *, summary: str = '') -> list[str]:
         where = '、'.join(_location_text(loc) for loc in locations)
         message = (f'任务 {code}（{owner}）{len(members)} 处：{first}；'
                    f'受影响位置：{where}')
+        context = {'root_cause': code,
+                   'affected_locations': [list(loc) for loc in locations],
+                   'wire_paths': [list(p) for p in paths] if editable else []}
+        # 展示任务可以聚合；规划仍需要每处错误的类型、原位置和必要替换能力。
+        # 不能只留下第一处文案，否则同码的 extra/missing/union 再次被混成一条路径。
+        shapes = [dict(entry) for member in members
+                  for entry in member.context.get('shape_errors', ())]
+        if shapes:
+            context['shape_errors'] = shapes
+        member_contexts = [{key: value for key, value in member.context.items()
+                            if key not in ('wire_paths', 'shape_errors')}
+                           for member in members]
+        if any(member_contexts):
+            context['member_contexts'] = member_contexts
         tasks.append(ValidationIssue(
             message, code=code, location=tuple(sorted(locations, key=repr)),
-            owner=owner, scope=scope,
-            context={'root_cause': code,
-                     'affected_locations': [list(loc) for loc in locations],
-                     'wire_paths': [list(p) for p in paths] if editable else []}))
+            owner=owner, scope=scope, context=context))
     legacy_groups: dict[str, list[str]] = {}
     for error in legacy:
         legacy_groups.setdefault(validation_identity(error), []).append(error)
@@ -195,10 +208,9 @@ def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, ch
     不修改输入、不落盘、不调用模型。形状无法解析或条目引用不可解析时跳过
     该条——对应错误已由结构判据报告。
     """
-    from contracts.schema.state import WithheldNameBinding
     from novel.core.name_materials import (
         FIRST_PERSON_ROLE_WORD, expand_surface_releases, withheld_name_bindings,
-        withheld_name_literals,
+        withheld_name_literals, material_name_permissions,
     )
     from novel.stages.common import (
         MaterialPart, MaterialSource, material_identities, positive_material_issues,
@@ -233,10 +245,7 @@ def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, ch
         entry.model_copy(update={'display': display(entry.char_id)})
         for entry in projection.by_person)})
     withheld = withheld_name_literals(projection, released, structure)
-    bindings = tuple(
-        WithheldNameBinding(literal=literal, char_id=char_id, enclosing=enclosing)
-        for literal, char_id, enclosing
-        in withheld_name_bindings(withheld, structure, released))
+    bindings = withheld_name_bindings(structure, expanded)
 
     def project(text: str) -> str:
         projected, _hits = project_withheld_names(
@@ -262,37 +271,41 @@ def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, ch
         where_path[where] = ('opening_facts', k)
     for k, item in enumerate(parsed.materials):
         ref = item.beat_ref
-        beat = body.beat(ref['scene'], ref['beat']) if isinstance(ref, dict) else None
+        beat = body.beat(ref.scene, ref.beat)
         if beat is None:
             continue
         hidden = {index[h].delta.address() for h in item.withheld if h in index}
-        lines = [beat.event] if beat.event else []
-        for delta in beat.target_delta:
-            if delta.address() in hidden or delta.op != 'set':
-                continue
-            try:
-                lines.append(render_hook_fact_text(display_projection, delta.address(),
-                                                   delta, kp_statements))
-            except ValueError:
-                continue
         if item.presentation:
-            lines.append(item.presentation)
+            lines = [item.presentation]
+        else:
+            lines = [beat.event] if beat.event else []
+            for delta in beat.target_delta:
+                if delta.address() in hidden or delta.op != 'set':
+                    continue
+                try:
+                    lines.append(render_hook_fact_text(display_projection, delta.address(),
+                                                       delta, kp_statements))
+                except ValueError:
+                    continue
         where = f'hook/materials/{k}'
         parts[where] = MaterialPart(project('\n'.join(lines)), (
-            MaterialSource('hook', f"{ref.get('scene', '')}#{ref.get('beat', '')}",
+            MaterialSource('hook', f'{ref.scene}#{ref.beat}',
                            f'materials/{k}', '\n'.join(lines)),))
         where_path[where] = ('materials', k)
     if not parts:
         return []
     issues = positive_material_issues(
         parts, released=released, withheld=withheld,
-        internal_ids=material_identities(body, binding, chars))
+        internal_ids=material_identities(body, binding, chars),
+        name_permissions=material_name_permissions(
+            expanded, {cid: display(cid) for cid in set(faces_of) | focalizers}))
     errors = []
     for issue in issues:
         path = where_path.get(issue.where)
         if path is None:
             continue
-        code = ('hook_design_material_exposure' if issue.code == 'positive_material_leak'
+        code = ('hook_design_material_exposure' if issue.code in
+                {'positive_material_leak', 'name_text_reference'}
                 else 'hook_design_internal_exposure')
         errors.append(design_issue(
             f'（材料预检）{issue.message}', code=code, location=path, paths=(path,)))
@@ -315,6 +328,9 @@ def inspect_design_candidate(wire, *, checkpoint, brief, obligations, chars,
                              for cid, c in chars.characters.items()},
         brief=brief, obligations=obligations, characters=chars.core_view())
     checks = [PreflightCheck('design', 'failed' if errors else 'passed')]
+    preserve_errors = preserve_name_issues(checkpoint, chars)
+    errors = list(preserve_errors) + errors
+    checks.append(PreflightCheck('preserve_input', 'failed' if preserve_errors else 'passed'))
     binding = None
     # placements与事实锁标注只接受现役wire；即使Design构造失败也独立检查标注形状。
     placements, marks, placement_errors = _design_wire_projections(wire, brief)
@@ -364,14 +380,23 @@ def inspect_design_candidate(wire, *, checkpoint, brief, obligations, chars,
                           and str(error.location[1]) in coverage_missing)]
     # 相同正式引用/目标时序在 Design 与免费 compile 同验；候选入口保留 Design
     # 的真实编辑位置，去掉同码同位置的 compile 回声。独立正式重编译仍完整报错。
-    echoed_codes = {'design_detail_ref', 'series_summary_early', 'series_summary_unbound'}
+    echoed_codes = {
+        'design_detail_ref', 'series_summary_early', 'series_summary_unbound',
+        'design_confirm_unestablished', 'design_read_anchor',
+        'design_read_unestablished', 'design_read_unknown',
+    }
     design_roots = {(error.code, tuple(error.location)) for error in errors
                     if isinstance(error, ValidationIssue) and error.owner == 'design'
                     and error.code in echoed_codes}
     errors = [error for error in errors
               if not (isinstance(error, ValidationIssue) and error.owner == 'compile'
                       and (error.code, tuple(error.location)) in design_roots)]
-    return DesignInspection(body, binding, tuple(dict.fromkeys(errors)), materials,
+    # ValidationIssue 是 str carrier；相同措辞可能位于不同字段。按结构身份去重，
+    # 否则同一候选的第二个错误被遮住，局部返修只能逐轮发现另一个位置。
+    distinct_errors: dict[str, str] = {}
+    for error in errors:
+        distinct_errors.setdefault(validation_identity(error), error)
+    return DesignInspection(body, binding, tuple(distinct_errors.values()), materials,
                             tuple(checks), projections)
 
 
@@ -389,9 +414,7 @@ def _design_wire_projections(wire, brief) -> tuple[dict | None, tuple, list[str]
         return None, (), [design_issue(str(exc), code='design_wire_expand',
                                       location=exc.path, paths=(exc.path,))]
     except ValidationError as exc:
-        return None, (), [design_issue(
-            f'design 瘦 wire 协议校验失败：{exc}',
-            code='design_wire_shape', location=('wire_shape',))]
+        return None, (), _wire_shape_issues(exc, 'design 瘦 wire 协议校验失败', wire=wire)
     return design_placements(model), design_fact_marks(model), []
 
 

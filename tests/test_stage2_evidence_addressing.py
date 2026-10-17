@@ -272,7 +272,11 @@ def test_rc29_full_answer_in_patch_round_is_accepted_as_full_revision(tmp_path):
                                 character_slugs=['fu_jun']))
     assert '【条目返修】' in transport.calls[1].user
     assert data == full and len(transport.calls) == 2
-    assert not answer.cached and answer.content == json.dumps(full, ensure_ascii=False)
+    from novel.llm.paid_requests import PatchedAnswer
+    assert isinstance(answer, PatchedAnswer), '整份答仍按冻结范围应用，不绕过计划'
+    assert not answer.patches[-1].cached
+    assert answer.patches[-1].content == json.dumps(full, ensure_ascii=False)
+    assert len(answer.adoption_refs) == 2, '基底与本轮完整回答均保留耐久来源'
 
 
 # ── 2026-10-07 词汇漂移闸：prompt 字段清单与瘦 wire schema 逐名相等 ─────────

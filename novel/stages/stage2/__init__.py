@@ -51,9 +51,9 @@ from novel.stages.stage2.compile import (
 )
 from novel.stages.stage2.names import (
     NAMES_INPUT_VERSION, NameVariantCandidate, normalize_name_observations,
-    validate_name_resolutions, ProbeFinding, compile_name_structure,
+    validate_name_resolutions, ProbeFinding, compile_name_structure, compile_names_observation,
     compile_name_variants, derive_surface_forms, merge_name_structure,
-    name_variant_candidates, name_variants_prompt, names_evidence_view,
+    name_variant_candidates, name_variants_prompt, names_evidence_view, extend_name_surfaces,
     names_patch_locate, surname_construction_probe,
 )
 from novel.stages.stage2.resolver import (
@@ -78,7 +78,8 @@ __all__ = [
     'character_core_view',
     'compile_associate_observation', 'compile_cross_cause',
     'chapter_patch_locate', 'compile_book_observation', 'compile_chapter_observation', 'chapter_loop_issues',
-    'compile_name_structure', 'compile_source_truth', 'inspect_identity_associations', 'evidence_metrics',
+    'compile_name_structure', 'compile_names_observation', 'extend_name_surfaces',
+    'compile_source_truth', 'inspect_identity_associations', 'evidence_metrics',
     'normalize_name_observations', 'validate_name_resolutions',
     'initial_snapshot', 'near_synonym_pair',
     'compile_name_variants', 'derive_surface_forms', 'merge_name_structure',

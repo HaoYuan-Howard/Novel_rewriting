@@ -139,7 +139,7 @@ def _blueprint() -> BlueprintsArtifactV17:
 
 
 def _preserve_wire() -> dict:
-    return {'protocol_version': 'stage4-preserve-v5', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v6', 'obligations': [
         {'kind': 'event_core', 'statement': '芸娘从起疑到证实同一件事',
          'anchors': ['b01_01.c1', 'b01_02.c1'],
          'must_preserve': True, 'satisfaction': '怀疑渐进到证实',
@@ -753,7 +753,7 @@ def _a5_wires():
 
     wires = deepcopy(looped_full_chain_wires())
     wires['preserve'] = {
-        'protocol_version': 'stage4-preserve-v5',
+        'protocol_version': 'stage4-preserve-v6',
         'obligations': [
             {'kind': 'event_core', 'statement': '苏芸娘嫁入陆家且夫君立下旧约',
              'anchors': ['b01_01.e1'], 'must_preserve': True,
@@ -765,6 +765,10 @@ def _a5_wires():
     # design wire（v6）：ob01 支撑 b01＋接受 b02；ob02 接受 b01（绿基座）。
     wires['design']['scenes'][0]['beats'][0]['real'] = ['ob01']
     wires['design']['scenes'][0]['beats'][1]['real'] = ['ob01']
+    from tests.factories import declared_stage4_text
+    for obligation in wires['preserve']['obligations']:
+        for field in ('statement', 'satisfaction'):
+            obligation[field] = declared_stage4_text(obligation[field])
     return wires
 
 
@@ -878,7 +882,7 @@ def test_preserve_model_validation_error_feeds_revision_not_crash():
               'anchors': ['b01_01.e1']}
     try:
         checkpoint, errors = assemble_preserve(
-            {'protocol_version': 'stage4-preserve-v5',
+            {'protocol_version': 'stage4-preserve-v6',
              'obligations': [entry, entry2],
              'series': [{'members': [1, 2], 'mechanism': None},
                         {'members': [1, 2], 'mechanism': None}]},  # 全员双 series

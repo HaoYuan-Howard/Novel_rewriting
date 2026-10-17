@@ -58,8 +58,14 @@ def _build_root(tmp_path, *, designs=None, through_design=True):
     chapters = _chapters()
     wires = _full_chain_wires()
     if designs is None:
-        bad, good = deepcopy(wires['design']), deepcopy(wires['design'])
+        bad = deepcopy(wires['design'])
         _bad_design(bad)
+        # _bad_design 还在第2场加入合法的后置称谓释放，作为未泄漏对照。
+        # 本用例的二轮恢复只授权修正第1场的两拍 ev；完整回答也须保持其它
+        # 条目原样，不能顺带恢复成原 good 并删去未授权的第2场 release。
+        good = deepcopy(bad)
+        for beat_i in (0, 1):
+            good['scenes'][0]['beats'][beat_i]['ev'] = wires['design']['scenes'][0]['beats'][beat_i]['ev']
         designs = [bad, good]
     transport = _DesignSequence(wires, designs)
     repo, session, _ = _make_session(tmp_path, wires, transport=transport)
@@ -142,9 +148,9 @@ def test_replay_reads_purchased_design_rounds_against_current_inputs(tmp_path):
     design = report['owners']['design']
     assert design['status'] == 'ran' and design['node'] == 'str06.stage4.body_design'
     first, second = design['rounds']
-    # 首轮：整份回答，称谓泄漏被当前验收拒绝；记录与重放同为未通过
+    # 首轮：整份回答，候选指称未声明被当前验收拒绝；未知不冒充确定泄漏。
     assert (first['shape'], first['replay']['passed'], first['replay']['reuse']) == ('full', False, 'failed')
-    assert first['replay']['codes'].get('positive_material_leak', 0) >= 2
+    assert first['replay']['codes'].get('name_text_unclassified', 0) >= 2
     assert first['recorded'] == {'accepted': False, 'parse': 'failed', 'errors': first['recorded']['errors']}
     # CS-H H2 起接受记录里的错误按根因聚合成任务（同一规则码的多处命中＝一个任务，附受
     # 影响位置）：重放按条数计的两处泄漏，在记录里是一条任务——记录数＝根因数。
@@ -161,6 +167,28 @@ def test_replay_reads_purchased_design_rounds_against_current_inputs(tmp_path):
     # 重放用的章数组／预算／篇幅带与原运行身份吻合（run_workflow 记的 input_sha256）
     assert report['inputs']['input_identity'] == 'match'
     assert report['inputs']['chapter_count'] == 2
+
+
+def test_replay_retains_a_scope_rejected_full_answer_and_its_later_authorized_round(tmp_path):
+    """范围外改动被接受闸拒绝时，读数器仍保留已购轮，不把语义绿等同当时采用。"""
+    good = deepcopy(_full_chain_wires()['design'])
+    bad = deepcopy(good)
+    _bad_design(bad)
+    assert bad['scenes'][1]['beats'][0]['release'] and 'release' not in good['scenes'][1]['beats'][0]
+    # 第二答修好两拍，同时越权删除后场合法 release；第三答在正式整份修订
+    # 请求下返回同一份 good 才可采用。不能为维持二轮口径放宽局部编辑权限。
+    base, _, _ = _build_root(tmp_path, designs=[bad, good])
+    design = rc.replay(base, SID)['owners']['design']
+    first, rejected, accepted = design['rounds']
+    assert [row['ordinal'] for row in design['rounds']] == [1, 2, 3]
+    assert [row['recorded']['accepted'] for row in design['rounds']] == [False, False, True]
+    assert first['replay']['reuse'] == 'failed'
+    assert rejected['recorded']['parse'] == 'failed' and rejected['recorded']['errors'] == 1
+    assert rejected['replay']['passed'] and rejected['replay']['reuse'] == 'green', \
+        '当前语义预检与当时范围验收是两份读数，不能相互覆盖'
+    assert accepted['recorded']['accepted'] and accepted['replay']['reuse'] == 'green'
+    assert design['summary']['green'] == [2, 3] and design['summary']['failed'] == [1]
+    assert design['summary']['usage']['completion_tokens'] == 666, '被拒的付费回答也保留在成本分母'
 
 
 def test_replay_never_writes_the_root(tmp_path):

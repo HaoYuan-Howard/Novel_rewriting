@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from novel.llm.transport import ChatResponse
 from tests.test_str06_body import _RoutingTransport
-from tests.test_str06_hook import _full_chain_wires
+from tests.test_str06_hook import _declared_prose, _full_chain_wires
 
 
 # 只用当前章已释放的称谓，不碰未释放专名或场景标记。
@@ -43,7 +43,7 @@ class _EntryTransport(_RoutingTransport):
         if owner.startswith('body_ch'):
             self.calls.append(owner)
             text = GOOD_CH01 if owner.endswith('ch01') else GOOD_CH02
-            return ChatResponse(content=text, finish_reason='stop',
+            return ChatResponse(content=_declared_prose(text), finish_reason='stop',
                                 usage={'prompt_tokens': 100, 'completion_tokens': 40},
                                 model='fake')
         return super().send(request)
@@ -55,4 +55,5 @@ def _make_entry_transport(fault: str | None = None):
     from tests.str06_faults import FaultTransport, looped_full_chain_wires
 
     return FaultTransport(looped_full_chain_wires(), fault=fault, fault_once=True,
-                          body_texts={'ch01': GOOD_CH01, 'ch02': GOOD_CH02})
+                          body_texts={'ch01': _declared_prose(GOOD_CH01),
+                                      'ch02': _declared_prose(GOOD_CH02)})

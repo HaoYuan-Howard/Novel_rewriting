@@ -20,7 +20,7 @@
 |---|---|---|
 | `scripts/export_backend_types.py` | 生成 `web/src/types/backend.generated.ts`（`--check`） | `tests/test_api_enums.py` 对账守卫 |
 | `calibrate_style_corpus.py` | 0 成本新链 Stage5 正文风格基线复算（`stage5/body/chNN.txt` vs 源文） | `tests/test_style_calibration.py` |
-| `book_overlap.py` | 成书与源文逐章 20 字重叠读数（回映射走新链 compile 替换表） | `tests/test_book_overlap.py` |
+| `book_overlap.py` | 用当前正文回执按身份正向重放成书，再量改名前正文与源文逐章 20 字重叠；缺证据不量 | `tests/test_book_overlap.py` |
 | `derive_schema.py` | 从盘上产物反推观察 schema（新链坐标；观察 ≠ 契约） | `docs/schema/_README.md` |
 | `probe_nonbody_word.py` | NONBODY_KINDS 增词前的门槛探针 | `docs/BACKEND_CONTRACT.md` |
 | `canary_chapters.py` | B6-A canary 选章（只读 sealed WriterBookIR；逐章计分＋三章＋下一条命令） | `tests/test_canary_chapters.py`、`docs/schema/str06.md` |

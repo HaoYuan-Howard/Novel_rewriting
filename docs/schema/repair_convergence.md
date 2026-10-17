@@ -24,7 +24,7 @@ Gherkin 使用 [Cucumber 官方语法](https://cucumber.io/docs/gherkin/referenc
 | 同上 | RC-37／39 | **仅结构层已实现**：结构检查只报引用与模式的实际结果，语义对应未运行即保持unver；局部语义核验已随CS-F3离线标定封口（2026-10-05：判官不可启用，生产语义维持unver，重开条件见DECISIONS同日行） |
 | 同上 | RC-40～43 | 已实现Writer路径（2026-10-04，IR rc16／renderer v10）：只投影已证明唯一绑定人物的完整登记称谓，短姓／未登记表达不猜人物，留痕可观测，Design自有文本冲突不由compiler代选；`tests/test_str06_name_projection.py`、`tests/test_str06_material_repair.py`（归因仍按原字段）、`tests/test_str06_r10b_writer_packet.py`。**Hook材料投影已随 rc16（2026-10-05）落地**：释放面由 Hook Design 自选，`compile_hook_context` 按本场释放算好 `HookContext.withheld_bindings`，`render_hook_context` 在正向材料行与禁区行做同一确定性投影（上下文字段与来源文本不改，条目返修归因仍按原字段），留痕 `hook_name_projections`——对齐 `docs/BACKEND_CONTRACT.md` R-6.2 的「Hook 同尺投影」；新称谓创作不在本批，RC-42只证拒绝未登记别名 |
 | 同上 | RC-44～45 | `tests/test_str06_candidate_preflight.py`：同一候选聚合自身及继承材料问题，真实接受入口上游优先且失败不发布，免费恢复与已有Hook复验，依赖缺失明确未运行；验证记录见提交`edf965d7`说明及重置前（`eb5f0d5a`）的REQUIREMENTS |
-| 同上 | RC-47 | 已实现（2026-10-04；2026-10-05 CS-F1 收口）：Design错误在判定处带wire路径，最小完整父项／耦合字段合并／替换不重叠，合并后重跑完整预检，无法定位退整份；读取闭合→read行、确认闭合→初始行／know行（带结构化位置的判据在`read_closure`），Hook判据错误（材料、起笔事实、称谓释放、位置引用，含禁止揭示×材料的双侧路径）同约定接条目返修——Hook与Design共用`design_paths`的构造约定与定位器；`tests/test_str06_design_patch.py`（定位策略纯函数＋真实`patches`回答的stage用例，含读取闭合read行返修与Hook材料条目返修）、`tests/test_str06_product_entry.py`（真实子进程）。仍整份修订：全局覆盖闸与无路径错误类（缺省标注的责任拍须模型选择，不可条目定位） |
+| 同上 | RC-47 | 已实现（2026-10-04；2026-10-05 CS-F1 收口；2026-10-17 契约驱动规划）：Design错误在判定处带wire证据路径，结构错误保留逐项类型与schema，替换范围由schema与owner语义边界共同确定；合并后重跑完整预检。读取闭合→read行、确认闭合→初始行／know行（判据在`read_closure`带结构化位置）；Hook判据错误（材料、起笔事实、称谓释放、位置引用，含禁止揭示×材料的双侧路径）同约定接条目返修。Design／Hook共用`design_paths`；无法定位按RC-59停机，不自动整份重生，漏标责任拍走可选目标闭集。`tests/test_str06_design_patch.py`覆盖真实`patches`回答、整场读取修复、完整预检及免费重放，`tests/test_str06_patch_routes.py`覆盖真实形状错误与修复路由 |
 | 同上 | RC-46／48／49 | 责任归因的语义面、版本恢复和分项成本验收；目标行为，未绑定绿证据前不得宣称实现 |
 | 同上 | RC-50～56 | CS-H（2026-10-05，目标行为）：已购候选免费沿用与候选集合、记录如实、接受版本发布语义与三个中断恢复；见下方「CS-H」A 节，批次 H1 落地前不得宣称实现 |
 | 同上 | RC-57～59 | CS-H 窄返修协议：目标路径与可选目标闭集、整份出口闭集、无法定位即停、无进展按根因；批次 H2 落地前不得宣称实现 |
@@ -134,7 +134,7 @@ RC-19收口追加`test_rc19_three_digit_chapter_can_persist_and_resume_its_revis
 | I-15、I-21／RC-26 | 「。」后切分把收尾「」」切到下一段、问叹号收尾的自然段并段，标签悬在上一段下方；`novel/stages/chain.py::_segment_paragraphs` 一段一自然段，`novel/stages/stage2/resolver.py::render_evidence_block` 唯一渲染、段含换行即拒 | `test_rc26_each_paragraph_is_exactly_one_segment`、`test_rc26_requests_render_one_segment_per_line`（真实 book／chapters prompt 组装）、`test_rc26_multiline_segment_stops_before_request`；names 输入改为阅读序数组（`novel/stages/stage2/names.py::names_evidence_view`，input v2）由 `test_rc26_names_input_keeps_reading_order_past_99_paragraphs` 经真实 run_names 入口验证 |
 | I-21、R-2.18／RC-27（2026-10-07 指针化收口） | 模型被要求抄可由引文推导的段号／逐字引文，验收器已算出正确段与原文却让模型付费重抄；现为 `novel/stages/stage2/resolver.py::basis_quote`＋`novel/stages/stage2/chapters.py::_derive_basis_quotes`／`novel/stages/stage2/book.py::_derive_basis_quotes`（wire 只给段 id、引文＝段全文由代码切出），范围外→整拍、闭集外→该转移 | `test_chapter_basis_quote_is_derived_from_segment_text`、`test_basis_segment_outside_derived_interval_revises_whole_beat`、`test_basis_segment_absent_from_closed_set_revises_only_that_transfer`、`test_real_chain_publishes_derived_basis` 经真实 run_book／run_chapters 落盘 |
 | I-35／RC-28 | `["e11_29","e11_31","e11_34..e11_36"]` 数组内区间不展开（三人成行 ch11 停点）；曾由 slim 的 `_expand_src` 对组合闭合，CS-S 1a（2026-10-07）v8 起区间语法整体关闭——模型只写单段 `start`，区间由 `novel/stages/stage2/slim.py::derive_beat_intervals` 代码派生 | `test_v8_range_and_array_syntax_are_closed`（旧语法拒收）；区间纪律反例见 `tests/test_str06_chapter_slim.py`（数值序、首拍引子弃权、越界 start） |
-| I-35／RC-29 | patch 轮请求同时带原协议整份格式与 patch 格式，模型交整份被判形状失败并烧掉末轮（夫君不行 ch02）；`novel/llm/paid_requests.py::_answers_in_full` | `test_rc29_full_answer_in_patch_round_is_accepted_as_full_revision`：第二次调用即采纳，不多耗内容轮 |
+| I-35／RC-29 | patch 轮仍可收到整份回答；`novel/llm/paid_requests.py::accept_patch_answer` 先按冻结计划提取替换，并用 JSON 摘要证明范围外未变，再合并与完整验收；未提供子schema的 owner 同样不得绕过范围 | `test_rc29_full_answer_in_patch_round_is_accepted_as_full_revision`：第二次调用即采纳，不多耗内容轮，保留基底与本轮耐久引用 |
 
 红例记录 `.test_cache/evidence-addressing-red.xml`（10 例全红，原因分别是切分、
 渲染、缺渲染函数、只给引文的 basis 被拒、书级 wire 协议缺失、patch 轮多一次调用）。
@@ -280,10 +280,19 @@ Binding；compiler／validator均不在检查中落盘或改输入。
 规则停止；聚合报告保留全部独立问题，先处理造成输入失效的上游问题，不在旧
 输入上继续购买Design修订。上游修复后按新输入重建报告，不能消费旧诊断坐标。
 
-Design的局部修订接入已有patch接受机制。范围由当前wire路径和耦合字段决定：
-修改目标条目、锁绑定、释放位置时包含必要共同父项；无重叠替换，未涉及条目保持
-原内容。合并后重跑完整预检，禁止用局部通过替代整体验收。无法安全局部定位时
-显式扩大到最小完整父项；确需整份时保留原因，不能无声退化为每轮重写整书。
+Design的局部修订接入已有patch接受机制。故障证据路径、允许替换范围与只读上下文
+分离；schema决定可完成结构修复的对象，owner声明语义自洽所需边界。额外键的值
+无论是非空／空数组、对象、标量或null，都必须有删除键的权限；完整父对象替换通过
+省略该键完成删除。Design场内额外键统一授权整场，模型决定是否保留并调整原有语义，
+程序不搬字段。修改目标条目、锁绑定、释放位置时包含必要共同父项，替换不重叠。
+
+共享接受循环冻结同一计划中的基底摘要、目标路径、子schema与问题覆盖；依赖切片、
+返修请求、回答校验及合并均消费该计划。整场目标的材料闭合全部场内拍，未经授权的
+邻场不因此进入编辑范围；未涉及条目保持原内容。发请求前验证计划具备必要结构编辑
+能力，无法规划时报告工程错误停止。只有路由闭集登记的原因可整份修订。合并后重跑
+完整预检，禁止用局部通过替代整体验收，也不无声退化为每轮重写整书。
+Design依赖切片统一`stage4-design-patch-slice-v4`，`wire_protocol_version`保留候选的
+原始v9／v10／v11；派生切片升版不改变正式artifact／wire，也不重置预算或历史轮。
 沿用原修订上限、问题身份与循环停止；增大重试次数不是本批修复手段。
 
 ### E．版本、恢复和验收
@@ -510,10 +519,11 @@ anchors／quotes，Hook材料里的姓名在渲染期已投影（本根17次）�
 |---|---|
 | 覆盖 | 全部JSON节点都有条目定位器；跨节点回派与节点内返修同一协议，基底是owner已发布版本的修订对照wire。**已落地口径（H4，2026-10-06）**：定位器齐面——chapters（`chapter_patch_locate`，CS-patch）、Design／HookDesign（`locate_design_patches`）、Preserve（`locate_preserve_patches`）、associate（`associate_patch_locate`，配对条目）、book／names／naming（`book_patch_locate`／`names_patch_locate`／`naming_patch_locate`，与各自 compile 同源视图，不新增判据）；覆盖增删、构造期复检与协议字面量等**替换不了**的问题仍走整份出口，不静默漏项。**请求路径不重叠**：同一条目的父、子错误折叠到父条目（`novel/stages/common.py::group_located_errors`，book／names／naming 共用；chapters 的同名折叠在 `chapter_patch_locate`）；associate 的多句柄位置（同章／因果／续场的两端）只命中**同时含全部句柄**的那一行，未知句柄按所在字段定位，协议校验错误按 `loc` 的条目下标直达 |
 | 目标 | 固定路径；或**可选目标**：责任位置须由模型决定时（必保义务漏标、新增义务、需选释放位置），给出候选拍闭集，回答的路径必须落在闭集内（RC-58） |
-| 输入 | 协议规则＋失败条目＋依赖切片＋合法取值；切片只带必要的事实与状态，不带整份原请求，也不带前序材料全文 |
-| 输出与应用 | 复核目标与错误定位目标合成后，`novel/llm/paid_requests.py::normalize_patch_targets` 在依赖切片前再次收口祖孙／重复路径：只折叠已有授权父项，合并全部问题，任一必选则父项必选。只返回目标路径的替换；范围外改动拒绝；核对基底候选摘要；合并后跑完整验收，无关条目字节不变 |
+| 输入 | 协议规则＋失败条目＋依赖切片＋合法取值。故障证据、替换范围与只读上下文分离，目标子schema与实际生成契约同源；切片闭合完整替换单元（整场须遍历其全部拍）的必要事实、状态与前缀，不带整份原请求，也不带前序材料全文 |
+| 输出与应用 | 复核目标与错误定位目标合成后，`novel/llm/paid_requests.py::normalize_patch_targets` 在依赖切片前再次收口祖孙／重复路径：只折叠已有授权父项，合并全部问题，任一必选则父项必选。冻结基底摘要、全部目标及目标子schema为同一计划，用于依赖切片、请求、回答校验与合并。只返回目标路径的完整替换，省略非法键可删除该键；范围外改动拒绝；合并后跑完整验收，无关条目字节不变 |
 | 反馈 | 按根因聚合成任务并附受影响位置 |
 | 无法定位 | 视为判据缺路径的工程缺陷：停并报规则码，不进整份重生；契约测试保证每个现役规则码或可定位、或有可选目标、或登记在整份闭集（RC-59）。**H2 裁定（第四态）**：Guard M1–M8 与 compile 依赖码落在确定性免费节点（`str06.stage4.compile`）的复跑面上，没有 Design wire 编辑位置——登记第四种处置 `stop`（按所在面正式路由回派或停机报码），不把它们塞进整份闭集冒充可修复；路由表与判据一一对应，`tests/test_str06_patch_routes.py` 双向核对码集合并静态验证每个 locate 码的发射点带 wire 路径。裁定全文见 `docs/DECISIONS.md` CS-H H2 行 |
+| 结构可修复性（2026-10-17） | 逐项保留Pydantic错误类型、故障位置与所属schema，聚合展示不得丢弃这些证据；额外键替换完整父对象、缺字段替换能补齐字段的对象、数组约束替换完整数组、联合分支标签不作JSON键。Design场内额外键按owner政策升整场，程序不自动移动语义。发请求前核对目标合法且允许必要编辑；计划无效以`repair_plan_invalid`停止，零返修外发。坏稿值类型不参与权限选择 |
 | 整份出口（闭集） | JSON：回答无法解码或整体形状失败、协议字面量不符。文本：篇幅带、空回答、包装。局部称谓、单条义务、编译缺陷不得进入 |
 | 无进展 | 同一输入下同一根因仍在即无进展，候选字节变化不算进展；回派与重入不重置任何额度 |
 | 计量 | 输入、可见输出、推理token分列 |

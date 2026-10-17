@@ -42,6 +42,7 @@ from contracts.invariants import NODES, OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.workflow import candidate_node_owner
 from contracts.schema.hook import HookDesign
 from novel.errors import ArtifactUnreadable
+from novel.core.name_text import resolve_name_text
 from novel.stages.common import hook_organization_summary
 from novel.store import Str06Repository
 from novel.work_unit_usage import read_cost_snapshot
@@ -253,6 +254,35 @@ def blueprint_view(base: str | os.PathLike[str], candidate: str) -> Str06Bluepri
 
 # ─────────────────────────────── Stage4 面 ───────────────────────────────
 
+def _display_name_text(text: str, *, field: str) -> str:
+    """只在明确的监控文本叶子解码；机器引用和源证据不经过本函数。"""
+    decoded = resolve_name_text(text)
+    if decoded.errors:
+        codes = ', '.join(dict.fromkeys(issue.code for issue in decoded.errors))
+        raise ArtifactUnreadable(f'{field} 的身份文本语法损坏，显示不可读（{codes}）')
+    return decoded.text
+
+
+def _display_fields(value: dict, fields: tuple[str, ...], *, path: str) -> dict:
+    result = dict(value)
+    for field in fields:
+        if isinstance(result.get(field), str):
+            result[field] = _display_name_text(result[field], field=f'{path}.{field}')
+    return result
+
+
+def _display_design_beat(beat: dict, *, path: str) -> dict:
+    result = _display_fields(beat, ('event', 'delivery_hint'), path=path)
+    if 'target_delta' in beat:
+        result['target_delta'] = [
+            _display_fields(delta, ('value',), path=f'{path}.target_delta[{index}]')
+            for index, delta in enumerate(beat['target_delta'])]
+    if 'threads' in beat:
+        result['threads'] = [
+            _display_fields(thread, ('text', 'progress', 'resolution'), path=f'{path}.threads[{index}]')
+            for index, thread in enumerate(beat['threads'])]
+    return result
+
 def design_view(base: str | os.PathLike[str], candidate: str) -> Str06DesignView:
     """graph／binding：场景驱动与导演说明、章目的、Hook 正式选择与 Binding 条目。"""
     run = _run_dir(base, candidate)
@@ -263,15 +293,18 @@ def design_view(base: str | os.PathLike[str], candidate: str) -> Str06DesignView
         return Str06DesignView(present=False)
     scenes = tuple(
         Str06DesignSceneView(
-            scene_id=s['scene_id'], driver=dict(s['driver']),
-            realization_brief=s['realization_brief'],
-            pov=s['delivery']['pov'], voice=s['delivery']['voice'],
-            avoid=tuple(s['delivery'].get('avoid') or ()),
-            beats=tuple(s['beats']))
+            scene_id=s['scene_id'], driver=_display_fields(s['driver'],
+                ('immediate_want', 'opposition', 'turn'), path=f'{s["scene_id"]}.driver'),
+            realization_brief=_display_name_text(s['realization_brief'], field=f'{s["scene_id"]}.realization_brief'),
+            pov=s['delivery']['pov'], voice=_display_name_text(s['delivery']['voice'], field=f'{s["scene_id"]}.delivery.voice'),
+            avoid=tuple(_display_name_text(text, field=f'{s["scene_id"]}.delivery.avoid[{index}]')
+                        for index, text in enumerate(s['delivery'].get('avoid') or ())),
+            beats=tuple(_display_design_beat(beat, path=f'{s["scene_id"]}#{beat["beat_id"]}')
+                        for beat in s['beats']))
         for s in graph.get('scenes') or ())
     chapters = tuple(
         Str06DesignChapterView(chapter_ordinal=c['chapter_ordinal'],
-                               purpose=c['purpose'],
+                               purpose=_display_name_text(c['purpose'], field=f'chapter:{c["chapter_ordinal"]}.purpose'),
                                scene_ids=tuple(c['scene_ids']))
         for c in graph.get('chapters') or ())
     hook_payload = graph.get('hook')
@@ -289,7 +322,7 @@ def design_view(base: str | os.PathLike[str], candidate: str) -> Str06DesignView
             materials=tuple(m['beat_ref'] for m in hook_payload['materials']),
             concealed=tuple(hook_payload.get('concealed') or ()),
             forbidden_reveals=len(hook_payload.get('forbidden_reveals') or ()),
-            design_brief=brief)
+            design_brief=_display_name_text(brief, field='hook.design_brief'))
     binding_payload = _inspect(run, 'stage4/grounding/semantic_binding.json')
     binding = (Str06DesignBindingView(
         obligations=len(binding_payload.get('obligations') or ()),
@@ -312,11 +345,14 @@ def ir_nav_view(base: str | os.PathLike[str], candidate: str) -> Str06IrNavView:
     brief = payload.get('book_brief') or {}
     chapters = tuple(
         Str06IrChapterView(
-            chapter_ordinal=nav['chapter_ordinal'], purpose=nav['purpose'],
+            chapter_ordinal=nav['chapter_ordinal'], purpose=_display_name_text(
+                nav['purpose'], field=f'ir.chapter:{nav["chapter_ordinal"]}.purpose'),
             length_budget=next(c['length_budget'] for c in payload['chapters']
                                if c['chapter_ordinal'] == nav['chapter_ordinal']),
             scene_ids=tuple(nav['scene_ids']),
-            scene_lines=tuple(nav['scene_lines']))
+            scene_lines=tuple(_display_name_text(text,
+                field=f'ir.chapter:{nav["chapter_ordinal"]}.scene_lines[{index}]')
+                for index, text in enumerate(nav['scene_lines'])))
         for nav in brief.get('chapters') or ())
     return Str06IrNavView(
         present=True, book_title=brief.get('book_title') or '',

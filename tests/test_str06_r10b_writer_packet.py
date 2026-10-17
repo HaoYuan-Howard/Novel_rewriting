@@ -518,7 +518,7 @@ def test_consumption_closure_ignores_hook_selection():
                             'followup_refs': ['sc02#b02']},
         local_focus='通过观察与即时反应呈现疑心。')
     graph = PresentationGraph.model_validate({
-        **body.model_dump(mode='json'), 'contract_version': 'str06-rc23',
+        **body.model_dump(mode='json'), 'contract_version': 'str06-rc25',
         'hook': hook.model_dump(mode='json')})
     closure = consumption_closure(graph)
     assert closure == consumption_closure(body)

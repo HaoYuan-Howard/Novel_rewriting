@@ -186,7 +186,7 @@ def _names_observation(book):
         evidence=EVIDENCE)
     assert structure is not None and not errors, errors
     return NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL,
-                            structure=structure)
+                            structure=structure, additional_surfaces={})
 
 
 def _full_stage2_wires() -> dict:
@@ -355,7 +355,7 @@ def test_same_name_two_persons_stay_separate(tmp_path):
         'fu_jun_jr': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e03_01']}]}})
     wires['names']['people']['fu_jun_jr'] = {
-        'family_id': 'f_lu', 'given': None, 'aliases': []}
+        'family_id': 'f_lu', 'given': None, 'aliases': [], 'additional_surfaces': []}
     repo, _ask, _report = _run_stage2(tmp_path, 'two_persons', wires)
     chars = repo.inspect('stage2/characters/characters.json')
     assert set(chars['characters']) == {'fu_jun', 'fu_jun_jr', 'yun_niang'}
@@ -830,7 +830,7 @@ def test_first_appearance_gate_stops_as_typed_mechanical_defect(tmp_path):
             {'surface': '陆家', 'source_refs': ['e03_02']}]}})
     wires['names']['people']['late_kid'] = {
         'family_id': 'f_lu', 'given': None, 'aliases': [],
-        'surface_forms': {'陆家': '{family}家'}}
+        'additional_surfaces': []}
     wires['ch01']['beats'][0]['participants'] = ['fu_jun', 'late_kid']
     with pytest.raises(MechanicalDefectStop,
                        match='participant_before_first_appearance\\[late_kid@ch01\\]'):
@@ -895,7 +895,7 @@ def test_loop_pairing_conflict_is_rejected_before_acceptance_and_publication(kin
         evidence=EVIDENCE)
     assert structure is not None and not struct_errors, struct_errors
     names = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL,
-                             structure=structure)
+                             structure=structure, additional_surfaces={})
     space = project_association_space(book, chapters)
     before = deepcopy(bad)
     observation, errors = compile_associate_observation(bad['associate'], space)
@@ -1216,15 +1216,15 @@ def test_stage4_reads_only_canonical(tmp_path, synonymous):
                                   blueprints=blueprint.model_dump(mode='json'))
     assert '夫君' in preserve_prompt and '床底' in preserve_prompt
     # Design 的身份投影来自 Characters core（不含名称结构变更面）。
-    brief, identities = project_brief(
-        __import__('novel.stages.stage4.grounding', fromlist=['assemble_preserve'])
-        .assemble_preserve(
-            {'protocol_version': 'stage4-preserve-v5', 'obligations': [
+    checkpoint, errors = __import__('novel.stages.stage4.grounding', fromlist=['assemble_preserve']).assemble_preserve(
+            {'protocol_version': 'stage4-preserve-v6', 'obligations': [
                 {'kind': 'event_core',
-                 'statement': '夫君藏身床底',
+                 'statement': '[[name:fu_jun|夫君]]藏身床底',
                  'anchors': ['b01_01.e1'],
                  'must_preserve': True, 'satisfaction': '呈现藏身', 'requires': []}]},
             policy_id='p', policy_version=3, characters=core, blueprint=blueprint,
-            provider='fake', model='fake', request_sha256='r' * 64)[0], core, blueprint)
+            provider='fake', model='fake', request_sha256='r' * 64)
+    assert checkpoint is not None and not errors, errors
+    brief, identities = project_brief(checkpoint, core, blueprint)
     assert identities and all(i.char_id in {'fu_jun', 'yun_niang'} for i in identities)
     assert DESIGN_RULES  # 规则面常量在位（生产 prompt 由 run_body_design 组装）

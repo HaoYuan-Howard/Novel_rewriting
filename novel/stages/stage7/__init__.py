@@ -19,15 +19,16 @@ from novel.stages.stage7.assembly import (
     chapter_access, delivery_identity, verify_chapter_receipts,
 )
 from novel.stages.stage7.naming import (
-    NAMING_VALIDATOR_VERSION, apply_names, check_residual, compile_name_map,
-    compile_surface_replacements, diff_proof, naming_patch_locate,
+    NAMING_VALIDATOR_VERSION, apply_bound_names, compile_name_map,
+    compile_bound_replacements,
+    diff_proof, naming_patch_locate,
     naming_projection,
 )
 
 __all__ = [
-    'BodyAccess', 'DeliveryOutcome', 'NAMING_VALIDATOR_VERSION', 'apply_names',
+    'BodyAccess', 'DeliveryOutcome', 'NAMING_VALIDATOR_VERSION', 'apply_bound_names',
     'assemble_delivery', 'build_delivery_manifest', 'chapter_access',
-    'check_residual', 'compile_name_map', 'compile_surface_replacements',
+    'compile_bound_replacements', 'compile_name_map',
     'delivery_identity', 'diff_proof', 'naming_patch_locate', 'naming_projection',
     'verify_chapter_receipts',
 ]

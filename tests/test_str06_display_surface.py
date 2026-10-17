@@ -175,7 +175,7 @@ def test_first_person_focalizer_uses_the_role_word_in_the_packet():
 
 def test_apposition_folds_instead_of_doubling():
     """同位语折叠：「表弟裴书远」投影为「表弟」，不输出「表弟表弟」。"""
-    bindings = (WithheldNameBinding(literal='裴书远', char_id='cousin'),)
+    bindings = (WithheldNameBinding(literal='裴书远', char_id='cousin', unmarked_unique=True),)
     text, hits = project_withheld_names(
         '表弟裴书远进门', bindings=bindings, display={'cousin': '表弟'})
     assert text == '表弟进门'
@@ -193,7 +193,7 @@ def test_apposition_folds_instead_of_doubling():
 
 def test_bare_surname_is_never_projected():
     """裸姓不投影：短姓／家族构词不在绑定表内，保持原样留给字面检查。"""
-    bindings = (WithheldNameBinding(literal='陆大哥', char_id='fu_jun'),)
+    bindings = (WithheldNameBinding(literal='陆大哥', char_id='fu_jun', unmarked_unique=True),)
     text, hits = project_withheld_names(
         '陆与陆家同在，陆大哥在门口。', bindings=bindings, display={'fu_jun': '夫君'})
     assert text == '陆与陆家同在，夫君在门口。'
@@ -205,8 +205,8 @@ def test_display_projection_preserves_mixed_forms_and_quotation_context():
     """姓名叙述与带名称呼同句出现时，只投影称谓，不删除行动或对白框架。"""
     text, hits = project_withheld_names(
         '陆大哥在外看房，娘子听见人说「陆兄不是外人」。',
-        bindings=(WithheldNameBinding(literal='陆大哥', char_id='fu_jun'),
-                  WithheldNameBinding(literal='陆兄', char_id='fu_jun')),
+        bindings=(WithheldNameBinding(literal='陆大哥', char_id='fu_jun', unmarked_unique=True),
+                  WithheldNameBinding(literal='陆兄', char_id='fu_jun', unmarked_unique=True)),
         display={'fu_jun': '夫君'})
     assert text == '夫君在外看房，娘子听见人说「夫君不是外人」。'
     assert [(h.literal, h.char_id, h.replacement) for h in hits] == [

@@ -1151,7 +1151,7 @@ class Str06BlueprintView(StrictModel):
 class Str06DesignSceneView(StrictModel):
     scene_id: str = Field(min_length=1)
     driver: dict[str, str]
-    realization_brief: str = Field(min_length=1, description='导演说明原样投影')
+    realization_brief: str = Field(min_length=1, description='导演说明的可读投影；仅解码身份标记，正式产物不改')
     pov: str = Field(min_length=1)
     voice: str = Field(min_length=1)
     avoid: tuple[str, ...] = ()

@@ -6,6 +6,7 @@ from typing import Iterable, Mapping
 from contracts.schema.source import (
     CharacterEntry, CharactersCore, NameProjection, NameStructure, render_form,
 )
+from contracts.schema.state import WithheldNameBinding
 
 #: 第一人称叙述的聚焦人物在材料里的角色词（CS-H H3，RC-60 显示面第 1 条）。
 FIRST_PERSON_ROLE_WORD = '我（叙述者）'
@@ -39,11 +40,22 @@ def withheld_name_literals(
     projection: NameProjection, released: Iterable[str],
     structure: NameStructure | None = None,
 ) -> tuple[str, ...]:
-    """正文与 Hook 共用专名字面及家族构词的禁用推导。"""
+    """只将登记称谓与家族构词列为释放守卫；构词部件仅作候选召回。"""
     names = set(projection.proper_literals) | family_form_literals(structure)
     for entry in projection.by_person:
         names.update(entry.name_bearing_surfaces)
     return tuple(sorted(names - set(released) - {''}))
+
+
+def name_candidate_literals(
+    projection: NameProjection, structure: NameStructure | None = None,
+) -> tuple[str, ...]:
+    """待语义声明的词法候选全集；本函数不宣布候选是否指人。"""
+    candidates = set(projection.proper_literals) | family_form_literals(structure)
+    for entry in projection.by_person:
+        candidates.update(entry.proper_literals)
+        candidates.update(entry.name_bearing_surfaces)
+    return tuple(sorted(candidates - {''}))
 
 
 def appellation_fallback(
@@ -109,18 +121,14 @@ def display_surface(
 
 
 def withheld_name_bindings(
-    withheld: Iterable[str], structure: NameStructure | None,
-    known: Iterable[str] = (),
-) -> tuple[tuple[str, str, tuple[str, ...]], ...]:
-    """禁用字面里**已证明唯一绑定某一人物**的完整登记称谓：``(字面, char_id, 包含它的更长称谓)``。
+    structure: NameStructure | None, released_names: Mapping[str, Iterable[str]],
+) -> tuple[WithheldNameBinding, ...]:
+    """按本人释放面派生尚未释放的登记个人姓名面；不从扁平许可反猜身份。
 
-    只收：该人物 Characters 的登记 surface 且含姓名部件（构词非 null）、全书只属于
-    这一人物、字面长度≥2、不是姓／家族构词本身（短姓与家族称呼指向不唯一）。
-    纯称谓（夫君、表弟…）不含姓名部件、本来就不在禁用面；未登记表达、多义字面、
-    短姓一律没有绑定——不据字符串相似性推断人物（I-20／I-21），原样保留给 owner
-    登记或改写。`withheld` 是本章实际禁用的字面集合（已扣除已释放称谓）；`known` 是
-    本章已知的其余称谓字面（已释放），与禁用字面一起预先算出「包含该字面的更长称谓」，
-    让渲染期投影不拆开它们。
+    显式 name 引用由 (char_id, literal) 查表，同形多人仍保留各自绑定。姓与家族
+    构词不投影成个人称谓，纯称谓（构词 null）也不在本表。裸文兼容还须有全书
+    唯一归属证明；证明统计全部个人登记面，包含其他人的纯称谓或已释放同形面。
+    这份确定性证据随绑定携带，渲染期不再读取 Characters。
     """
     if structure is None:
         return ()
@@ -131,14 +139,24 @@ def withheld_name_bindings(
             owners.setdefault(surface, set()).add(char_id)
     families = {f.literal for f in structure.families.values()}
     families |= family_form_literals(structure)
-    pool = set(withheld) | set(known)
-    bound: list[tuple[str, str, tuple[str, ...]]] = []
-    for literal in set(withheld):
-        who = owners.get(literal, set())
-        if len(literal) >= 2 and literal not in families and len(who) == 1:
-            char_id = next(iter(who))
-            if structure.people[char_id].surface_forms[literal] is None:
+    pool = set(owners) | families
+    bound: list[WithheldNameBinding] = []
+    for char_id, person in structure.people.items():
+        released = set(released_names.get(char_id, ()))
+        for literal, form in person.surface_forms.items():
+            if not literal or literal in released or literal in families or form is None:
                 continue
             enclosing = tuple(sorted(k for k in pool if k != literal and literal in k))
-            bound.append((literal, char_id, enclosing))
-    return tuple(sorted(bound))
+            bound.append(WithheldNameBinding(
+                literal=literal, char_id=char_id, enclosing=enclosing,
+                unmarked_unique=owners[literal] == {char_id}))
+    return tuple(sorted(bound, key=lambda b: (b.literal, b.char_id)))
+
+
+def material_name_permissions(
+    released_names: Mapping[str, Iterable[str]], display: Mapping[str, str],
+) -> dict[str, tuple[str, ...]]:
+    """材料引用许可＝本人释放面＋本人的确定性显示面；不授予未释放家族构词。"""
+    return {cid: tuple(dict.fromkeys((*released_names.get(cid, ()), *([face] if face else []))))
+            for cid in set(released_names) | set(display)
+            if (face := display.get(cid, '')) or released_names.get(cid)}

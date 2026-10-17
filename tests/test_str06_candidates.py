@@ -604,8 +604,12 @@ def test_mention_count_changes_reach_real_design_reuse_consumer(
     assert '夫君' in original
 
     def change_statement(name):
+        # fixture 的 name 参数表示多次人物提及；每次单独声明，不能把“夫君夫君”
+        # 塞进单个登记 surface。保持次数的别称替换应保留各次身份。
+        import re
+        mentions = re.sub(r'夫君|陆大哥', lambda match: f'[[name:fu_jun|{match.group()}]]', name)
         return lambda cp: cp.model_copy(update={'obligations': tuple(
-            o.model_copy(update={'statement': original.replace('夫君', name, 1)})
+            o.model_copy(update={'statement': original.replace('[[name:fu_jun|夫君]]', mentions, 1)})
             if index == 0 else o for index, o in enumerate(cp.obligations))})
 
     republish_checkpoint(repo, change_statement(before_name))

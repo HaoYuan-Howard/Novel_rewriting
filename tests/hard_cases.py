@@ -163,7 +163,7 @@ def _body_withheld() -> list:
     """未释放专名进正文：硬失败（重写耗尽后无合法候选即停止，不披露放行）。"""
     from novel.stages.stage5.body_checks import validate_chapter_prose
     return validate_chapter_prose(
-        '苏芸娘推门进屋，看见满地信纸。', withheld_literals=('苏芸娘',),
+        '[[name:yun_niang|苏芸娘]]推门进屋，看见满地信纸。', withheld_literals=('苏芸娘',),
         released_surfaces=('苏姑娘',), target_chars=1000,
         band_low=600, band_high=1300)
 
@@ -185,7 +185,7 @@ def _hook_withheld() -> list:
     from novel.stages.stage5.hook_writer import validate_hook_prose
 
     _body, _published, context = _green_pair()
-    return validate_hook_prose('苏芸娘想起陆大哥。', context)
+    return validate_hook_prose('[[name:yun_niang|苏芸娘]]想起[[name:fu_jun|陆大哥]]。', context)
 
 
 def _name_map_conflict() -> list:
@@ -202,19 +202,26 @@ def _name_map_conflict() -> list:
 
 
 def _naming_residual() -> list:
-    """应替换的源名在交付文本中残留且未认领。"""
-    from novel.stages.stage7.naming import check_residual
-    return check_residual('苏姑娘推门进屋。', {'苏姑娘': '苏瑶'}, claims=(), kept_literals=())
+    """已绑定人物提及缺改名或保留决定，交付变换拒绝。"""
+    from contracts.schema.name_text import NameMention
+    from novel.stages.stage7.naming import apply_bound_names
+    _text, errors = apply_bound_names(
+        '苏姑娘推门进屋。', (NameMention(start=0, end=3, char_id='yun', surface='苏姑娘'),),
+        {'other': {'苏姑娘': '苏瑶'}})
+    return errors
 
 
 def _chain_broken() -> list:
     """章回执与当前编译脱钩：集合核对报出，装配未就绪（D2；rc6 身份拆分）。"""
     from novel.stages.stage7.assembly import verify_chapter_receipts
-    from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
-    receipts = {1: {'status': 'accepted', 'writer_view_sha256': 'c' * 64,
+    from contracts.schema.receipt import (
+        BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS, RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
+    )
+    receipts = {1: {'status': 'accepted', 'chapter_ordinal': 1, 'writer_view_sha256': 'c' * 64,
                     'validation_sha256': 'b' * 64, 'machine_view_sha256': 'd' * 64,
                     'validator_version': BODY_VALIDATOR_VERSION,
                     'mechanical_checks': BODY_MECHANICAL_CHECKS,
+                    'protocol_version': WRITER_PROTOCOL_VERSION, 'renderer_version': RENDERER_VERSION,
                     'prose_sha256': 'b' * 64}}
     from novel.stages.common import ChapterIdentities
     return verify_chapter_receipts(
@@ -236,10 +243,10 @@ CASES: dict[str, Case] = {
                                      'M8 本场线程操作未按 Design 投影进 IR'),
     'design_knowledge_mode_closure': Case('stage4', _design_bad_knowledge_mode, 'knowledge_mode'),
     'body_chapter_complete': Case('stage5', _body_empty, '[non_empty]'),
-    'body_withheld_literals': Case('stage5', _body_withheld, '[withheld_literals]'),
-    'hook_mechanical': Case('stage5', _hook_withheld, '[withheld_literals]'),
+    'body_withheld_literals': Case('stage5', _body_withheld, '[name_text_reference]'),
+    'hook_mechanical': Case('stage5', _hook_withheld, '[name_text_reference]'),
     'name_map_compile': Case('stage7', _name_map_conflict, 'naming 条目形状非法'),
-    'naming_residual': Case('stage7', _naming_residual, '在交付文本中残留'),
+    'naming_residual': Case('stage7', _naming_residual, '没有登记的改名或保留决定'),
     'assembly_chapter_chain': Case('stage7', _chain_broken, 'prose_sha256 脱钩'),
 }
 
@@ -334,12 +341,12 @@ def _binding_unclosed() -> list:
 
 def _hook_design_bad_wire() -> list:
     """Hook 设计机械校验：材料引用不存在的拍。"""
-    from tests.test_str06_hook import _green_pair
+    from tests.test_str06_hook import _green_pair, _projection
     from novel.stages.stage4.hook import assemble_hook_design
 
-    graph, projection, _context = _green_pair()
+    graph, _published, _context = _green_pair()
     _hook, errors = assemble_hook_design(
-        {'protocol_version': 'stage4-hook-design-v3',
+        {'protocol_version': 'stage4-hook-design-v4',
          'pov': {'person': 'third', 'focalizers': ['narrator']},
          'local_focus': '用即时反应形成反差',
          'reader_expectation': {'kind': 'action', 'focus': '人物怎样应对旧约',
@@ -348,7 +355,7 @@ def _hook_design_bad_wire() -> list:
                         'emphasis': 'develop', 'transition': 'start',
                         'presentation': '倒叙材料'}],
          'opening_facts': [], 'forbidden_reveals': []},
-        body=graph, known_char_ids=set(), name_projection=projection)
+        body=graph, known_char_ids=set(), name_projection=_projection())
     return errors
 
 
@@ -422,10 +429,11 @@ def _receipt_stale() -> list:
 
     from contracts.schema.receipt import ChapterLengthDisclosure
     receipt = ChapterReceipt(
-        contract_version='str06-rc17', chapter_ordinal=1, status='accepted',
+        contract_version='str06-rc25', chapter_ordinal=1, status='accepted',
         writer_view_sha256='a' * 64, validation_sha256='b' * 64,
         machine_view_sha256='e' * 64,
         prose_sha256='c' * 64, request_identity='r1',
+        name_mentions=(), non_name_spans=(),
         protocol_version='p1', renderer_version='r1', validator_version=BODY_VALIDATOR_VERSION,
         mechanical_checks=BODY_MECHANICAL_CHECKS, length=ChapterLengthDisclosure(
             char_count=100, target_chars=100, band_low=60, band_high=130,
@@ -446,7 +454,7 @@ def _hook_rejected_no_formal() -> list:
     _body, _published, context = _green_pair()
     errors: list[str] = []
     for _attempt in range(1 + MAX_REWRITES):
-        errors = validate_hook_prose('苏芸娘想起陆大哥。', context)
+        errors = validate_hook_prose('[[name:yun_niang|苏芸娘]]想起[[name:fu_jun|陆大哥]]。', context)
         if not errors:
             return []
     return errors
@@ -467,7 +475,7 @@ CASES.update({
     'body_length_band': Case('stage5', _body_out_of_band, '[length_band]'),
     'chapter_receipt_binding': Case('stage5', _receipt_stale, 'writer_view_sha256'),
     'hook_receipt_binding': Case('stage5', _hook_rejected_no_formal,
-                                 '[withheld_literals]'),
+                                 '[name_text_reference]'),
     'body_design_compile': Case('stage4', _body_design_bad_wire, '必须是本书 char_id'),
     'chapter_plan_shape': Case('stage4', _chapter_count_mismatch, '章'),
     'length_budget_conserved': Case('stage4', _chapter_count_mismatch, '章'),
@@ -752,10 +760,10 @@ def _names_structure_uncovered() -> list:
         surfaces=(SurfaceWindow(surface='夫君', from_chapter=1,
                                 source_refs=('e01_01',)),))})
     _structure, errors = compile_name_structure(
-        {'protocol_version': 'stage2-names-v6',
+        {'protocol_version': 'stage2-names-v7',
          'families': {'fam_lu': {'literal': '陆', 'forms': []}},
          'people': {'ch1': {'family_id': 'fam_lu', 'given': None, 'aliases': [],
-                            'form_overrides': {'陆大哥': None}}}},
+                            'form_overrides': {'陆大哥': None}, 'additional_surfaces': []}}},
         core, '夫君与陆家大哥夜话。')
     return errors
 

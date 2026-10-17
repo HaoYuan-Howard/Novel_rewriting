@@ -139,11 +139,11 @@ def _names_inputs():
 
 def _names_wire() -> dict:
     # CS-S 1c：v6 结构 wire——surface_forms 由程序派生（夫君／云娘均无部件→None）。
-    return {'protocol_version': 'stage2-names-v6',
+    return {'protocol_version': 'stage2-names-v7',
             'families': {'f_lu': {'literal': '陆', 'forms': []}},
             'people': {
-                'fu_jun': {'family_id': 'f_lu', 'given': None, 'aliases': []},
-                'yun_niang': {'family_id': None, 'given': None, 'aliases': []}}}
+                'fu_jun': {'family_id': 'f_lu', 'given': None, 'aliases': [], 'additional_surfaces': []},
+                'yun_niang': {'family_id': None, 'given': None, 'aliases': [], 'additional_surfaces': []}}}
 
 
 def test_names_patch_locate_maps_family_and_person_entries():

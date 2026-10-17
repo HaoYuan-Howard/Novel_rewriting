@@ -25,10 +25,10 @@ Design wire；主体须与楔子人物相关——全场景保护不等于全列
 未在 Hook 中释放的专名字面：名称结构 ∩（全部人物的专名字面与带名 surface）
 − Hook 已释放的称谓。不写死任何人名；hook validator 据此查成文泄漏。
 
-【withheld_bindings（rc16，CS-F2）】
-同一禁用面里「已证明唯一绑定人物」的完整登记称谓——释放面按 Hook 自选的
-surface_releases（不是章释放表）在 compile 时算好，随上下文携带；渲染期
-（`render_hook_context`）据此把这类字面换成本场已释放称谓。上下文字段保持
+【withheld_bindings（rc25）】
+按本人尚未释放的个人姓名面登记 (char_id, literal)；同形多人分别登记，家族构词
+不投影为个人称谓。释放面按 Hook 自选 surface_releases 在 compile 时算好，
+随上下文携带；显式引用按身份投影，旧裸文另须全书唯一归属证明。上下文字段保持
 原文本：条目返修的来源归因按原字段核对，投影只改送达写手的字节（RC-40/41）。
 """
 from __future__ import annotations
@@ -37,7 +37,7 @@ from typing import Final, Iterable, Mapping, Sequence
 
 from contracts.schema.context import SurfaceRelease
 from contracts.schema.design import PresentationGraph
-from contracts.schema.state import EffectDomain, WithheldNameBinding
+from contracts.schema.state import EffectDomain
 from contracts.schema.hook import (
     HookContext, HookExpressionView, HookMaterialView, HookOpeningFact,
     HookReaderExpectationFocus, HookSceneVoice,
@@ -47,7 +47,7 @@ from contracts.schema.source import (
 )
 from novel.core.name_materials import (
     appellation_fallbacks, withheld_name_bindings, withheld_name_literals,
-    expand_surface_releases,
+    expand_surface_releases, name_candidate_literals,
 )
 from novel.core.text import kp_statement
 from novel.stages.stage4.hook_validation import validate_hook_design
@@ -329,10 +329,7 @@ def compile_hook_context(
          for r in hook.surface_releases), key=lambda r: r.char_id))
     released = {s for r in usable for s in r.surfaces}
     withheld = withheld_name_literals(projection, released, structure)
-    bindings = tuple(
-        WithheldNameBinding(literal=literal, char_id=char_id, enclosing=enclosing)
-        for literal, char_id, enclosing
-        in withheld_name_bindings(withheld, structure, released))
+    bindings = withheld_name_bindings(structure, display_names)
 
     # 线程收束并入禁区（R2.7）：视界＝材料引用拍的最大（场序, 拍序）；
     # 楔子人物＝focalizers∪材料拍参与者∪起笔事实主语/持有者∪释放与隐藏人物。
@@ -382,6 +379,7 @@ def compile_hook_context(
         character_voices=tuple(v for v in graph.character_voices
                                if v.char_id in cast and v.char_id not in set(hook.concealed)),
         scene_voices=scene_voices, usable_surfaces=usable,
+        name_candidates=name_candidate_literals(projection, structure),
         withheld_literals=tuple(sorted(withheld)),
         withheld_bindings=bindings, display_faces=display_faces,
         avoid_lines=tuple(avoid_lines),

@@ -39,7 +39,7 @@ def _prepare(tmp_path, *, bad_preserve=False):
         # 反例改经已发布 checkpoint 的正式修订注入（republish 换 seal＝上游新版本），
         # 不再经 Preserve 购买回答（那里会被自闸逐条定位）。
         republish_checkpoint(repo, lambda cp: cp.model_copy(update={'obligations': tuple(
-            o.model_copy(update={'statement': '陆郎与芸娘成亲且立下旧约'})
+            o.model_copy(update={'statement': '[[name:fu_jun|陆郎]]与[[name:yun_niang|芸娘]]成亲且立下旧约'})
             if o.obligation_id == 'ob01' else o
             for o in cp.obligations)}))
     chars = repo.read_model('stage2/characters/characters.json')
@@ -73,11 +73,11 @@ def test_candidate_aggregates_direct_and_inherited_errors_without_mutation(tmp_p
     before = deepcopy(wire)
     view = inspect_design_candidate(wire, **args)
     assert view.body is not None and view.binding is not None and not view.passed
-    assert sum('positive_material_leak' in e for e in view.errors) >= 2
-    assert any(s.kind == 'obligation' and '陆郎' in s.text
-               for m in view.materials for s in m.sources)
+    assert sum(getattr(error, 'code', '') == 'name_text_unclassified' for error in view.errors) >= 2
+    assert any(getattr(error, 'owner', '') == 'preserve'
+               and getattr(error, 'code', '') == 'name_text_reference' for error in view.errors)
     checks = {c.name: c.status for c in view.checks}
-    assert checks['design'] == checks['writer_materials'] == 'failed'
+    assert checks['design'] == checks['preserve_input'] == 'failed'
     assert checks['binding'] == checks['execution_plan'] == 'passed'
     assert checks['hook_materials'] == 'not_run'
     assert wire == before
@@ -106,16 +106,17 @@ def test_real_acceptance_routes_upstream_first_and_preserves_all_diagnostics(tmp
                      ask_text=ctx.ask_text, ask_body=ctx.ask_body, budget=ctx.budget,
                      node_filter=('str06.stage4.body_design',))
     assert stopped.value.node == 'str06.stage4.preserve'
-    report = stopped.value.context['candidate_preflight']
-    assert not report['passed'] and report['errors'] and report['material_errors']
+    report = stopped.value.context['input_preflight']
+    assert report['errors']
+    assert report['checks'] == [{'name': 'preserve_input', 'status': 'failed'}]
     status = ctx.repository.read('runtime/workflow_status.json')
-    assert status['error_context']['candidate_preflight'] == report
+    assert status['error_context']['input_preflight'] == report
     assert status['failed_node'] == 'str06.stage4.body_design'
     record = read_owner_issue_file(ctx.repository, 'preserve')
     assert record and record.issues
     assert all('candidate_preflight' not in i.context for i in record.issues), '整份报告不按条目复制进返修请求'
     assert read_owner_issue_file(ctx.repository, 'design') is None, '不为过期输入提前消耗Design回派轮'
-    assert transport.calls.count('design') == 1, '已知上游错误时不能再购买Design自修'
+    assert transport.calls.count('design') == 0, '已知输入错误时不购买Design候选或自修'
     assert not ctx.repository.path('stage4/design/body_design.json').exists()
     assert not ctx.repository.path('stage4/grounding/semantic_binding.json').exists()
 
@@ -127,10 +128,9 @@ def test_self_revision_stop_keeps_check_status_and_free_replay(tmp_path):
     with pytest.raises(ValidationStop) as stopped:
         run_body_design(ctx)
     assert stopped.value.context['candidate_preflight']['checks']
-    # CS-H H3：已绑定称谓经显示面投影（含回落）后不再算泄漏；坏稿用未登记别名
-    # （陆郎——不可投影），Design 自有文本与送达写手的材料**同面如实报出**
-    # （同一字面、同一责任方），无假绿。
-    assert 'design=failed' in str(stopped.value) and 'writer_materials=failed' in str(stopped.value)
+    # 未声明的候选属于作者当前返修责任；未决不伪称已证明发生了姓名泄漏。
+    assert 'design=failed' in str(stopped.value)
+    assert 'name_text_unclassified' in str(stopped.value)
     calls = len(transport.calls)
     with pytest.raises(ValidationStop):
         run_body_design(ctx)
@@ -326,14 +326,15 @@ def _reopened_session(repo, transport):
 
 
 @pytest.mark.parametrize('semantic_change', [False, True])
-def test_purchased_v9_candidate_uses_carry_or_narrow_review_after_v10_upgrade(tmp_path, semantic_change):
-    """真正 v9 已购账＋谱系 → v10 入口，不因请求升版整份重购。"""
+def test_purchased_v9_candidate_is_diagnostic_only_after_identity_text_upgrade(tmp_path, semantic_change):
+    """旧候选可读取诊断，但缺少逐次身份语义时不得机械冒充 v11 免费沿用。"""
     from novel.stages.chain import _record_design_candidates
     from novel.stages import candidates
     from novel.stages.common import design_rules, pack_prompt
     from novel.stages.stage4 import project_design_input, preserve_revision_wire
     ctx, wires, transport, args = _prepare(tmp_path)
     repo = ctx.repository
+    current = deepcopy(wires['design'])
     wires['design']['protocol_version'] = 'stage4-design-v9'
     prompt = pack_prompt(design_rules(protocol='stage4-design-v9'),
                          brief=project_design_input(args['brief'], args['obligations'],
@@ -347,9 +348,10 @@ def test_purchased_v9_candidate_uses_carry_or_narrow_review_after_v10_upgrade(tm
     republish_checkpoint(repo, lambda cp: cp.model_copy(update={
         'obligations': tuple(o.model_copy(update={'statement': o.statement + '，且夫君许诺必归'})
                              for o in cp.obligations)}) if semantic_change else _lineage_only_mutation(cp))
+    wires['design'] = current
     result = run_body_design(_design_ctx(ctx, _reopened_session(repo, transport)))
-    assert result['reuse']['action'] == ('narrow_review' if semantic_change else 'carried_forward')
-    assert transport.calls.count('design') == calls + int(semantic_change)
+    assert result['reuse']['action'] == 'full_purchase'
+    assert transport.calls.count('design') == calls + 1
     assert repo.read_model('stage4/design/body_design.json').scenes
     assert repo.read_model('stage4/grounding/semantic_binding.json').entries
 
@@ -362,8 +364,8 @@ def _ledger_rows(repo, purpose='design'):
 
 
 @pytest.mark.stage_scope('stage4')
-def test_purchased_v9_narrow_failure_accepts_current_v10_full_fallback(tmp_path):
-    """旧候选窄修失败后，整份兜底的请求和完整接受闸使用当前协议。"""
+def test_purchased_current_narrow_failure_accepts_current_full_fallback(tmp_path):
+    """已声明身份的当前候选窄修失败后，整份兜底仍经过当前完整接受闸。"""
     import json
     import re
 
@@ -376,10 +378,10 @@ def test_purchased_v9_narrow_failure_accepts_current_v10_full_fallback(tmp_path)
     ctx, wires, transport, args = _prepare(tmp_path)
     repo = ctx.repository
     current = deepcopy(wires['design'])
-    wires['design']['protocol_version'] = 'stage4-design-v9'
-    prompt = pack_prompt(design_rules(protocol='stage4-design-v9'),
+    wires['design']['protocol_version'] = 'stage4-design-v11'
+    prompt = pack_prompt(design_rules(protocol='stage4-design-v11'),
                          brief=project_design_input(args['brief'], args['obligations'],
-                                                    protocol='stage4-design-v9'))
+                                                    protocol='stage4-design-v11'))
     wire, _ref = ctx.ask('design', prompt, lambda w: list(inspect_design_candidate(w, **args).errors))
     inspection = inspect_design_candidate(wire, **args)
     assert inspection.passed
@@ -408,9 +410,9 @@ def test_purchased_v9_narrow_failure_accepts_current_v10_full_fallback(tmp_path)
     assert result['reuse']['action'] == 'narrow_review'
     assert len(fallback.requests) == 2
     assert '【窄返修】' in fallback.requests[0]
-    assert re.search(r'"const"\s*:\s*"stage4-design-v9"', fallback.requests[0])
+    assert re.search(r'"const"\s*:\s*"stage4-design-v11"', fallback.requests[0])
     assert '【修订要求】' in fallback.requests[1]
-    assert re.search(r'"const"\s*:\s*"stage4-design-v10"', fallback.requests[1])
+    assert re.search(r'"const"\s*:\s*"stage4-design-v11"', fallback.requests[1])
     assert result['candidate_preflight']['passed'] is True
     assert repo.read_model('stage4/design/body_design.json').scenes
     assert repo.read_model('stage4/grounding/semantic_binding.json').entries
@@ -572,17 +574,18 @@ def test_changed_entry_without_provable_equivalence_gets_one_narrow_review_round
 
 
 class _FirstDesignBadTransport:
-    """包一层假 transport：**第一份** design 回答是坏候选，其后给好候选。
+    """第一份 design 回答在已授权的两拍内出坏稿，其后给好候选。
 
     只在自己出坏稿的那一次计数；委派给内层的 design 请求由内层计数——一次
-    外发记一行，别让包装器把调用数翻倍。
+    外发记一行。escape_scope 专门制造整份越权回答，不能与 owner 验收失败混用。
     """
 
-    def __init__(self, inner):
+    def __init__(self, inner, *, escape_scope=False):
         self.inner = inner
         self.calls = inner.calls
         self.wires = inner.wires
         self._spoiled = False
+        self._escape_scope = escape_scope
 
     def send(self, request):
         if self.inner._owner(request) != 'design':
@@ -593,7 +596,12 @@ class _FirstDesignBadTransport:
             self.calls.append('design')
             bad = deepcopy(self.inner.wires['design'])
             _bad_design(bad)
-            return ChatResponse(content=_json.dumps(bad, ensure_ascii=False),
+            # 上游 ob01 变化只授权第 1 场两拍；它们的坏文本须真正进入 owner
+            # 预检。本例不能顺带改第 2 场 release 后被范围闸提前拒收。
+            response = bad if self._escape_scope else {'patches': [
+                {'path': f'scenes[0].beats[{index}]', 'value': bad['scenes'][0]['beats'][index]}
+                for index in range(2)]}
+            return ChatResponse(content=_json.dumps(response, ensure_ascii=False),
                                 finish_reason='stop',
                                 usage={'prompt_tokens': 10, 'completion_tokens': 10},
                                 model='fake')
@@ -639,6 +647,39 @@ def test_earlier_green_candidate_is_not_blocked_by_a_later_failed_one(tmp_path):
     assert rejected, '被拒的那份也在登记里（RC-52：全部已购候选），且如实记未接受'
     assert all(e['upstream_version'] for e in registry['candidates']), \
         '本次验收过的候选都带谱系'
+
+
+def test_scope_rejected_full_candidate_has_no_owner_preflight_or_lineage(tmp_path):
+    """范围拒收发生在 owner 预检前；该稿留账但不能补造谱系或挡住较早绿稿。"""
+    ctx, _wires, transport, _ = _prepare(tmp_path)
+    repo = ctx.repository
+    session = _reopened_session(repo, transport)
+    ctx = _design_ctx(ctx, session)
+    run_body_design(ctx)
+    first_design = repo.read_model('stage4/design/body_design.json')
+    original_checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
+    republish_checkpoint(repo, lambda checkpoint: checkpoint.model_copy(update={
+        'obligations': tuple(o.model_copy(update={
+            'statement': o.statement + '，且夫君许诺必归'}) for o in checkpoint.obligations)}))
+    escaped = _FirstDesignBadTransport(transport, escape_scope=True)
+    run_body_design(_design_ctx(ctx, _reopened_session(repo, escaped)))
+    assert transport.calls.count('design') == 3, '越权稿拒收后走显式整份恢复轮'
+    registry = repo.inspect('runtime/candidates/design.json')
+    rejected = next(entry for entry in registry['candidates'] if entry['ordinal'] == 2)
+    assert rejected['accepted'] is False
+    assert rejected['last_preflight'] is None, '范围拒收稿未经过 owner 预检'
+    assert rejected['upstream_version'] == {}, '没有验收证据就没有上游谱系'
+
+    republish_checkpoint(repo, lambda _checkpoint: _lineage_only_mutation(original_checkpoint))
+    result = run_body_design(ctx)
+    assert transport.calls.count('design') == 3, '未验稿不能迫使重购'
+    assert result['reuse']['action'] == 'carried_forward'
+    assert repo.read_model('stage4/design/body_design.json') == first_design
+    registry = repo.inspect('runtime/candidates/design.json')
+    adopted = [entry for entry in registry['candidates'] if entry.get('adoptions')]
+    assert len(adopted) == 1 and adopted[0]['ordinal'] == 1
+    rejected = next(entry for entry in registry['candidates'] if entry['ordinal'] == 2)
+    assert rejected['last_preflight'] is None and rejected['upstream_version'] == {}
 
 
 def test_added_entry_review_uses_the_beat_closed_set_as_optional_targets(tmp_path):
@@ -707,32 +748,39 @@ def test_full_purchase_is_confined_to_the_closed_set_of_reasons_and_leaves_a_tra
     assert len(registry.candidates) == 2, '新购轮也进登记'
 
 
-def test_routed_candidate_keeps_its_lineage_so_a_repaired_upstream_can_reuse_it(tmp_path):
-    """被上游回派（未发布）的候选也登记谱系：上游修好后据此沿用，不整份重购。
+def test_purchased_candidate_keeps_lineage_across_upstream_input_rejection(tmp_path):
+    """真实已购候选保留生成时谱系；后续源输入拒绝不重标候选来源或整份重购。
 
-    这正是 CS-H 的起因：Design 候选自身无错、只因 Preserve 的义务措辞不合格被回派；
-    Preserve 修订后同一份回答往往已经全绿。若谱系（候选生成时的上游版本）只在发布成功
-    后才登记，这类候选永远「没有修订谱系」，免费沿用对它不可达。
+    新输入闸在购买 Design 前拦截错误，故先生成已购候选，再注入源修订冲突；
+    修好后的免费判定仍能定位原候选，只复核其实际变化条目。
     """
     from novel.stages.owner_revision import OwnerRevisionRequired
-    ctx, wires, transport, _ = _prepare(tmp_path, bad_preserve=True)
+    ctx, wires, transport, _ = _prepare(tmp_path)
     repo = ctx.repository
     session = _reopened_session(repo, transport)
     ctx = _design_ctx(ctx, session)
+    run_body_design(ctx)
+    before = repo.inspect('runtime/candidates/design.json')
+    republish_checkpoint(repo, lambda checkpoint: checkpoint.model_copy(update={
+        'obligations': tuple(obligation.model_copy(update={
+            'statement': '[[name:fu_jun|陆郎]]与[[name:yun_niang|芸娘]]成亲且立下旧约'})
+            if obligation.obligation_id == 'ob01' else obligation
+            for obligation in checkpoint.obligations)}))
     with pytest.raises(OwnerRevisionRequired):
         run_body_design(ctx)
     assert transport.calls.count('design') == 1
+    assert repo.inspect('runtime/candidates/design.json') == before, '源输入拒绝不重标既有候选谱系'
     good = _full_chain_wires()['preserve']['obligations'][0]['statement']
 
     def repaired(checkpoint):
-        first = checkpoint.obligations[0].model_copy(update={'statement': good})
+        first = checkpoint.obligations[0].model_copy(update={'statement': good + '，且夫君许诺必归'})
         return checkpoint.model_copy(update={'obligations': (first, *checkpoint.obligations[1:])})
 
     registry = repo.inspect('runtime/candidates/design.json')
-    assert len(registry['candidates']) == 1, '被回派（未发布）的候选已登记'
+    assert len(registry['candidates']) == 1, '真实已购候选已登记且拒绝输入不增加候选'
     routed = registry['candidates'][0]
-    assert routed['accepted'] is False and routed['upstream_version']['wire']['obligations'], \
-        '如实记未接受，并带它生成时的上游版本'
+    assert routed['accepted'] is True and routed['upstream_version']['wire']['obligations'], \
+        '保留已购候选的原接受状态和生成时上游版本'
     republish_checkpoint(repo, repaired)
     result = run_body_design(_design_ctx(ctx, session))
     assert result['reuse']['action'] in ('carried_forward', 'narrow_review'), result['reuse']
@@ -976,7 +1024,7 @@ def test_series_covers_only_revision_narrowly_reviews_summary_and_affected_insta
     from tests.test_str06_design_patch import PatchingTransport
     wires = _full_chain_wires()
     wires['preserve']['obligations'].extend([
-        {'kind': 'event_core', 'statement': '芸娘在新婚夜立誓查清旧约',
+        {'kind': 'event_core', 'statement': '[[name:yun_niang|芸娘]]在新婚夜立誓查清旧约',
          'anchors': ['b01_01.e1'], 'must_preserve': False,
          'satisfaction': '立誓查清旧约的决意已经发生', 'requires': []},
         {'kind': 'event_core', 'statement': '门外人声远去后渐渐安静',

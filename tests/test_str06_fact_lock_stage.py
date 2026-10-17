@@ -155,7 +155,7 @@ def test_ambiguous_fact_lock_is_rejected_by_full_candidate_paid_entry_and_free_p
         ['scenes', 0, 'beats', 2, 'state', 1],
         ['scenes', 0, 'beats', 2, 'state', 2]]
     assert {c.name: c.status for c in view.checks} == {
-        'design': 'failed', 'placements': 'passed', 'binding': 'failed',
+        'design': 'failed', 'preserve_input': 'passed', 'placements': 'passed', 'binding': 'failed',
         'execution_plan': 'not_run', 'writer_inputs': 'not_run',
         'writer_materials': 'not_run', 'mechanical_guard': 'not_run',
         'hook_materials': 'not_run'}

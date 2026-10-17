@@ -5,14 +5,16 @@ from pydantic import ValidationError
 
 from contracts.schema.grounding import OutputConstraints
 from contracts.schema.observation import (
-    AssociateObservation, NamesObservation, STAGE2_NAMES_PROTOCOL,
+    AssociateObservation,
 )
 from contracts.schema.source import SourceNameResolution
+from contracts.schema.receipt import HOOK_MECHANICAL_CHECKS, HOOK_VALIDATOR_VERSION
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG, STAGE4_PRESERVE_POLICY_VERSION
 from novel.stages.stage2 import (
     associate_observation_issues, character_core_view, compile_book_observation,
-    compile_chapter_observation, compile_cross_cause, compile_name_structure,
-    compile_name_variants, compile_source_truth, inspect_identity_associations,
+    compile_chapter_observation, compile_cross_cause,
+    compile_name_variants, compile_names_observation, compile_source_truth,
+    extend_name_surfaces, inspect_identity_associations,
     name_variant_candidates,
     normalize_name_observations, project_association_space, project_cause_candidates,
     validate_name_resolutions,
@@ -24,9 +26,12 @@ from novel.stages.stage4 import (
     run_mechanical_guard, inspect_body_materials, plan_material_repairs,
     hook_combination_errors,
 )
-from novel.stages.stage5 import chapter_prose_validator, context_sha256, validate_hook_prose, sha256_text
+from novel.stages.stage5 import (
+    chapter_prose_validator, context_sha256, resolve_chapter_prose, resolve_hook_prose,
+    validate_hook_prose, sha256_text,
+)
 from novel.stages.stage7 import (
-    assemble_delivery, chapter_access, compile_name_map, compile_surface_replacements,
+    assemble_delivery, chapter_access, compile_name_map, compile_bound_replacements,
     verify_chapter_receipts,
 )
 from novel.stages.common import (
@@ -76,17 +81,22 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                 else:
                     chapters[n] = repository.read_model(f'stage2/observations/ch{n:02d}.json')
             if owner == 'names':
-                structure, errors = compile_name_structure(candidate, core, '\n'.join(v['text'] for v in evidence.values()), evidence=evidence)
+                names, core, errors = compile_names_observation(
+                    candidate, core, '\n'.join(v['text'] for v in evidence.values()), evidence=evidence)
                 if errors:
                     return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
+                structure = names.structure
                 # 主结构 wire 已不携带变体判定：保留已购判定，再按当前候选完整
                 # 复验；新候选缺判定不能默认 not_name，缺正式上游由 not_run 报告。
                 current_names = repository.read_model('stage2/observations/names.json')
                 structure = structure.model_copy(update={
                     'resolutions': current_names.structure.resolutions})
-                names = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL, structure=structure)
+                names = names.model_copy(update={'structure': structure})
             elif owner == 'name_variants':
                 current_names = repository.read_model('stage2/observations/names.json')
+                core, errors = extend_name_surfaces(core, current_names, evidence=evidence)
+                if errors:
+                    return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
                 structure = current_names.structure
                 derived, located = compile_name_variants(
                     candidate, name_variant_candidates(structure, core, evidence),
@@ -97,9 +107,12 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                 assert derived is not None
                 structure = structure.model_copy(update={'resolutions': tuple(
                     SourceNameResolution.model_validate(item) for item in derived)})
-                names = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL, structure=structure)
+                names = current_names.model_copy(update={'structure': structure})
             else:
                 names = repository.read_model('stage2/observations/names.json')
+                core, errors = extend_name_surfaces(core, names, evidence=evidence)
+                if errors:
+                    return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
             if owner in {'names', 'name_variants', 'cross_cause'}:
                 errors = validate_name_resolutions(names.structure, core, evidence=evidence)
                 if errors:
@@ -264,13 +277,21 @@ def _delivery_preview(repository, owner, candidate, chars) -> dict:
     if owner == 'hook_writer':
         hook_prose = candidate['prose']
         errors = validate_hook_prose(hook_prose, hook)
+        resolved = resolve_hook_prose(hook_prose, hook)
+        hook_prose = resolved.text
         hook_receipt = {**hook_receipt, 'prose_sha256': sha256_text(hook_prose),
+                        'validator_version': HOOK_VALIDATOR_VERSION,
+                        'mechanical_checks': list(HOOK_MECHANICAL_CHECKS),
+                        'name_mentions': [row.model_dump() for row in resolved.mentions],
+                        'non_name_spans': [row.model_dump() for row in resolved.non_name_spans],
                         'hook_context_sha256': context_sha256(hook), 'status': 'accepted' if not errors else 'rejected'}
     elif owner.startswith('body_ch'):
         n = int(owner[7:])
         packet = project_chapter_packet(ir, n)
         prose[n] = candidate['prose']
         errors = chapter_prose_validator(packet)(prose[n])
+        resolved = resolve_chapter_prose(prose[n], packet)
+        prose[n] = resolved.text
         # 合成回执按**本次重验**的尺子记版本：沿盘上旧值会在下一次换版后
         # 把刚验证过的候选稿误报成「须先免费重验」（假红）。
         from contracts.schema.receipt import BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION
@@ -279,9 +300,11 @@ def _delivery_preview(repository, owner, candidate, chars) -> dict:
                        'validation_sha256': identities[n].validation_sha256,
                        'validator_version': BODY_VALIDATOR_VERSION,
                        'mechanical_checks': list(BODY_MECHANICAL_CHECKS),
+                       'name_mentions': [row.model_dump() for row in resolved.mentions],
+                       'non_name_spans': [row.model_dump() for row in resolved.non_name_spans],
                        'status': 'accepted' if not errors else 'rejected'}
     errors.extend(verify_chapter_receipts(receipts, prose, identities_by_ordinal=identities))
-    replacements, name_errors = compile_surface_replacements(chars, name_map)
+    replacements, name_errors = compile_bound_replacements(chars, name_map)
     errors.extend(name_errors)
     if errors:
         return {'node': 'str06.stage7.assemble', 'status': 'ran', 'errors': errors}
@@ -291,7 +314,8 @@ def _delivery_preview(repository, owner, candidate, chars) -> dict:
     outcome = assemble_delivery(chapter_prose=prose,
         body=chapter_access(receipts, receipts, identities_by_ordinal=identities, chapter_prose=prose),
         hook_prose=hook_prose, hook_receipt=hook_receipt, hook_context_sha256=context_sha256(hook),
-        replacements=replacements, kept_literals=kept)
+        replacements=replacements, kept_literals=kept, chapter_receipts=receipts,
+        identities_by_ordinal=identities)
     return {'node': 'str06.stage7.assemble', 'status': 'ran',
             'errors': [] if outcome.status == 'ready' else [outcome.reason],
             'delivery_status': outcome.status, 'candidate_receipt': owner != 'naming'}

@@ -593,7 +593,7 @@ def test_generated_design_schema_rejects_the_same_local_branch_errors():
 def test_family_release_is_shared_and_stage7_replaces_actual_forms():
     from tests.test_str06_hook import _characters
     from novel.core.name_materials import expand_surface_releases, withheld_name_literals
-    from novel.stages.stage7 import compile_name_map, compile_surface_replacements, apply_names
+    from novel.stages.stage7 import compile_name_map, compile_bound_replacements, apply_bound_names
     chars = _characters()
     releases = expand_surface_releases({'fu_jun': ('夫君',)}, chars.name_structure)
     assert '陆家' in releases['fu_jun']
@@ -601,8 +601,10 @@ def test_family_release_is_shared_and_stage7_replaces_actual_forms():
     from tests.test_str06_hook import _full_chain_wires
     names, errors = compile_name_map(_full_chain_wires()['naming'], chars)
     assert not errors
-    replacements, errors = compile_surface_replacements(chars, names)
-    assert not errors and apply_names('陆家还有陆兄。', replacements)[0] == '顾家还有顾兄。'
+    replacements, errors = compile_bound_replacements(chars, names)
+    from novel.core.name_text import resolve_name_text
+    text = resolve_name_text('[[name:fu_jun|陆家]]还有[[name:fu_jun|陆兄]]。')
+    assert not errors and apply_bound_names(text.text, text.mentions, replacements)[0] == '顾家还有顾兄。'
 
 
 def test_narration_reaches_writer_and_rejects_scene_pov_drift():

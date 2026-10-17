@@ -17,7 +17,10 @@ unver 行常驻披露，不产生审批待办。机械检查只证明形状、�
 ## 观察与关联协议（B2；R1 associate 独立版本）
 
 book／chapters 的现役 canonical 协议为 `stage2-book-v7`／`stage2-chapters-v7`，
-names 为 `stage2-names-v4`（最初共用的 `stage2-observation-v1` 已关闭式拒读）；
+names 为 `stage2-names-v5`、wire 为 `stage2-names-v7`。每个人物显式给出
+`additional_surfaces`（可为空），仅补充有源段证据的称谓，不增删或拆合人物；唯一
+compiler 合入 Characters，Book 原观察不改。旧 canonical v4 的集中只读适配保留
+原身份与字节形状，不补造缺失称谓证据（见 [name_text.md](name_text.md)）；
 associate 用**独立版本** `stage2-associate-v5`
 （R1，2026-09-28 起独立；CS-H H4，2026-10-06 升 v3；CS-S Phase 2，2026-10-07
 升 v4；CS-S Phase 3，2026-10-08 升 v5；`contracts/schema/observation.py`；进请求

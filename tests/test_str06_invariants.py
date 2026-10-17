@@ -15,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.schema.context import (
+    SupportingBeatEvent,
     VerificationIR,
     WriterBrief,
     WriterContext,
@@ -141,7 +142,7 @@ def _slice(scene_id: str, *consumed: str) -> ExecutionSlice:
 
 
 def _context(scene_id: str) -> WriterContext:
-    from contracts.schema.context import BeatIR
+    from contracts.schema.context import BeatIR, SupportingBeatEvent
     return WriterContext(
         scene_id=scene_id, execution_slice_sha256=H64,
         verification_ir=VerificationIR(
@@ -200,7 +201,7 @@ def test_plan_matches_graph_green_and_red():
 def _chapter_receipt(**over) -> ChapterReceipt:
     from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
     base = dict(
-        chapter_ordinal=1, writer_view_sha256=H64, validation_sha256='b' * 64,
+        name_mentions=(), non_name_spans=(), chapter_ordinal=1, writer_view_sha256=H64, validation_sha256='b' * 64,
         machine_view_sha256='d' * 64,
         prose_sha256=('c' * 64), request_identity='req-1',
         protocol_version='p1', renderer_version='r1', validator_version=BODY_VALIDATOR_VERSION,
@@ -386,8 +387,10 @@ def test_verification_ir_carries_continuity_fact_view():
     ir = VerificationIR(
         scene_id='s02', obligations=(_obligation('ob2'),),
         beats=(BeatIR(beat_ref='s02#bt1', event='e'),),
-        continuity_fact_view=('s01 已接受：约定成立且为夫妻共同秘密',))
-    assert ir.continuity_fact_view[0].startswith('s01')
+        continuity_fact_view=(SupportingBeatEvent(
+            beat_ref='s01#bt1', event='约定成立且为夫妻共同秘密'),))
+    assert ir.continuity_fact_view[0].beat_ref == 's01#bt1'
+    assert ir.continuity_fact_view[0].event == '约定成立且为夫妻共同秘密'
 
 
 def test_brief_hides_source_topology_behaviorally():
@@ -439,9 +442,11 @@ def test_stage_engine_packages_import_discipline():
                     'dataclasses', 'collections', 'functools', 'itertools',
                     'enum', 'abc', 'datetime', 'json', 're', 'os', 'sys', 'copy',
                     'math')
+    # core.repair 是契约已登记的纯 schema／路径原语；精确放行此模块，
+    # 不扩成 novel.core 子树，付费、持久化和编排依赖仍由下方禁项守住。
     allowed_roots = ('contracts', 'novel.errors', 'novel.stages',
-                     'novel.core.text', 'novel.core.name_materials',
-                     'novel.core.material_trace', 'novel.core.validation')
+                     'novel.core.text', 'novel.core.name_materials', 'novel.core.name_text',
+                     'novel.core.material_trace', 'novel.core.validation', 'novel.core.repair')
     banned_novel = ('novel.llm', 'novel.orchestrator', 'novel.store',
                     'novel.views', 'novel.api', 'novel.run', 'novel.work_units',
                     'novel.consumption', 'novel.prov', 'novel.paths')

@@ -15,15 +15,17 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.schema.naming import NameAssignment, NameMapV5, TargetName
+from contracts.schema.name_text import NameMention
 from contracts.schema.source import (
     CharactersArtifactV6, CharactersCore, NameStructure,
 )
-from novel.stages.common import apply_replacements
+from novel.core.name_text import resolve_name_text
 from novel.stages.stage2.names import (
     compile_name_structure, surname_construction_probe,
 )
 from novel.stages.stage7.naming import (
-    compile_name_map, compile_surface_replacements, diff_proof, naming_projection,
+    apply_bound_names, compile_bound_replacements, compile_name_map,
+    diff_proof, naming_projection,
 )
 from novel.stages.stage7.assembly import (
     BodyAccess, assemble_delivery, chapter_access, delivery_identity,
@@ -364,19 +366,21 @@ def _green_map(chars):
 def test_surface_replacements_long_name_and_family_forms():
     chars = _chars()
     name_map = _green_map(chars)
-    table, errors = compile_surface_replacements(chars, name_map)
+    table, errors = compile_bound_replacements(chars, name_map)
     assert not errors, errors
     # 复姓完整替换，不被截成首字
-    assert table['皇甫珩'] == '慕容珩'
-    assert table['皇甫公子'] == '慕容公子'
+    assert table['huang_fu_heng']['皇甫珩'] == '慕容珩'
+    assert table['huang_fu_heng']['皇甫公子'] == '慕容公子'
     # 家族级称谓按同 family_id 新姓一致展开
-    assert table['陈家'] == '沈家'
+    assert table['chen_yan']['陈家'] == '沈家'
     # 独立化名显式赋值，不由新名推导
-    assert table['云溪居士'] == '白云先生'
-    text = '皇甫珩与陈砚在陈家。云溪居士旁观。'
-    renamed, claims = apply_replacements(text, table)
+    assert table['ju_shi']['云溪居士'] == '白云先生'
+    resolved = resolve_name_text('[[name:huang_fu_heng|皇甫珩]]与[[name:chen_yan|陈砚]]在'
+                                 '[[name:chen_yan|陈家]]。[[name:ju_shi|云溪居士]]旁观。')
+    renamed, errors = apply_bound_names(resolved.text, resolved.mentions, table)
     assert renamed == '慕容珩与沈砚在沈家。白云先生旁观。'
-    assert [c.literal for c in claims] == ['皇甫珩', '陈砚', '陈家', '云溪居士']
+    assert not errors
+    assert [c.surface for c in resolved.mentions] == ['皇甫珩', '陈砚', '陈家', '云溪居士']
 
 
 def test_released_surfaces_close_over_the_replacement_table():
@@ -386,11 +390,10 @@ def test_released_surfaces_close_over_the_replacement_table():
     带名称谓零残留、逐一对上新名，且不出现旧姓配新名（陈砚 不得残存）。
     """
     from novel.stages.stage4.design import assemble_body_design
-    from novel.stages.stage7.naming import check_residual
 
     chars = _chars()
     name_map = _green_map(chars)
-    table, errors = compile_surface_replacements(chars, name_map)
+    table, errors = compile_bound_replacements(chars, name_map)
     assert not errors, errors
     surface_owner = {s.surface: cid for cid, entry in chars.characters.items()
                      for s in entry.surfaces}
@@ -421,13 +424,15 @@ def test_released_surfaces_close_over_the_replacement_table():
         registered_surfaces=registered, expression_requirements=sample_requirements(), source_narration=sample_narration())
     assert body is not None and not errors, errors
 
-    prose = '、'.join(released) + '同席。'
-    renamed, claims = apply_replacements(prose, table)
-    assert check_residual(renamed, table, claims, ()) == [], '获准输出的称谓必须全部换成新名'
+    resolved = resolve_name_text('、'.join(f'[[name:{surface_owner[s]}|{s}]]' for s in released)
+                                 + '同席。', surfaces=registered)
+    assert not resolved.errors
+    renamed, errors = apply_bound_names(resolved.text, resolved.mentions, table)
+    assert not errors, '获准输出的称谓必须全部换成新名'
     for old, new in (('皇甫珩', '慕容珩'), ('皇甫公子', '慕容公子'),
                      ('陈砚', '沈砚'), ('陈松', '沈松'), ('赵老大', '柳老大'),
                      ('云溪居士', '白云先生')):
-        assert table[old] == new and new in renamed
+        assert table[surface_owner[old]][old] == new and new in renamed
         assert old not in renamed, f'{old} 未换成本名'
     assert '夫人' in renamed, '纯称谓不进替换表，原样保留'
     # 旧姓配新名不得出现（家族新姓一致展开的并集之外）
@@ -435,68 +440,35 @@ def test_released_surfaces_close_over_the_replacement_table():
         assert mixed not in renamed
 
 
-def test_same_surface_multiple_values_rejected_same_value_ok():
-    from novel.stages.stage7.naming import _record
-    # 同一源字面对应多个不同值：报错并列出 owner，不按替换顺序选
-    errors: list[str] = []
-    owners: dict[str, str] = {}
-    table_x: dict[str, str] = {}
-    _record(table_x, owners, '大郎', '柳大', 'a', errors)
-    _record(table_x, owners, '大郎', '顾大', 'b', errors)
-    assert any('多个不同值' in e and 'a' in e and 'b' in e for e in errors)
-    # 同值多归属：合法（共享同姓本身不是冲突）
-    _record(table_x, owners, '二郎', '顾二', 'b', errors)
-    _record(table_x, owners, '二郎', '顾二', 'c', errors)
-    assert not any('二郎' in e for e in errors)
+def test_same_surface_without_person_decision_is_refused():
+    mentions = (NameMention(start=0, end=2, char_id='a', surface='大郎'),)
+    assert apply_bound_names('大郎回家。', mentions, {'b': {'大郎': '顾大'}})[1]
+    assert apply_bound_names('大郎回家。', mentions, {'a': {'大郎': '柳大'}}) == ('柳大回家。', [])
 
 
-def test_replacement_value_containing_key_rejected():
-    chars = _chars()
-    name_map = _green_map(chars)
-    table, _ = compile_surface_replacements(chars, name_map)
-    tampered = dict(table)
-    tampered['砚哥'] = '沈砚哥里含陈砚'  # 值包含另一 key：链式替换风险
-    _, errors = compile_surface_replacements(chars, name_map)
-    assert not errors  # 原表干净
-    from novel.stages.stage7.naming import _record
-    errors2: list[str] = []
-    owners: dict[str, str] = {'陈砚': 'x'}
-    table_y = {'陈砚': '沈砚'}
-    _record(table_y, owners, '砚哥', '沈砚里含陈砚', 'y', errors2)
-    for key, value in table_y.items():
-        for other in table_y:
-            if other != key and other in value:
-                errors2.append('链式')
-    assert any('链式' in e for e in errors2)
-    del tampered
+def test_replacement_value_containing_another_source_name_is_applied_once():
+    resolved = resolve_name_text('[[name:a|砚哥]]与[[name:b|陈砚]]同行。')
+    renamed, errors = apply_bound_names(resolved.text, resolved.mentions,
+                                      {'a': {'砚哥': '新陈砚'}, 'b': {'陈砚': '沈砚'}})
+    assert not errors and renamed == '新陈砚与沈砚同行。'
 
 
-# ───────────────────────── residual 与 diff proof ─────────────────────────
-
-def test_residual_claims_and_kept_no_false_positives():
-    table = {'裴书远': '林书言', '裴': '林'}
-    text = '裴书远与裴兄同行'
-    renamed, claims = apply_replacements(text, table)
-    # 目标名含旧字面：书言/林 出现在替换值里 → 认领区间吸收，不误报
-    from novel.stages.stage7.naming import check_residual
-    assert check_residual(renamed, table, claims) == []
-    # kept 包含映射键：该字面是合法保留面 → 从查禁集剔除
-    assert check_residual('裴家老宅', table, (), ('裴',)) == []
-    # 未认领且应替换的残留 → 拒
-    problems = check_residual('裴书远与裴兄'.replace('裴书远', '林书言') + '裴', table, claims[:0])
-    assert problems and '裴' in problems[0]
+def test_kept_mention_and_target_containing_old_literal_do_not_affect_ordinary_words():
+    resolved = resolve_name_text('[[name:a|白]]与[[name:b|白家公子]]说[[text|对白]]。')
+    table = {'a': {'白': '赵白'}, 'b': {'白家公子': '白家公子'}}
+    renamed, errors = apply_bound_names(resolved.text, resolved.mentions, table)
+    assert not errors and renamed == '赵白与白家公子说对白。'
+    wrong = resolved.mentions[0].model_copy(update={'surface': '赵'})
+    assert apply_bound_names(resolved.text, (wrong,), table)[1]
 
 
 def test_diff_proof_green_and_tamper_red():
-    table = {'裴书远': '林书言', '陆大哥': '顾大哥'}
-    original = '裴书远对陆大哥说。'
-    renamed, claims = apply_replacements(original, table)
-    assert diff_proof(original, renamed, table, claims) == []
-    tampered = renamed + '多一个字'
-    assert diff_proof(original, tampered, table, claims)
+    resolved = resolve_name_text('[[name:p|裴书远]]对[[name:l|陆大哥]]说。')
+    table = {'p': {'裴书远': '林书言'}, 'l': {'陆大哥': '顾大哥'}}
+    renamed = '林书言对顾大哥说。'
+    assert diff_proof(resolved.text, renamed, table, resolved.mentions) == []
+    assert diff_proof(resolved.text, renamed + '多一个字', table, resolved.mentions)
 
-
-# ───────────────────────── Assembly：就绪边界与身份分离 ─────────────────────────
 
 def test_body_access_states_separated():
     access = chapter_access(['s01', 's02', 's03', 's04'], {
@@ -529,10 +501,14 @@ def test_chapter_access_separates_stale_from_missing_and_rejected():
     prose = {1: '第一章。', 2: '第二章。', 3: '第三章。', 4: '第四章。'}
 
     def receipt(writer_view, ordinal):
-        from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
-        return {'status': 'accepted', 'writer_view_sha256': writer_view,
+        from contracts.schema.receipt import (
+            BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS, RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
+        )
+        return {'status': 'accepted', 'chapter_ordinal': ordinal, 'writer_view_sha256': writer_view,
                 'validator_version': BODY_VALIDATOR_VERSION, 'mechanical_checks': BODY_MECHANICAL_CHECKS,
+                'protocol_version': WRITER_PROTOCOL_VERSION, 'renderer_version': RENDERER_VERSION,
                 'validation_sha256': '9' * 64, 'machine_view_sha256': 'e' * 64,
+                'name_mentions': (), 'non_name_spans': (),
                 'prose_sha256': sha(prose[ordinal])}
 
     receipts = {
@@ -563,21 +539,49 @@ def test_chapter_access_separates_stale_from_missing_and_rejected():
 
 def _hook_receipt_dict(prose: str, context_sha: str, status: str = 'accepted') -> dict:
     import hashlib
+    from contracts.schema.receipt import HOOK_VALIDATOR_VERSION, HOOK_MECHANICAL_CHECKS
     return {'hook_context_sha256': context_sha, 'prose_sha256':
             hashlib.sha256(prose.encode('utf-8')).hexdigest(),
-            'request_identity': 'r1', 'validator_version': 'v1', 'status': status,
-            'mechanical_checks': ('non_empty',), 'semantic': 'unverified'}
+            'request_identity': 'r1', 'validator_version': HOOK_VALIDATOR_VERSION, 'status': status,
+            'mechanical_checks': HOOK_MECHANICAL_CHECKS, 'semantic': 'unverified',
+            'name_mentions': _delivery_mentions(prose), 'non_name_spans': ()}
+
+
+def _delivery_mentions(prose):
+    import re
+    return [NameMention(start=match.start(), end=match.end(), char_id='pei',
+                        surface='裴书远').model_dump()
+            for match in re.finditer('裴书远', prose)]
+
+
+def _body_receipt_dict(prose):
+    import hashlib
+    from contracts.schema.receipt import (
+        BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS, RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
+    )
+    return {'status': 'accepted', 'chapter_ordinal': 1, 'prose_sha256': hashlib.sha256(prose.encode()).hexdigest(),
+            'writer_view_sha256': 'a' * 64, 'validation_sha256': 'b' * 64,
+            'validator_version': BODY_VALIDATOR_VERSION, 'mechanical_checks': BODY_MECHANICAL_CHECKS,
+            'protocol_version': WRITER_PROTOCOL_VERSION, 'renderer_version': RENDERER_VERSION,
+            'name_mentions': _delivery_mentions(prose), 'non_name_spans': ()}
+
+
+def _delivery_identities():
+    from novel.stages.common import ChapterIdentities
+    return {1: ChapterIdentities(writer_view_sha256='a' * 64, validation_sha256='b' * 64,
+                                 machine_view_sha256='c' * 64)}
 
 
 def _ready_delivery():
-    table = {'裴书远': '林书言'}
+    table = {'pei': {'裴书远': '林书言'}}
     hook, chapter1 = '楔子：裴书远夜行。', '正文：裴书远到家。'
     context_sha = 'c' * 64
     receipt = _hook_receipt_dict(hook, context_sha)
     access = chapter_access([1], {1: {'status': 'accepted'}})
     outcome = assemble_delivery(chapter_prose={1: chapter1}, body=access, hook_prose=hook,
                                 hook_receipt=receipt, hook_context_sha256=context_sha,
-                                replacements=table, kept_literals=())
+                                replacements=table, kept_literals=(),
+                                chapter_receipts={1: _body_receipt_dict(chapter1)}, identities_by_ordinal=_delivery_identities())
     return outcome, table, hook, chapter1, context_sha, receipt, access
 
 
@@ -589,14 +593,16 @@ def test_assembly_replay_is_byte_stable_and_identity_separated():
         '楔子：林书言夜行。\n\n第1章\n正文：林书言到家。')
     again = assemble_delivery(chapter_prose={1: chapter1}, body=access, hook_prose=hook,
                               hook_receipt=receipt, hook_context_sha256=context_sha,
-                              replacements=table, kept_literals=())
+                              replacements=table, kept_literals=(),
+                              chapter_receipts={1: _body_receipt_dict(chapter1)}, identities_by_ordinal=_delivery_identities())
     assert again.delivery_bytes == outcome.delivery_bytes
     assert again.delivery_identity == outcome.delivery_identity
     # 换 NameMap：交付身份变，但 Stage5/Hook 回执的输入原样（回执字段无交付材料）
-    other = {'裴书远': '周书言'}
+    other = {'pei': {'裴书远': '周书言'}}
     changed = assemble_delivery(chapter_prose={1: chapter1}, body=access, hook_prose=hook,
                                 hook_receipt=receipt, hook_context_sha256=context_sha,
-                                replacements=other, kept_literals=())
+                                replacements=other, kept_literals=(),
+                                chapter_receipts={1: _body_receipt_dict(chapter1)}, identities_by_ordinal=_delivery_identities())
     assert changed.delivery_identity != outcome.delivery_identity
     assert set(receipt) & {'name_map', 'delivery_identity'} == set()
 
@@ -677,6 +683,145 @@ def test_assembly_hook_receipt_binding_enforced():
         hook_receipt=_hook_receipt_dict(hook, context_sha, status='rejected'),
         hook_context_sha256=context_sha, replacements=table, kept_literals=())
     assert rejected.status == 'not_ready' and rejected.reason == 'hook_rejected'
+
+
+def test_bound_names_distinguish_shared_surfaces_and_leave_ordinary_words_untouched():
+    """相同短名可属于不同人；普通词命中旧名部件不参与改名。"""
+    prose = '对白说完，白向白点头，若有所思。'
+    first, second = prose.index('白向'), prose.index('白点')
+    mentions = (
+        NameMention(start=first, end=first + 1, char_id='a', surface='白'),
+        NameMention(start=second, end=second + 1, char_id='b', surface='白'),
+    )
+    renamed, errors = apply_bound_names(prose, mentions, {
+        'a': {'白': '赵'}, 'b': {'白': '钱'},
+    })
+    assert errors == [] and renamed == '对白说完，赵向钱点头，若有所思。'
+    assert apply_bound_names(prose, mentions[::-1], {'a': {'白': '赵'}, 'b': {'白': '钱'}})[1]
+    assert apply_bound_names(prose, mentions, {'a': {'白': '赵'}})[1]
+
+
+def test_bound_replacements_keep_person_identity_instead_of_rejecting_shared_surface():
+    chars = _chars()
+    first = chars.name_structure.people['zhao_a']
+    second = chars.name_structure.people['zhao_b']
+    structure = chars.name_structure.model_copy(update={'people': {
+        **chars.name_structure.people,
+        'zhao_a': first.model_copy(update={'surface_forms': {**first.surface_forms, '赵先生': '{family}先生'}}),
+        'zhao_b': second.model_copy(update={'surface_forms': {**second.surface_forms, '赵先生': '{family}先生'}}),
+    }})
+    chars = chars.model_copy(update={'name_structure': structure})
+    mapping = NameMapV5(entries=(
+        NameAssignment(char_ref='zhao_a', name=TargetName(family='林', given='青'), aliases={}),
+        NameAssignment(char_ref='zhao_b', name=TargetName(family='周', given='竹'), aliases={}),
+        *(NameAssignment(char_ref=char_id, keep_reason='本例明确保留')
+          for char_id in ('huang_fu_heng', 'chen_yan', 'chen_song', 'ju_shi')),
+    ))
+    replacements, errors = compile_bound_replacements(chars, mapping)
+    assert errors == []
+    assert replacements['zhao_a']['赵先生'] == '林先生'
+    assert replacements['zhao_b']['赵先生'] == '周先生'
+
+
+def test_assembly_requires_current_name_receipt_and_binds_mention_identity():
+    _, table, hook, chapter, context_sha, receipt, access = _ready_delivery()
+    old = {key: value for key, value in receipt.items()
+           if key not in {'name_mentions', 'non_name_spans'}}
+    refused = assemble_delivery(
+        chapter_prose={1: chapter}, body=access, hook_prose=hook,
+        hook_receipt=old, hook_context_sha256=context_sha, replacements=table,
+        chapter_receipts={1: _body_receipt_dict(chapter)}, identities_by_ordinal=_delivery_identities())
+    assert refused.status == 'not_ready' and '缺人物提及' in refused.reason
+    refused = assemble_delivery(
+        chapter_prose={1: chapter}, body=access, hook_prose=hook,
+        hook_receipt=receipt, hook_context_sha256=context_sha, replacements=table)
+    assert refused.status == 'not_ready' and '缺章级人物提及回执' in refused.reason
+
+    same_target = {**table, 'other': {'裴书远': '林书言'}}
+    first = assemble_delivery(
+        chapter_prose={1: chapter}, body=access, hook_prose=hook,
+        hook_receipt=receipt, hook_context_sha256=context_sha, replacements=same_target,
+        chapter_receipts={1: _body_receipt_dict(chapter)}, identities_by_ordinal=_delivery_identities())
+    changed = {**receipt, 'name_mentions': [dict(row, char_id='other')
+                                          for row in receipt['name_mentions']]}
+    second = assemble_delivery(
+        chapter_prose={1: chapter}, body=access, hook_prose=hook,
+        hook_receipt=changed, hook_context_sha256=context_sha, replacements=same_target,
+        chapter_receipts={1: _body_receipt_dict(chapter)}, identities_by_ordinal=_delivery_identities())
+    assert first.delivery_bytes == second.delivery_bytes
+    assert first.delivery_identity != second.delivery_identity
+
+
+@pytest.mark.parametrize('field,value', [
+    ('validator_version', 'old-validator'), ('mechanical_checks', None),
+    ('mechanical_checks', ('non_empty',)), ('name_mentions', ''),
+    ('non_name_spans', {}), ('name_mentions', None),
+])
+def test_assembly_rejects_old_hook_checks_or_non_array_identity_records(field, value):
+    _, table, hook, chapter, context_sha, receipt, access = _ready_delivery()
+    receipt = {**receipt, field: value}
+    outcome = assemble_delivery(
+        chapter_prose={1: chapter}, body=access, hook_prose=hook,
+        hook_receipt=receipt, hook_context_sha256=context_sha, replacements=table,
+        chapter_receipts={1: _body_receipt_dict(chapter)}, identities_by_ordinal=_delivery_identities())
+    assert outcome.status == 'not_ready'
+    assert outcome.reason.startswith(('hook_validator_mismatch', 'hook_name_bindings:'))
+
+
+def test_assembly_does_not_accept_status_only_body_access_as_binding_proof():
+    _, table, hook, chapter, context_sha, receipt, access = _ready_delivery()
+    assert access.ready, '状态只读分类可以就绪，但不能替代当前输入证据'
+    outcome = assemble_delivery(
+        chapter_prose={1: chapter}, body=access, hook_prose=hook,
+        hook_receipt=receipt, hook_context_sha256=context_sha, replacements=table,
+        chapter_receipts={1: _body_receipt_dict(chapter)})
+    assert outcome.status == 'not_ready' and '缺当前章包身份' in outcome.reason
+    for inputs in ({'identities_by_ordinal': _delivery_identities()}, {'chapter_prose': {1: chapter}}):
+        with pytest.raises(ValueError, match='同时提供'):
+            chapter_access([1], {1: _body_receipt_dict(chapter)}, **inputs)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('validator_version', 'old-validator'), ('mechanical_checks', None),
+    ('protocol_version', 'old-protocol'), ('renderer_version', 'old-renderer'),
+    ('writer_view_sha256', 'f' * 64), ('validation_sha256', 'f' * 64),
+    ('name_mentions', ''), ('non_name_spans', None),
+    ('chapter_ordinal', 2), ('chapter_ordinal', True), ('chapter_ordinal', None),
+])
+def test_assembly_rechecks_current_body_identity_even_if_caller_claims_ready(field, value):
+    _, table, hook, chapter, context_sha, receipt, access = _ready_delivery()
+    body_receipt = {**_body_receipt_dict(chapter), field: value}
+    outcome = assemble_delivery(
+        chapter_prose={1: chapter}, body=access, hook_prose=hook,
+        hook_receipt=receipt, hook_context_sha256=context_sha, replacements=table,
+        chapter_receipts={1: body_receipt}, identities_by_ordinal=_delivery_identities())
+    assert outcome.status == 'not_ready' and outcome.reason.startswith('body_name_bindings:')
+
+
+@pytest.mark.parametrize('side', ['hook', 'body'])
+def test_assembly_refuses_protocol_wire_in_formal_prose(side):
+    _, table, hook, chapter, context_sha, receipt, access = _ready_delivery()
+    if side == 'hook':
+        hook = '[[text|楔子]]'
+        receipt = _hook_receipt_dict(hook, context_sha)
+    else:
+        chapter = '[[text|正文]]'
+    outcome = assemble_delivery(
+        chapter_prose={1: chapter}, body=access, hook_prose=hook,
+        hook_receipt=receipt, hook_context_sha256=context_sha, replacements=table,
+        chapter_receipts={1: _body_receipt_dict(chapter)}, identities_by_ordinal=_delivery_identities())
+    assert outcome.status == 'not_ready' and '仍含身份协议定界符' in outcome.reason
+
+
+def test_delivery_identity_binds_non_person_declarations_even_with_identical_prose():
+    first, table, hook, chapter, context_sha, receipt, access = _ready_delivery()
+    changed = {**receipt, 'non_name_spans': [{'start': 0, 'end': 2}]}
+    second = assemble_delivery(
+        chapter_prose={1: chapter}, body=access, hook_prose=hook,
+        hook_receipt=changed, hook_context_sha256=context_sha, replacements=table,
+        chapter_receipts={1: _body_receipt_dict(chapter)}, identities_by_ordinal=_delivery_identities())
+    assert first.delivery_bytes == second.delivery_bytes
+    assert first.delivery_identity != second.delivery_identity
 
 
 def test_delivery_identity_pure_function():

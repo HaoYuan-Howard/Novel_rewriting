@@ -3,7 +3,9 @@ from dataclasses import replace
 
 import pytest
 
-from novel.core.material_trace import MaterialIssue, MaterialSource
+from novel.core.material_trace import (
+    MaterialFragment, MaterialIssue, MaterialLines, MaterialSource, sources_for_span,
+)
 from novel.stages.stage4 import inspect_body_materials, plan_material_repairs
 from tests.test_str06_hook import _characters
 from tests.test_str06_r10b_writer_packet import _design, _binding, _requirements
@@ -119,6 +121,18 @@ def test_missing_stale_and_ambiguous_origins_do_not_route():
     assert plan_material_repairs([issue], body=body, binding=binding, brief=brief)[0].action == 'stop'
 
 
+def test_missing_display_cannot_assign_an_owner_without_formal_material_proof():
+    """无显示面不是来源证明；模板和过期投影不得借该分支消耗 Design 修订轮。"""
+    body, binding, brief, chars = _conflict()
+    proposition = brief.propositions[0]
+    for origins in ((), (MaterialSource('projection', 'sc01', 'readonly', '陆大哥'),),
+                    (MaterialSource('knowledge', proposition.kp_id, 'statement', '陆大哥过期命题'),)):
+        issue = MaterialIssue('positive_material_leak', 'rendered_template', 0, '陆大哥', origins, 1)
+        repair, = plan_material_repairs([issue], body=body, binding=binding, brief=brief,
+                                        structure=chars.name_structure)
+        assert repair.action == 'stop' and repair.owner == ''
+
+
 def test_identity_excludes_display_location_and_wording():
     from novel.stages.owner_revision import _fingerprint
     body, binding, brief, chars = _conflict()
@@ -163,7 +177,7 @@ def test_correction_preserves_history_and_refuses_stale_preview(tmp_path):
         hook_wire_v3(_hook_wire(
             opening_facts=[], forbidden_reveals=[],
             reader_expectation={
-                'kind': 'fact', 'focus': '夫君所谓赴文会的真实目的是什么？',
+                'kind': 'fact', 'focus': '所谓赴文会的真实目的是什么？',
                 'answer': {'ref': {'scene': 'sc02', 'beat': 'b02'},
                            'address': {'domain': 'knowledge', 'subjects': ['yun_niang'],
                                        'holder': 'yun_niang', 'key': brief.propositions[0].kp_id}}})),
@@ -246,9 +260,11 @@ def test_internal_id_issue_carries_only_sources_that_contain_the_handle():
     from novel.stages.common import positive_material_issues
     own = MaterialSource('design', 'sc01#b01', 'target_delta/0', 'fu_jun')
     other = MaterialSource('design', 'sc01#b01', 'event', '夫君出门')
-    longer = MaterialSource('design', 'sc01#b01', 'event', 'fu_jun_x 是另一个标识')
+    lines = MaterialLines()
+    lines.append_fragments(MaterialFragment('夫君出门', (other,)),
+                           '——拍末应成立：', MaterialFragment('fu_jun', (own,)))
     issue, = positive_material_issues(
-        {'must_realize/0': MaterialPart('夫君出门——拍末应成立：fu_jun', (own, other, longer))},
+        {'must_realize/0': lines.parts()[0]},
         released=(), withheld=(), internal_ids=['fu_jun'], chapter_ordinal=7)
     assert issue.code == 'internal_id_leak' and issue.sources == (own,)
     assert issue.chapter_ordinal == 7
@@ -256,6 +272,121 @@ def test_internal_id_issue_carries_only_sources_that_contain_the_handle():
         {'must_realize/0': MaterialPart('fu_jun：出门', (other,))},
         released=(), withheld=(), internal_ids=['fu_jun'], chapter_ordinal=7)
     assert rendered.sources == ()
+
+
+def test_material_span_tracks_each_occurrence_and_keeps_templates_unowned():
+    """同一行相同字面两次出现：模板中的那次不能借正式字段中的那次获得 owner。"""
+    source = MaterialSource('design', 'book', 'book_style', 'fu_jun')
+    lines = MaterialLines()
+    lines.append_fragments('模板 fu_jun：', MaterialFragment('fu_jun', (source,)))
+    part, = lines.parts()
+    first, second = part.text.index('fu_jun'), part.text.rindex('fu_jun')
+    assert sources_for_span(part, first, first + len('fu_jun')) == ()
+    assert sources_for_span(part, second, second + len('fu_jun')) == (source,)
+    assert sources_for_span(part, second - 1, second + 1) == (), '跨过模板边界保持 unknown'
+    from novel.core.material_trace import MaterialPart
+    assert sources_for_span(MaterialPart(part.text, (source,)), second,
+                            second + len('fu_jun')) == (), '旧的行级来源只能诊断'
+
+
+def test_material_span_survives_projection_and_dedup_only_with_proof():
+    """字段内投影坐标可证；模板和其它字段不提供同位语折叠证据。"""
+    source = MaterialSource('design', 'sc01#b01', 'event', '原称谓去查案')
+    other = MaterialSource('obligation', 'ob01', 'statement', '原称谓去查案')
+    lines = MaterialLines(lambda text: (text.replace('原称谓', '他'), ()))
+    for origin in (source, other):
+        lines.append_fragments('承接：', MaterialFragment('原称谓去查案', (origin,)))
+    part, = lines.parts(deduplicate=True)
+    assert part.text == '承接：他去查案'
+    assert sources_for_span(part, 4, 7) == (source, other)
+    lines.append('承接：他去查案')
+    unproven, = lines.parts(deduplicate=True)
+    assert unproven.sources == (source, other)
+    assert sources_for_span(unproven, 4, 7) == (), '任一重复产出路径没有来源就不能自动回派'
+    folding = MaterialLines(lambda text: (text.replace('他原称谓', '他'), ()))
+    folding.append_fragments('他', MaterialFragment('原称谓', (source,)))
+    folded, = folding.parts()
+    assert folded.text == '他原称谓' and folded.sources == (source,)
+    assert folded.ordinary_spans == ((0, 1),)
+    assert sources_for_span(folded, 1, 4) == (source,), '模板不参与语义字段的同位语折叠'
+
+
+def test_identity_candidates_do_not_join_across_declared_or_template_boundaries():
+    from novel.stages.common import positive_material_issues
+    text = '[[name:a|白]][[text|若非如此]]'
+    origin = MaterialSource('design', 'book', 'book_style', text)
+    lines = MaterialLines()
+    lines.append_fragments('旁白：', MaterialFragment(text, (origin,)))
+    assert positive_material_issues({'row': lines.parts()[0]}, released=('白',),
+        withheld=('白若', '旁白'), internal_ids=()) == ()
+    blocked = MaterialLines()
+    blocked_origin = replace(origin, text='[[name:a|白若]]')
+    blocked.append_fragments(MaterialFragment('[[name:a|白若]]', (blocked_origin,)))
+    issue, = positive_material_issues({'row': blocked.parts()[0]}, released=(),
+        withheld=('白若',), internal_ids=())
+    assert issue.code == 'positive_material_leak' and issue.literal == '白若'
+    assert issue.sources == (blocked_origin,)
+
+
+@pytest.mark.parametrize('code', ['name_text_syntax', 'name_text_reference', 'name_text_unclassified'])
+def test_identity_protocol_failures_keep_actual_code_and_only_route_mutable_fields(code):
+    body, binding, brief, _ = _conflict()
+    text = {'name_text_syntax': '[[text|字面',
+            'name_text_reference': '[[name:unknown|字面]]',
+            'name_text_unclassified': '字面'}[code]
+    body = body.model_copy(update={'book_style': text})
+    field = MaterialSource('design', 'book', 'book_style', body.book_style)
+    issue = MaterialIssue(code, 'row', 0, '字面', (field,), 1, reason='明确的身份协议诊断')
+    own, = plan_material_repairs([issue], body=body, binding=binding, brief=brief)
+    assert own.owner == 'design' and own.issue.context['validation_code'] == code
+    assert '内部句柄' not in issue.message and '未释放专名字面' not in issue.message
+    proposition = brief.propositions[0]
+    readonly = MaterialSource('knowledge', proposition.kp_id, 'statement', proposition.statement)
+    for origins in ((), (readonly,), (MaterialSource('projection', 'sc01', 'readonly', '字面'),)):
+        stopped, = plan_material_repairs([replace(issue, sources=origins)], body=body,
+                                        binding=binding, brief=brief)
+        assert stopped.action == 'stop' and stopped.owner == ''
+    unknown, = plan_material_repairs([replace(issue, code='future_unknown_code')], body=body,
+                                    binding=binding, brief=brief)
+    assert unknown.action == 'stop' and '未识别' in replace(issue, code='future_unknown_code').message
+
+
+def test_cross_scene_support_event_keeps_exact_design_origin_through_writer():
+    """真实 compiler→IR→章包→renderer→回派链：前场事实不再冒充无owner的projection。"""
+    from novel.stages.common import _build_writer_packet, project_chapter_packet
+    body = _design()
+    scenes, beats = list(body.scenes), list(body.scenes[0].beats)
+    beats[0] = beats[0].model_copy(update={'event': beats[0].event + '，fu_jun 留下字条'})
+    scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})
+    body = body.model_copy(update={'scenes': tuple(scenes)})
+    binding = _binding(body)
+    binding = binding.model_copy(update={'entries': tuple(
+        entry.model_copy(update={'supporting_beat_refs': ('sc01#b01', 'sc02#b01')})
+        if entry.obligation_id == 'ob02' else entry for entry in binding.entries)})
+    brief, chars = _requirements(), _characters()
+    before = [value.model_dump_json() for value in (body, binding, brief, chars)]
+    view = inspect_body_materials(body, binding, brief, chars, budget=4000,
+                                  length_band=(0.6, 1.3))
+    assert not view.errors and view.ir is not None
+    packet = project_chapter_packet(view.ir, 2)
+    supporting, = packet.chapter.scenes[0].verification_ir.continuity_fact_view
+    assert supporting.beat_ref == 'sc01#b01' and supporting.event == beats[0].event
+    _, parts = _build_writer_packet(packet)
+    part, = [part for part in parts['continuity'] if part.text.startswith('前场已成立：')]
+    start = part.text.index('fu_jun')
+    origins = sources_for_span(part, start, start + len('fu_jun'))
+    assert len(origins) == 1
+    origin, = origins
+    assert (origin.kind, origin.ref, origin.field, origin.text) == (
+        'design', 'sc01#b01', 'event', beats[0].event)
+    issue = MaterialIssue('internal_id_leak', 'continuity', start, 'fu_jun', origins, 2)
+    repair, = plan_material_repairs([issue], body=body, binding=binding, brief=brief)
+    assert (repair.action, repair.owner, repair.node) == (
+        'revise_upstream', 'design', 'str06.stage4.body_design')
+    stale, = plan_material_repairs([replace(issue, sources=(replace(origin,
+        text='fu_jun 由投影臆造的事件'),))], body=body, binding=binding, brief=brief)
+    assert stale.action == 'stop' and stale.owner == ''
+    assert [value.model_dump_json() for value in (body, binding, brief, chars)] == before
 
 
 def test_internal_id_in_design_own_value_routes_design_not_code_defect():
@@ -326,10 +457,64 @@ def test_hook_owned_text_routes_only_with_formal_hook_proof():
         reader_expectation={'kind': 'action', 'focus': '人物怎样查证线索',
                             'followup_refs': [sorted(body.beat_refs())[-1]]},
         local_focus='以姓名线索组织即时反应')
-    graph = PresentationGraph(**{**body.model_dump(), 'contract_version': 'str06-rc23'},
-                              hook=hook)
+    from novel.stages.stage4 import publish_graph
+    graph = publish_graph(body, hook)
     for value, expected in [(hook.local_focus, 'hook_design'), ('凭空改写的提示', '')]:
         problem = MaterialIssue('positive_material_leak', 'hook/writer_view', 0, value,
             (MaterialSource('hook', 'hook', 'local_focus', value),))
         repair, = plan_material_repairs([problem], body=graph, binding=binding, brief=brief)
         assert repair.owner == expected
+
+
+def test_hook_renderer_emits_scoped_sources_and_keeps_readonly_facts_unknown():
+    from tests.test_str06_hook import _green_pair
+    from novel.stages.common import _hook_render_parts, hook_material_issues
+    _, graph, context = _green_pair()
+    _, binding, brief, _ = _conflict()
+    text = 'fu_jun 是错误句柄'
+    hook = graph.hook.model_copy(update={'local_focus': text})
+    graph = graph.model_copy(update={'hook': hook})
+    context = context.model_copy(update={'local_focus': text})
+    issues = hook_material_issues(context, internal_ids=('fu_jun',))
+    own, = [issue for issue in issues if issue.code == 'internal_id_leak']
+    assert len(own.sources) == 1
+    assert (own.sources[0].kind, own.sources[0].ref, own.sources[0].field) == ('hook', 'hook', 'local_focus')
+    repaired, = plan_material_repairs([own], body=graph, binding=binding, brief=brief)
+    assert repaired.owner == 'hook_design'
+    facts = list(context.opening_facts)
+    facts[0] = facts[0].model_copy(update={'text': text})
+    changed = context.model_copy(update={'local_focus': '眼前动作', 'opening_facts': tuple(facts)})
+    readonly, = [issue for issue in hook_material_issues(changed, internal_ids=('fu_jun',))
+                 if issue.code == 'internal_id_leak']
+    assert readonly.sources and {source.kind for source in readonly.sources} == {'projection'}
+    stopped, = plan_material_repairs([readonly], body=graph, binding=binding, brief=brief)
+    assert stopped.action == 'stop'
+    parts, _ = _hook_render_parts(context)
+    field, = [part for part in parts if part.text.startswith('- 局部表现重点：')]
+    assert sources_for_span(field, 0, 2) == (), '固定模板不能借同一行的Hook字段获取owner'
+
+
+def test_hook_selected_event_and_body_event_have_distinct_proven_permissions():
+    from contracts.schema.hook import HookDesign, HookMaterial
+    from novel.stages.stage4 import publish_graph
+    body, binding, brief, _ = _conflict()
+    ref = sorted(body.beat_refs())[0]
+    scenes, beats = list(body.scenes), list(body.scenes[0].beats)
+    beats[0] = beats[0].model_copy(update={'event': beats[0].event + '，fu_jun 留下字条'})
+    scenes[0] = scenes[0].model_copy(update={'beats': tuple(beats)})
+    body = body.model_copy(update={'scenes': tuple(scenes)})
+    hook = HookDesign(pov=body.narration,
+        materials=(HookMaterial(beat_ref=ref, emphasis='develop', transition='start'),),
+        reader_expectation={'kind': 'action', 'focus': '眼前行动如何发展',
+                            'followup_refs': [sorted(body.beat_refs())[-1]]}, local_focus='眼前行动')
+    graph = publish_graph(body, hook)
+    event = graph.beat(*ref.split('#')).event
+    for source, expected in (
+            (MaterialSource('hook', ref, 'materials/0/event', event), 'hook_design'),
+            (MaterialSource('design', ref, 'event', event), 'design'),
+            (MaterialSource('hook', ref, 'materials/0/event', '投影臆造的事件'), '')):
+        issue = MaterialIssue('internal_id_leak', 'hook/writer_view/1', 0, 'fu_jun', (source,))
+        repair, = plan_material_repairs([issue], body=graph, binding=binding, brief=brief)
+        assert repair.owner == expected
+        if expected == 'hook_design':
+            assert '不得改写正文事件' in repair.issue.message

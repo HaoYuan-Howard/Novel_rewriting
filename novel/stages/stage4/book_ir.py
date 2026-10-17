@@ -38,9 +38,9 @@ from contracts.schema.design import BodyDesign, ChapterAssignment
 from contracts.schema.execution import ExecutionPlan
 from contracts.schema.grounding import BriefFactLock, SemanticBinding
 from contracts.schema.source import NameProjection, NameStructure
-from contracts.schema.state import SurfaceRelease, WithheldNameBinding
+from contracts.schema.state import SurfaceRelease
 from novel.stages.stage4.fold import ThreadFold, fold_accepted_prefix
-from novel.core.name_materials import withheld_name_bindings
+from novel.core.name_materials import withheld_name_bindings, name_candidate_literals
 from novel.stages.common import (
     ReleasePrefixes, consumption_closure, project_context, unanswered_guards,
     withheld_name_literals, expand_surface_releases,
@@ -70,18 +70,28 @@ def chapter_display_fallback(
                  for cid, fallback in sorted((display_fallback or {}).items()) if fallback)
 
 
-def chapter_surface_releases(graph: BodyDesign, chapter_ordinal: int, structure: NameStructure | None = None) -> set[str]:
+def chapter_name_releases(graph: BodyDesign, chapter_ordinal: int,
+                          structure: NameStructure | None = None) -> dict[str, tuple[str, ...]]:
     """第 k 章（含）之前已释放的称谓字面：initial + 前 k 章内引入位置（D2：compile
-    时算好的章级称谓许可，机械 validator 的认领面）。"""
-    releases = {intro.char_id: set(intro.surfaces) for intro in graph.initial_surfaces}
+    时算好的章级称谓许可，机械 validator 的认领面）。个人称谓按首次声明顺序
+    去重；该顺序既是显示优先级，也进入写手请求身份，不能经 set 的进程随机序。"""
+    releases: dict[str, list[str]] = {}
+    for intro in graph.initial_surfaces:
+        releases.setdefault(intro.char_id, []).extend(intro.surfaces)
     chapter_of = {sid: ch.chapter_ordinal for ch in graph.chapters for sid in ch.scene_ids}
     for scene in graph.scenes:
         if chapter_of[scene.scene_id] > chapter_ordinal:
             continue
         for beat in scene.beats:
             for intro in beat.surface_introductions:
-                releases.setdefault(intro.char_id, set()).update(intro.surfaces)
-    return {s for faces in expand_surface_releases(releases, structure).values() for s in faces}
+                releases.setdefault(intro.char_id, []).extend(intro.surfaces)
+    return expand_surface_releases(releases, structure)
+
+
+def chapter_surface_releases(graph: BodyDesign, chapter_ordinal: int,
+                             structure: NameStructure | None = None) -> set[str]:
+    return {s for faces in chapter_name_releases(graph, chapter_ordinal, structure).values()
+            for s in faces}
 
 
 def chapter_withheld_literals(
@@ -265,11 +275,13 @@ def compile_writer_book_ir(
             length_budget=budgets[ordinal], scenes=tuple(contexts),
             continuity=_chapter_continuity(graph, previous_assignment, assignment),
             released_surfaces=released_here,
+            released_names=tuple(SurfaceRelease(char_id=cid, surfaces=faces)
+                                 for cid, faces in sorted(chapter_name_releases(
+                                     graph, ordinal, structure).items())),
+            name_candidates=name_candidate_literals(projection, structure),
             withheld_literals=withheld,
-            withheld_bindings=tuple(
-                WithheldNameBinding(literal=literal, char_id=char_id, enclosing=enclosing)
-                for literal, char_id, enclosing
-                in withheld_name_bindings(withheld, structure, released_here)),
+            withheld_bindings=withheld_name_bindings(
+                structure, chapter_name_releases(graph, ordinal, structure)),
             display_prefix=chapter_display_prefix(graph, ordinal),
             display_fallback=chapter_display_fallback(display_fallback),
             requires_released=tuple(sorted(chapter_requires.get(ordinal, ())))))

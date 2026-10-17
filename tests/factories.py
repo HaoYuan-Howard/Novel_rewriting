@@ -38,7 +38,18 @@ def stage0_machine_revise(book, new_clean: str):
     return rev.commit(store, transform, clean_text=new_clean)
 
 
-def hook_wire_v3(coordinates: dict) -> dict:
+def declared_stage4_text(text: str, *, owners: dict[str, str] | None = None) -> str:
+    """测试作者按显式人物映射逐次声明；未知别名继续作为反例。"""
+    import re
+    if owners is None:
+        owners = {'苏芸娘': 'yun_niang', '芸娘': 'yun_niang', '苏姑娘': 'yun_niang',
+                  '夫君': 'fu_jun', '陆大哥': 'fu_jun', '陆兄': 'fu_jun', '陆家': 'fu_jun'}
+    pattern = re.compile(r'\[\[.*?\]\]|' + '|'.join(sorted(owners, key=len, reverse=True)))
+    return pattern.sub(lambda match: match.group() if match.group().startswith('[[') else
+                       f'[[name:{owners[match.group()]}|{match.group()}]]', text)
+
+
+def current_hook_wire(coordinates: dict) -> dict:
     """测试用坐标式构造器：只换算引用，不替设计填入组织或阅读期待。
 
     夹具必须显式提供 v3 的 emphasis／transition／local_focus／阅读期待。
@@ -67,5 +78,16 @@ def hook_wire_v3(coordinates: dict) -> dict:
     if expectation and expectation['kind'] == 'fact' and 'answer' in expectation:
         answer = expectation.pop('answer')
         expectation['fact_ref'] = handle(answer['ref'], answer['address'])
-    result['protocol_version'] = 'stage4-hook-design-v3'
+    result['protocol_version'] = 'stage4-hook-design-v4'
+    for row in result['materials']:
+        if isinstance(row.get('presentation'), str):
+            row['presentation'] = declared_stage4_text(row['presentation'])
+    if isinstance(expectation, dict) and isinstance(expectation.get('focus'), str):
+        expectation['focus'] = declared_stage4_text(expectation['focus'])
+    if isinstance(result.get('local_focus'), str):
+        result['local_focus'] = declared_stage4_text(result['local_focus'])
     return result
+
+
+# 历史 helper 名不代表旧协议；现役样例在一个 builder 中明确声明语义。
+hook_wire_v3 = current_hook_wire

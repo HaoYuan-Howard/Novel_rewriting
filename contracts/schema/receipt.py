@@ -37,22 +37,27 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
+from contracts.schema.name_text import NameMention, NameTextSpan
 
 __all__ = ['ChapterLengthDisclosure', 'ChapterReceipt',
            'BODY_VALIDATOR_VERSION', 'BODY_MECHANICAL_CHECKS',
-           'RENDERER_VERSION', 'WRITER_PROTOCOL_VERSION', 'HOOK_VALIDATOR_VERSION']
+           'RENDERER_VERSION', 'WRITER_PROTOCOL_VERSION', 'HOOK_VALIDATOR_VERSION',
+           'HOOK_MECHANICAL_CHECKS']
 
 #: 机械规则的独立版本轴；规则变化必须换版，消费者先免费重验原章稿。
 #: v2（CS-H H3，RC-61）增加 required_literals：必保揭名承载章须出现称谓字面。
 #: v3：标题词须有标题边界，正文首句“尾声未尽”等自然用语不作包装标题。
-BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v3'
+BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v4'
 #: 写手材料与机械回执共用的正式版本轴；运行时提示、身份与预算从此取值。
-RENDERER_VERSION = 'str06-render-v12'
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v11'
-HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v4'
+RENDERER_VERSION = 'str06-render-v13'
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v12'
+HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v5'
 #: 回执宣告通过的机械检查项闭集。
 BODY_MECHANICAL_CHECKS = (
-    'non_empty', 'encoding', 'no_wrapper', 'withheld_literals', 'required_literals', 'length_band',
+    'non_empty', 'encoding', 'no_wrapper', 'name_text', 'required_literals', 'length_band',
+)
+HOOK_MECHANICAL_CHECKS = (
+    'non_empty', 'encoding', 'no_wrapper', 'name_text', 'length_cap',
 )
 
 
@@ -77,7 +82,7 @@ class ChapterLengthDisclosure(StrictModel):
 class ChapterReceipt(StrictModel):
     """章级接受回执（`stage5/acceptance/body/ch{nn}.json`）。"""
 
-    contract_version: Literal['str06-rc17'] = 'str06-rc17'
+    contract_version: Literal['str06-rc25'] = 'str06-rc25'
     chapter_ordinal: int = Field(ge=1)
     writer_view_sha256: str = Field(
         min_length=64, max_length=64,
@@ -94,6 +99,10 @@ class ChapterReceipt(StrictModel):
                     '重购；用于对账与漂移诊断，不进回执核对')
     prose_sha256: str = Field(min_length=64, max_length=64,
                               description='绑定改名前本章正文')
+    name_mentions: tuple[NameMention, ...] = Field(
+        description='compiler 从 name_text 计算的纯正文人物提及；空表须显式给出')
+    non_name_spans: tuple[NameTextSpan, ...] = Field(
+        description='compiler 计算的普通义声明区间；语义声明本身保持 unverified')
     request_identity: str = Field(min_length=1, description='被接受 attempt 的实际请求身份')
     protocol_version: str = Field(min_length=1)
     renderer_version: str = Field(min_length=1)

@@ -46,7 +46,7 @@ confirms。事实地址与时序闭合由 read_closure 共用判据验证，pend
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from pydantic import ValidationError
 
@@ -55,15 +55,16 @@ from contracts.schema.grounding import FactLockBinding, OutputConstraints, Recon
 from contracts.schema.state import EffectDomain
 from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure
+from novel.core.repair import shape_repair_paths
 from novel.core.validation import ValidationIssue
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.series import summary_order_violations
 from novel.stages.stage4.fact_bindings import (
     fact_binding_errors, fact_lock_carrier_errors, fact_lock_subject_errors,
 )
-from novel.stages.common import expand_surface_releases
+from novel.stages.common import design_wire_schema, expand_surface_releases
 from novel.stages.stage4.read_closure import confirmation_closure_errors, resolve_design_reads
-from novel.stages.stage4.materials import validate_design_materials
+from novel.stages.stage4.materials import design_wire_name_text_issues, validate_design_materials
 from novel.stages.stage4.slim import (
     FactLockMark, design_fact_marks, design_placements, expand_design_wire,
     design_wire_model, DESIGN_READ_PROTOCOLS,
@@ -358,21 +359,35 @@ def _wire_model_errors(exc: Exception) -> list[str]:
             for loc, _kind, msg in entries] or [str(exc)]
 
 
-def _wire_shape_issues(exc: Exception, prefix: str) -> list:
-    """v9 瘦 wire 的 pydantic 错误：位置 `loc` 本身就是 wire 路径（局部修订的编辑范围）。
+def _wire_shape_issues(exc: Exception, prefix: str, *, wire: dict,
+                       schema: dict | None = None) -> list:
+    """结构错误保留证据位置、子类型和必要替换能力；领域范围由定位器决定。
 
-    与 `_wire_model_errors` 同一套去噪（子项已报错的容器级 too_short 不单列），文案一致，
-    只是每条问题多带规则码与路径。仅用于直接校验 v9 wire 的那一次——中间 v5 形状的
-    错误位置不是 wire 路径，仍走 `_wire_model_errors`。
+    只用于原始 wire 的模型校验。中间 v5 形状没有对应的 wire 路径，不能借这里
+    授权局部编辑；无法归一的联合标签或坏路径是规划错误，不退整份购买来掩盖。
     """
-    entries = [(tuple(err.get('loc') or ()), str(err.get('type') or ''), err.get('msg'))
-               for err in exc.errors()]    # type: ignore[union-attr]
-    if any(kind != 'too_short' for _loc, kind, _msg in entries):
-        entries = [item for item in entries if item[1] != 'too_short']
-    return [design_issue(
-        f'{prefix}：{".".join(str(p) for p in loc) or "<顶层>"}：{msg}（按 wire 形状逐处修正）',
-        code='design_wire_shape', location=loc, paths=(loc,) if loc else ())
-        for loc, _kind, msg in entries] or [str(exc)]
+    schema = schema if schema is not None else design_wire_schema(
+        protocol=wire['protocol_version'])
+    entries = shape_repair_paths(schema, wire, exc.errors())  # type: ignore[union-attr]
+    issues = []
+    for entry in entries:
+        path = entry['replace_path']
+        if path is None:
+            code = 'wire_shape_unlocatable'
+        elif not path:
+            code = 'design_wire_root_shape'
+        else:
+            code = 'design_wire_shape'
+        location = tuple(entry['issue_path'] if entry['issue_path'] is not None
+                         else entry['raw_location'])
+        issues.append(design_issue(
+            f'{prefix}：{".".join(str(p) for p in location) or "<顶层>"}：'
+            f'{entry["message"]}（{entry["error_type"]}；按 wire 形状逐处修正）',
+            code=code, location=(location, entry['error_type']),
+            paths=(tuple(path),) if path else (), context={'shape_errors': [entry]}))
+    return issues or [design_issue(
+        f'{prefix}：模型校验失败但没有可定位诊断', code='wire_shape_unlocatable',
+        location=('wire_shape',))]
 
 
 def _check_pov_closed_set(data: dict[str, Any], known_char_ids: set[str],
@@ -397,27 +412,60 @@ def _check_pov_closed_set(data: dict[str, Any], known_char_ids: set[str],
                 paths=(('scenes', index - 1, 'delivery', 'pov'),)))
 
 
+def _expression_ref_issues(refs: Iterable[str], kinds: Mapping[str, str],
+                           scene_i: int, beat_j: int, *,
+                           locatable: bool) -> list[str]:
+    """wire 与 canonical 共用的表达选择判据；类别只取正式 Brief，不从文案推断。"""
+    errors: list[str] = []
+    where = ('scenes', scene_i, 'beats', beat_j, 'ex')
+    paths = (where,) if locatable else ()
+    beat_ref = f'{_scene_id(scene_i + 1)}#{_beat_id(beat_j + 1)}'
+    for ex_id in refs:
+        if ex_id not in kinds:
+            message = (f'{beat_ref} 的 expression_refs 引用闭集外 ex_id：{ex_id!r}'
+                       '（只能取 Brief.expression 给出的项）')
+        elif kinds[ex_id] == 'narration':
+            message = (f'{beat_ref} 的 expression_refs 引用 narration（{ex_id}）'
+                       '——书级表达只写机制，不上具体拍')
+        else:
+            continue
+        errors.append(design_issue(
+            message, code='design_expression_ref', location=(*where, ex_id), paths=paths))
+    return errors
+
+
+def _check_wire_expression_refs(wire: Mapping[str, Any], expression_requirements) -> list[str]:
+    """表达引用不依赖 know/real 展开成功，首轮即与其他可运行判据聚合。
+
+    只读可识别的数组和字符串；形状错误由 wire schema 报告，不构造半份 canonical。
+    """
+    errors: list[str] = []
+    scenes = wire.get('scenes')
+    if not isinstance(scenes, (list, tuple)):
+        return errors
+    kinds = {item.ex_id: item.kind for item in expression_requirements}
+    for scene_i, scene in enumerate(scenes):
+        beats = scene.get('beats') if isinstance(scene, dict) else None
+        if not isinstance(beats, (list, tuple)):
+            continue
+        for beat_j, beat in enumerate(beats):
+            refs = beat.get('ex', ()) if isinstance(beat, dict) else None
+            if not isinstance(refs, (list, tuple)):
+                continue
+            errors.extend(_expression_ref_issues(
+                (ref for ref in refs if isinstance(ref, str)), kinds,
+                scene_i, beat_j, locatable=True))
+    return errors
+
+
 def _check_expression_refs(body: BodyDesign, expression_requirements,
                            errors: list[str], *, locatable: bool = False) -> None:
-    """a4：拍的 expression_refs 闭集——只能引用 Brief.expression 的 ex_id，
-    narration 是书级机制不上拍（正向表达任务落具体拍；书级表达只写机制）。
-    `locatable`＝输入是 v9 wire：按画面序下标给出 `ex` 的 wire 路径。"""
+    """a4：拍只接受非 narration 的正式表达；离线 canonical 同样保留防御。"""
     kinds = {item.ex_id: item.kind for item in expression_requirements}
     for scene_i, scene in enumerate(body.scenes):
         for beat_j, beat in enumerate(scene.beats):
-            where = ('scenes', scene_i, 'beats', beat_j, 'ex')
-            paths = (where,) if locatable else ()
-            for ex_id in beat.expression_refs:
-                if ex_id not in kinds:
-                    errors.append(design_issue(
-                        f'{scene.scene_id}#{beat.beat_id} 的 expression_refs 引用'
-                        f'闭集外 ex_id：{ex_id!r}（只能取 Brief.expression 给出的项）',
-                        code='design_expression_ref', location=(*where, ex_id), paths=paths))
-                elif kinds[ex_id] == 'narration':
-                    errors.append(design_issue(
-                        f'{scene.scene_id}#{beat.beat_id} 的 expression_refs 引用'
-                        f'narration（{ex_id}）——书级表达只写机制，不上具体拍',
-                        code='design_expression_ref', location=(*where, ex_id), paths=paths))
+            errors.extend(_expression_ref_issues(
+                beat.expression_refs, kinds, scene_i, beat_j, locatable=locatable))
 
 
 def _check_detail_refs(body: BodyDesign, brief: ReconstructionBrief | None,
@@ -749,7 +797,7 @@ def inspect_body_design(
     )
 
     errors: list[str] = []
-    coverage_errors: list[str] = []
+    independent_errors: list[str] = []
     marks: tuple[FactLockMark, ...] = ()
     real_sites: dict[str, list[tuple[int, int]]] = {}
     # 只有直接来自 v9 wire 的候选，下标才是 wire 路径（局部修订的编辑范围）；
@@ -757,13 +805,19 @@ def inspect_body_design(
     locatable = wire.get('protocol_version') in DESIGN_READ_PROTOCOLS
     v9_wire = wire
     if locatable:
+        independent_errors.extend(_check_wire_expression_refs(wire, expression_requirements))
+        independent_errors.extend(design_wire_name_text_issues(
+            wire, projection=name_projection, structure=name_structure,
+            registered_surfaces=registered_surfaces,
+            require_classification=wire.get('protocol_version') == STAGE4_DESIGN_WIRE_PROTOCOL))
         try:
             expanded, expand_issues = expand_design_wire(
                 wire, brief=brief, obligations=obligations)
         except ValidationError as exc:
-            return None, _wire_shape_issues(exc, '设计瘦 wire 协议校验失败')
+            return None, independent_errors + _wire_shape_issues(
+                exc, '设计瘦 wire 协议校验失败', wire=wire)
         if expand_issues:
-            return None, [design_issue(message, code='design_wire_expand',
+            return None, independent_errors + [design_issue(message, code='design_wire_expand',
                                        location=tuple(path or ()),
                                        paths=(tuple(path),) if path else ())
                           for path, message in expand_issues]
@@ -780,7 +834,7 @@ def inspect_body_design(
                 ob for ob, requirement in obligations.items()
                 if getattr(requirement, 'must_preserve', True) and ob not in annotated)
             if missing:
-                coverage_errors.append(design_issue(
+                independent_errors.append(design_issue(
                     f'必保义务未被任何拍标注承载（real）：{missing}'
                     '——每条 must_preserve 需求至少标注一拍',
                     code='design_carrier_missing',
@@ -798,7 +852,7 @@ def inspect_body_design(
         # 形状失败不遮闭集面（R8b：canary 第 1 份实证——pov 描述句与 scope
         # 缺失同报，修订一轮收掉全部三类，而不是逐层早退打四轮）。
         _check_pov_closed_set(wire, known_char_ids, errors)
-        return None, coverage_errors + errors + _wire_model_errors(exc)
+        return None, independent_errors + errors + _wire_model_errors(exc)
     data = model.model_dump(mode='json')
     expressions = {item.ex_id: item.statement for item in expression_requirements}
     decisions = data['expression_decisions']
@@ -818,7 +872,7 @@ def inspect_body_design(
             location=('narration', 'keep'),
             paths=(('narration',) if locatable else (),)))
     if errors:
-        return None, coverage_errors + errors
+        return None, independent_errors + errors
     data['expression_decisions'] = [
         {'ex_id': item['ex_id'], 'action': item['action'], 'reason': item['reason'],
          'statement': expressions[item['ex_id']] if item['action'] == 'keep' else item['target_statement']}
@@ -833,18 +887,18 @@ def inspect_body_design(
     if not errors:
         _resolve_reads(data, errors)
     if errors:
-        return None, coverage_errors + errors
+        return None, independent_errors + errors
     try:
         body = BodyDesign.model_validate(data)
     except (ValidationError, TypeError) as exc:
         shape_errors = (_wire_model_errors(exc)
                         if isinstance(exc, ValidationError) else [str(exc)])
-        return None, coverage_errors + [design_issue(
+        return None, independent_errors + [design_issue(
             f'book_design 构造失败：{entry}',
             code='book_design_construct',
             location=('book_design',))
             for entry in shape_errors]
-    errors.extend(coverage_errors)
+    errors.extend(independent_errors)
 
     def issue(message: str, code: str, location: tuple, *paths: tuple):
         """带规则码与可编辑 wire 路径的问题；非 v9 候选没有可局部修订的位置。"""
@@ -985,7 +1039,8 @@ def inspect_body_design(
                         f'ThreadAction 引用未知 char_id {thread.subject}'
                         f'（{scene.scene_id}#{beat.beat_id} 的 {thread.ref}）',
                         'design_unknown_char', where, where))
-    _check_expression_refs(body, expression_requirements, errors, locatable=locatable)
+    if not locatable:
+        _check_expression_refs(body, expression_requirements, errors)
     _check_detail_refs(body, brief, errors, locatable=locatable)
     # 读取/确认闭合（CS-F1 局部修订收口）：违例在判定处带结构化位置，这里映射
     # 成可编辑 wire 路径——初始行（initial_state[k]）或该拍内第 m 个带 confirms

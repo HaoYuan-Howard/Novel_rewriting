@@ -21,6 +21,49 @@ PV9 = 'stage4-design-v9'
 PV5 = 'stage4-design-v5'
 
 
+def _identity_projection():
+    from contracts.schema.source import NameProjection, NameProjectionEntry
+    return NameProjection(
+        proper_literals=('白姑娘',), family_literals=('白',), by_person=(NameProjectionEntry(
+            char_id='bai', display='白姑娘', family_literal='白', given=None,
+            proper_literals=('白',), name_bearing_surfaces=('白姑娘',)),))
+
+
+def test_v11_identity_text_validates_author_fields_without_guessing_keys_or_references():
+    from copy import deepcopy
+    from novel.stages.stage4.materials import design_wire_name_text_issues
+    wire = {'book_style': '[[text|明白]]之后再叙述', 'scenes': [{
+        'driver': {'focal_actor': '白', 'immediate_want': '等[[name:bai|白姑娘]]回来'},
+        'beats': [{'ev': '[[text|白天]]进门', 'state': [{'key': '白', 'val': '[[text|坦白]]'}],
+                   'real': ['白'], 'release': [{'char_id': 'bai', 'surfaces': ['白姑娘']}]}]}]}
+    before = deepcopy(wire)
+    kwargs = dict(projection=_identity_projection(), structure=None,
+                  registered_surfaces={'bai': ('白姑娘',)}, require_classification=True)
+    assert design_wire_name_text_issues(wire, **kwargs) == []
+    assert wire == before, 'validator不把普通词替换成姓名，也不改引用字段'
+    wire['book_style'] = '我心里明白'
+    issues = design_wire_name_text_issues(wire, **kwargs)
+    assert {issue.code for issue in issues} == {'name_text_unclassified'}
+    assert all(issue.context['wire_paths'] == [['book_style']] for issue in issues)
+    wire['book_style'] = '[[name:other|白姑娘]]'
+    assert {issue.code for issue in design_wire_name_text_issues(wire, **kwargs)} == {'name_text_reference'}
+
+
+def test_v11_schema_and_v10_compatibility_preserve_explicit_candidate_identity():
+    import json
+    from novel.stages.common import design_rules
+    from novel.stages.stage4.slim import design_wire_model
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
+    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v11'
+    rules = design_rules(name_candidates=('白',), registered_surfaces={'bai': {'白姑娘'}})
+    assert 'identity-text-v1' in rules and '需逐次声明的姓名候选字面：["白"]' in rules
+    schema = json.loads(rules.rsplit('\n', 1)[1])
+    assert schema['properties']['protocol_version']['const'] == STAGE4_DESIGN_WIRE_PROTOCOL
+    wire = _v9_wire()
+    wire['protocol_version'] = 'stage4-design-v10'
+    assert design_wire_model(wire).protocol_version == 'stage4-design-v10'
+
+
 def test_model_design_schema_keeps_dynamic_knowledge_branches_valid():
     import json
     from jsonschema import Draft202012Validator
@@ -281,7 +324,7 @@ def test_design_rules_prompt_carries_v7_and_obligation_table():
     from novel.stages.common import design_rules
     from novel.stages.stage4.slim import project_design_input
     rules = design_rules(known_char_ids={'yun_niang'})
-    assert 'stage4-design-v10' in rules and 'SlimDesignBeatV10' in rules
+    assert 'stage4-design-v11' in rules and 'SlimDesignBeatV10' in rules
     assert 'real' in rules and 'obNN' in rules
     brief = _brief()
     table = project_design_input(brief, _obligations(brief))['requirements']
@@ -562,6 +605,58 @@ def test_detail_schema_closes_short_refs_and_empty_catalog_remains_optional():
         assert bool(list(validator.iter_errors(['ob01.d01']))) == (not refs)
 
 
+def test_expression_schema_and_narrow_choices_close_on_beat_expression_ids():
+    """已知类别先收紧请求：narration 不能成为拍选择，空目录只接受空数组。"""
+    import json
+    from jsonschema import Draft202012Validator
+    from novel.stages.common import design_rules
+    from novel.stages.stage4.slim import design_patch_legal_values
+
+    for protocol, beat in ((PV9, 'SlimDesignBeat'),
+                           ('stage4-design-v10', 'SlimDesignBeatV10')):
+        for refs in ((), ('ex_02', 'ex_03')):
+            schema = json.loads(design_rules(
+                expression_ids=refs, protocol=protocol).rsplit('\n', 1)[1])
+            Draft202012Validator.check_schema(schema)
+            validator = Draft202012Validator(schema['$defs'][beat]['properties']['ex'])
+            assert not list(validator.iter_errors([]))
+            assert list(validator.iter_errors(['ex_01'])), '书级 narration 不入拍闭集'
+            assert list(validator.iter_errors(['ex_99'])), '未知表达不能靠模型自由编造'
+            assert bool(list(validator.iter_errors(['ex_02']))) == (not refs)
+            assert design_patch_legal_values(expression_ids=refs)['expression_ids'] == list(refs)
+
+
+def test_expression_refs_are_reported_even_when_knowledge_cannot_expand():
+    """know/real 不匹配不能遮住独立表达错误，反馈路径仍能发起条目返修。"""
+    from copy import deepcopy
+    from contracts.schema.expression import ExpressionRequirement
+    from novel.stages.stage4.design import inspect_body_design
+    from novel.stages.stage4.design_paths import wire_paths_of
+    from novel.stages.stage4.slim import design_patch_slice
+
+    brief = _brief()
+    brief = brief.model_copy(update={'expression': (
+        *brief.expression,
+        ExpressionRequirement(ex_id='ex_02', kind='narration', statement='第一人称叙述'),)})
+    wire = _v9_wire()
+    wire['scenes'][0]['beats'][0]['real'] = []
+    wire['scenes'][0]['beats'][1]['ex'] = ['ex_02', 'ex_99']
+    before = deepcopy(wire)
+    body, errors = inspect_body_design(
+        wire, known_char_ids={'lu_fujun', 'yun_niang', 'pei_shuyuan'},
+        expression_requirements=brief.expression, source_narration=brief.source_narration,
+        brief=brief, obligations=_obligations(brief))
+    assert body is None and wire == before
+    assert any(getattr(error, 'code', '') == 'design_wire_expand' for error in errors)
+    refs = [error for error in errors if getattr(error, 'code', '') == 'design_expression_ref']
+    assert {error.location[-1] for error in refs} == {'ex_02', 'ex_99'}
+    assert all(wire_paths_of(error) == (('scenes', 0, 'beats', 1, 'ex'),) for error in refs)
+    dependency = design_patch_slice(
+        wire, brief, _obligations(brief), targets=[('scenes', 0, 'beats', 1, 'ex')])
+    assert dependency['beat_expressions'] == {
+        'ex_01': {'kind': 'humor', 'statement': '一本正经的荒诞'}}
+
+
 def test_v10_reference_expansion_matches_purchased_v9_and_keeps_raw_wire():
     """短引用只能改类型化字段；原已购 wire 与自然语言中的 hash 字面不改。"""
     from copy import deepcopy
@@ -694,3 +789,238 @@ def test_summary_narrow_slice_includes_only_explicit_covered_missing_instance():
     assert payload['requirements']['ob02']['summary'] == '第二次经历'
     assert payload['requirements']['ob02']['satisfaction'] == '第二次经历'
     assert 'anchors' not in str(payload) and 'core_second' not in str(payload)
+
+
+def _scene_repair_slice_fixture(protocol):
+    """依赖分别放在不同拍／引用面，避免只补 details 仍然得到假绿。"""
+    from contracts.schema.grounding import IdentityProjection
+
+    raw = _brief().model_dump(mode='json')
+    raw['requirements'][1].update({
+        'participants': ['requirement_actor'],
+        'details': [{'detail_id': 'dt_2222222222222222', 'text': '第二拍专用细节'}],
+        'knowledge_changes': [{'change_id': 'kc_2222222222222222',
+                               'holder': 'knowledge_holder', 'kp': 'kp_2222222222222222',
+                               'mode': 'heard'}],
+    })
+    raw['requirements'][2]['details'] = [
+        {'detail_id': 'dt_3333333333333333', 'text': '未涉及场的细节全文'}]
+    raw['propositions'].extend([
+        {'kp_id': 'kp_2222222222222222', 'statement': '第二拍认知命题'},
+        {'kp_id': 'kp_3333333333333333', 'statement': '场级读取命题'},
+        {'kp_id': 'kp_4444444444444444', 'statement': '非法位置仍携带的候选命题'},
+        {'kp_id': 'kp_5555555555555555', 'statement': '无关命题'},
+    ])
+    raw['knowledge_locks'].append({'holder': 'knowledge_holder',
+                                    'kp': 'kp_2222222222222222', 'mode': 'heard'})
+    raw['knowledge_locks'].append({'holder': 'extra_holder',
+                                    'kp': 'kp_3333333333333333', 'mode': 'suspected'})
+    raw['fact_locks'] = [
+        {'kf_id': KF, 'statement': '第二拍状态选择的锁', 'kind': 'planned',
+         'modality': 'planned', 'subjects': ['lock_subject']},
+        {'kf_id': 'kf_5555555555555555', 'statement': '无关锁', 'kind': 'planned',
+         'modality': 'planned', 'subjects': ['unrelated_actor']},
+    ]
+    brief = ReconstructionBrief.model_validate(raw)
+    shorten = protocol != PV9
+
+    def ref(value):
+        return value[:11] if shorten else value
+
+    wire = _v9_wire()
+    wire['protocol_version'] = protocol
+    wire['initial_surfaces'] = [{'char_id': 'initial_actor', 'surfaces': ['初始称谓']}]
+    wire['scenes'] = [
+        {'driver': {'focal_actor': 'prefix_actor'}, 'brief': '目标之前', 'beats': [
+            {'ev': '前拍', 'release': [{'char_id': 'prefix_actor', 'surfaces': ['前缀称谓']}]}]},
+        {'driver': {'focal_actor': 'driver_actor'}, 'brief': '整场修订的候选上下文',
+         'pov': 'pov_actor',
+         'reads': [
+             {'domain': 'knowledge', 'key': ref('kp_3333333333333333'),
+              'holder': 'read_holder'},
+             {'domain': 'relation', 'key': 'marriage', 'subjects': ['read_left', 'read_right']}],
+         'beats': [
+             {'ev': '第一拍', 'real': ['ob01'], 'know': [{'ref': 'ob01.k01'}],
+              'who': ['who_actor'],
+              'state': [{'at': 'state_left+state_right', 'key': 'local', 'val': '事实'}],
+              'release': [{'char_id': 'first_release', 'surfaces': ['第一拍称谓']}]},
+             {'ev': '第二拍问[[name:mentioned_actor|称谓]]', 'real': ['ob02'], 'know': [{'ref': 'ob02.k01'}],
+              'details': ['ob02.d01'],
+              'state': [{'at': 'state_actor', 'key': 'intent', 'val': '仍在计划',
+                         'modality': 'planned', 'lock': ref(KF)}],
+              'reads': [{'domain': 'knowledge', 'key': ref('kp_4444444444444444'),
+                         'holder': 'illegal_holder'}],
+              'release': [{'char_id': 'last_release', 'surfaces': ['第二拍称谓']}]}]},
+        {'driver': {'focal_actor': 'unrelated_actor'}, 'brief': '目标之后', 'beats': [
+            {'ev': '后拍', 'real': ['ob03'], 'details': ['ob03.d01'],
+             'state': [{'at': 'unrelated_actor', 'key': 'later', 'val': '未来',
+                        'lock': ref('kf_5555555555555555')}],
+             'release': [{'char_id': 'future_actor', 'surfaces': ['未来称谓']}]}]},
+    ]
+    wire['chapters'] = [{'purpose': '前章', 'scenes': 1},
+                        {'purpose': '修订章', 'scenes': 1},
+                        {'purpose': '后章', 'scenes': 1}]
+    people = ('initial_actor', 'prefix_actor', 'driver_actor', 'pov_actor', 'read_holder',
+              'read_left', 'read_right', 'who_actor', 'state_left', 'state_right',
+              'first_release', 'last_release', 'state_actor', 'knowledge_holder',
+              'requirement_actor', 'lock_subject', 'illegal_holder', 'unrelated_actor',
+              'future_actor', 'extra_holder', 'mentioned_actor', 'lu_fujun', 'yun_niang')
+    identities = tuple(IdentityProjection(char_id=person, identity_statement=f'{person}的身份')
+                       for person in people)
+    return wire, brief, _obligations(brief), identities
+
+
+def test_scene_and_chapter_patch_slices_close_every_editable_beat_dependency():
+    from copy import deepcopy
+    from novel.stages.stage4.slim import design_patch_slice
+
+    for protocol in (PV9, 'stage4-design-v10', 'stage4-design-v11'):
+        wire, brief, obligations, identities = _scene_repair_slice_fixture(protocol)
+        before = deepcopy(wire)
+        for target in (('scenes', 1), ('scenes', 1, 'beats'), ('chapters', 1)):
+            payload = design_patch_slice(wire, brief, obligations,
+                                         targets=[target], identities=identities)
+            assert payload['slice_version'] == 'stage4-design-patch-slice-v4'
+            assert payload['wire_protocol_version'] == protocol
+            assert wire == before, '形状坏稿只作为候选上下文，切片不删除或迁移非法读取'
+            assert payload['scenes'] == [wire['scenes'][1]]
+            assert payload['scenes'][0]['beats'][1]['reads'] == before['scenes'][1]['beats'][1]['reads']
+            assert set(payload['requirements']) == {'ob01', 'ob02'}
+            assert payload['requirements']['ob02']['details'] == {'ob02.d01': {'text': '第二拍专用细节'}}
+            suffix = 19 if protocol == PV9 else 11
+            assert set(payload['propositions']) == {ref[:suffix] for ref in (
+                'kp_1111111111111111', 'kp_2222222222222222',
+                'kp_3333333333333333', 'kp_4444444444444444')}
+            assert set(payload['fact_locks']) == {KF[:suffix]}, '短锁与完整锁查同一个正式身份'
+            if protocol == PV9:
+                assert set(payload['knowledge_changes']) == {'ob01.k01', 'ob02.k01'}
+            else:
+                assert payload['requirements']['ob02']['knowledge_changes']['ob02.k01']['kp'] == 'kp_22222222'
+                assert payload['knowledge_locks'] == [
+                    {'holder': 'extra_holder', 'kp': 'kp_33333333', 'mode': 'suspected'}]
+            assert [row['ref'] for row in payload['neighbor_beats']] == [
+                'scenes[0].beats[0]', 'scenes[2].beats[0]']
+            assert [row['char_id'] for row in payload['release_prefix']] == [
+                'initial_actor', 'prefix_actor', 'first_release', 'last_release']
+            included = {row['char_id'] for row in payload['identities']}
+            assert {'initial_actor', 'prefix_actor', 'driver_actor', 'pov_actor', 'read_holder',
+                    'read_left', 'read_right', 'who_actor', 'state_left', 'state_right',
+                    'first_release', 'last_release', 'state_actor', 'knowledge_holder',
+                    'requirement_actor', 'lock_subject', 'illegal_holder', 'extra_holder',
+                    'mentioned_actor'} <= included
+            assert not {'unrelated_actor', 'future_actor'} & included
+            assert '未涉及场的细节全文' not in str(payload) and '无关命题' not in str(payload)
+
+
+def test_beat_patch_keeps_dependencies_narrow_while_scene_array_expands_all_beats():
+    from novel.stages.stage4.slim import design_patch_slice
+
+    wire, brief, obligations, identities = _scene_repair_slice_fixture('stage4-design-v11')
+    narrow = design_patch_slice(wire, brief, obligations,
+                                targets=[('scenes', 1, 'beats', 0)], identities=identities)
+    assert narrow['scenes'] == [wire['scenes'][1]], '同场其它拍是只读上下文'
+    assert set(narrow['requirements']) == {'ob01'}
+    assert set(narrow['propositions']) == {'kp_11111111', 'kp_33333333'}
+    assert not narrow['fact_locks'], '不可编辑邻拍的锁不扩大窄输入'
+    assert [row['char_id'] for row in narrow['release_prefix']] == [
+        'initial_actor', 'prefix_actor', 'first_release']
+    assert 'last_release' not in {row['char_id'] for row in narrow['identities']}
+    assert 'mentioned_actor' not in {row['char_id'] for row in narrow['identities']}
+    wide = design_patch_slice(wire, brief, obligations, targets=[('scenes',)], identities=identities)
+    assert wide['scenes'] == wire['scenes']
+    assert set(wide['requirements']) == {'ob01', 'ob02', 'ob03'}
+    assert set(wide['fact_locks']) == {KF[:11], 'kf_55555555'}
+    assert wide['neighbor_beats'] == []
+    assert wide['release_prefix'][-1]['char_id'] == 'future_actor'
+
+
+def test_shape_repair_slice_preserves_malformed_candidate_containers_without_guessing():
+    from copy import deepcopy
+    from novel.stages.stage4.slim import design_patch_slice
+
+    wire, brief, obligations, _ = _scene_repair_slice_fixture('stage4-design-v11')
+    wire['scenes'][0] = '非法场对象'
+    wire['scenes'][1]['beats'] = [None, {'real': {'非法': '容器'}, 'know': '非法列表',
+                                        'state': [None, {'at': ['坏地址']}],
+                                        'release': [None]}]
+    wire['scenes'][2]['beats'] = {'非法': '拍数组'}
+    wire['initial_surfaces'] = [None, {'char_id': 'initial_actor', 'surfaces': ['初始称谓']}]
+    wire['chapters'][1]['scenes'] = '非法场数'
+    before = deepcopy(wire)
+    for target in (('scenes',), ('scenes', 0), ('scenes', 1), ('scenes', 2), ('chapters', 1)):
+        payload = design_patch_slice(wire, brief, obligations, targets=[target])
+        assert wire == before and payload['scenes'], '原始坏值随上下文送达，切片只读'
+    wire['scenes'] = {'非法': '场数组'}
+    payload = design_patch_slice(wire, brief, obligations, targets=[('scenes',)])
+    assert payload['scenes'] == wire['scenes']
+
+
+def test_scene_repair_state_history_supplies_initial_and_prior_values_and_closes_confirms():
+    from copy import deepcopy
+    from contracts.schema.grounding import IdentityProjection
+    from novel.stages.stage4.slim import design_patch_slice
+
+    wire, brief, obligations, identities = _scene_repair_slice_fixture('stage4-design-v11')
+    marriage = {'domain': 'relation', 'key': 'marriage',
+                'subjects': ['history_left', 'history_right'], 'value': '已经成婚'}
+    knowledge = {'domain': 'knowledge', 'key': 'kp_33333333', 'holder': 'history_holder',
+                 'value': 'true', 'knowledge_mode': 'known',
+                 'confirms': {'domain': 'character', 'key': 'proof', 'subjects': ['proof_subject']}}
+    proof = {'domain': 'character', 'key': 'proof', 'subjects': ['proof_subject'], 'value': '已有凭证'}
+    wire['initial_state'].extend([marriage, knowledge, proof])
+    wire['scenes'][0]['beats'][0]['state'] = [
+        {'at': 'past_left+past_right', 'key': 'marriage', 'val': '婚事已公开'},
+        {'at': 'proof_subject', 'key': 'proof', 'val': '凭证已出示'},
+        {'at': 'intent_actor', 'key': 'intent', 'val': '此前已有打算'},
+        {'at': 'unrelated_actor', 'key': 'irrelevant', 'val': '无关键的历史值'}]
+    wire['scenes'][1]['beats'][1]['reads'] = [
+        {'domain': 'relation', 'key': 'marriage', 'subjects': ['history_left', 'history_right']}]
+    wire['scenes'][2]['beats'][0]['state'].append(
+        {'at': 'history_left+history_right', 'key': 'marriage', 'val': '尚未发生的未来婚事'})
+    identities += tuple(IdentityProjection(char_id=person, identity_statement=f'{person}的身份')
+                        for person in ('history_left', 'history_right', 'history_holder',
+                                       'past_left', 'past_right', 'proof_subject', 'intent_actor'))
+    before = deepcopy(wire)
+    payload = design_patch_slice(wire, brief, obligations,
+                                 targets=[('scenes', 1)], identities=identities)
+    assert wire == before, '历史只读，不替模型迁移非法的非空reads'
+    history = {row['ref']: row['value'] for row in payload['state_history']}
+    assert history == {
+        'initial_state[1]': marriage,
+        'initial_state[2]': knowledge,
+        'initial_state[3]': proof,
+        'scenes[0].beats[0].state[0]': wire['scenes'][0]['beats'][0]['state'][0],
+        'scenes[0].beats[0].state[1]': wire['scenes'][0]['beats'][0]['state'][1],
+        'scenes[0].beats[0].state[2]': wire['scenes'][0]['beats'][0]['state'][2],
+    }
+    assert not any(ref.startswith('scenes[1]') for ref in history), '目标场全文已有的state不重复发送'
+    assert '尚未发生的未来婚事' not in str(history) and '无关键的历史值' not in str(history)
+    included = {row['char_id'] for row in payload['identities']}
+    assert {'history_left', 'history_right', 'history_holder', 'past_left', 'past_right',
+            'proof_subject', 'intent_actor'} <= included
+    narrow = design_patch_slice(wire, brief, obligations,
+                                targets=[('scenes', 1, 'beats', 0)], identities=identities)
+    assert 'scenes[0].beats[0].state[2]' not in {row['ref'] for row in narrow['state_history']}
+    assert 'intent_actor' not in {row['char_id'] for row in narrow['identities']}
+
+
+def test_all_beat_repair_scope_supplies_semantics_for_unmarked_obligations_only_when_authorized():
+    from novel.stages.stage4.slim import design_patch_slice
+
+    raw = _brief().model_dump(mode='json')
+    raw['requirements'][2].update({
+        'must_preserve': True, 'satisfaction': '未标注的必保义务也必须得到兑现',
+        'details': [{'detail_id': 'dt_3333333333333333', 'text': '漏标义务的正式细节'}]})
+    brief = ReconstructionBrief.model_validate(raw)
+    obligations = _obligations(brief)
+    wire = _v9_wire()
+    assert all('ob03' not in beat.get('real', ()) for scene in wire['scenes'] for beat in scene['beats'])
+    closed_set = [('scenes', si, 'beats', bi)
+                  for si, scene in enumerate(wire['scenes']) for bi, _beat in enumerate(scene['beats'])]
+    payload = design_patch_slice(wire, brief, obligations, targets=closed_set)
+    assert payload['requirements']['ob03']['satisfaction'] == '未标注的必保义务也必须得到兑现'
+    assert payload['requirements']['ob03']['details'] == {'ob03.d01': {'text': '漏标义务的正式细节'}}
+    narrow = design_patch_slice(wire, brief, obligations, targets=[closed_set[0]])
+    assert 'ob03' not in narrow['requirements']
+    assert '漏标义务的正式细节' not in str(narrow)
+    assert 'anchors' not in str(payload) and 'quotes' not in str(payload)

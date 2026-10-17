@@ -60,7 +60,7 @@ def v13_chapter(*beats: dict, causal_edges: tuple = ()) -> dict:
 
 
 def names_v6_wire(structure: dict) -> dict:
-    """canonical NameStructure dump → v6 结构 wire（CS-S 1c 夹具助手）：
+    """canonical NameStructure dump → 现役结构 wire（历史函数名仅供测试夹具）：
     剥 people 的 surface_forms（构词由程序派生）与顶层 resolutions（同一性
     走窄调用）；form_overrides 默认空（派生结果应与原 surface_forms 一致——
     不一致的夹具会在断言处暴露）。"""
@@ -68,7 +68,9 @@ def names_v6_wire(structure: dict) -> dict:
     for slug, person in (structure.get('people') or {}).items():
         people[slug] = {key: value for key, value in person.items()
                         if key != 'surface_forms'}
-    return {'protocol_version': 'stage2-names-v6',
+        people[slug]['additional_surfaces'] = []
+    from contracts.schema.observation import STAGE2_NAMES_WIRE_PROTOCOL
+    return {'protocol_version': STAGE2_NAMES_WIRE_PROTOCOL,
             'families': structure.get('families') or {},
             'people': people}
 

@@ -293,13 +293,22 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
         note='章级已释放称谓并集：机械 validator 的认领面；'
              '写手许可经场景级 released_surfaces 送达'),
+    'writer_book_ir.chapters[].released_names[].char_id': _spec(
+        'writer_book_ir.chapters[].released_names[].char_id', consumers=(_W, _V),
+        scope=_CHAP, mode=DeliveryMode.MUST_RESPECT, note='身份引用目录的授权人物'),
+    'writer_book_ir.chapters[].released_names[].surfaces': _spec(
+        'writer_book_ir.chapters[].released_names[].surfaces', consumers=(_W, _V),
+        scope=_CHAP, mode=DeliveryMode.MUST_RESPECT, note='身份引用目录的授权称谓'),
+    'writer_book_ir.chapters[].name_candidates': _spec(
+        'writer_book_ir.chapters[].name_candidates', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='未声明文本的逐次候选覆盖；不把未来姓名候选目录送写手'),
     'writer_book_ir.chapters[].withheld_literals': _spec(
         'writer_book_ir.chapters[].withheld_literals', consumers=(_V,),
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
         note='本章禁用字面：validator 检查面，不进写手阅读面'),
-    # rc16（CS-F2 称谓投影）：禁用字面中已证明唯一绑定人物的完整登记称谓。表本身不进
-    # 阅读面；renderer 凭它把正向材料行里的该字面换成本场已释放称谓（写手视图摘要含
-    # 投影后的渲染字节，验证输入摘要含本表）。
+    # rc25：按本人释放面派生 (char_id, literal)；同形多人分别登记。表不进阅读面，
+    # renderer 显式按身份投影；旧裸文另须全书唯一归属证明，验证输入摘要含本表。
     'writer_book_ir.chapters[].withheld_bindings[].literal': _spec(
         'writer_book_ir.chapters[].withheld_bindings[].literal', consumers=(_V,),
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
@@ -309,6 +318,10 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'writer_book_ir.chapters[].withheld_bindings[].char_id', consumers=(_V,),
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
         note='绑定人物内部身份：只用于解析本场已释放称谓，内部句柄不进阅读面'),
+    'writer_book_ir.chapters[].withheld_bindings[].unmarked_unique': _spec(
+        'writer_book_ir.chapters[].withheld_bindings[].unmarked_unique', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='compiler 统计全部登记面得出的唯一归属证明；仅旧裸文投影消费，不让作者填写'),
     'writer_book_ir.chapters[].withheld_bindings[].enclosing': _spec(
         'writer_book_ir.chapters[].withheld_bindings[].enclosing', consumers=(_V,),
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
@@ -900,10 +913,14 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'writer_book_ir.chapters[].scenes[].verification_ir.prohibitions',
         consumers=(_W, _V), scope=_SCENE, mode=DeliveryMode.MUST_RESPECT,
         note='场景 avoid（显式禁止事项）'),
-    'writer_book_ir.chapters[].scenes[].verification_ir.continuity_fact_view': _spec(
-        'writer_book_ir.chapters[].scenes[].verification_ir.continuity_fact_view',
+    'writer_book_ir.chapters[].scenes[].verification_ir.continuity_fact_view[].event': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.continuity_fact_view[].event',
         consumers=(_W,), scope=_SCENE, mode=DeliveryMode.CONTINUITY,
         note='前场已接受义务的事实视图；R2 与章 entry 合成承接分区，不复述'),
+    'writer_book_ir.chapters[].scenes[].verification_ir.continuity_fact_view[].beat_ref': _spec(
+        'writer_book_ir.chapters[].scenes[].verification_ir.continuity_fact_view[].beat_ref',
+        consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+        note='前场支撑拍的正式引用；材料归因核对源拍事件，引用不进入写手阅读面'),
     # WriterBrief：呈现视图
     'writer_book_ir.chapters[].scenes[].writer_brief.scene_id': _spec(
         'writer_book_ir.chapters[].scenes[].writer_brief.scene_id',
@@ -1038,9 +1055,12 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'hook_context.withheld_literals', consumers=(_V,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY,
         note='Hook 禁用字面（validator 检查面）；不进 Hook 阅读面'),
-    # rc16（CS-F2 Hook 称谓投影）：与章 IR 绑定表同一把尺，释放面按 Hook 自选
-    # surface_releases 推导。表本身不进阅读面；renderer 凭它把正向材料行与禁区行
-    # 里的该字面换成本场已释放称谓（上下文字段与来源归因保持原字段文本）。
+    'hook_context.name_candidates': _spec(
+        'hook_context.name_candidates', consumers=(_V,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='身份文本逐次覆盖候选；只供验证，不向写手暴露隐藏姓名'),
+    # rc25：与章 IR 同一人物绑定目录；按 Hook 自选 surface_releases 逐人物推导，
+    # 显式引用按身份投影、旧裸文另验全书唯一归属。表不进阅读面，来源保持原字段。
     'hook_context.withheld_bindings[].literal': _spec(
         'hook_context.withheld_bindings[].literal', consumers=(_V,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY,
@@ -1050,6 +1070,10 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         'hook_context.withheld_bindings[].char_id', consumers=(_V,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY,
         note='绑定人物内部身份：只用于解析本场已释放称谓，内部句柄不进阅读面'),
+    'hook_context.withheld_bindings[].unmarked_unique': _spec(
+        'hook_context.withheld_bindings[].unmarked_unique', consumers=(_V,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='全书登记唯一归属的 compiler 证明；显式引用不靠词面唯一性，旧裸文须有此证明'),
     'hook_context.withheld_bindings[].enclosing': _spec(
         'hook_context.withheld_bindings[].enclosing', consumers=(_V,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY,

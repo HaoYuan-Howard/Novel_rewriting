@@ -402,7 +402,7 @@ def _length(**over) -> dict:
 
 def _chapter_receipt(**over) -> dict:
     base = dict(
-        chapter_ordinal=1, writer_view_sha256=H64, validation_sha256='b' * 64,
+        name_mentions=(), non_name_spans=(), chapter_ordinal=1, writer_view_sha256=H64, validation_sha256='b' * 64,
         machine_view_sha256='c' * 64,
         prose_sha256=H64, request_identity='req-1',
         protocol_version='str06-body-protocol-v5', renderer_version='str06-render-v5',

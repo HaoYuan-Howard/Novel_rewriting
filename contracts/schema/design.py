@@ -58,6 +58,7 @@ from contracts.schema.base import StrictModel
 from contracts.schema.common import CharacterVoice, FreeProvenance, LlmProvenance
 from contracts.schema.hook import HookDesign, HookPov
 from contracts.schema.expression import ExpressionDecision, ExpressionDecisionWire
+from contracts.schema.name_text import NAME_TEXT_INSTRUCTIONS
 from contracts.schema.state import (
     EffectDomain, StateAddress, StateChange, StateRead, SurfaceIntroduction, change_schema,
 )
@@ -352,7 +353,7 @@ class BodyDesign(StrictModel):
     （`TargetBeat.threads`，折叠走 ThreadFold）。rc7 的四个静态锚定列表
     已删除（AUD-04：无消费者；裁决 3）。
     """
-    contract_version: Literal['str06-rc22'] = 'str06-rc22'
+    contract_version: Literal['str06-rc25'] = 'str06-rc25'
     graph_id: str = Field(min_length=1)
     narration: HookPov
     expression_decisions: tuple[ExpressionDecision, ...] = Field(min_length=1)
@@ -495,7 +496,7 @@ class PresentationGraph(BodyDesign):
     语义合法（withheld ⊆ 该拍 delta、时序、披露自洽）归 assemble_hook_design。
     """
     # Hook 组织协议独立升版；正文 view 仍为 rc22，不扩大正文失效面。
-    contract_version: Literal['str06-rc23'] = 'str06-rc23'
+    contract_version: Literal['str06-rc25'] = 'str06-rc25'
     hook: HookDesign
     #: 来源账（F7a）：盘上键 `_provenance`；`exclude=True` 保 prompt 字节不变。
     provenance: FreeProvenance | LlmProvenance | None = Field(
@@ -728,7 +729,7 @@ class DesignWireV5(StrictModel):
 #: v9（rc21，2026-10-09）：可改写细节由短引用选择，文本来自正式 Brief。
 #: v10（2026-10-09）：请求投影 v2 省略机械空值/重复知情授权；kp/kf 改短引用。
 #: v9 已购候选显式解码仍支持沿用与窄复核，删除条件在 REQUIREMENTS 登记。
-STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v10'
+STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v11'
 
 
 class SlimDesignState(StrictModel):
@@ -907,3 +908,10 @@ class DesignWireV10(DesignWireV9):
 
     protocol_version: Literal['stage4-design-v10']
     scenes: tuple[SlimDesignSceneV10, ...] = Field(min_length=1)
+
+
+class DesignWireV11(DesignWireV10):
+    """v11 的自有自然语言使用身份引用文本；坐标由 compiler 计算，文本原样留证。"""
+
+    model_config = {'json_schema_extra': {'description': NAME_TEXT_INSTRUCTIONS}}
+    protocol_version: Literal['stage4-design-v11']

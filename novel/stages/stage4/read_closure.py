@@ -6,7 +6,8 @@
 错误结构化（CS-F1 局部修订收口）：违例在判据处带稳定位置（初始行号，或
 场／拍下标＋该拍内第几个带 confirms 的增量）——下标按 canonical 阅读序，
 与 v8 wire 行同序（expand 保序派发），design 接受面据此映射可编辑 wire 路径；
-compile 诊断面只投影消息，形状不变。
+compile 诊断面保留同一规则码与稳定位置，不附 wire 编辑路径。候选预检只在
+Design 已报出同码同位置的可编辑问题时合并回声，独立重编译仍完整报告。
 """
 from __future__ import annotations
 

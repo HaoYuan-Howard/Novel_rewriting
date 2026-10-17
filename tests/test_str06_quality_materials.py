@@ -14,6 +14,7 @@ import pytest
 
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.paid_requests import digest
+from novel.core.name_text import resolve_name_text
 from novel.stages.chain import ChainContext, run_compile_stage4, run_workflow
 from novel.stages.common import (
     _build_writer_packet, build_writer_packet, material_identities,
@@ -24,6 +25,7 @@ from novel.stages.stage4 import publish_graph
 from novel.stages.stage4.compile import compile_execution_plan
 from novel.store import PublishItem, Str06Repository
 from tests.str06_facilities import make_context, synthetic_ref
+from tests.factories import declared_stage4_text
 from tests.test_str06_body import (
     _RoutingTransport, _chapters, _fake_ask, _fake_body, _fake_text, _make_session, _run,
 )
@@ -32,6 +34,17 @@ from tests.test_str06_hook import _full_chain_wires
 
 DETAIL = '迎娶的人群渐渐散去，只剩新婚两人对坐'
 UNSELECTED_DETAIL = '门外的脚步声从密到疏，终于归于安静'
+
+
+def _visible(text):
+    """可读语义仍按原纯文断言；canonical 中的身份声明另由正式判据验证。"""
+    resolved = resolve_name_text(text)
+    assert not resolved.errors, resolved.errors
+    return resolved.text
+
+
+def _shop_text(text):
+    return declared_stage4_text(text, owners={'陈禾': 'apprentice', '周澄': 'keeper'})
 
 
 class _MaterialTransport(_RoutingTransport):
@@ -135,7 +148,8 @@ def test_real_preserve_without_details_keeps_existing_tasks(tmp_path):
     assert all(not scene.verification_ir.prior_series_events
                for chapter in ir.chapters for scene in chapter.scenes)
     view = build_writer_packet(project_chapter_packet(ir, 1))
-    assert sum('正文呈现婚约成立且夫君立下旧约' in line for line in view.must_realize) == 1
+    assert sum('正文呈现婚约成立且夫君立下旧约' in _visible(line)
+               for line in view.must_realize) == 1
     assert all('可用细节' not in line for line in view.creative_guidance)
     assert transport.calls.count('preserve') == transport.calls.count('design') == 1
 
@@ -166,7 +180,7 @@ def test_required_event_without_transfers_reaches_its_real_writer_position(tmp_p
     wires['preserve']['obligations'].append({
         'kind': 'event_core', 'statement': '夜半离家与玉佩线索',
         'anchors': ['b02_01.v1'], 'must_preserve': True,
-        'satisfaction': condition, 'requires': []})
+        'satisfaction': declared_stage4_text(condition), 'requires': []})
     wires['design']['scenes'][1]['beats'][0]['real'] = ['ob02']
     ctx, transport = _prepare(tmp_path, wires, through='stage5')
     repo = ctx.repository
@@ -215,7 +229,7 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
 
     quantity_lock = _lock_id('kf_', 'b02_02.e1')
     design = {
-        'protocol_version': 'stage4-design-v10',
+        'protocol_version': 'stage4-design-v11',
         'book_style': '第三人称叙述商铺日常，先写条件，再写人物的选择与行动。',
         'initial_state': [{'domain': 'character', 'subjects': ['apprentice'],
                            'key': 'occupation', 'value': '商铺学徒'}],
@@ -282,16 +296,16 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
                                   'op': 'unknown', 'value': None, 'modality': 'actual',
                                   'basis': [{'segment': 'e02_02',
                                              'quote': '木箱中的货量尚未查明'}]}])]},
-        'names': {'protocol_version': 'stage2-names-v6',
+        'names': {'protocol_version': 'stage2-names-v7',
                   'families': {'fam_chen': {'literal': '陈', 'forms': []},
                                'fam_zhou': {'literal': '周', 'forms': []}},
-                  'people': {'apprentice': {'family_id': 'fam_chen', 'given': '禾', 'aliases': []},
-                             'keeper': {'family_id': 'fam_zhou', 'given': '澄', 'aliases': []}}},
+                  'people': {'apprentice': {'family_id': 'fam_chen', 'given': '禾', 'aliases': [], 'additional_surfaces': []},
+                             'keeper': {'family_id': 'fam_zhou', 'given': '澄', 'aliases': [], 'additional_surfaces': []}}},
         'associate': {'protocol_version': 'stage2-associate-v5',
                       'same_proposition': [], 'loop_pairing': [], 'cross_chapter_cause': [],
                       'scene_continuation': [{'left': 'ch01.sc1', 'right': 'ch02.sc1',
                                               'verdict': 'distinct'}]},
-        'preserve': {'protocol_version': 'stage4-preserve-v5', 'obligations': [
+        'preserve': {'protocol_version': 'stage4-preserve-v6', 'obligations': [
             {'kind': 'initial_state', 'statement': '陈禾开场已是商铺学徒',
              'anchors': ['s0_01'], 'must_preserve': True,
              'satisfaction': '陈禾原本就是商铺学徒，不改成新来求职', 'requires': []},
@@ -306,7 +320,7 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
              'anchors': ['b02_02.e1'], 'must_preserve': True,
              'satisfaction': '等待开箱时货量保持未知，不补出确定数量', 'requires': []}]},
         'design': design,
-        'hook_design': {'protocol_version': 'stage4-hook-design-v3',
+        'hook_design': {'protocol_version': 'stage4-hook-design-v4',
                         'pov': {'person': 'third', 'focalizers': ['narrator']},
                         'opening_facts': [],
                         'materials': [{'beat_ref': {'scene': 'sc01', 'beat': 'b01'},
@@ -320,6 +334,15 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
         cause = wires['preserve']['obligations'][1]
         cause['statement'] = CAUSAL_CONDITION
         cause['satisfaction'] = '陈禾暂缓取货，先补账再出发'
+    # 只声明目标作者的自然语言；源观察、引文、登记称谓与引用 ID 不加标记。
+    for obligation in wires['preserve']['obligations']:
+        for field in ('statement', 'satisfaction'):
+            obligation[field] = _shop_text(obligation[field])
+        for detail in obligation.get('details', []):
+            detail['text'] = _shop_text(detail['text'])
+    for scene in design['scenes']:
+        for beat in scene['beats']:
+            beat['ev'] = _shop_text(beat['ev'])
     return chapters, wires, quantity_lock
 
 
@@ -341,7 +364,7 @@ class _CausalMaterialTransport(_MaterialTransport):
             return super().send(request)
         self.requests.setdefault(owner, []).append(request.user)
         self.calls.append(owner)
-        return ChatResponse(content=prose[owner], finish_reason='stop',
+        return ChatResponse(content=_shop_text(prose[owner]), finish_reason='stop',
                             usage={'prompt_tokens': 100, 'completion_tokens': 40}, model='fake')
 
 
@@ -364,17 +387,17 @@ def test_trigger_in_statement_reaches_the_writer_without_repeating_it_in_satisfa
     repo, transport, _, _ = _prepare_causal_materials(tmp_path, cause_in_statement=True)
     checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
     cause = checkpoint.obligations[1]
-    assert cause.statement == CAUSAL_CONDITION
+    assert _visible(cause.statement) == CAUSAL_CONDITION
     assert '账页齐全' not in cause.satisfaction
     brief = repo.read_model('stage4/grounding/reconstruction_brief.json')
-    requirement = next(r for r in brief.requirements if r.summary == CAUSAL_CONDITION)
+    requirement = next(r for r in brief.requirements if _visible(r.summary) == CAUSAL_CONDITION)
     assert requirement.satisfaction == cause.satisfaction
-    assert CAUSAL_CONDITION in transport.requests['design'][0]
+    assert CAUSAL_CONDITION in _visible(transport.requests['design'][0].split('输入：\n', 1)[1])
     ir = repo.read_model('stage4/ir/writer_book_ir.json')
     writer = build_writer_packet(project_chapter_packet(ir, 1))
-    assert any(CAUSAL_CONDITION in line for line in writer.must_realize)
+    assert any(CAUSAL_CONDITION in _visible(line) for line in writer.must_realize)
     assert CAUSAL_CONDITION in transport.requests['body_ch01'][0]
-    assert cause.satisfaction in transport.requests['body_ch01'][0]
+    assert _visible(cause.satisfaction) in transport.requests['body_ch01'][0]
     assert all(transport.calls.count(owner) == 1
                for owner in ('preserve', 'design', 'body_ch01', 'body_ch02'))
 
@@ -393,13 +416,13 @@ def test_necessary_cause_decision_and_transition_reach_the_actual_writer_request
     source_characters = repo.read_model('stage2/characters/characters.json')
     source_blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
     assert len(checkpoint.obligations) == len(binding.entries) == 4
-    assert [o.satisfaction for o in checkpoint.obligations][1:3] == [
+    assert [_visible(o.satisfaction) for o in checkpoint.obligations][1:3] == [
         CAUSAL_CONDITION, TRANSITION_CONDITION]
     requirements = {r.summary: r for r in brief.requirements}
     cause = requirements[checkpoint.obligations[1].statement]
     transition = requirements[checkpoint.obligations[2].statement]
-    assert cause.satisfaction == CAUSAL_CONDITION
-    assert transition.satisfaction == TRANSITION_CONDITION
+    assert _visible(cause.satisfaction) == CAUSAL_CONDITION
+    assert _visible(transition.satisfaction) == TRANSITION_CONDITION
     assert transition.requires_cores == (cause.core_id,)
     assert (source_characters.initial_state[0].key,
             source_characters.initial_state[0].value) == ('occupation', '商铺学徒')
@@ -408,19 +431,20 @@ def test_necessary_cause_decision_and_transition_reach_the_actual_writer_request
                for chapter in source_blueprint.chapters for beat in chapter.beats)
     assert all(DESIGN_COMMUNICATION_BRIDGE not in evidence
                for evidence in source_blueprint.evidence.values())
-    assert DESIGN_COMMUNICATION_BRIDGE not in checkpoint.model_dump_json()
+    assert DESIGN_COMMUNICATION_BRIDGE not in _visible(checkpoint.model_dump_json())
     assert (body.initial_state[0].key, body.initial_state[0].value) == ('occupation', '商铺学徒')
     assert body.scenes[0].beats[2].event == wires['design']['scenes'][0]['beats'][2]['ev']
-    assert DESIGN_COMMUNICATION_BRIDGE in body.scenes[0].beats[2].event
-    assert DESIGN_COMMUNICATION_BRIDGE in ir.chapter(1).scenes[0].verification_ir.beats[2].event
+    assert DESIGN_COMMUNICATION_BRIDGE in _visible(body.scenes[0].beats[2].event)
+    assert DESIGN_COMMUNICATION_BRIDGE in _visible(ir.chapter(1).scenes[0].verification_ir.beats[2].event)
     assert body.scenes[1].beats[0].event == wires['design']['scenes'][1]['beats'][0]['ev']
     assert [(f.kind, f.kf_id) for f in brief.fact_locks] == [('unknown_value', quantity_lock)]
     assert [(d.key, d.op, d.value) for d in body.scenes[1].beats[1].target_delta] == [
         ('possession', 'unknown', None)]
     assert len(binding.fact_bindings) == 1
     design_prompt = transport.requests['design'][0]
-    assert CAUSAL_CONDITION in design_prompt and TRANSITION_CONDITION in design_prompt
-    assert DESIGN_COMMUNICATION_BRIDGE not in design_prompt
+    readable_input = _visible(design_prompt.split('输入：\n', 1)[1])
+    assert CAUSAL_CONDITION in readable_input and TRANSITION_CONDITION in readable_input
+    assert DESIGN_COMMUNICATION_BRIDGE not in readable_input
     assert OPTIONAL_ACTION in design_prompt
     source_handles = [a.handle for o in checkpoint.obligations for a in o.anchors]
     for handle in source_handles:
@@ -431,23 +455,23 @@ def test_necessary_cause_decision_and_transition_reach_the_actual_writer_request
         packet = project_chapter_packet(ir, chapter)
         writer = build_writer_packet(packet)
         event = body.scenes[chapter - 1].beats[2 if chapter == 1 else 0].event
-        assert any(required in line for line in writer.must_realize)
+        assert any(required in _visible(line) for line in writer.must_realize)
         assert any(event in line for line in writer.must_realize)
-        assert all(required not in line for line in writer.creative_guidance)
-        assert all(other not in line for line in writer.must_realize)
+        assert all(required not in _visible(line) for line in writer.creative_guidance)
+        assert all(other not in _visible(line) for line in writer.must_realize)
         request = transport.requests[f'body_ch{chapter:02d}'][0]
         assert required in request
-        assert event in request
+        assert _visible(event) in request
         assert all(handle not in request for handle in source_handles)
         assert 'event_evidence' not in request and '"quotes"' not in request
         assert quantity_lock not in request
     first_writer = build_writer_packet(project_chapter_packet(ir, 1))
-    assert any(DESIGN_COMMUNICATION_BRIDGE in line for line in first_writer.must_realize)
+    assert any(DESIGN_COMMUNICATION_BRIDGE in _visible(line) for line in first_writer.must_realize)
     assert DESIGN_COMMUNICATION_BRIDGE in transport.requests['body_ch01'][0]
     # 次章需要知道上一章怎样收尾；桥梁以已发生的承接送达，不再要求重演。
     second_writer = build_writer_packet(project_chapter_packet(ir, 2))
-    assert all(DESIGN_COMMUNICATION_BRIDGE not in line for line in second_writer.must_realize)
-    assert any(DESIGN_COMMUNICATION_BRIDGE in line for line in second_writer.continuity)
+    assert all(DESIGN_COMMUNICATION_BRIDGE not in _visible(line) for line in second_writer.must_realize)
+    assert any(DESIGN_COMMUNICATION_BRIDGE in _visible(line) for line in second_writer.continuity)
     assert any(OPTIONAL_ACTION in line for line in first_writer.creative_guidance) == select_detail
     assert all(OPTIONAL_ACTION not in line for line in first_writer.must_realize)
     assert (OPTIONAL_ACTION in transport.requests['body_ch01'][0]) == select_detail
@@ -598,7 +622,7 @@ def test_real_summary_narrow_repair_sends_covered_unbound_instance_semantics(tmp
 
     wires = _full_chain_wires()
     wires['preserve']['obligations'].extend([
-        {'kind': 'event_core', 'statement': '芸娘在新婚夜立誓查清旧约',
+        {'kind': 'event_core', 'statement': declared_stage4_text('芸娘在新婚夜立誓查清旧约'),
          'anchors': ['b01_01.e1'], 'must_preserve': False,
          'satisfaction': '立誓查清旧约的决意已经发生', 'requires': []},
         {'kind': 'event_core', 'statement': '次日回顾新婚立约与立誓',
@@ -621,7 +645,7 @@ def test_real_summary_narrow_repair_sends_covered_unbound_instance_semantics(tmp
     first, narrow = transport.owner_requests
     assert '【条目返修】' not in first and '【条目返修】' in narrow
     assert '【依赖切片】' in narrow
-    assert '芸娘在新婚夜立誓查清旧约' in narrow
+    assert declared_stage4_text('芸娘在新婚夜立誓查清旧约') in narrow
     assert '立誓查清旧约的决意已经发生' in narrow
     assert 'ob02' in narrow
     assert 'b01_01.e1' not in narrow

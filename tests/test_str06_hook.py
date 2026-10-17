@@ -50,6 +50,16 @@ H64 = 'a' * 64
 SRC = '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'
 
 
+def _declared_prose(text: str) -> str:
+    """本文件固定故事的明确人物声明；不推断普通义，不把未知文字包入 text。"""
+    import re
+    owners = {'苏芸娘': 'yun_niang', '芸娘': 'yun_niang', '苏姑娘': 'yun_niang',
+              '夫君': 'fu_jun', '陆大哥': 'fu_jun', '陆兄': 'fu_jun', '陆家': 'fu_jun'}
+    pattern = re.compile(r'\[\[.*?\]\]|' + '|'.join(sorted(owners, key=len, reverse=True)))
+    return pattern.sub(lambda match: match.group() if match.group().startswith('[[') else
+                       f'[[name:{owners[match.group()]}|{match.group()}]]', text)
+
+
 # ───────────────────────── fixture 构造器 ─────────────────────────
 
 def _characters() -> CharactersArtifactV6:
@@ -177,7 +187,7 @@ def _hook_wire(**over) -> dict:
              'address': {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
                          'key': 'secret'}}],
         'reader_expectation': {
-            'kind': 'fact', 'focus': '玉佩与夫君的旧约有什么关联？',
+            'kind': 'fact', 'focus': '玉佩与那桩旧约有什么关联？',
             'answer': {'ref': {'scene': 'sc02', 'beat': 'b02'},
                        'address': {'domain': 'knowledge', 'subjects': ['fu_jun'],
                                    'holder': 'yun_niang', 'key': 'secret'}}},
@@ -192,8 +202,8 @@ def _design_wire_v7() -> dict:
     自由键 knowledge 增量在 v6 无面（知情一律经 real＋Brief 锁派生），fake 链
     以 character 域事实断言承载同一信息。义务 ob01 的接受拍＝末次标注拍
     （sc01#b02），sc01#b01 是支撑位——与旧 bind wire 的 entries/supporting 等价。"""
-    return {
-        'protocol_version': 'stage4-design-v10',
+    wire = {
+        'protocol_version': 'stage4-design-v11',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'character_voices': [{'char_id': 'yun_niang', 'voice': '冷峻'}],
         'initial_state': [
@@ -231,6 +241,17 @@ def _design_wire_v7() -> dict:
                      {'purpose': '玉佩之谜浮出水面', 'scenes': 1,
                       'entry': {'transition': 'time_skip'}}],
     }
+    # 当前作者协议明确声明身份名称表达，含已登记的家族构词。
+    declare = _declared_prose
+    for scene in wire['scenes']:
+        scene['driver'] = {key: value if key == 'focal_actor' else declare(value)
+                           for key, value in scene['driver'].items()}
+        scene['brief'] = declare(scene['brief'])
+        for beat in scene['beats']:
+            beat['ev'] = declare(beat['ev'])
+            for state in beat.get('state', ()):
+                state['val'] = declare(state['val'])
+    return wire
 
 
 def _hook_wire_v7(**over) -> dict:
@@ -569,8 +590,13 @@ def test_source_and_obligation_fields_rejected():
             {'obligations': [{'obligation_id': 'ob1'}]},
             {'state0': ['红烛高照']}):
         wire = _hook_wire(**smuggled)
-        _, errors = _assemble(wire, body)
-        assert any('未知字段' in e for e in errors), smuggled
+        hook, errors = _assemble(wire, body)
+        assert hook is None, '越权源字段和义务字段不得进入Hook正式产物'
+        rejected = [problem for error in errors
+                    if getattr(error, 'code', None) == 'hook_wire_root_shape'
+                    for problem in error.context.get('shape_errors', ())]
+        assert any(problem['error_type'] == 'extra_forbidden'
+                   and problem['issue_path'] == list(smuggled) for problem in rejected), smuggled
 
 
 def test_opening_fact_must_be_established_and_not_material_delta():
@@ -644,12 +670,14 @@ def test_concealed_identity_three_layers():
     wire['surface_releases'].append({'char_id': 'fu_jun', 'surfaces': ['陆大哥']})
     _, errors = _assemble(wire, body)
     assert any('隐藏人物' in e for e in errors)
-    # 第四层（正文字面）：withheld_literals 含全部未释放专名，validator 挡成文
+    # 第四层：未释放完整称谓仍不能引用；裸姓名部件只召回为待声明候选。
     _, _, context = _green_pair()
-    assert {'陆', '陆大哥', '陆兄', '苏', '苏姑娘'} <= set(context.withheld_literals)
+    assert {'陆大哥', '陆兄', '苏姑娘'} <= set(context.withheld_literals)
+    assert {'陆', '苏'} <= set(context.name_candidates)
+    assert not {'陆', '苏'} & set(context.withheld_literals)
     prose = '苏芸娘望着空房，想起陆大哥。'
     errors = validate_hook_prose(prose, context)
-    assert any('withheld_literals' in e and '陆大哥' in e for e in errors)
+    assert any('name_text_unclassified' in e and '陆大哥' in e for e in errors)
 
 
 def test_release_must_be_declared_surface():
@@ -702,7 +730,7 @@ def test_non_material_beat_change_keeps_context():
     body_dump = graph.model_dump(mode='json')
     body_dump['scenes'][1]['beats'][1]['event'] = '芸娘发现玉佩上另有刻字（改）'
     body_dump.pop('hook')
-    body_dump['contract_version'] = 'str06-rc22'
+    body_dump.pop('contract_version')
     body2 = BodyDesign.model_validate(body_dump)
     graph2 = publish_graph(body2, graph.hook)
     context2, errors = compile_hook_context(
@@ -756,8 +784,8 @@ def test_hook_length_gate_is_cap_only():
 
 def test_hook_writer_wrapper_rewrite_same_context():
     _, _, context = _green_pair()
-    wrapped_prose = '# 楔子\n苏芸娘望着空房。'
-    ok_prose = '苏芸娘望着空房。'
+    wrapped_prose = _declared_prose('# 楔子\n苏芸娘望着空房。')
+    ok_prose = _declared_prose('苏芸娘望着空房。')
     prompts = []
 
     def ask_text(owner, prompt, validate=None):
@@ -793,19 +821,20 @@ def test_hook_writer_rejects_wrappers_and_leaks():
             ('```json\\n{}\\n```', 'no_wrapper'),
             ('# 楔子', 'no_wrapper'),
             ('楔子', 'no_wrapper'),
-            ('苏芸娘想起陆大哥。', 'withheld_literals'),
-            ('苏芸娘看着陆家大门。', 'withheld_literals')):
+            (_declared_prose('苏芸娘想起陆大哥。'), 'name_text_reference'),
+            (_declared_prose('苏芸娘看着陆家大门。'), 'name_text_reference')):
         errors = validate_hook_prose(prose, context)
         assert any(code in e for e in errors), (prose, errors)
 
 
 def test_mechanical_pass_never_claims_semantic_verification():
     _, _, context = _green_pair()
-    prose = '苏芸娘望着空房。'
+    prose = _declared_prose('苏芸娘望着空房。')
     assert validate_hook_prose(prose, context) == []
     receipt = HookReceipt(
         hook_context_sha256=H64, prose_sha256=H64, request_identity='r1',
         validator_version='v1', status='accepted',
+        name_mentions=(), non_name_spans=(),
         mechanical_checks=('non_empty', 'encoding'))
     assert receipt.semantic == 'unverified'
     with pytest.raises(ValidationError):
@@ -833,6 +862,7 @@ def test_receipt_hash_charset():
     with pytest.raises(ValidationError, match='十六进制'):
         HookReceipt(hook_context_sha256='A' * 64, prose_sha256=H64,
                     request_identity='r', validator_version='v', status='accepted',
+                    name_mentions=(), non_name_spans=(),
                     mechanical_checks=('non_empty',))
 
 
@@ -971,12 +1001,12 @@ def _full_chain_wires():
                           {'left': 'ch01.sc1', 'right': 'ch02.sc1',
                            'verdict': 'distinct'}]},
         'cross_cause': {'protocol_version': 'stage2-cross-cause-v1', 'causes': []},
-        'preserve': {'protocol_version': 'stage4-preserve-v5', 'obligations': [
+        'preserve': {'protocol_version': 'stage4-preserve-v6', 'obligations': [
             {'kind': 'event_core',
-             'statement': '苏芸娘嫁入陆家且夫君立下旧约',
+             'statement': '[[name:yun_niang|苏芸娘]]嫁入[[name:fu_jun|陆家]]且[[name:fu_jun|夫君]]立下旧约',
              'anchors': ['b01_01.e1'],
              'must_preserve': True,
-             'satisfaction': '正文呈现婚约成立且夫君立下旧约', 'requires': []}]},
+             'satisfaction': '正文呈现婚约成立且[[name:fu_jun|夫君]]立下旧约', 'requires': []}]},
         'design': _design_wire_v7(),
         'hook_design': hook_wire,
         'naming': naming_wire,
@@ -1001,7 +1031,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monke
 
     def make_text(repo):
         def ask_text(owner, prompt, validate=None):
-            return ('苏芸娘望着空房。', [],
+            return (_declared_prose('苏芸娘望着空房。'), [],
                     synthetic_ref(owner, prompt))
         return ask_text
 
@@ -1102,8 +1132,8 @@ def test_request_catalog_annotates_name_exposure_by_person():
     catalog = annotated_hook_catalog(body, projection=_projection())
     agreement = fact_ref_of('sc01#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'agreement'))
     assert catalog[agreement]['name_exposure'] == {
-        'fu_jun': ['陆大哥', '陆'],
-        'yun_niang': ['苏芸娘', '芸娘', '苏']}
+        'fu_jun': ['陆大哥'],
+        'yun_niang': ['苏芸娘', '芸娘']}
     plain = fact_ref_of('sc02#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'secret'))
     assert 'name_exposure' not in catalog[plain]
 

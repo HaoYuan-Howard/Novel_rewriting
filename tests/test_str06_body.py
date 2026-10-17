@@ -35,7 +35,7 @@ from novel.stages.common import (
 from novel.stages.stage7.assembly import verify_chapter_receipts
 from novel.stages.chain import derive_total_length_budget, run_workflow
 from tests.str06_facilities import anchor_stub, make_context
-from tests.test_str06_hook import _body_wire, _characters, _full_chain_wires
+from tests.test_str06_hook import _body_wire, _characters, _declared_prose, _full_chain_wires
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.compile import compile_execution_plan
 from novel.stages.stage4.grounding import derive_semantic_binding
@@ -384,7 +384,16 @@ def test_renderer_only_contains_the_current_packet():
     # source lineage（b01_01）与内部 ID 不进 Writer 阅读面
     assert 'b01_01' not in body2 and 'blueprint_refs' not in body2
     assert 'sc01' not in body2 and 'sc02' not in body2
-    assert 'yun_niang' not in body2 and 'fu_jun' not in body2
+    six_sections = body2.split('【必须写出】', 1)[1].split('【本章交付要求】', 1)[0]
+    assert 'yun_niang' not in six_sections and 'fu_jun' not in six_sections
+    # 身份目录是协议输入，恰好只含本章许可，不能把整书人物或未来称谓送入许可。
+    import json
+    directory = json.JSONDecoder().raw_decode(body2.split('【合法身份引用】', 1)[1].strip())[0]
+    assert directory == {row.char_id: list(row.surfaces) for row in packet2.chapter.released_names}
+    assert set(directory) == {'yun_niang', 'fu_jun'}
+    assert '陆大哥' not in directory['fu_jun'] and '苏姑娘' not in directory['yun_niang']
+    assert all(not re.search(r'(?:sc\d+|b\d+_\d+|ob\d+)', name)
+               for names in directory.values() for name in names)
     # 同章包 ⇒ 同字节
     assert body2 == render_chapter_packet(project_chapter_packet(writer_ir, 2))
     # 第 1 章的章包不含第 2 章材料；场内称谓释放位置以自然拍序表述
@@ -436,11 +445,16 @@ def _withheld(chapter=1):
 def test_withheld_literals_follow_release_schedule():
     chars = _characters()
     body = _green_design()
-    released1 = chapter_surface_releases(body, 1)
+    released1 = chapter_surface_releases(body, 1, chars.name_structure)
     assert {'苏芸娘', '夫君', '芸娘'} <= released1
     withheld1 = _withheld(1)
-    # 未释放：陆家姓字面与构词、苏姑娘；已释放的 芸娘/苏芸娘/夫君 不在禁用面
-    assert '陆大哥' in withheld1 and '陆兄' in withheld1 and '陆' in withheld1
+    # 未释放完整称谓仍在禁止引用面；裸姓只召回待声明候选，不证明指人。
+    assert '陆大哥' in withheld1 and '陆兄' in withheld1
+    from novel.core.name_materials import name_candidate_literals
+    candidates = name_candidate_literals(chars.name_projection(), chars.name_structure)
+    assert '陆' in candidates and '苏' in candidates
+    assert '陆' not in withheld1 and '苏' not in withheld1
+    assert '陆家' in released1 and '陆家' not in withheld1
     assert '苏姑娘' in withheld1
     assert '芸娘' not in withheld1 and '夫君' not in withheld1
     # R9：成员已合法释放，其登记家族构词随之可用；其它个人称谓继续禁用。
@@ -469,9 +483,10 @@ def test_validate_chapter_prose_all_branches():
     withheld = _withheld(1)
     released = tuple(sorted(chapter_surface_releases(_green_design(), 1)))
     kw = dict(withheld_literals=withheld, released_surfaces=released,
+              name_surfaces={'yun_niang': ('苏芸娘', '芸娘'), 'fu_jun': ('夫君',)},
               target_chars=100, band_low=10, band_high=130,
               scene_markers=('s01', 's02'))
-    assert validate_chapter_prose('夫君夜半离家，芸娘追至门前，心中起疑。', **kw) == []
+    assert validate_chapter_prose(_declared_prose('夫君夜半离家，芸娘追至门前，心中起疑。'), **kw) == []
     assert validate_chapter_prose('   ', **kw) == ['[non_empty] 章正文为空']
     assert any(e.startswith('[encoding]') for e in validate_chapter_prose(
         '正文\ufffd带坏字符。', **kw))
@@ -481,10 +496,10 @@ def test_validate_chapter_prose_all_branches():
         '第一章 开端\n正文', **kw))
     assert any('no_wrapper' in e for e in validate_chapter_prose(
         '苏芸娘走了。s01 场景结束。', **kw))
-    assert any('withheld_literals' in e for e in validate_chapter_prose(
-        '夫君走了，芸娘追到陆家大门。', **kw))
+    assert any('name_text_reference' in e for e in validate_chapter_prose(
+        _declared_prose('夫君走了，芸娘追到陆家大门。'), **kw))
     # 已释放长名认领后不误报其构成字面
-    assert validate_chapter_prose('苏芸娘与夫君对坐无言，烛火摇了三摇。', **kw) == []
+    assert validate_chapter_prose(_declared_prose('苏芸娘与夫君对坐无言，烛火摇了三摇。'), **kw) == []
     assert any('length_band' in e for e in validate_chapter_prose(
         '字' * 200, **kw))
 
@@ -513,7 +528,7 @@ def _packet_kw(band=(0.6, 1.3), total=200, ordinal=1):
 
 
 def _answered(text, finish_reason=None, identity='id'):
-    return AnsweredText(text=text, finish_reason=finish_reason, identity=identity,
+    return AnsweredText(text=None if text is None else _declared_prose(text), finish_reason=finish_reason, identity=identity,
                         cached=False)
 
 
@@ -538,106 +553,123 @@ def test_write_chapter_first_pass_and_rewrite_identity():
     assert '上一稿' in fake.prompts[1] and '原因' in fake.prompts[1]
     # 交给付费边界的就是控制流用的那把机械校验：同一稿得同一结论（RC-54）
     assert fake.validators[0](bad) == list(outcome.attempts[0].errors)
-    assert fake.validators[1](good) == []
+    assert fake.validators[1](_declared_prose(good)) == []
     # 重写请求仍是同一章包正文 + 重写要求（不含前文/他章材料）
     assert fake.prompts[1].startswith(fake.prompts[0].rstrip('\n'))
 
 
-def _withheld_patch_packet():
-    """只含本测试专名许可的章包；不改变篇幅判据来接受实际违规稿。"""
+def test_name_text_candidate_is_unclassified_until_explicitly_declared():
+    """词法命中不等于泄漏；普通同形词须有语义声明，正式正文仍为纯文本。"""
     packet = _packet_kw()['packet']
-    return packet.model_copy(update={'chapter': packet.chapter.model_copy(update={
-        'withheld_literals': ('未名',), 'released_surfaces': ('夫君',),
-        'requires_released': (),
-    })})
+    chapter = packet.chapter.model_copy(update={
+        'name_candidates': ('白',), 'withheld_literals': (), 'released_surfaces': (),
+        'released_names': (), 'requires_released': (),
+    })
+    packet = packet.model_copy(update={'chapter': chapter})
+    draft = '她把话问得明白。' * 10
+    declared = draft.replace('明白', '[[text|明白]]')
+    fake = _FakeAnswers([_answered(draft), _answered(declared, identity='declaration')])
+    outcome = write_chapter(packet=packet, ask=fake)
+    assert outcome.prose == draft and outcome.receipt.name_mentions == ()
+    assert len(outcome.receipt.non_name_spans) == 10
+    assert all('name_text_unclassified' in error for error in outcome.attempts[0].errors)
+    assert '【重写要求】' in fake.prompts[1] and fake.systems[1] is None
+    from novel.stages.stage5 import recheck_chapter
+    assert recheck_chapter(packet, draft, outcome.receipt) == outcome.receipt
+    corrupted = outcome.receipt.model_copy(update={'non_name_spans': ()})
+    assert recheck_chapter(packet, draft, corrupted) is None
 
 
-def _withheld_patch_draft():
-    return '\n'.join((
-        '远处没有进请求的开场。', '近旁烛火烧得很稳。', '她把旧约问得清楚。',
-        '未名把回答低低说完。未名又掩上门。', '她没有追问。',
-        '屋里只剩风声。', '远处没有进请求的收束。'))
-
-
-def test_withheld_diagnostic_binds_original_offsets_and_locates_each_affected_line():
+def test_unclassified_name_diagnostic_keeps_original_prose_offsets():
     from novel.core.validation import ValidationIssue
-    from novel.stages.stage5.body import _withheld_repair_lines
-    prose = ' \n\n未名低声答。\n夫君不多说。\n未名关上门。\n '
+    prose = ' \n\n未名低声答。\n无人多说。\n未名关上门。\n '
     errors = validate_chapter_prose(
-        prose, withheld_literals=('未名',), released_surfaces=('夫君',),
+        prose, withheld_literals=(), released_surfaces=(), name_candidates=('未名',),
         target_chars=20, band_low=0, band_high=100)
-    assert len(errors) == 2 and all(isinstance(e, ValidationIssue) for e in errors)
-    assert [e.context for e in errors] == [
-        {'literal': '未名', 'start': prose.index('未名'), 'end': prose.index('未名') + 2},
-        {'literal': '未名', 'start': prose.rindex('未名'), 'end': prose.rindex('未名') + 2},
+    assert len(errors) == 2 and all(isinstance(error, ValidationIssue) for error in errors)
+    assert [error.context for error in errors] == [
+        {'literal': '未名', 'start': prose.index('未名'), 'end': prose.index('未名') + 2,
+         'coordinate_space': 'wire'},
+        {'literal': '未名', 'start': prose.rindex('未名'), 'end': prose.rindex('未名') + 2,
+         'coordinate_space': 'wire'},
     ]
-    assert _withheld_repair_lines(prose, errors) == (2, 4)
+    assert all(error.code == 'name_text_unclassified' for error in errors)
+    assert all(error.location[0] == 'wire' for error in errors)
 
 
-def test_pure_withheld_literal_repairs_only_the_affected_paragraph_and_uses_full_base_identity():
+def test_mixed_name_reference_and_length_failures_rewrite_the_same_wire():
+    good = '苏芸娘看着夫君，烛火烧得很稳。' * 5
+    bad = '陆大哥回来了。' + '字' * 200
+    fake = _FakeAnswers([_answered(bad), _answered(good)])
+    outcome = write_chapter(**_packet_kw(), ask=fake)
+    assert outcome.prose == good and fake.systems[1] is None
+    assert any(error.startswith('[name_text_reference]') for error in outcome.attempts[0].errors)
+    assert any(error.startswith('[length_band]') for error in outcome.attempts[0].errors)
+    assert _declared_prose(bad) in fake.prompts[1]
+
+
+def test_required_name_repair_merges_marked_paragraph_and_only_mentions_satisfy_release():
     import json
     from novel.stages.common import BODY_PARAGRAPH_REPAIR_SYSTEM
-    packet, draft = _withheld_patch_packet(), _withheld_patch_draft()
-    fixed = draft.split('\n')[3].replace('未名', '夫君')
-    patch = json.dumps({'paragraphs': [{'index': 3, 'text': fixed}]}, ensure_ascii=False)
-    fake = _FakeAnswers([_answered(draft), _answered(patch, identity='patch-id')])
+    from novel.stages.stage5 import recheck_chapter
+    packet = _packet_kw()['packet']
+    packet = packet.model_copy(update={'chapter': packet.chapter.model_copy(update={
+        'requires_released': ('苏芸娘',),
+    })})
+    initial = '风' * 70
+    fixed = '苏芸娘' + '风' * 65
+    patch = json.dumps({'paragraphs': [{'index': 0, 'text': _declared_prose(fixed)}]}, ensure_ascii=False)
+    fake = _FakeAnswers([_answered(initial), _answered(patch)])
     outcome = write_chapter(packet=packet, ask=fake)
-    assert outcome.prose == draft.replace('未名', '夫君')
-    assert outcome.request_identity == 'patch-id' and len(outcome.attempts) == 2
-    prompt = fake.prompts[1]
-    assert fake.systems[1] == BODY_PARAGRAPH_REPAIR_SYSTEM
-    assert '允许替换的行号：[3]' in prompt and '3（可编辑）' in prompt
-    assert '2（只读邻段）' in prompt and '4（只读邻段）' in prompt
-    assert '远处没有进请求' not in prompt and '本章交付要求' not in prompt
-    assert '本章合法已释放称谓：["夫君"]' in prompt
-    assert sha256_text(draft) in prompt
-    assert fake.validators[1](patch) == [], '付费接受器检查合并后的完整稿'
+    assert outcome.prose == fixed and fake.systems[1] == BODY_PARAGRAPH_REPAIR_SYSTEM
+    assert fake.validators[1](patch) == []
+    assert len(outcome.receipt.name_mentions) == 1
+    assert recheck_chapter(packet, fixed, outcome.receipt) == outcome.receipt
+    from novel.stages.stage5 import chapter_prose_validator
+    ordinary = '[[text|苏芸娘]]' + '风' * 65
+    assert any('[required_literals]' in error for error in chapter_prose_validator(packet)(ordinary))
 
-    # 切片外只改一句，窄输入正文仍相同，但完整基底变化必须换请求身份。
-    other = draft.replace('远处没有进请求的开场。', '另一处没有进请求的开场。')
-    second = _FakeAnswers([_answered(other), _answered(patch)])
-    write_chapter(packet=packet, ask=second)
-    assert other.split('\n')[0] not in second.prompts[1]
-    assert sha256_text(other) in second.prompts[1] and second.prompts[1] != prompt
+
+@pytest.mark.parametrize('tamper', ['prose', 'surface', 'char_id', 'overlap', 'order'])
+def test_free_recheck_refuses_body_or_identity_records_that_no_longer_bind(tamper):
+    from contracts.schema.name_text import NameTextSpan
+    from novel.stages.stage5 import recheck_chapter
+    packet = _packet_kw()['packet']
+    prose = '苏芸娘看着夫君，烛火烧得很稳。' * 5
+    outcome = write_chapter(packet=packet, ask=_FakeAnswers([_answered(prose)]))
+    receipt = outcome.receipt
+    if tamper == 'prose':
+        prose += '。'
+    elif tamper == 'surface':
+        receipt = receipt.model_copy(update={'name_mentions': (
+            receipt.name_mentions[0].model_copy(update={'surface': '另名字'}),
+            *receipt.name_mentions[1:],
+        )})
+    elif tamper == 'char_id':
+        receipt = receipt.model_copy(update={'name_mentions': (
+            receipt.name_mentions[0].model_copy(update={'char_id': 'missing'}),
+            *receipt.name_mentions[1:],
+        )})
+    elif tamper == 'overlap':
+        receipt = receipt.model_copy(update={'non_name_spans': (NameTextSpan(start=0, end=3),)})
+    else:
+        receipt = receipt.model_copy(update={'name_mentions': receipt.name_mentions[::-1]})
+    assert recheck_chapter(packet, prose, receipt) is None
 
 
 @pytest.mark.parametrize('bad_patch', [
-    '{"paragraphs":[{"index":2,"text":"改动只读邻段。"}]}',
-    '{"paragraphs":[{"index":99,"text":"越界。"}]}',
-    '{"paragraphs":[{"index":3,"text":"甲"},{"index":3,"text":"乙"}]}',
+    '{"paragraphs":[{"index":2,"text":"越界。"}]}',
+    '{"paragraphs":[{"index":0,"text":"甲"},{"index":0,"text":"乙"}]}',
     '{"paragraphs":[{"index":true,"text":"甲"}]}',
-    '{"paragraphs":[{"index":3,"text":"甲\\n新增段落"}]}',
-    '{"paragraphs":[{"index":3,"text":"甲","extra":1}]}',
-    '{"paragraphs":[{"index":3,"index":2,"text":"甲"}]}',
-    '正文整稿，不能当作段落补丁。',
+    '{"paragraphs":[{"index":0,"text":"甲\\n新段落"}]}',
+    '{"paragraphs":[{"index":0,"text":"甲","extra":1}]}',
+    '{"paragraphs":[{"index":0,"index":1,"text":"甲"}]}',
+    '正文整稿，不能当作段落修句。',
 ])
-def test_bad_withheld_patch_keeps_the_same_narrow_arm_and_does_not_edit_other_lines(bad_patch):
-    import json
-    from novel.stages.common import BODY_PARAGRAPH_REPAIR_SYSTEM
-    draft = _withheld_patch_draft()
-    fixed = draft.split('\n')[3].replace('未名', '夫君')
-    good_patch = json.dumps({'paragraphs': [{'index': 3, 'text': fixed}]}, ensure_ascii=False)
-    fake = _FakeAnswers([_answered(draft), _answered(bad_patch), _answered(good_patch)])
-    outcome = write_chapter(packet=_withheld_patch_packet(), ask=fake)
-    assert outcome.prose == draft.replace('未名', '夫君')
-    assert len(outcome.attempts) == 3 and outcome.attempts[1].errors[0].startswith('[paragraph_patch]')
-    assert fake.validators[1](bad_patch)[0].startswith('[paragraph_patch]')
-    assert fake.systems[1:] == [BODY_PARAGRAPH_REPAIR_SYSTEM] * 2
-    assert all('允许替换的行号：[3]' in prompt and sha256_text(draft) in prompt
-               and '远处没有进请求' not in prompt for prompt in fake.prompts[1:])
-    assert fake.prompts[1] != fake.prompts[2], '补丁格式失败进入下一轮请求身份'
-
-
-def test_mixed_withheld_and_length_failure_keeps_the_existing_whole_chapter_rewrite():
-    draft = _withheld_patch_draft() * 3
-    good = _withheld_patch_draft().replace('未名', '夫君')
-    fake = _FakeAnswers([_answered(draft), _answered(good)])
-    outcome = write_chapter(packet=_withheld_patch_packet(), ask=fake)
-    assert outcome.prose == good
-    assert any(e.startswith('[length_band]') for e in outcome.attempts[0].errors)
-    assert any(e.startswith('[withheld_literals]') for e in outcome.attempts[0].errors)
-    assert fake.systems[1] is None and '【重写要求】' in fake.prompts[1]
-    assert draft in fake.prompts[1]
+def test_required_name_paragraph_patch_rejects_invalid_shape(bad_patch):
+    from novel.stages.stage5.body import _merge_paragraph_patch
+    merged, error = _merge_paragraph_patch('第一段。\n第二段。', bad_patch, editable_lines=(0,))
+    assert merged is None and error.startswith('[paragraph_patch]')
 
 
 def test_write_chapter_selects_min_deviation_late_tie_and_blocks():
@@ -675,6 +707,15 @@ def test_write_chapter_selects_min_deviation_late_tie_and_blocks():
     assert len(fake.prompts) == 1, '截断后不得再发起重写请求'
 
 
+@pytest.mark.parametrize('error', ['[new_hard_rule] 新增硬约束不通过', '未知校验失败'])
+def test_unknown_validation_failure_is_never_disclosed_as_length_deviation(monkeypatch, error):
+    from novel.stages.stage5 import body
+    monkeypatch.setattr(body, 'chapter_prose_validator', lambda packet: lambda prose: [error])
+    fake = _FakeAnswers([_answered('字' * 70)] * 3)
+    outcome = write_chapter(**_packet_kw(), ask=fake)
+    assert outcome.prose is None and outcome.receipt is None
+
+
 # ───────────────────────── 回执集合核对 ─────────────────────────
 
 def test_verify_chapter_receipts_checks_each_chapter_against_its_packet():
@@ -690,15 +731,19 @@ def test_verify_chapter_receipts_checks_each_chapter_against_its_packet():
                                  validation_sha256=validation,
                                  machine_view_sha256='e' * 64)
 
-    r1 = {'status': 'accepted', 'writer_view_sha256': sha1,
+    r1 = {'status': 'accepted', 'chapter_ordinal': 1, 'writer_view_sha256': sha1,
           'validation_sha256': vsha, 'machine_view_sha256': 'e' * 64,
           'prose_sha256': sha(prose1)}
-    r2 = {'status': 'accepted', 'writer_view_sha256': sha2,
+    r2 = {'status': 'accepted', 'chapter_ordinal': 2, 'writer_view_sha256': sha2,
           'validation_sha256': vsha, 'machine_view_sha256': 'e' * 64,
           'prose_sha256': sha(prose2)}
-    from contracts.schema.receipt import BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS
+    from contracts.schema.receipt import (
+        BODY_VALIDATOR_VERSION, BODY_MECHANICAL_CHECKS, RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
+    )
     for receipt in (r1, r2):
-        receipt.update(validator_version=BODY_VALIDATOR_VERSION, mechanical_checks=BODY_MECHANICAL_CHECKS)
+        receipt.update(validator_version=BODY_VALIDATOR_VERSION, mechanical_checks=BODY_MECHANICAL_CHECKS,
+                       protocol_version=WRITER_PROTOCOL_VERSION, renderer_version=RENDERER_VERSION,
+                       name_mentions=(), non_name_spans=())
     ids = {1: identities(sha1), 2: identities(sha2)}
     assert verify_chapter_receipts({1: r1, 2: r2}, {1: prose1, 2: prose2},
                                   identities_by_ordinal=ids) == []
@@ -749,7 +794,7 @@ class _RoutingTransport:
         owner = self._owner(request)
         self.calls.append(owner)
         if owner == 'hook_writer':
-            return ChatResponse(content=self.hook_text, finish_reason='stop',
+            return ChatResponse(content=_declared_prose(self.hook_text), finish_reason='stop',
                                 usage={'prompt_tokens': 10, 'completion_tokens': 5},
                                 model='fake')
         if owner.startswith('body_ch'):
@@ -758,7 +803,7 @@ class _RoutingTransport:
                                     usage={'prompt_tokens': 100, 'completion_tokens': 40000},
                                     model='fake')
             text = GOOD_CH1 if owner.endswith('ch01') else GOOD_CH2
-            return ChatResponse(content=text, finish_reason='stop',
+            return ChatResponse(content=_declared_prose(text), finish_reason='stop',
                                 usage={'prompt_tokens': 100, 'completion_tokens': 40},
                                 model='fake')
         import json as _json
@@ -791,7 +836,7 @@ class _RoutingTransport:
         for owner, marker in (
                 ('names', '登记全书源名称结构'), ('preserve', '最小语义义务'),
                 ('design', '设计目标书'),
-                ('hook_design', 'stage4-hook-design-v3'), ('naming', '表层姓名')):
+                ('hook_design', 'stage4-hook-design-v4'), ('naming', '表层姓名')):
             if marker in user:
                 return owner
         raise AssertionError(f'无法路由的请求：{user[:80]}')

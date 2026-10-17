@@ -5,7 +5,7 @@
 【章包与独立成章（D2，B4）】
 Writer 与 Validator 只收当前章包（`ChapterWriterPacket` 三件套：PacketBrief＋
 ChapterIR＋RealizationContract）：不读前文正文、Design、Characters 或其他章
-IR。验证材料（称谓许可、禁用字面）已在 compile 时算好并随章包携带；Stage5
+IR。验证材料（身份称谓许可、待声明名称候选）已在 compile 时算好并随章包携带；Stage5
 只做语言实现。各章因此相互独立：可乱序完成、可并发、可按有效提交集合补缺
 （I-31：单章失败不污染其他章的合法结果）。
 
@@ -22,6 +22,8 @@ Machine 审计摘要（`machine_view_sha256`，仅审计不触发重购）；不
 与前文链（`R-7.4` 改写）。
 
 【边界】
+wire 以身份引用与普通义片段声明同形文本，compiler 解码为纯正文与两类坐标表，
+回执分别封存声明供免费重验和 Stage7 按身份改名；语义声明自身保持 unverified。
 本模块不落盘（正文/回执/attempt 记录的写入归调用方的 repository 编排）；
 不从正文反抽 semantic delta；章包错误回 Stage4 重编译，付费状态未知保持阻断。
 """
@@ -32,7 +34,8 @@ import json
 from typing import Any, NamedTuple
 
 from contracts.schema.receipt import ChapterLengthDisclosure, ChapterReceipt
-from novel.core.validation import ValidationIssue
+from contracts.schema.name_text import NameMention, NameTextSpan
+from novel.core.name_text import ResolvedNameText, resolve_name_text
 from novel.stages.common import (
     BODY_PARAGRAPH_REPAIR_SYSTEM, RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
     ChapterWriterPacket, chapter_identities, render_chapter_packet,
@@ -82,6 +85,19 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
+def resolve_chapter_prose(text: str, packet: ChapterWriterPacket) -> ResolvedNameText:
+    """章级身份声明的唯一 compiler 入口，采用与只读干跑共同消费。"""
+    return resolve_name_text(
+        text, surfaces={row.char_id: row.surfaces for row in packet.chapter.released_names},
+        candidate_literals=(*packet.chapter.name_candidates, *packet.chapter.withheld_literals,
+                            *packet.chapter.released_surfaces))
+
+
+def _wire_chars(packet: ChapterWriterPacket, text: str) -> int:
+    """协议标记不计入篇幅，计数始终针对确定性解码后的纯正文。"""
+    return count_body_chars(resolve_chapter_prose(text, packet).text)
+
+
 def _repair_identity(packet: ChapterWriterPacket, previous: str) -> str:
     """窄请求绑定完整基底与章包身份，省略的正文或材料变化仍须换请求。"""
     identities = chapter_identities(packet)
@@ -107,63 +123,12 @@ def _paragraph_repair_prompt(previous: str, errors: list[str], *,
             '（人物的首次正式点名），不得新增或改变事实、不得改动无关段落。'
             '\n当前稿按行编号列出；输出 JSON（不要围栏、不要解释）：'
             '{"paragraphs":[{"index":行号,"text":"该行替换后的全文"}]}——'
-            '只输出需要替换的行，未列出的行保持原样。\n〔当前稿〕\n' + numbered)
-
-
-def _withheld_repair_lines(previous: str, errors: list[str]) -> tuple[int, ...]:
-    """按 validator 给出的原稿区间定位行；没有可靠位置即报实现缺陷，禁止猜文案。"""
-    spans: list[tuple[int, int]] = []
-    cursor = 0
-    for line in previous.split('\n'):
-        spans.append((cursor, cursor + len(line)))
-        cursor += len(line) + 1
-    selected: set[int] = set()
-    for issue in errors:
-        if not isinstance(issue, ValidationIssue) or issue.code != 'withheld_literals':
-            raise ValueError('未释放字面窄修需要 validator 的 typed 位置诊断')
-        literal = issue.context.get('literal')
-        start, end = issue.context.get('start'), issue.context.get('end')
-        if (not isinstance(literal, str) or type(start) is not int or type(end) is not int
-                or not 0 <= start < end <= len(previous)
-                or previous[start:end] != literal):
-            raise ValueError('未释放字面窄修诊断与完整原稿不一致')
-        selected.update(index for index, (low, high) in enumerate(spans)
-                        if low < end and start < high)
-    if not selected:
-        raise ValueError('未释放字面窄修没有可编辑段落')
-    return tuple(sorted(selected))
-
-
-def _withheld_repair_prompt(previous: str, errors: list[str], *,
-                            packet: ChapterWriterPacket, editable_lines: tuple[int, ...],
-                            patch_error: str = '') -> str:
-    """纯姓名泄漏只送受影响段与前后邻段；邻段只读，完整基底仅以摘要绑定。"""
-    lines = previous.split('\n')
-    context_lines = set(editable_lines)
-    for index in editable_lines:
-        for step in (-1, 1):
-            neighbor = index + step
-            while 0 <= neighbor < len(lines) and not lines[neighbor].strip():
-                neighbor += step
-            if 0 <= neighbor < len(lines):
-                context_lines.add(neighbor)
-    excerpt = '\n'.join(
-        f'{index}（{"可编辑" if index in editable_lines else "只读邻段"}）: {lines[index]}'
-        for index in sorted(context_lines))
-    issues = [{'literal': issue.context['literal'], 'start': issue.context['start'],
-               'end': issue.context['end']} for issue in errors]
-    return ('【未释放字面段落修句身份】' + _repair_identity(packet, previous)
-            + '\n上一稿仅未释放专名字面检查失败；只修这些字面的表达，不改事实或知情位置。'
-            + '\n待修字面与原稿位置：' + json.dumps(issues, ensure_ascii=False)
-            + '\n本章合法已释放称谓：'
-            + json.dumps(list(packet.chapter.released_surfaces), ensure_ascii=False)
-            + '\n允许替换的行号：' + json.dumps(list(editable_lines))
-            + ('\n上次修句回答失败：' + patch_error if patch_error else '')
-            + '\n将未释放字面改为已有合法称谓或不点名的自然表述，保持原有语气、视角与篇幅。'
-            '只读邻段帮助衔接，不得修改；每个 text 只含一行，不能插入新段。'
-            '\n只输出 JSON（不要围栏、不要解释）：'
-            '{"paragraphs":[{"index":允许的行号,"text":"该行替换后的全文"}]}。'
-            '\n〔受影响段落与必要邻段〕\n' + excerpt)
+            '只输出需要替换的行，未列出的行保持原样。人物称谓仍须使用'
+            ' [[name:人物ID|本章已释放称谓]]，普通同形词使用 [[text|普通片段]]。'
+            '\n【合法身份引用】\n' + json.dumps(
+                {row.char_id: list(row.surfaces) for row in packet.chapter.released_names},
+                ensure_ascii=False, sort_keys=True)
+            + '\n〔当前稿〕\n' + numbered)
 
 
 def _merge_paragraph_patch(previous: str, answer: str, *,
@@ -245,26 +210,21 @@ def write_chapter(
     errors: list[str] = []
     identity = ''
     previous: str | None = None   # 重写基线：最近一份非空回答（空回答不进基线）
-    patch_error = ''              # 已定位的未释放字面窄修，格式失败仍绑定同一原稿
+    patch_error = ''
     for attempt in range(1 + MAX_BODY_REWRITES):
-        # 纯字面问题走段落窄修；混合篇幅等问题仍走原整章重写，不加收缩臂。
+        # 仅必保揭名缺失走段落修句；身份声明与混合问题经同一章包完整返修。
         required_patch = (previous is not None and bool(errors)
                           and all(error.startswith('[required_literals]') for error in errors))
-        withheld_patch = (previous is not None and bool(errors)
-                          and all(isinstance(error, ValidationIssue)
-                                  and error.code == 'withheld_literals' for error in errors))
-        patch_round = required_patch or withheld_patch
-        editable_lines = _withheld_repair_lines(previous, errors) if withheld_patch else None
+        patch_round = required_patch
+        editable_lines = None
         if previous is None:
             answered = ask(packet_text, validate)
         elif patch_round:
             # 回答是行替换 JSON，不是整章正文：付费边界收到的校验器必须校验**合并后**
             # 的稿（接受记录 accepted 才如实，RC-54），请求用专用 system 提示
             # （写手 system 要求「只输出完整正文」，与本轮的 JSON 输出相冲突）。
-            prompt = (_withheld_repair_prompt(
-                previous, errors, packet=packet, editable_lines=editable_lines,
-                patch_error=patch_error) if withheld_patch else _paragraph_repair_prompt(
-                    previous, errors, packet=packet, patch_error=patch_error))
+            prompt = _paragraph_repair_prompt(
+                previous, errors, packet=packet, patch_error=patch_error)
             answered = ask(prompt,
                            _patch_answer_validator(previous, validate,
                                                    editable_lines=editable_lines),
@@ -278,11 +238,8 @@ def write_chapter(
             empty_error = '[non_empty] 响应为空'
             attempts.append(ChapterAttempt(attempt + 1, identity, answered.finish_reason,
                                            0, (empty_error,)))
-            if withheld_patch:
-                patch_error = empty_error
-            else:
-                errors = [empty_error]
-                patch_error = ''
+            errors = [empty_error]
+            patch_error = ''
             continue
         prose = answered.text
         if answered.finish_reason == 'length':
@@ -291,29 +248,25 @@ def write_chapter(
             # 错误拦下，本分支只服务不经 Runtime 的合成/测试 ask）。
             attempts.append(ChapterAttempt(
                 attempt + 1, identity, answered.finish_reason,
-                count_body_chars(prose),
+                _wire_chars(packet, prose),
                 ('[truncated] 响应被截断（finish_reason=length），即停该章（D6）',)))
             break
         if patch_round:
             merged, merge_error = _merge_paragraph_patch(
                 previous, prose, editable_lines=editable_lines)
             if merge_error:
-                # 已定位的未释放字面保留原稿与诊断，下一轮仍修同一段；缺字面修句
-                # 未定位允许改哪些段落，格式失败沿既有语义退整章恢复，并保留两种原因。
+                # 解析失败保留完整基底和原诊断，下一轮恢复整章，不假造已合并稿。
                 attempts.append(ChapterAttempt(attempt + 1, identity,
                                                answered.finish_reason,
-                                               count_body_chars(previous), (merge_error,)))
-                if withheld_patch:
-                    patch_error = merge_error
-                else:
-                    errors = [merge_error, *errors]
-                    patch_error = ''
+                                               _wire_chars(packet, previous), (merge_error,)))
+                errors = [merge_error, *errors]
+                patch_error = ''
                 continue
             prose = merged
         patch_error = ''
         errors = validate(prose)
         attempts.append(ChapterAttempt(attempt + 1, identity, answered.finish_reason,
-                                       count_body_chars(prose), tuple(errors)))
+                                       _wire_chars(packet, prose), tuple(errors)))
         candidates.append((identity, prose, errors, answered.ref))
         previous = prose
         if not errors:
@@ -324,19 +277,16 @@ def write_chapter(
     # （截断稿自 D6 起即停、不进候选，不在过滤集内；段落修句轮的合并稿与其
     # 解析失败留证同走 attempt 账，缺字面稿不得披露放行。）
     legal = [(identity, prose, ref) for identity, prose, errs, ref in candidates
-             if not any(e.startswith(('[non_empty]', '[encoding]', '[no_wrapper]',
-                                      '[withheld_literals]', '[required_literals]',
-                                      '[paragraph_patch]'))
-                        for e in errs)]
+             if all(error.startswith('[length_band]') for error in errs)]
     if not legal:
         return ChapterOutcome(prose=None, receipt=None,
                               attempts=tuple(attempts), request_identity=identity,
                               length_disclosed=False)
     chosen_identity, chosen_prose, chosen_ref = min(
         enumerate(legal),
-        key=lambda item: (abs(count_body_chars(item[1][1]) - target) / target,
+        key=lambda item: (abs(_wire_chars(packet, item[1][1]) - target) / target,
                           -item[0]))[1]
-    disclosed = not (low <= count_body_chars(chosen_prose) <= high)
+    disclosed = not (low <= _wire_chars(packet, chosen_prose) <= high)
     return _outcome(packet, chosen_prose, chosen_identity, attempts, low, high, target,
                     disclosed=disclosed, ref=chosen_ref)
 
@@ -344,7 +294,16 @@ def write_chapter(
 def _outcome(packet: ChapterWriterPacket, prose: str, identity: str,
              attempts: list[ChapterAttempt],
              low: int, high: int, target: int, *, disclosed: bool,
-             ref=None) -> ChapterOutcome:
+             ref=None, name_mentions: tuple[NameMention, ...] | None = None,
+             non_name_spans: tuple[NameTextSpan, ...] | None = None) -> ChapterOutcome:
+    if name_mentions is None and non_name_spans is None:
+        resolved = resolve_chapter_prose(prose, packet)
+        if resolved.errors:
+            raise ValueError('通过校验的正文无法解码身份引用')
+        prose, name_mentions, non_name_spans = (
+            resolved.text, resolved.mentions, resolved.non_name_spans)
+    if name_mentions is None or non_name_spans is None:
+        raise ValueError('正式正文必须带人物提及及普通义声明')
     count = count_body_chars(prose)
     identities = chapter_identities(packet)
     receipt = ChapterReceipt(
@@ -353,6 +312,7 @@ def _outcome(packet: ChapterWriterPacket, prose: str, identity: str,
         validation_sha256=identities.validation_sha256,
         machine_view_sha256=identities.machine_view_sha256,
         prose_sha256=sha256_text(prose),
+        name_mentions=name_mentions, non_name_spans=non_name_spans,
         request_identity=identity or 'unidentified',
         protocol_version=WRITER_PROTOCOL_VERSION,
         renderer_version=RENDERER_VERSION, validator_version=BODY_VALIDATOR_VERSION,
@@ -378,10 +338,13 @@ def recheck_chapter(packet: ChapterWriterPacket, prose: str,
             or receipt.writer_view_sha256 != identities.writer_view_sha256
             or receipt.prose_sha256 != sha256_text(prose)):
         return None
-    errors = chapter_prose_validator(packet)(prose)
+    errors = chapter_prose_validator(
+        packet, name_mentions=receipt.name_mentions,
+        non_name_spans=receipt.non_name_spans)(prose)
     if errors and not (receipt.length_disclosed and all(str(e).startswith('[length_band]') for e in errors)):
         return None
     contract = packet.realization_contract
     return _outcome(packet, prose, receipt.request_identity, [],
                     contract.band_low, contract.band_high, contract.target_chars,
-                    disclosed=bool(errors)).receipt
+                    disclosed=bool(errors), name_mentions=receipt.name_mentions,
+                    non_name_spans=receipt.non_name_spans).receipt

@@ -5,15 +5,15 @@ Stage7 在新链（STR-06，F8a 激活）有两个节点：`str06.stage7.naming`
 成书装配，`executor_content_limit=0` 结构性禁付）。旧 `stage7.rename`／
 `stage7.assemble` 与 approve／adopt-residual 人工面随旧链退役。
 
-ApplyNames 是替换的唯一应用者：章回执链核对 → 单遍替换 → 残留检查 → TXT 先落盘 →
+ApplyNames 是替换的唯一应用者：章回执链核对 → 身份提及与映射核对 → 按区间改名 → TXT 先落盘 →
 manifest 最后提交。Stage7 不改写 Stage5 任何字节；交付可确定性重放，同输入同字节。
 NameMap 是交付变换契约，接受正文、回执与已购证据独立保护。
 
 成书按阅读序逐章加「第N章」一行（章号由系统添加；写手协议据此约定不写章号与标题），
 引子放最前、不加标题。交付身份对**分章**敏感：有序的 `(chapter_ordinal,
-prose_sha256)`、Hook 成文 hash、改名映射与保留字面、`ASSEMBLY_FORMAT_VERSION`
-共同派生——拼接相同但分章不同的两份书是不同的交付。章回执与前文链仍绑定不含章号的
-`prior_body_text`。
+prose_sha256)`、Hook 成文 hash、改名映射与保留字面、两类身份声明表及
+`ASSEMBLY_FORMAT_VERSION` 共同派生——拼接相同但分章不同的两份书是不同的
+交付。章回执绑定本章改名前正文及当前章包，不绑定前文链。
 
 ## 现役产物
 
@@ -33,15 +33,15 @@ prose_sha256)`、Hook 成文 hash、改名映射与保留字面、`ASSEMBLY_FORM
 ## 权限分界
 
 Naming 只消费名称结构与稳定身份的只读投影；ApplyNames 是替换的唯一应用者——
-投影不落交付、Apply 不改映射。残留判断遵守 claimed/kept：目标名含旧字面不误报，
-kept 含映射键不误报。换 NameMap 只影响交付，Hook 窄改不使无关正文接受失效。
+投影不落交付、Apply 不改映射。`compile_bound_replacements` 按 char_id 编译登记构词；
+`apply_bound_names` 只改回执声明区间，普通义与表外文字保持原样。同字面不同人物不再由全局字符串替换顺序决定。换 NameMap 只影响交付，Hook 窄改不使无关正文接受失效。
 
 ## 判据表
 
 | 判据 | sev | 要求 |
 |---|---|---|
 | `name_map_compile` | hard | NameMap v5 编译闭合（名称位一致、无姓氏冲突） |
-| `naming_residual` | hard | 单遍替换后旧名零残留（遵守 claimed/kept） |
+| `naming_residual` | hard | 身份提及、区间与映射闭合；零表外改动 |
 | `assembly_chapter_chain` | hard | 章回执链核对（逐章写手视图／验证输入摘要＋正文 hash；Machine 层摘要仅审计不参与） |
 | `delivery_manifest` | hard | TXT 先落盘、manifest 最后提交、hash 逐字一致 |
 | `delivery_replayable` | hard | 同输入交付字节一致（零新购重放） |
@@ -51,3 +51,5 @@ kept 含映射键不误报。换 NameMap 只影响交付，Hook 窄改不使无�
 
 当前注册表共 **8 条**：**6 hard、1 metric、1 unver**。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。
+
+身份文本协议、回执两类区间及旧稿重建边界见 [name_text.md](name_text.md)。交付身份同时绑定两类声明表。

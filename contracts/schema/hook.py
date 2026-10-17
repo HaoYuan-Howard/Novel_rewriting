@@ -42,6 +42,7 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.common import CharacterVoice, FreeProvenance, LlmProvenance
+from contracts.schema.name_text import NameMention, NameTextSpan
 from contracts.schema.state import StateAddress, SurfaceRelease, WithheldNameBinding
 
 OpeningRef = str  # 'init' 或 '<scene_id>#<beat_id>'；存在性归跨引用校验
@@ -203,7 +204,7 @@ class HookReaderDevelopmentWire(HookReaderExpectationFocus):
 
 class HookDesignWire(StrictModel):
     """v3 组织选择随有序材料，阅读期待用已有事实/拍；无第二份剧情简报。"""
-    protocol_version: Literal['stage4-hook-design-v3']
+    protocol_version: Literal['stage4-hook-design-v4']
     pov: HookPov
     opening_facts: tuple[HookOpeningFactWire, ...] = ()
     materials: tuple[HookMaterialWire, ...] = Field(min_length=1)
@@ -214,6 +215,12 @@ class HookDesignWire(StrictModel):
     reader_expectation: Annotated[
         HookReaderFactWire | HookReaderDevelopmentWire, Field(discriminator='kind')]
     local_focus: str = Field(min_length=1)
+
+
+class HookDesignWireV3(HookDesignWire):
+    """仅供已购历史候选集中解码；新请求与新生成只使用 v4。"""
+
+    protocol_version: Literal['stage4-hook-design-v3']
 
 
 class HookOpeningFact(StrictModel):
@@ -263,12 +270,12 @@ class HookContext(StrictModel):
     只解析引用、投影与格式化，不解释 brief；不含义务字段。`withheld_literals`
     是未在 Hook 中释放的专名字面（名称结构 ∩ Design 称谓推导），供机械
     validator 检查成文泄漏，不写死任何人名。rc16（CS-F2）：`withheld_bindings`
-    是禁用字面中「可唯一绑定人物」的完整登记称谓子集——释放面按 Hook 自选的
-    `surface_releases` 在 compile 时算好，渲染期据此确定性投影；空表合法
-    （无可证明绑定＝一律不投影），上下文字段本身不被投影改写。
+    按 Hook 自选 `surface_releases` 逐人物派生 (char_id, literal) 绑定，同形多人
+    分别登记。显式身份引用按本人显示面投影，旧裸文另须全书唯一归属证明；空表合法，
+    上下文字段本身不被投影改写。
     """
 
-    contract_version: Literal['str06-rc24'] = 'str06-rc24'
+    contract_version: Literal['str06-rc25'] = 'str06-rc25'
     pov: HookPov
     opening_facts: tuple[HookOpeningFact, ...] = ()
     materials: tuple[HookMaterialView, ...] = Field(min_length=1)
@@ -283,7 +290,9 @@ class HookContext(StrictModel):
     scene_voices: tuple[HookSceneVoice, ...] = ()
     usable_surfaces: tuple[SurfaceRelease, ...] = ()
     withheld_literals: tuple[str, ...] = Field(default=(), min_length=0)
-    #: 禁用字面中已证明唯一绑定人物的完整登记称谓（渲染期投影的验证材料，不进阅读面）。
+    name_candidates: tuple[str, ...] = Field(
+        description='需逐次作人物或普通文本声明的名称候选，不证明候选具有指人语义')
+    #: 本人未释放的个人姓名面及裸文唯一归属证明（不进阅读面）。
     withheld_bindings: tuple[WithheldNameBinding, ...] = Field(default=(), min_length=0)
     #: 显示面前缀（CS-H H3，RC-60）：每人按释放顺序的 Hook 自选释放面；尚无释放
     #: 且**非 concealed** 的人物在末尾附回落纯称谓（concealed 不回落——隐藏人物
@@ -308,9 +317,9 @@ class HookContext(StrictModel):
 
     @model_validator(mode='after')
     def _unique_binding_literals(self) -> 'HookContext':
-        literals = [b.literal for b in self.withheld_bindings]
-        if len(set(literals)) != len(literals):
-            raise ValueError('Hook 的称谓绑定字面重复')
+        bindings = [(b.char_id, b.literal) for b in self.withheld_bindings]
+        if len(set(bindings)) != len(bindings):
+            raise ValueError('Hook 的人物称谓绑定重复')
         return self
 
 
@@ -323,6 +332,10 @@ class HookReceipt(StrictModel):
 
     hook_context_sha256: str = Field(min_length=64, max_length=64)
     prose_sha256: str = Field(min_length=64, max_length=64)
+    name_mentions: tuple[NameMention, ...] = Field(
+        description='compiler 计算的纯正文人物提及；不得用缺字段冒充合法空表')
+    non_name_spans: tuple[NameTextSpan, ...] = Field(
+        description='compiler 计算的普通义声明区间；空表须显式给出')
     request_identity: str = Field(min_length=1, description='被接受 attempt 的请求身份')
     validator_version: str = Field(min_length=1)
     status: Literal['accepted', 'rejected']

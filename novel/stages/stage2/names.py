@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""name_structure —— Stage2 names 窄调用的确定性 compile（F6；CS-S 1c 升 v6）。
+"""name_structure —— Stage2 names 窄调用的确定性 compile（现役 wire v7）。
 
 【职责】compiler：names wire → Characters 的 `name_structure` 段。语义判断
 （谁是这个人的姓、名、化名）归抽取 LLM；本模块只做确定性转换与闭合校验：
@@ -30,18 +30,19 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, NamedTuple
+from typing import Any, Mapping, NamedTuple
 
 from contracts.schema.source import (
-    CharactersCore, NameStructure, render_form,
+    CharactersCore, NameStructure, SurfaceWindow, render_form,
 )
 from contracts.schema.observation import (
-    STAGE2_NAME_VARIANTS_WIRE_PROTOCOL, STAGE2_NAMES_WIRE_PROTOCOL,
+    STAGE2_NAME_VARIANTS_WIRE_PROTOCOL, STAGE2_NAMES_PROTOCOL, STAGE2_NAMES_WIRE_PROTOCOL,
+    AdditionalNameSurfaceWire, NamesObservation, SurfaceMention,
 )
 from novel.stages.common import group_located_errors
 from novel.stages.stage2.resolver import EvidenceResolver
 
-_PEOPLE_KEYS = frozenset({'family_id', 'given', 'aliases', 'form_overrides'})
+_PEOPLE_KEYS = frozenset({'family_id', 'given', 'aliases', 'form_overrides', 'additional_surfaces'})
 _FAMILY_KEYS = frozenset({'literal', 'forms'})
 #: wire 允许对象内冗余自报名（与 dict 键一致时归一，不一致报错）
 _FAMILY_OPTIONAL = frozenset({'family_id'})
@@ -88,6 +89,115 @@ def compile_name_structure(
     structure, located = _compile_name_structure_located(
         wire, characters, source_text, evidence=evidence)
     return structure, [message for _path, message in located]
+
+
+def extend_name_surfaces(
+    characters: CharactersCore, names: NamesObservation, *, evidence,
+) -> tuple[CharactersCore | None, list[str]]:
+    """唯一补面投影：Names 的有证据词面声明并入 Book 既有人物，不改 Book。
+
+    v4 只读兼容明确没有观察过补充面；空映射不是称谓完整性证明。v5 则逐项
+    复验证据、人物闭集和既有面冲突，窗口复用 Resolver 派生，供所有真实消费者。
+    """
+    if names.protocol_version == 'stage2-names-v4':
+        return (characters, []) if not names.additional_surfaces else (
+            None, ['names v4 不得暗含补充称谓声明'])
+    if names.protocol_version != STAGE2_NAMES_PROTOCOL:
+        return None, [f'不支持的 names 观察协议：{names.protocol_version}']
+    extended, located = _extend_surface_mentions(
+        characters, names.additional_surfaces, evidence=evidence)
+    return extended, [message for _path, message in located]
+
+
+def _extend_surface_mentions(
+    characters: CharactersCore, additions: Mapping[str, tuple[SurfaceMention, ...]], *, evidence,
+) -> tuple[CharactersCore | None, list[tuple[tuple | None, str]]]:
+    """证据寻址与不可变 core 投影；不判断自然语言中的人物同一性。"""
+    resolver = EvidenceResolver(evidence or {})
+    issues: list[tuple[tuple | None, str]] = []
+    people = dict(characters.characters)
+    for slug, mentions in additions.items():
+        path = ('people', slug)
+        if slug not in people:
+            issues.append((path, f'补充称谓引用人物闭集之外的 {slug!r}；不得增删或拆合人物'))
+            continue
+        entry = people[slug]
+        seen = {surface.surface for surface in entry.surfaces}
+        windows = list(entry.surfaces)
+        for mention in mentions:
+            literal, refs = mention.surface, tuple(mention.source_refs)
+            if literal in seen:
+                issues.append((path, f'{slug} 的补充称谓 {literal!r} 重复或已在 Book 登记'))
+                continue
+            seen.add(literal)
+            invalid = resolver.check_closed_set(refs)
+            if len(set(refs)) != len(refs):
+                issues.append((path, f'{slug} 补充称谓 {literal!r} 的 evidence_refs 重复'))
+            for issue in invalid:
+                issues.append((path, f'{slug} 补充称谓 {literal!r}：{issue.message}'))
+            if not isinstance(evidence, Mapping):
+                issues.append((path, f'{slug} 补充称谓 {literal!r} 缺少可逐字核对的源证据'))
+                continue
+            missing = [ref for ref in refs if ref in evidence
+                       and literal not in (evidence[ref].get('text') or '')]
+            if missing:
+                issues.append((path, f'{slug} 补充称谓 {literal!r} 在所引段 {missing} 未逐字出现'))
+            if invalid or missing:
+                continue
+            chapter, issue = resolver.surface_chapter(literal, refs)
+            if issue is not None:
+                issues.append((path, f'{slug} 补充称谓 {literal!r}：{issue.message}'))
+                continue
+            assert chapter is not None
+            windows.append(SurfaceWindow(surface=literal, from_chapter=chapter,
+                                         until_chapter=None, source_refs=refs))
+        people[slug] = entry.model_copy(update={'surfaces': tuple(windows)})
+    return (None if issues else characters.model_copy(update={'characters': people})), issues
+
+
+def _wire_surface_additions(
+    raw_people: dict[str, Any], characters: CharactersCore, *, evidence,
+) -> tuple[dict[str, tuple[SurfaceMention, ...]], CharactersCore | None,
+           list[tuple[tuple | None, str]]]:
+    """新 wire 的补充声明只在这里转换成 canonical SurfaceMention。"""
+    from pydantic import ValidationError
+    additions: dict[str, tuple[SurfaceMention, ...]] = {}
+    issues: list[tuple[tuple | None, str]] = []
+    for slug, raw in raw_people.items():
+        if not isinstance(raw, dict):
+            continue  # 人物条目的形状由主结构判据报告。
+        path = ('people', slug)
+        if 'additional_surfaces' not in raw or not isinstance(raw['additional_surfaces'], list):
+            issues.append((path, f'{slug} 必须显式给 additional_surfaces 数组（没有则给 []）'))
+            continue
+        mentions = []
+        for value in raw['additional_surfaces']:
+            try:
+                declaration = AdditionalNameSurfaceWire.model_validate(value)
+            except ValidationError as exc:
+                issues.append((path, f'{slug} 补充称谓形状非法：{exc}'))
+                continue
+            mentions.append(SurfaceMention(surface=declaration.surface,
+                                           source_refs=declaration.evidence_refs))
+        if mentions:
+            additions[slug] = tuple(mentions)
+    extended, surface_issues = _extend_surface_mentions(characters, additions, evidence=evidence)
+    return additions, extended, issues + surface_issues
+
+
+def compile_names_observation(
+    wire: dict[str, Any], characters: CharactersCore, source_text: str, *, evidence,
+) -> tuple[NamesObservation | None, CharactersCore | None, list[str]]:
+    """names 唯一组装入口：结构与补充证据同次验证，返回变体判定所用的同源 core。"""
+    structure, errors = compile_name_structure(wire, characters, source_text, evidence=evidence)
+    if errors:
+        return None, None, errors
+    additions, extended, located = _wire_surface_additions(wire['people'], characters, evidence=evidence)
+    if located:
+        return None, None, [message for _path, message in located]
+    observation = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL,
+                                   structure=structure, additional_surfaces=additions)
+    return observation, extended, []
 
 
 def names_patch_locate(
@@ -280,7 +390,7 @@ def _compile_name_structure_located(
         return None, [(None, 'names wire必须是对象')]
     if wire.get('protocol_version') != STAGE2_NAMES_WIRE_PROTOCOL:
         return None, [(None, f'names必须使用{STAGE2_NAMES_WIRE_PROTOCOL}；'
-                       '旧回答（含 surface_forms／resolutions 的 v5 及更早）按版本拒收，'
+                       '旧回答（v6 及更早）按版本拒收，'
                        '不做推断采用')]
     if set(wire) - {'protocol_version', 'families', 'people'}:
         fail(None, 'names wire 携带未知字段')
@@ -294,6 +404,12 @@ def _compile_name_structure_located(
     if not isinstance(raw_people, dict):
         fail(None, 'people 必须是对象')
         return None, issues
+    _additions, extended, surface_issues = _wire_surface_additions(
+        raw_people, characters, evidence=evidence)
+    issues.extend(surface_issues)
+    errors.extend(message for _path, message in surface_issues)
+    if extended is not None:
+        characters = extended
     slugs = set(characters.characters)
     unknown_people = set(raw_people) - slugs
     if unknown_people:
@@ -359,7 +475,7 @@ def _compile_name_structure_located(
         path = ('people', slug)
         where = f'人物 {slug}'
         if not isinstance(raw, dict) or set(raw) - _PEOPLE_KEYS:
-            fail(path, f'{where} 携带未知字段或形状非法（v6 无 surface_forms——'
+            fail(path, f'{where} 携带未知字段或形状非法（v7 无 surface_forms——'
                        '构词模板由程序派生）')
             errors.append(f'{where} 携带未知字段或形状非法')
             continue

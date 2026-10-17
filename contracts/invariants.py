@@ -560,7 +560,7 @@ LEGACY_STAGE5_MODES: Final = ('deep', 'shallow')
 #   （BOOK_CHAPTER_SEP＝裸数字行）与恒等基线（IDENTITY_*）常量随旧链
 #   consumer（core/bands.py、stage7/subs.py、旧 schema/stage7.py）删除；
 #   现役成书章标记是 `assembly.py::_chapter_marker` 的「第N章」行，残留由
-#   `naming.py::check_residual` 机械验硬闸守卫。
+#   `naming.py::apply_bound_names` 机械验证身份提及与改名映射。
 
 #: 一条待办此刻是否还等人动作。`reviewed_retained` 表示 typed 决策已存在，
 #: 记录因审计/披露而保留；它与“是否阻塞交付”是正交轴。

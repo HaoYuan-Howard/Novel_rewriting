@@ -11,14 +11,17 @@ payload 的条目容器同形同序（assembler 展开引用、不改列表序�
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.hook import HookDesign
 from contracts.schema.source import NameProjection, NameStructure
-from novel.core.name_materials import expand_surface_releases
+from novel.core.name_materials import expand_surface_releases, name_candidate_literals
+from novel.core.name_text import resolve_name_text
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.hook_facts import established_fact, fact_is_current, hook_facts
+from novel.stages.stage4.materials import name_text_field_issues
 
 Init = 'init'
 
@@ -26,6 +29,30 @@ Init = 'init'
 def _issue(message: str, code: str, location: tuple, *paths: tuple):
     """带规则码与可编辑 wire 路径的判据问题；路径为空＝该问题不可条目定位。"""
     return design_issue(message, code=code, location=location, paths=paths)
+
+
+def hook_name_text_issues(wire: dict[str, Any], *, projection: NameProjection,
+                          structure: NameStructure | None,
+                          require_classification: bool) -> list[str]:
+    """只检查 Hook 自有措辞，不向目标设计或事实目录回写名称语义。"""
+    surfaces = ({cid: tuple(person.surface_forms) for cid, person in structure.people.items()}
+                if structure is not None else {
+                    entry.char_id: (*entry.name_bearing_surfaces, entry.display)
+                    for entry in projection.by_person})
+    surfaces = expand_surface_releases(surfaces, structure)
+    candidates = name_candidate_literals(projection, structure) if require_classification else ()
+    fields = []
+    materials = wire.get('materials')
+    for index, item in enumerate(materials if isinstance(materials, (list, tuple)) else ()):
+        if isinstance(item, dict) and isinstance(item.get('presentation'), str):
+            fields.append((('materials', index, 'presentation'), item['presentation']))
+    expectation = wire.get('reader_expectation')
+    if isinstance(expectation, dict) and isinstance(expectation.get('focus'), str):
+        fields.append((('reader_expectation', 'focus'), expectation['focus']))
+    if isinstance(wire.get('local_focus'), str):
+        fields.append((('local_focus',), wire['local_focus']))
+    return [issue for path, text in fields for issue in name_text_field_issues(
+        text, path=path, surfaces=surfaces, candidates=candidates)]
 
 
 def _address_key(raw: dict[str, Any] | None) -> tuple | None:
@@ -164,7 +191,8 @@ def validate_hook_payload(
     name_projection: NameProjection, name_structure: NameStructure | None = None,
 ) -> list[str]:
     """位置已确定性解析后的同一套结构判据；wire与canonical复验共用。"""
-    errors: list[str] = []
+    errors: list[str] = hook_name_text_issues(
+        wire, projection=name_projection, structure=name_structure, require_classification=False)
 
     positions = _position(body)
     facts = hook_facts(body)
@@ -215,12 +243,19 @@ def validate_hook_payload(
                 f'材料 {ref} 涉及隐藏人物 {sorted(hidden_here)}，必须给出 presentation',
                 'hook_hidden_presentation', ('materials', k), ('materials', k)))
         if item.get('presentation'):
+            resolved = resolve_name_text(item['presentation'])
             for char_id in sorted(hidden_here):
                 entry = name_projection.person(char_id)
-                literals = (set(entry.proper_literals) | set(entry.name_bearing_surfaces)
+                literals = (set(entry.name_bearing_surfaces)
                             if entry else set())
-                for literal in sorted(literals):
-                    if literal and literal in item['presentation']:
+                declared = {mention.surface for mention in resolved.mentions
+                            if mention.char_id == char_id}
+                for literal in sorted(literals | declared):
+                    legacy = bool(literal) and any(
+                        not any(span.start <= match.start() and match.end() <= span.end
+                                for span in (*resolved.non_name_spans, *resolved.mentions))
+                        for match in re.finditer(re.escape(literal), resolved.text))
+                    if literal in declared or legacy:
                         errors.append(_issue(
                             f'材料 {ref} 的 presentation 泄漏隐藏人物 {char_id} 的字面 {literal!r}',
                             'hook_presentation_leak', ('materials', k, char_id),

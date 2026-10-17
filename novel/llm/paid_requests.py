@@ -78,10 +78,12 @@ import re
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Final, NamedTuple, Sequence
 
 from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
+from contracts.judges.str06 import PATCH_ROUTES
 from novel import paths, prov, run_identity
 from novel.core.validation import ValidationIssue, validation_identity
 from contracts.invariants import (
@@ -114,6 +116,7 @@ __all__ = [
     'ExecutionError', 'ValidationStop',
     'NarrowContext', 'NarrowPatchRequest',
     'PaidRequestSession', 'PatchBaseline', 'PatchLocate', 'PatchTarget', 'PatchedAnswer',
+    'PatchPlan', 'PatchPlanningError', 'prepare_patch_plan',
     'PurchaseRequired', 'RUNTIME_PHASES', 'UpstreamOwned', 'WORKFLOW_REL',
     'accept_patch_answer', 'ask_json', 'ask_text_once', 'candidate_artifact',
     'candidate_contract_identity', 'format_json_path', 'normalize_patch_targets',
@@ -1353,7 +1356,8 @@ def accept_json_answer(answer: DurableAnswer,
             if errors:
                 data = None   # 校验不过即未采纳（救回段同一套闸，不得放行）
         else:
-            data, errors = None, ['顶层必须为 object']
+            data, errors = None, [ValidationIssue(
+                '顶层必须为 object', code='answer_shape', location=('answer',), owner='runtime')]
     if data is None and not errors:
         # 整份出口闭集（CS-H H2，RC-59）：回答无法解码／顶层形状失败是**唯一**
         # 可退整份修订的 JSON 侧原因；按码登记（`PATCH_ROUTES['answer_shape']`），
@@ -1448,6 +1452,94 @@ class NarrowPatchRequest(NamedTuple):
     rules: str          #: 协议规则：wire 协议字面量、字段契约与输出格式
     dependency: str     #: 依赖切片：只带必要的事实与状态（ JSON 文本）
     legal_values: str   #: 合法取值：可引用闭集（char_id／ob／know ref／kf…）
+    wire_schema: dict | None = None  #: 与首次请求同源的完整 schema，仅用于派生替换子 schema
+
+
+@dataclass(frozen=True)
+class PatchPlan:
+    """一次返修的冻结权限：基底、无重叠目标及对应子 schema。
+
+    schema 保存为 JSON 字节等价字符串，避免切片或 prompt 组装修改已冻结权限。
+    计划只证明必要结构操作可表达；语义正确性仍由合并后的完整 owner 验收决定。
+    """
+
+    baseline_sha256: str
+    targets: tuple[PatchTarget, ...]
+    replacement_schemas: tuple[tuple[str, str], ...] = ()
+    shape_diagnostics: tuple[str, ...] = ()
+
+
+class PatchPlanningError(ValueError):
+    """尚未外发的计划不能覆盖诊断或表达必要操作，属于工程失败。"""
+
+
+def _replacement_validator(schema_json: str):
+    """执行下发的同一份JSON Schema；只在模型条目返修边界加载依赖。"""
+    try:
+        from jsonschema import Draft202012Validator, SchemaError
+    except ImportError as exc:
+        raise PatchPlanningError('模型执行环境缺少jsonschema，请安装项目llm依赖') from exc
+    schema = json.loads(schema_json)
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as exc:
+        raise PatchPlanningError(f'替换子schema不可执行：{exc.message}') from exc
+    return Draft202012Validator(schema)
+
+
+def prepare_patch_plan(wire: dict, targets: Sequence[PatchTarget], *,
+                       errors: Sequence[str] = (), wire_schema: dict | None = None) -> PatchPlan:
+    """纯函数：先验证结构可修性，再冻结用于请求和接受的同一份范围。
+
+    owner 提供语义范围，runtime 不从字段名推测迁移；诊断的 replace_path 是
+    schema 派生的结构下界，任何授权目标都必须包含它，不能停在非法键本身。
+    """
+    from novel.core.repair import schema_at_path
+
+    normalized = tuple(normalize_patch_targets(targets))
+    if not isinstance(wire, dict) or not normalized:
+        raise PatchPlanningError('条目返修需要对象基底与非空替换目标')
+    covered = {validation_identity(issue) for target in normalized for issue in target.issues}
+    if any(validation_identity(issue) not in covered for issue in errors):
+        raise PatchPlanningError('修复计划未覆盖全部校验问题')
+    schemas: list[tuple[str, str]] = []
+    checked_schemas: set[str] = set()
+    for target in normalized:
+        path = target.path
+        if not path or any(type(part) not in (str, int) or part == ''
+                           or (type(part) is int and part < 0) for part in path):
+            raise PatchPlanningError(f'不合法的替换目标 {path!r}')
+        try:
+            _walk_path(wire, path)
+        except KeyError as exc:
+            if not (len(path) == 1 and isinstance(path[0], str)):
+                raise PatchPlanningError(f'替换目标不存在：{path!r}') from exc
+        if wire_schema is not None:
+            try:
+                schema = schema_at_path(wire_schema, path)
+            except ValueError as exc:
+                raise PatchPlanningError(f'替换目标不属于当前 wire 契约：{path!r}') from exc
+            encoded = json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            if encoded not in checked_schemas:
+                _replacement_validator(encoded)
+                checked_schemas.add(encoded)
+            schemas.append((format_json_path(path), encoded))
+    diagnostics: list[str] = []
+    for issue in errors:
+        for problem in getattr(issue, 'context', {}).get('shape_errors', ()):
+            structural = problem.get('replace_path')
+            if structural is None or not structural or wire_schema is None:
+                raise PatchPlanningError('形状诊断缺少可执行的 schema 替换范围')
+            structural = tuple(structural)
+            if not any(structural[:len(target.path)] == target.path
+                       and len(target.path) <= len(structural) for target in normalized):
+                raise PatchPlanningError(
+                    f'替换范围无法修复 {problem.get("error_type")}：'
+                    f'{problem.get("issue_path")}，至少须覆盖 {structural!r}')
+            encoded = json.dumps(problem, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            if encoded not in diagnostics:
+                diagnostics.append(encoded)
+    return PatchPlan(digest(wire), normalized, tuple(schemas), tuple(diagnostics))
 
 
 #: owner 声明的窄请求组装协议：``(base_wire, targets) -> NarrowPatchRequest``。
@@ -1459,7 +1551,8 @@ NarrowContext = Callable[[dict, list[PatchTarget]], NarrowPatchRequest]
 
 #: owner 声明的条目定位协议：``(wire_dict, errors) -> [(path, issues), …] 或
 #: None``——条目用裸元组（stage 包不 import 本模块也能声明协议；分层规则禁
-#: stage2 依赖 novel.llm）。None（或存在不可定位错误）＝本轮退整份返修；
+#: stage2 依赖 novel.llm）。None 交 owner 的正式路由；Design／Hook 局部问题
+#: 无法定位属于规划缺陷，只有登记 whole_answer 的问题才走整份出口。
 #: 返回的条目必须**覆盖全部** errors，否则 ask_json 拒绝进入条目返修
 #: （不静默漏项）。纯函数、确定性——与该 owner 的验收闸同源派生。
 #: 第三元素 ``True``（CS-H H2，RC-58）＝可选目标闭集条目：责任位置须由模型
@@ -1552,6 +1645,7 @@ NARROW_SECTION = '【窄返修】'
 def patch_user_prompt(base_user: str, targets: list[PatchTarget],
                       wire: dict, *, narrow: NarrowPatchRequest | None = None,
                       baseline: PatchBaseline | None = None,
+                      plan: PatchPlan | None = None,
                       revision_rules: str = _REVISION_BOUNDARY) -> str:
     """条目返修轮的 user 面。
 
@@ -1565,7 +1659,16 @@ def patch_user_prompt(base_user: str, targets: list[PatchTarget],
     """
 
     def _item_json(path: tuple[str | int, ...]) -> str:
-        return json.dumps(_walk_path(wire, path), ensure_ascii=False)
+        try:
+            return json.dumps(_walk_path(wire, path), ensure_ascii=False)
+        except KeyError:
+            if len(path) == 1 and path[0] not in wire:
+                return '（字段缺省；按契约补建完整值，缺省不等于 null）'
+            raise
+
+    if plan is not None and (plan.baseline_sha256 != digest(wire)
+                             or tuple(targets) != plan.targets):
+        raise PatchPlanningError('prompt 的基底或目标与冻结修复计划不一致')
 
     required = '\n'.join(
         f'- 路径 {format_json_path(t.path)}：当前值 {_item_json(t.path)}；'
@@ -1582,11 +1685,35 @@ def patch_user_prompt(base_user: str, targets: list[PatchTarget],
              if required else '【条目返修】以下条目经免费判定须复核，只替换这些条目。',
              '输出 JSON：{"patches": [{"path": "路径", "value": 该条目的完整替换}, …]}。',
              '路径字符串原样照抄；不得改动未列出条目。']
+    lines.append('报错位置仅供诊断；编辑权限只取下面列出的替换路径。提交完整合法对象，'
+                 '省略非法键才能删除它，空数组或 null 不表示删键。上下文材料不授予编辑权；'
+                 '候选中的额外内容是否需要保留，由你依据正式规则决定，不照抄到非法位置。')
+    if plan is not None:
+        lines.append(f'【当前候选】sha256:{plan.baseline_sha256}；'
+                     '本轮替换仅适用于这一版候选。')
     if required:
         lines.append('必须逐条覆盖下面列出的全部路径，不得新增路径、不得改动未列出条目。')
     if optional:
         lines.append('下面是可选目标闭集：只对你选中的承载位给替换，未选中不给；'
-                     '至少覆盖一个（一个都不给视为没有选定承载位，将按未通过处理）。')
+                     '至少覆盖一个。若同一可选问题已经附在必选替换目标中，可只在该必选目标内'
+                     '解决，不必另选无关条目；合并后仍须完整验收。')
+    if plan is not None and plan.replacement_schemas:
+        # 多个场／状态行通常共用相同子schema。只索引一次完整定义，避免错误数
+        # 增长时把同一份分支约束反复发送；每个schema仍是含所需$defs的独立文档。
+        identifiers: dict[str, str] = {}
+        schemas: dict[str, dict] = {}
+        schema_targets = []
+        for path, schema in plan.replacement_schemas:
+            identifier = identifiers.setdefault(schema, f'unit{len(identifiers) + 1}')
+            schemas.setdefault(identifier, json.loads(schema))
+            schema_targets.append({'path': path, 'schema_id': identifier})
+        lines.append('【替换目标 Schema】每个目标按schema_id查schemas；每份schema独立解释：\n'
+                     + json.dumps({'targets': schema_targets, 'schemas': schemas},
+                                  ensure_ascii=False, separators=(',', ':')))
+    if plan is not None and plan.shape_diagnostics:
+        lines.append('【结构诊断】以下路径是故障证据，不能替代授权目标：\n'
+                     + json.dumps([json.loads(problem) for problem in plan.shape_diagnostics],
+                                  ensure_ascii=False, separators=(',', ':')))
     if narrow is None:
         prompt = (base_user
                   + '\n\n' + '\n'.join(lines) + '\n'
@@ -1603,9 +1730,12 @@ def patch_user_prompt(base_user: str, targets: list[PatchTarget],
                 revision_rules]
     if baseline is not None:
         summary = f'（{baseline.summary}）' if baseline.summary else ''
-        sections.insert(1, '【基底】owner 已发布版本的修订对照 wire，'
-                           f'摘要 sha256:{baseline.digest}{summary}；'
-                           '请核对你在修的就是这一版。')
+        historical = plan is not None and baseline.digest != plan.baseline_sha256
+        sections.insert(1, ('【历史起步基底】' if historical else '【基底】')
+                           + 'owner 已发布版本的修订对照 wire，'
+                           + f'摘要 sha256:{baseline.digest}{summary}；'
+                           + ('该摘要仅说明来源，本轮替换以当前候选摘要为准。' if historical else
+                              '请核对你在修的就是这一版。'))
     sections.append(required if required else optional)
     if required and optional:
         sections.append(optional)
@@ -1614,6 +1744,7 @@ def patch_user_prompt(base_user: str, targets: list[PatchTarget],
 
 def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
                         wire: dict, validate, *, baseline: PatchBaseline | None = None,
+                        plan: PatchPlan | None = None,
                         ) -> tuple[dict | None, bool, dict]:
     """patch 轮回答的接受闸（与 accept_json_answer 同一纪律的条目版）。
 
@@ -1627,6 +1758,9 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
     如实进无进展判定）。
     """
     fields: dict = {'mode': 'json', 'salvage': 'none', 'errors': ()}
+    if plan is not None and (plan.baseline_sha256 != digest(wire)
+                             or tuple(targets) != plan.targets):
+        raise PatchPlanningError('接受回答时的基底或目标与冻结修复计划不一致')
     if baseline is not None and digest(wire) != baseline.digest:
         fields['parse'], fields['errors'] = 'failed', (ValidationIssue(
             f'patch 基底与声明的候选摘要不一致（声明 {baseline.digest[:12]}…，'
@@ -1638,6 +1772,21 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
     if data is None and not content.strip() and (answer.reasoning or '').strip():
         data, decode_error = _decode_json(answer.reasoning)
         fields['salvage'] = 'reasoning'
+    if (plan is not None and isinstance(data, dict)
+            and 'patches' not in data):
+        # 窄请求收到整份回答也不能绕过权限：只提取已授权目标，范围外必须原样。
+        try:
+            extracted = [(target.path, _walk_path(data, target.path)) for target in targets]
+            projected = _merge_patches(wire, extracted)
+        except (KeyError, TypeError, ValueError):
+            projected = None
+        if projected is None or digest(projected) != digest(data):
+            fields['parse'], fields['errors'] = 'failed', (ValidationIssue(
+                '整份回答改动了冻结修复计划以外的内容，拒绝采用',
+                code='patch_shape', location=('patches', 'scope'), owner='runtime'),)
+            return None, False, fields
+        data = {'patches': [{'path': format_json_path(path), 'value': value}
+                            for path, value in extracted]}
     if not isinstance(data, dict) or not isinstance(data.get('patches'), list):
         fields['parse'] = 'ok' if data is not None else (
             'empty' if not content.strip() else 'failed')
@@ -1649,6 +1798,11 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
     requested = {format_json_path(t.path): t.path for t in targets}
     required = {format_json_path(t.path) for t in targets if not t.optional}
     optional = {format_json_path(t.path) for t in targets if t.optional}
+    mandatory_issues = {validation_identity(issue) for target in targets if not target.optional
+                        for issue in target.issues}
+    optional_needs_selection = any(
+        validation_identity(issue) not in mandatory_issues
+        for target in targets if target.optional for issue in target.issues)
     seen: set[str] = set()
     resolved: list[tuple[tuple[str | int, ...], Any]] = []
     errors: list[str] = []
@@ -1678,10 +1832,23 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
         f'缺少路径 {p!r} 的替换条目', code='patch_shape',
         location=('patches', 'missing', p), owner='runtime')
         for p in sorted(required - seen))
-    if optional and not (optional & seen):
+    if optional and optional_needs_selection and not (optional & seen):
         errors.append(ValidationIssue(
             '可选目标闭集一个都没有选定承载位（至少覆盖一个）',
             code='patch_shape', location=('patches', 'optional'), owner='runtime'))
+    if not errors and plan is not None and plan.replacement_schemas:
+        schema_by_path = dict(plan.replacement_schemas)
+        validators: dict[str, Any] = {}
+        for index, (path, value) in enumerate(resolved):
+            encoded = schema_by_path[format_json_path(path)]
+            if encoded not in validators:
+                validators[encoded] = _replacement_validator(encoded)
+            for error in validators[encoded].iter_errors(value):
+                errors.append(ValidationIssue(
+                    f'替换目标 {format_json_path(path)} 的值不符合下发子schema：{error.message}',
+                    code='patch_shape', location=('patches', index, 'value',
+                                                 *error.absolute_path, error.validator),
+                    owner='runtime'))
     if errors:
         fields['parse'], fields['errors'] = 'failed', tuple(errors)
         return None, False, fields
@@ -1696,21 +1863,6 @@ def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
     fields['parse'] = 'ok' if not merged_errors else 'failed'
     fields['errors'] = tuple(merged_errors)
     return merged, not merged_errors, fields
-
-
-def _answers_in_full(answer: DurableAnswer) -> bool:
-    """RC-29：条目返修轮的回答是不是一份整份回答（JSON object 且无 patches 键）。
-
-    返修请求以原请求为固定前缀（供应商缓存纪律），原请求末尾的整份输出格式
-    与追加的 patch 格式同时在场；模型按原协议交回整份是合法回答——它走与首答
-    相同的全量校验，不算 patch 形状失败（2026-10-04 夫君不行 ch02 就是这样把
-    最后一轮烧掉的）。解码与 D5 救回同 `accept_json_answer` 一把尺。
-    """
-    content = answer.content or ''
-    data, _error = _decode_json(content)
-    if data is None and not content.strip() and (answer.reasoning or '').strip():
-        data, _error = _decode_json(answer.reasoning)
-    return isinstance(data, dict) and 'patches' not in data
 
 
 def revision_user_prompt(base_user: str, previous_answer: str,
@@ -1745,12 +1897,14 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
     """JSON 语义调用的接受循环（调用方组合；Runtime 本体不收业务回调）。
 
     耐久响应 → 解析 → D5 救回 → 校验；**非空但不过闸**时按条目级返修优先、
-    整份修订兜底（CS-patch，2026-10-03）：owner 提供 `patch` 定位且全部错误
+    整份修订按owner登记出口执行：owner 提供 `patch` 定位且全部错误
     可定位时，只把失败条目发回（原请求作固定前缀，输出仅替换条目），合并版
     过同一套校验即采纳——返修成本从「整份×轮数」降到「失败条目×轮数」；
-    定位不了或 patch 形状不过 → 整份修订；合并仍失败但根因任务集不重复则继续
+    Design／Hook定位不了即停，patch形状失败只按登记出口处置；其它owner沿用自身
+    定位协议。合并仍失败但根因任务集不重复则继续
     返修。patch 与整份请求各占一次 `OWNER_REVISION_MAX_ROUNDS` 额度。patch
-    轮收到整份回答（RC-29）按整份走同一套全量校验，不算形状失败。
+    轮收到整份回答（RC-29）先证明范围外内容未变，再按冻结目标提取替换并完整校验；
+    不因回答是整份对象而绕过条目权限。
     **无进展按根因**（CS-H H2，RC-59）：owner 的验收反馈按根因聚合成任务
     （`stage4/preflight.py::DesignInspection.feedback`：同一规则码的多处命中是
     一个任务并附受影响位置），本循环以**任务身份**（规则码＋责任面＋受影响位置
@@ -1794,6 +1948,7 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
     revisions = 0
     seen_heads: list[frozenset[str]] = []
     targets: list[PatchTarget] | None = None
+    plan: PatchPlan | None = None
     wire_dict: dict | None = baseline.wire if baseline is not None else None
     base_answer = answer
     patches: list[DurableAnswer] = []
@@ -1851,10 +2006,10 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
                 baseline_errors = list(validate(wire_dict))
                 data, errors, fields = None, baseline_errors, {
                     'mode': 'json', 'salvage': 'none', 'errors': tuple(baseline_errors)}
-            elif targets is not None and not _answers_in_full(answer):
+            elif targets is not None:
                 merged, passed, fields = accept_patch_answer(
                     answer, targets, wire_dict, validate,
-                    baseline=baseline if not patches else None)
+                    baseline=baseline if not patches else None, plan=plan)
                 data = merged if passed else None
                 errors = list(fields['errors'])
                 if merged is not None:
@@ -1914,7 +2069,27 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
             previous = json.dumps(wire_dict, ensure_ascii=False, indent=1)
         round_targets: list[PatchTarget] = list(pending_review)
         pending_review = []
-        if patch is not None and wire_dict is not None and not force_full and errors:
+
+        def plan_stop(reason: str):
+            stop = ValidationStop(
+                f'{owner} 返修规划失败，未发起下一次请求：{reason}',
+                code='repair_plan_invalid', stage=_stage_of(node), node=node,
+                item=scope, phase='accept',
+                context={**stop_context, 'reason': reason})
+            stop.adoption = adoption
+            raise stop
+
+        # 路由登记是 Stage4 的唯一策略源；不能因碰巧有路径绕过 stop/whole_answer。
+        # 其它 owner 的定位契约仍由各自声明，不能套用 Stage4 的规则码名册。
+        strict_routes = owner in ('design', 'hook_design')
+        routes = [PATCH_ROUTES.get(getattr(error, 'code', None)) for error in errors]
+        if strict_routes and any(route is None or route == 'stop' for route in routes):
+            plan_stop('规则未登记或没有本节点可编辑面：'
+                      + repr([getattr(error, 'code', None) for error in errors]))
+        whole_answer = force_full or (strict_routes and 'whole_answer' in routes)
+        if whole_answer:
+            round_targets = []
+        if patch is not None and wire_dict is not None and not whole_answer and errors:
             located = patch(wire_dict, list(errors))
             # 定位器须覆盖全部问题，不能通过局部修复静默丢掉其它失败
             # （条目可能是二元组或带可选目标标志的三元组，按下标取）。
@@ -1924,16 +2099,31 @@ def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
                     optional = bool(entry[2]) if len(entry) > 2 else False
                     round_targets.append(PatchTarget(
                         path=path, issues=tuple(issues), optional=optional))
+            elif strict_routes:
+                plan_stop('条目定位器未给出覆盖全部问题的合法编辑范围')
         # 复核目标与定位器结果各自合法，合成后仍须折叠同路径及祖孙路径；
         # 必选子项的问题并入完整父项，不能靠响应顺序或容忍缺键掩盖冲突。
         targets = normalize_patch_targets(round_targets) or None
+        plan = None
         force_full = False
         if targets:
-            narrow_context = narrow(wire_dict, targets) if narrow is not None else None
+            try:
+                frozen_targets, frozen_digest = tuple(targets), digest(wire_dict)
+                narrow_context = narrow(wire_dict, targets) if narrow is not None else None
+                if tuple(targets) != frozen_targets or digest(wire_dict) != frozen_digest:
+                    raise PatchPlanningError('依赖切片修改了候选或替换权限')
+                plan = prepare_patch_plan(
+                    wire_dict, targets, errors=errors,
+                    wire_schema=narrow_context.wire_schema if narrow_context is not None else None)
+            except (PatchPlanningError, KeyError, TypeError, ValueError) as exc:
+                plan_stop(str(exc))
+            targets = list(plan.targets)
             next_user = patch_user_prompt(base_user, targets, wire_dict,
-                                          narrow=narrow_context, baseline=baseline,
+                                          narrow=narrow_context, baseline=baseline, plan=plan,
                                           revision_rules=revision_rules)
         else:
+            if strict_routes and not whole_answer:
+                plan_stop('没有可执行条目计划，且不属于整份出口闭集')
             next_user = revision_user_prompt(base_user, previous, list(errors),
                                              revision_rules=revision_rules)
         request = ChatRequest(

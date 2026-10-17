@@ -27,23 +27,21 @@ from contracts.schema.design import BodyDesign, PresentationGraph
 from contracts.schema.hook import HookDesign
 from contracts.schema.source import NameProjection, NameStructure
 from contracts.schema.workflow import STAGE4_HOOK_DESIGN_PROTOCOL
+from novel.core.name_materials import name_candidate_literals
 from novel.stages.stage4.design_paths import design_issue
-from novel.stages.stage4.hook_validation import validate_hook_payload
+from novel.stages.stage4.hook_validation import hook_name_text_issues, validate_hook_payload
 from novel.stages.stage4.hook_wire import (
     annotated_hook_catalog, expand_hook_wire, hook_catalog, hook_name_exposure,
     hook_wire_schema, opening_chapter_input,
 )
 
-_WIRE_KEYS = frozenset({
-    'protocol_version', 'pov', 'opening_facts', 'materials', 'concealed',
-    'surface_releases', 'forbidden_reveals', 'local_focus', 'reader_expectation'})
 
 def assemble_hook_design(
     wire: dict[str, Any], *, body: BodyDesign, known_char_ids: set[str],
     name_projection: NameProjection,
     name_structure: NameStructure | None = None,
 ) -> tuple[HookDesign | None, list[str]]:
-    """Hook Design wire（stage4-hook-design-v3）→ HookDesign
+    """Hook Design wire（stage4-hook-design-v4）→ HookDesign
     （canonical 候选，待 publish_graph 发布）。
 
     事实只选目录 fact_ref，材料只给位置分量；compiler 展开 canonical 引用，
@@ -54,19 +52,15 @@ def assemble_hook_design(
             f'protocol_version 必须是 {STAGE4_HOOK_DESIGN_PROTOCOL}，'
             f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）',
             code='hook_protocol_literal', location=('protocol_version',)))
-    extra = set(wire) - _WIRE_KEYS
-    if extra:
-        errors.append(design_issue(
-            f'Hook Design wire 携带未知字段 {sorted(extra)}'
-            '（源 Hook 证据、义务字段与自由 state0 文本不收）',
-            code='hook_wire_key_whitelist', location=('wire_keys', tuple(sorted(extra)))))
     if errors:
         return None, errors
+    text_errors = hook_name_text_issues(
+        wire, projection=name_projection, structure=name_structure, require_classification=True)
     data, errors = expand_hook_wire(wire, body)
     if errors:
-        return None, errors
+        return None, text_errors + errors
     assert data is not None
-    errors = validate_hook_payload(
+    errors = text_errors + validate_hook_payload(
         data, body=body, known_char_ids=known_char_ids,
         name_projection=name_projection, name_structure=name_structure)
     if errors:
@@ -191,7 +185,8 @@ def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple],
             exposure = hook_name_exposure(row['event'], projection)
             if exposure:
                 row['name_exposure'] = exposure
-    sliced = {'slice_version': 'stage4-hook-patch-slice-v3',
+    sliced = {'slice_version': 'stage4-hook-patch-slice-v4',
+            'name_candidates': list(name_candidate_literals(projection)) if projection is not None else [],
             'facts': annotated_hook_catalog(body, projection=projection,
                                             kp_statements=kp_statements,
                                             world_statements=world_statements),

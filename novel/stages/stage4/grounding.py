@@ -43,13 +43,10 @@ from contracts.schema.source import (
     BlueprintsArtifactV17, CharactersCore,
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
-from novel.core.name_materials import (
-    family_form_literals, withheld_name_bindings,
-)
+from novel.core.name_materials import expand_surface_releases, name_candidate_literals
+from novel.core.name_text import resolve_name_text
 from novel.core.validation import ValidationIssue
-from novel.stages.common import (
-    check_binding_covers_checkpoint, claim_spans, uncovered_occurrences,
-)
+from novel.stages.common import check_binding_covers_checkpoint
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.fact_bindings import (
     fact_binding_errors, fact_lock_carrier_errors, fact_lock_subject_errors,
@@ -975,39 +972,19 @@ def _preserve_issue(message: str, code: str, location: tuple,
 def preserve_name_issues(
     checkpoint: PreserveCheckpoint | None, chars,
 ) -> list[ValidationIssue]:
-    """Preserve 自闸（CS-H H3，RC-64）：义务 statement／satisfaction 里的
-    **裸姓与未登记别名**在 Preserve 自己的接受循环里被逐条定位。
+    """新策略验证作者的身份/普通义声明；旧源文本不由裸部件命中宣布为泄漏。
 
-    同一把尺＝下游材料归因的判据面（`positive_material_issues`／
-    `withheld_name_bindings`）：能被显示面投影的字面（唯一归属的带名称谓）
-    合法——它们在写手材料里确定性投影；**永不投影**的字面（裸姓；多义带名面——
-    同一登记称谓属于两个人物，其中的裸姓同被查出；未登记别名因含裸姓成分同被
-    查出）在义务文本里就是下游缺口，这里带 `obligations[i]` 条目路径提前拦下，
-    不再等跨节点回派。家族构词（「陆家」一类集体指称）**不拒**：同家族人物释放后
-    它是正文的合法字面，Preserve 阶段不知释放时点，拒收只会误报。
-    quotes／anchors 是源文逐字证据，不在扫描面。纯函数、只读。
-
-    同一人物的多个已登记称谓可自然混用；本闸不模拟目标释放顺序，也不凭称谓共现
-    推断揭名。必保揭名另由正式证据派生，随 Brief 交给 Design 的释放闸验证。
+    policy 11 起义务自有文本逐次覆盖姓名候选，未决只报未决。历史 checkpoint
+    保留原 policy 身份，只复验已有标记，不为旧源文猜身份或补普通义声明。
+    quotes、anchors、源句证据不进入改写或候选覆盖面。纯函数，不改输入。
     """
     structure = chars.name_structure
     if checkpoint is None or structure is None:
         return []
     projection = chars.name_projection()
-    family_forms = family_form_literals(structure)
-    registered = sorted(set(projection.proper_literals)
-                        | {s for entry in projection.by_person
-                           for s in entry.name_bearing_surfaces}
-                        | family_forms)
-    bindable = {literal for literal, _cid, _enclosing
-                in withheld_name_bindings(registered, structure)}
-    # 闸面＝裸姓（家族字面本身，含复姓整字）。认领面只有两类合法字面：家族构词
-    # （「陆家」一类集体指称）与**唯一归属、可投影**的带名面——「陆」在「陆家」
-    # 「陆兄」里被更长的合法字面认领；在「陆郎」「陆某」这类未登记别名里未被覆盖、
-    # 如实报出。多义带名面（同一登记称谓属于两个人物）永不投影，**不**作认领面：
-    # 它里面的裸姓同样如实报出（与下游材料归因同一把尺，RC-64）。
-    gate = tuple(sorted({f.literal for f in structure.families.values()}))
-    claim_face = tuple(sorted((family_forms | bindable) - set(gate)))
+    candidates = name_candidate_literals(projection, structure) if checkpoint.policy_version >= 11 else ()
+    surfaces = expand_surface_releases(
+        {cid: tuple(person.surface_forms) for cid, person in structure.people.items()}, structure)
     issues: list[ValidationIssue] = []
     for index, obligation in enumerate(checkpoint.obligations):
         fields = [(field, getattr(obligation, field) or '', ('obligations', index))
@@ -1018,18 +995,13 @@ def preserve_name_issues(
         for field, text, path in fields:
             if not text:
                 continue
-            claimed = claim_spans(text, claim_face)
-            for claim in uncovered_occurrences(text, gate, claimed):
+            for error in resolve_name_text(text, surfaces, candidate_literals=candidates).errors:
                 issue = _preserve_issue(
-                    f'义务 {obligation.obligation_id} 的 {field} 含不可投影字面 '
-                    f'{claim.literal!r}（裸姓／多义带名面中的裸姓成分——写手材料无法'
-                    '确定性投影，下游必成泄漏）：改用可用称呼或不含姓名字面的表述，'
-                    '保留 anchors 与原义务语义',
-                    'preserve_name_literal',
-                    ('preserve_name_literal', obligation.obligation_id, field, claim.literal),
+                    f'义务 {obligation.obligation_id} 的 {field}：{error}', error.code,
+                    (obligation.obligation_id, field, error.start, error.literal),
                     (path,))
                 issue.context.update({'obligation_id': obligation.obligation_id,
-                                      'field': field, 'literal': claim.literal})
+                                      'field': field, 'literal': error.literal})
                 issues.append(issue)
     return issues
 

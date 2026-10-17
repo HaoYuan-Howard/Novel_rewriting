@@ -51,7 +51,7 @@ from contracts.schema.consumption import (
     DeliveryScope, FieldDeliverySpec,
 )
 from contracts.schema.context import (
-    KnowledgeEntry, PendingConfirmation, PriorSeriesEvent, StateEntry, WriterDetail,
+    KnowledgeEntry, PendingConfirmation, PriorSeriesEvent, StateEntry, SupportingBeatEvent, WriterDetail,
 )
 from contracts.schema.grounding import EventEvidence, ObligationAnchor, SourceDetail
 from contracts.schema.hook import HookContext, HookOpeningFact, HookPov
@@ -202,6 +202,104 @@ def test_writer_visible_fields_have_mutation_cases():
                 f'{path} 登记 Hook 消费者但没有 Hook 变异用例')
     stale = sorted(set(_WRITER_CASE_WAIVERS) - set(STR06_FIELD_DELIVERY))
     assert not stale, f'豁免清单引用了不存在的登记路径：{stale}'
+
+
+def test_chapter_name_releases_preserves_priority_and_adds_each_surface_once():
+    """释放许可按初始声明与阅读序合并，重复不换显示优先级，后章新增不回流。"""
+    from contracts.schema.state import SurfaceIntroduction
+    from novel.stages.stage4.book_ir import chapter_name_releases
+    from tests.test_str06_hook import _characters
+
+    body = _green_book_ir()[0]
+    later = body.scenes[1]
+    first = later.beats[0]
+    changed = first.model_copy(update={'surface_introductions': (
+        *first.surface_introductions,
+        SurfaceIntroduction(char_id='yun_niang', surfaces=('芸娘', '苏姑娘', '苏芸娘')),
+    )})
+    later = later.model_copy(update={'beats': (changed, *later.beats[1:])})
+    body = body.model_copy(update={'scenes': (body.scenes[0], later, *body.scenes[2:])})
+    before = body.model_dump(mode='json')
+    assert chapter_name_releases(body, 1, _characters().name_structure)['yun_niang'] == (
+        '苏芸娘', '芸娘')
+    assert chapter_name_releases(body, 2, _characters().name_structure)['yun_niang'] == (
+        '苏芸娘', '芸娘', '苏姑娘')
+    assert body.model_dump(mode='json') == before
+
+
+def test_released_name_order_and_request_identity_are_stable_across_hashseeds():
+    """真实子进程重编同一输入：释放顺序、两类正文身份及 Hook 请求不受 hashseed 影响。
+
+    首个释放面有显示优先级，不能为了稳定摘要而全局排序；后续重复释放只去重，
+    新称谓按正式阅读序追加。跨进程零新购恢复另由产品封存丢失反例保护。
+    """
+    import json
+    import os
+    from textwrap import dedent
+
+    script = dedent('''
+        import json
+        from novel.config import Config
+        from novel.llm.paid_requests import digest
+        from novel.stages.chain import ExecutionProfile, str06_chat_request
+        from novel.stages.common import (
+            BODY_WRITER_SYSTEM, HOOK_WRITER_SYSTEM, chapter_identities,
+            project_chapter_packet, render_chapter_packet,
+        )
+        from novel.stages.stage4.hook_context import compile_hook_context
+        from novel.stages.stage5 import build_hook_user_prompt, context_sha256
+        from tests.test_str06_body import _green_book_ir
+        from tests.test_str06_hook import _characters, _green_pair
+
+        profile = ExecutionProfile(cfg=Config(), reasoning_effort='high')
+        def request_identity(owner, prompt, system):
+            request = str06_chat_request(
+                profile, owner, prompt, json_mode=False, system=system,
+                temperature=0.7, enforce=False)
+            return digest({'owner': owner, 'provider': profile.provider,
+                           'request': request.cache_payload()})
+
+        _body, _binding, _plan, ir = _green_book_ir()
+        chapters = []
+        for chapter in ir.chapters:
+            packet = project_chapter_packet(ir, chapter.chapter_ordinal)
+            prompt = render_chapter_packet(packet)
+            chapters.append({
+                'ordinal': chapter.chapter_ordinal,
+                'released_names': [r.model_dump(mode='json') for r in chapter.released_names],
+                'identities': chapter_identities(packet)._asdict(),
+                'request_identity': request_identity(
+                    f'body_ch{chapter.chapter_ordinal:02d}', prompt, BODY_WRITER_SYSTEM),
+            })
+        _body, graph, _context = _green_pair()
+        chars = _characters()
+        context, errors = compile_hook_context(
+            graph, chars.name_projection(), chars.name_structure,
+            characters=chars.core_view(), total_budget=2000)
+        assert context is not None and not errors, errors
+        print(json.dumps({
+            'chapters': chapters,
+            'hook_names': [r.model_dump(mode='json') for r in context.usable_surfaces],
+            'hook_context_identity': context_sha256(context),
+            'hook_request_identity': request_identity(
+                'hook_writer', build_hook_user_prompt(context), HOOK_WRITER_SYSTEM),
+        }, ensure_ascii=True, sort_keys=True))
+    ''')
+    repo = Path(__file__).resolve().parents[1]
+    results = []
+    for seed in ('1', '2', '99'):
+        result = subprocess.run(
+            [sys.executable, '-B', '-c', script], cwd=repo,
+            env={**os.environ, 'PYTHONHASHSEED': seed, 'PYTHONPATH': str(repo)},
+            capture_output=True, text=True, encoding='utf-8', timeout=60)
+        assert result.returncode == 0, result.stdout + result.stderr
+        results.append(json.loads(result.stdout))
+    assert results[1:] == results[:-1], '相同正式输入重编后写手目录或请求身份发生进程间漂移'
+    for chapter in results[0]['chapters']:
+        names = {row['char_id']: row['surfaces'] for row in chapter['released_names']}
+        assert names['yun_niang'] == ['苏芸娘', '芸娘'], '须保持首次释放优先级，不按字面排序'
+    hook_names = {row['char_id']: row['surfaces'] for row in results[0]['hook_names']}
+    assert hook_names['yun_niang'] == ['苏芸娘', '芸娘']
 
 
 def test_chapter_ordinal_renders_in_chapter_purpose(green_ir):
@@ -370,6 +468,11 @@ def _inject_prior_series_event(ir: WriterBookIR, **updates) -> WriterBookIR:
     return _patch_scene_ir(ir, 2, 'sc02', prior_series_events=(prior,))
 
 
+def _inject_supporting_event(ir: WriterBookIR, **updates) -> WriterBookIR:
+    fact = SupportingBeatEvent(beat_ref='sc01#b01', event='前场支撑事件').model_copy(update=updates)
+    return _patch_scene_ir(ir, 2, 'sc02', continuity_fact_view=(fact,))
+
+
 def _inject_source_detail(ir: WriterBookIR, *, anchor=None, anchor_updates=None,
                           **detail_updates) -> WriterBookIR:
     source = _scene(ir, 1, 'sc01').verification_ir.obligations[0]
@@ -405,6 +508,13 @@ def _body_mutations() -> list[_BodyMutation]:
     def surfaces(ir):
         chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
         return _patch_chapter(ir, 2, released_surfaces=('变异面九九',))
+
+    def released_name(ir, **updates):
+        chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
+        names = list(chapter.released_names)
+        assert names, '绿基座的章级合法身份引用目录不得为空'
+        names[0] = names[0].model_copy(update=updates)
+        return _patch_chapter(ir, 2, released_names=tuple(names))
 
     def requires_released(ir):
         return _patch_chapter(ir, 2, requires_released=('变异揭名九九',))
@@ -827,6 +937,11 @@ def _body_mutations() -> list[_BodyMutation]:
                       '禁露字面九九', withheld),
         _BodyMutation('writer_book_ir.chapters[].released_surfaces', 2,
                       '变异面九九', surfaces),
+        _BodyMutation('writer_book_ir.chapters[].released_names[].char_id', 2,
+                      'name_owner_99', lambda ir: released_name(ir, char_id='name_owner_99')),
+        _BodyMutation('writer_book_ir.chapters[].released_names[].surfaces', 2,
+                      '变异身份称谓九九',
+                      lambda ir: released_name(ir, surfaces=('变异身份称谓九九',))),
         _BodyMutation('writer_book_ir.chapters[].requires_released', 2,
                       '变异揭名九九', requires_released),
         # ── R2 契约面：承接与线程（Machine 层已进章包，阅读面归分区渲染）──
@@ -882,10 +997,15 @@ def _body_mutations() -> list[_BodyMutation]:
                       lambda ir: _patch_scene_ir(ir, 2, 'sc02',
                                                  prohibitions=('变异禁区九九',))),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
-                      '.continuity_fact_view', 2, '变异承接九九',
+                      '.continuity_fact_view[].event', 2, '变异承接九九',
                       lambda ir: _patch_scene_ir(
                           ir, 2, 'sc02',
-                          continuity_fact_view=('sc01#b01：变异承接九九',))),
+                          continuity_fact_view=(SupportingBeatEvent(
+                              beat_ref='sc01#b01', event='变异承接九九'),))),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.continuity_fact_view[].beat_ref', 2, 'sc99#b99',
+                      lambda ir: _inject_supporting_event(ir, beat_ref='sc99#b99'),
+                      _inject_supporting_event),
         # ── R10-0.4：送达守卫自检补齐（登记写手可见 ⇒ 必须有渲染字节变异用例）──
         # 书级/章级
         _BodyMutation('writer_book_ir.book_brief.character_voices[].voice', None,

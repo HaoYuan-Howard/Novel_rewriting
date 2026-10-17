@@ -19,6 +19,37 @@ from tests.test_str06_hook import _characters, _green_pair, _hook_wire, _project
 ADDRESS = ('character', ('yun_niang',), '', 'marital_status')
 
 
+def test_hook_author_text_reports_unclassified_candidates_without_claiming_leakage():
+    from novel.stages.stage4.hook_validation import hook_name_text_issues
+    from novel.stages.stage4.hook_wire import hook_name_exposure
+    from tests.test_str06_design_slim import _identity_projection
+    kwargs = dict(projection=_identity_projection(), structure=None, require_classification=True)
+    wire = {'local_focus': '白天只写行动', 'materials': [],
+            'reader_expectation': {'focus': '动静从何而来？'}}
+    errors = hook_name_text_issues(wire, **kwargs)
+    assert {error.code for error in errors} == {'name_text_unclassified'}
+    assert all(error.context['wire_paths'] == [['local_focus']] for error in errors)
+    wire['local_focus'] = '[[text|白天]]只写行动'
+    assert hook_name_text_issues(wire, **kwargs) == []
+    wire['local_focus'] = '[[name:other|白姑娘]]走过'
+    assert {error.code for error in hook_name_text_issues(wire, **kwargs)} == {'name_text_reference'}
+    assert hook_name_exposure('我明白了', _identity_projection()) == {}
+    assert hook_name_exposure('[[text|白天]]有脚步', _identity_projection()) == {}
+    assert hook_name_exposure('[[name:bai|白姑娘]]走过', _identity_projection()) == {'bai': ['白姑娘']}
+
+
+def test_explicit_hidden_identity_cannot_escape_through_a_pure_appellation():
+    body, _, _ = _green_pair()
+    wire = hook_wire_v3(_hook_wire())
+    wire['materials'][0]['presentation'] = '[[name:fu_jun|夫君]]翻出后墙'
+    hook, errors = _accept(body, wire)
+    assert hook is None
+    assert any(getattr(error, 'code', '') == 'hook_presentation_leak' for error in errors)
+    wire['materials'][0]['presentation'] = '[[text|陆续]]传来几声脚步'
+    hook, errors = _accept(body, wire)
+    assert hook is not None and not errors, errors
+
+
 def _accept(body, wire):
     return assemble_hook_design(wire, body=body, known_char_ids={'yun_niang', 'fu_jun'},
                                 name_projection=_projection())
@@ -377,6 +408,48 @@ def test_invalid_expectation_shape_remains_narrowly_repairable_without_inventing
     assert wire == before
 
 
+@pytest.mark.parametrize('change,target', [
+    ('pov-enum', ('pov',)),
+    ('pov-cardinality', ('pov',)),
+    ('material-coordinate', ('materials', 0)),
+    ('material-nested-item', ('materials', 0)),
+    ('opening-reference', ('opening_facts', 0)),
+    ('forbidden-union', ('forbidden_reveals', 0)),
+    ('expectation-discriminator', ('reader_expectation',)),
+    ('materials-cardinality', ('materials',)),
+])
+def test_hook_shape_repairs_keep_the_schema_declared_owner_record(change, target):
+    """Hook 各记录采用同一语义边界；标量、数组、联合错误不改变拥有者。"""
+    body, _, _ = _green_pair()
+    wire = hook_wire_v3(_hook_wire())
+    if change == 'pov-enum':
+        wire['pov']['person'] = []
+    elif change == 'pov-cardinality':
+        wire['pov']['focalizers'] = []
+    elif change == 'material-coordinate':
+        wire['materials'][0]['beat_ref']['scene'] = []
+    elif change == 'material-nested-item':
+        wire['materials'][0]['withheld'] = [{}]
+    elif change == 'opening-reference':
+        wire['opening_facts'][0]['fact_ref'] = None
+    elif change == 'forbidden-union':
+        wire['forbidden_reveals'] = [{'kind': 'fact', 'fact_ref': []}]
+    elif change == 'expectation-discriminator':
+        wire['reader_expectation']['kind'] = 'invalid'
+    else:
+        wire['materials'] = []
+    before = deepcopy(wire)
+    hook, errors = _accept(body, wire)
+    assert hook is None and errors and all(error.code == 'hook_wire_shape' for error in errors)
+    targets = locate_design_patches(wire, errors)
+    assert targets is not None and [entry[0] for entry in targets] == [target]
+    for error in errors:
+        for structural in error.context['shape_errors']:
+            required = tuple(structural['replace_path'])
+            assert required[:len(target)] == target, '语义边界必须保留全部结构修复能力'
+    assert wire == before, 'owner 规划不搬字段或修改候选'
+
+
 @pytest.mark.parametrize('followups', [[], [{'scene': 'sc09', 'beat': 'b01'}]])
 def test_expectation_patch_exposes_real_later_action_without_delta_or_prior_reference(followups):
     body, _, _ = _green_pair()
@@ -436,7 +509,7 @@ def test_context_projects_authoritative_voice_and_never_copies_future_answer():
     hook, errors = _accept(body, wire)
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
-    assert body.contract_version == 'str06-rc22' and graph.contract_version == 'str06-rc23'
+    assert body.contract_version == 'str06-rc25' and graph.contract_version == 'str06-rc25'
     context, errors = compile_hook_context(graph, _projection(), total_budget=2000)
     assert context is not None and not errors, errors
     assert context.book_style == body.book_style

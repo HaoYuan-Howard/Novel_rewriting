@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""naming —— NameMap v5 的投影、编译、单遍应用与残留判定（F6，Stage7）。
+"""naming —— NameMap 的投影、编译与已绑定人物提及的确定性改名。
 
 【Naming 只读投影，Apply 唯一应用】
 `naming_projection` 给出应改名集合、需要的名称位、须回避的旧字面、稳定身份与
 风格——不读正文、Hook 或 Binding。`compile_name_map` 核对完整覆盖与冲突
 （同 family_id 新姓一致；不同源姓不得合并同姓；新旧字面冲突；keep 带理由）。
-`compile_surface_replacements` 是纯函数，不新增 replacement-table 产物；同一源
-字面对应多个不同值时报错并列出 owner，不按替换顺序选 owner。
+`compile_bound_replacements` 从正式名称结构及完整 NameMap 按人物身份派生
+称谓变换（包含明确保留），不新增 replacement-table 产物。
 
-【单遍与残留】
-`apply_names` 单遍长名优先（kept 项作为恒等项认领）；`check_residual` 只查应
-替换的字面、跳过认领区间——目标名含旧字面、kept 含映射键时不误报。
+【具体提及唯一应用】
+`apply_bound_names` 只消费 Stage5 回执的具体人物区间；坐标、字面和身份映射
+不闭合即拒绝。普通词不因包含旧姓名部件而变化；同形称谓可由不同人物各自改名。
+`diff_proof` 验证交付变换之外零改动。语义声明正确性依然 unverified。
 源身份/名称结构缺失回 Stage2；目标名称缺失或冲突回 Naming；机械错误归 compiler。
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable, Mapping
 
 from contracts.schema.naming import NAMING_VALIDATOR_VERSION, NameAssignment, NameMapV5, TargetName
 from contracts.schema.source import (
     BlueprintsArtifactV17, CharactersArtifactV6, render_form,
 )
-from novel.stages.common import (
-    apply_replacements, group_located_errors, uncovered_occurrences,
-)
+from contracts.schema.name_text import NameMention
+from novel.core.name_text import validate_name_mentions
+from novel.stages.common import group_located_errors
 
 
 # ───────────────────────── 投影（Naming 的唯一输入面） ─────────────────────────
@@ -311,121 +312,89 @@ def _check_name_conflicts(entries, characters, structure) -> list[tuple[str, tup
 
 # ───────────────────────── 替换表（纯函数）与应用 ─────────────────────────
 
-def compile_surface_replacements(
+def compile_bound_replacements(
     characters: CharactersArtifactV6, name_map: NameMapV5,
-) -> tuple[dict[str, str], list[str]]:
-    """Characters + NameMap → 确定性替换表（不落盘）。
+) -> tuple[dict[str, dict[str, str]], list[str]]:
+    """按人物身份编译登记称谓，含合法保留的恒等项，不凭字面选择 owner。
 
-    同一源字面对应多个不同值时报错并列出 owner；替换值包含另一键（链式替换
-    风险）时报错。kept 条目与纯称谓（form=None）不产生键。
+    同一称谓归属于不同人物是合法的；只有回执已经绑定身份的具体提及会应用。
+    同一源称谓对同一人物出现不同渲染才是 compiler 错误。
     """
-    errors: list[str] = []
     structure = characters.name_structure
-    table: dict[str, str] = {}
-    owner_of: dict[str, str] = {}
-    for entry in name_map.entries:
-        person = structure.people[entry.char_ref]
-        if entry.name is None:
-            continue
-        source_family = (structure.families[person.family_id].literal
-                         if person.family_id else None)
-        alias_targets = {a.alias_id: a.literal for a in person.aliases}
-        for alias_id, new_literal in entry.aliases.items():
-            alias_targets[alias_id] = new_literal
-        parts = {
-            'family': entry.name.family or source_family,
-            'given': entry.name.given or person.given,
-        }
-        parts.update(alias_targets)
+    if structure is None:
+        return {}, ['Characters 未登记名称结构']
+    checked, errors = compile_name_map({'entries': [{
+        'char_ref': entry.char_ref,
+        'name': entry.name.model_dump(include={'family', 'given'}) if entry.name else None,
+        'aliases': entry.aliases, 'keep_reason': entry.keep_reason,
+    } for entry in name_map.entries]}, characters)
+    if errors:
+        return {}, [f'NameMap 与源名称结构不闭合：{error}' for error in errors]
+    assignments = {entry.char_ref: entry for entry in checked.entries}
+    result: dict[str, dict[str, str]] = {}
+    errors = []
+    for char_id, person in sorted(structure.people.items()):
+        entry = assignments.get(char_id)
+        family = structure.families.get(person.family_id) if person.family_id else None
+        aliases = {alias.alias_id: alias.literal for alias in person.aliases}
+        renamed = entry is not None and entry.name is not None
+        if renamed:
+            aliases.update(entry.aliases)
+        surname = entry.name.family if renamed and entry.name.family else (
+            family.literal if family else None)
+        given = entry.name.given if renamed and entry.name.given else person.given
+        table: dict[str, str] = {}
         for surface, form in person.surface_forms.items():
-            if form is None:
+            if not renamed or form is None:
+                table[surface] = surface
                 continue
             try:
-                value = render_form(form, family=parts.get('family'),
-                                    given=parts.get('given'), aliases=alias_targets)
+                table[surface] = render_form(form, family=surname, given=given, aliases=aliases)
             except ValueError as exc:
-                errors.append(f'{entry.char_ref} 的 surface {surface!r} 渲染失败：{exc}')
-                continue
-            if value != surface:
-                _record(table, owner_of, surface, value, entry.char_ref, errors)
-        # 家族级称谓：该家族的 forms 按新姓展开（一次）。
-        if person.family_id and entry.name.family:
-            for item in structure.families[person.family_id].forms:
-                value = render_form(item.form, family=entry.name.family,
-                                    given=None, aliases={})
-                _record(table, owner_of, item.literal, value,
-                        f'family:{person.family_id}', errors)
-        # 化名键：旧字面 → 新字面（未改的化名保持恒等，不产生键）。
-        for alias in person.aliases:
-            target = entry.aliases.get(alias.alias_id)
-            if target is not None and target != alias.literal:
-                _record(table, owner_of, alias.literal, target, entry.char_ref, errors)
-    for key, value in table.items():
-        for other in table:
-            if other != key and other in value:
-                errors.append(f'替换值包含另一键（链式替换风险）：{key}->{value} 含 {other}')
-    return table, errors
+                errors.append(f'{char_id} 的 surface {surface!r} 渲染失败：{exc}')
+        if family is not None:
+            for item in family.forms:
+                try:
+                    target = render_form(item.form, family=surname, given=None, aliases={})
+                except ValueError as exc:
+                    errors.append(f'{char_id} 的家族称谓 {item.literal!r} 渲染失败：{exc}')
+                    continue
+                if item.literal in table and table[item.literal] != target:
+                    errors.append(f'{char_id} 的称谓 {item.literal!r} 存在冲突渲染')
+                else:
+                    table[item.literal] = target
+        result[char_id] = table
+    return result, errors
 
 
-def _record(table: dict[str, str], owner_of: dict[str, str], key: str, value: str,
-            owner: str, errors: list[str]) -> None:
-    registered = table.get(key)
-    if registered is None:
-        table[key] = value
-        owner_of[key] = owner
-    elif registered != value:
-        errors.append(
-            f'同一源字面 {key!r} 对应多个不同值：{registered!r}（{owner_of[key]}）与 '
-            f'{value!r}（{owner}）；不按替换顺序选 owner')
-
-
-def apply_names(text: str, replacements: dict[str, str]) -> tuple[str, tuple]:
-    """单遍替换：长名优先；kept 不在 replacements 里，天然恒等。"""
-    return apply_replacements(text, replacements)
-
-
-def check_residual(
-    text: str, replacements: dict[str, str], claims: tuple,
-    kept_literals: tuple[str, ...] = (),
-) -> list[str]:
-    """残留判定：只查应替换的字面，跳过认领区间与合法保留字面。
-
-    - 目标名含旧字面：替换值里的旧字面落在 apply 的认领区间内 → 不误报；
-    - kept 包含映射键：该字面是合法保留面 → 从查禁集剔除。
-    """
-    scan = set(replacements) - set(kept_literals)
-    problems: list[str] = []
-    for claim in uncovered_occurrences(text, scan, claims):
-        problems.append(
-            f'应替换的源名 {claim.literal!r} 在交付文本中残留且未认领（位置 {claim.start}）')
-    return problems
+def apply_bound_names(
+    text: str, mentions: Iterable[NameMention],
+    replacements: Mapping[str, Mapping[str, str]],
+) -> tuple[str, list[str]]:
+    """只替换回执已绑定的提及；正文其他字节逐字保留，不全局搜旧名。"""
+    mentions = tuple(mentions)
+    errors = [issue.message for issue in validate_name_mentions(text, mentions)]
+    for mention in mentions:
+        if mention.char_id not in replacements or mention.surface not in replacements[mention.char_id]:
+            errors.append(f'提及没有登记的改名或保留决定：{mention.char_id}/{mention.surface}')
+    if errors:
+        return text, errors
+    fragments: list[str] = []
+    cursor = 0
+    for mention in mentions:
+        fragments.extend((text[cursor:mention.start],
+                          replacements[mention.char_id][mention.surface]))
+        cursor = mention.end
+    fragments.append(text[cursor:])
+    return ''.join(fragments), []
 
 
 def diff_proof(
-    original: str, renamed: str, replacements: dict[str, str], claims: tuple,
+    original: str, renamed: str, replacements: Mapping[str, Mapping[str, str]],
+    mentions: Iterable[NameMention],
 ) -> list[str]:
-    """机械证明：renamed 与 original 的全部差异恰为替换表，别处零改动。
-
-    原文按命中序列挖空、改名稿按替换值序列挖空，两个骨架必须逐字相等。
-    """
-    def _skeleton(text: str, fragments: list[str]) -> str:
-        out: list[str] = []
-        pos = 0
-        for i, frag in enumerate(fragments):
-            j = text.find(frag, pos)
-            if j < 0:
-                raise ValueError(f'第 {i} 个片段未按序出现：{frag!r}')
-            out.append(text[pos:j])
-            out.append(f'\x00{i}\x00')
-            pos = j + len(frag)
-        out.append(text[pos:])
-        return ''.join(out)
-
-    try:
-        originals = [c.literal for c in claims]
-        replaced = [replacements[c.literal] for c in claims]
-        if _skeleton(original, originals) != _skeleton(renamed, replaced):
-            return ['diff 差异与替换表不符：存在表外改动']
-    except ValueError as exc:
-        return [f'diff proof 异常：{exc}']
-    return []
+    """验证具体提及变换的全部差异，正文其他字节必须逐字一致。"""
+    expected, errors = apply_bound_names(original, mentions, replacements)
+    if errors:
+        return errors
+    return [] if expected == renamed else ['diff 差异与身份绑定提及不符：存在表外改动或漏改']

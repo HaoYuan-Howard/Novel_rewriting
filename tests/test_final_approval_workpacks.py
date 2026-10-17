@@ -95,8 +95,8 @@ def test_new_chain_naming_is_the_takeover():
     """新链命名职责在场，且其反例由 tests/test_str06_naming.py 持有。"""
     from novel.stages.stage7 import naming
 
-    for entry in ('compile_name_map', 'compile_surface_replacements',
-                  'apply_names', 'check_residual', 'diff_proof',
+    for entry in ('compile_name_map', 'compile_bound_replacements',
+                  'apply_bound_names', 'diff_proof',
                   'naming_projection'):
         assert hasattr(naming, entry), f'新链命名职责缺失：{entry}'
     from pathlib import Path

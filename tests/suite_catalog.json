@@ -67,6 +67,14 @@
     "stage7": []
   },
   "modules": {
+    "tests/test_repair_plan.py": {
+      "layer": "unit_contract",
+      "stages": ["stage2", "stage4", "stage7"]
+    },
+    "tests/test_name_text.py": {
+      "layer": "unit_contract",
+      "stages": ["stage2", "stage4", "stage5", "stage7"]
+    },
     "tests/test_str06_candidate_preflight.py": {
       "layer": "stage",
       "stages": [
@@ -340,7 +348,7 @@
     },
     "tests/test_book_overlap.py": {
       "layer": "unit_contract",
-      "stages": []
+      "stages": ["stage2", "stage5", "stage7"]
     },
     "tests/test_c2b_import_gate.py": {
       "layer": "unit_contract",
@@ -664,7 +672,8 @@
       "layer": "unit_contract",
       "stages": ["stage4", "stage5", "stage7"],
       "cases": {
-        "test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body": "stage",
+        "test_upgrade_rebuilds_registered_consumers_and_preserves_archived_body_bytes": "stage",
+        "test_upgrade_from_rejected_body_design_candidate_runs_current_author_protocol": "stage",
         "test_cli_subprocess_preview_and_apply_are_free_and_reachable": "stage",
         "test_recompile_changes_only_one_chapter_and_keeps_other_commit": "stage",
         "test_unknown_call_and_accumulated_budget_survive_upgrade": "stage",
@@ -1355,6 +1364,7 @@
       ],
       "cases": {
         "test_missing_literal_gets_a_paragraph_level_repair_round": "stage",
+          "test_paragraph_repair_receives_authorized_identity_when_draft_has_no_name_markers": "stage",
         "test_unparseable_paragraph_patch_is_a_failed_attempt_not_a_candidate": "stage"
       }
     },

@@ -302,7 +302,10 @@ def test_ask_json_closes_review_parent_and_located_child_before_narrowing(
         {'ev': '旧事件', 'know': [{'ref': 'obsolete'}]}, {'ev': '未涉及拍'}]}]}
     original = deepcopy(wire)
     parent_path = ('scenes', 0, 'beats', 0)
-    error = '知情引用失效'
+    from novel.core.validation import ValidationIssue
+    error = ValidationIssue('知情引用失效', code='design_knowledge_lock',
+                            owner='design', location=parent_path + ('know',),
+                            context={'wire_paths': [list(parent_path + ('know',))]})
     transport = _ScriptedTransport([json.dumps({'patches': [
         {'path': 'scenes[0].beats[0]', 'value': {'ev': '修订事件'}}]},
         ensure_ascii=False)])

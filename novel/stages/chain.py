@@ -78,9 +78,10 @@ from novel.llm.transport import ChatRequest, DeepSeekTransport
 from novel.llm.budget import count_text_tokens
 from novel import paths, prov
 from novel.core.text import count_non_whitespace_chars
+from novel.core.name_materials import name_candidate_literals
 from novel.model_slots import pipeline_model_slot
 from novel.stages.common import (
-    NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, design_rules, expand_surface_releases,
+    NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, design_rules, design_wire_schema, expand_surface_releases,
     HOOK_DESIGN_RULES, HOOK_WRITER_SYSTEM, NAMING_RULES, SYS,
     BODY_WRITER_SYSTEM, ChapterIdentities, chapter_identities, pack_prompt,
     material_identities, packet_metrics, project_chapter_packet, render_chapter_packet,
@@ -90,13 +91,14 @@ from novel.stages.common import (
 from novel.stages import candidates
 from novel.stages.stage2 import (
     chapter_revision_scope_issues, slim_chapter_wire,
-    NamesObservation, book_observation_prompt,
+    book_observation_prompt,
     book_patch_locate, chapter_observation_prompt, chapter_patch_locate,
     character_core_view, names_patch_locate,
     compile_associate_observation, associate_candidates_prompt,
     associate_patch_locate, compile_cross_cause, cross_cause_prompt,
     project_identity_candidates, project_cause_candidates,
     compile_book_observation, compile_chapter_observation, compile_name_structure,
+    compile_names_observation, extend_name_surfaces,
     compile_name_variants, name_variant_candidates, name_variants_prompt,
     compile_source_truth, inspect_identity_associations, project_association_space,
     first_appearance_anchors, first_appearance_issues, NAMES_INPUT_VERSION,
@@ -104,7 +106,7 @@ from novel.stages.stage2 import (
     merge_name_structure,
 )
 from contracts.schema.observation import (
-    STAGE2_ASSOCIATE_PROTOCOL, STAGE2_NAMES_PROTOCOL, AssociateObservation,
+    STAGE2_ASSOCIATE_PROTOCOL, AssociateObservation,
 )
 from contracts.schema.source import SourceNameResolution
 from novel.stages.owner_revision import (
@@ -136,10 +138,11 @@ from novel.stages.stage5 import (
     build_hook_user_prompt,
     build_rewrite_user_prompt, context_sha256,
     chapter_prose_validator, recheck_chapter, sha256_text, validate_hook_prose, write_chapter,
+    resolve_hook_prose,
 )
 from novel.stages.stage7 import (
-    apply_names, assemble_delivery, build_delivery_manifest, chapter_access,
-    check_residual, compile_name_map, compile_surface_replacements,
+    apply_bound_names, assemble_delivery, build_delivery_manifest, chapter_access,
+    compile_name_map, compile_bound_replacements,
     naming_patch_locate, naming_projection, verify_chapter_receipts,
 )
 from novel.store import PublishItem, Str06Repository
@@ -521,8 +524,8 @@ def run_chapters(ctx: ChainContext) -> dict:
 def run_names(ctx: ChainContext) -> dict:
     """`str06.stage2.names`：源名称结构观察＋条件变体窄调用（CS-S 1c）。
 
-    结构答案（wire v6）只登记部件（姓／名／化名／歧义例外）；构词模板由
-    compiler 派生（`derive_surface_forms`）。随后代码生成变体候选
+    结构答案（wire v7）登记部件与有证据的遗漏称谓，人物仍限于 Book 闭集；
+    构词模板与称谓窗口由 compiler 派生。随后代码生成变体候选
     （`name_variant_candidates`——无候选＝零调用，S2-10 的 B）：有候选才发
     节点内窄调用 `name_variants`（wire `stage2-name-variants-v1`，逐条
     verdict），判定合入 structure.resolutions（not_name 只作完整性证明）。
@@ -551,9 +554,11 @@ def run_names(ctx: ChainContext) -> dict:
         'names', names_prompt,
         lambda w: compile_name_structure(w, core, full, evidence=evidence)[1],
         patch=_locate)
-    structure, errors = compile_name_structure(names_wire, core, full, evidence=evidence)
+    observation, core, errors = compile_names_observation(names_wire, core, full, evidence=evidence)
     if errors:
         raise ValueError(errors)
+    assert observation is not None and core is not None
+    structure = observation.structure
     resolutions: tuple = ()
     variants_ref = None
     # B：候选由代码给出——有候选才发窄调用（同节点第二 ask，独立工作单元
@@ -592,8 +597,7 @@ def run_names(ctx: ChainContext) -> dict:
         if validation:
             raise MechanicalDefectStop('变体判定不闭合', node='str06.stage2.names',
                                        issues=tuple(validation))
-    observation = NamesObservation(protocol_version=STAGE2_NAMES_PROTOCOL,
-                                   structure=structure)
+    observation = observation.model_copy(update={'structure': structure})
     # 来源账带全部实际发生的 ask（结构答案＋有候选时的变体窄调用）：窄调用的
     # 付费用量不得无人认领（I-17/I-37）。
     refs = (names_ref,) if variants_ref is None else (names_ref, variants_ref)
@@ -626,6 +630,9 @@ def run_associate(ctx: ChainContext) -> dict:
     names = repository.read_model('stage2/observations/names.json')
     evidence = build_evidence(ctx.chapters, ctx.hook_copy)
     core, errors = character_core_view(book, evidence=evidence)
+    if not errors:
+        core, surface_errors = extend_name_surfaces(core, names, evidence=evidence)
+        errors.extend(surface_errors)
     if not errors:
         # 正式 names 的人工编辑／恢复也须符合 Characters 的唯一结构判据；
         # 在购买关联前纯合并复验，防止漏人物、漏称谓或坏家族引用延迟到发布才拒。
@@ -978,6 +985,8 @@ def run_preserve(ctx: ChainContext) -> dict:
            + json.dumps([r.model_dump(mode='json') for r in chars.name_structure.resolutions],
                         ensure_ascii=False, sort_keys=True)
            if chars.name_structure and chars.name_structure.resolutions else '')
+        + '\n身份文本候选（只召回，不证明指人）：'
+        + json.dumps(name_candidate_literals(chars.name_projection(), chars.name_structure), ensure_ascii=False)
         + '\n人物表：' + json.dumps(core.model_dump(mode='json', include={'characters'}),
                                     ensure_ascii=False, sort_keys=True,
                                     separators=(',', ':')),
@@ -1233,8 +1242,8 @@ def _design_reuse_plan(ctx: ChainContext, *, checkpoint, chars, brief, obligatio
 def _design_candidate_compatible(wire, constraints: OutputConstraints) -> tuple[bool, str]:
     """兼容性检查（RC-53 闭集）：wire 协议字面量、可按当前 schema 构造、章数与
     篇幅约束未变。任一不符即整份新购的原因，不静默降级。"""
-    if not isinstance(wire, dict) or wire.get('protocol_version') not in DESIGN_READ_PROTOCOLS:
-        return False, '协议字面量不兼容'
+    if not isinstance(wire, dict) or wire.get('protocol_version') != STAGE4_DESIGN_WIRE_PROTOCOL:
+        return False, '协议字面量不兼容：旧候选缺少当前身份文本声明，不能机械补出语义'
     try:
         model = design_wire_model(wire)
     except ValidationError as exc:
@@ -1249,6 +1258,22 @@ def run_body_design(ctx: ChainContext) -> dict:
     chars = repository.read_model('stage2/characters/characters.json')
     core = chars.core_view()
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
+    inherited_name_issues = preserve_name_issues(checkpoint, chars)
+    if inherited_name_issues:
+        # 重新验证当前输入的声明，不为不属于 Design 的源义务缺陷购买 Design。
+        try:
+            discover_owner_issues(
+                repository, raised_by='str06.stage4.body_design', owner='preserve',
+                node='str06.stage4.preserve',
+                issues=tuple(OwnerIssueV1(
+                    code='material_name_leak', item=str(issue.location), message=str(issue),
+                    context={'input_owner': 'preserve', 'validation_code': issue.code,
+                             **issue.context}) for issue in inherited_name_issues))
+        except (OwnerRevisionRequired, OwnerRevisionStop) as exc:
+            exc.context['input_preflight'] = {
+                'checks': [{'name': 'preserve_input', 'status': 'failed'}],
+                'errors': list(inherited_name_issues)}
+            raise
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
     brief, identities = project_brief(checkpoint, core, blueprint,
                                       structure=chars.name_structure)
@@ -1259,7 +1284,10 @@ def run_body_design(ctx: ChainContext) -> dict:
     # 同一把尺——窄请求只裁掉整份输入材料，不另造一套协议（I-11）。
     rules_context = dict(
         known_char_ids=set(chars.characters),
+        name_candidates=name_candidate_literals(chars.name_projection(), chars.name_structure),
         detail_refs=detail_index(obligation_index),
+        expression_ids=tuple(item.ex_id for item in brief.expression
+                             if item.kind != 'narration'),
         knowledge_refs={ref: change.holder == 'reader' and change.mode == 'known'
                         for ref, (_, change) in knowledge_change_index(obligation_index).items()},
         # 禁区（unanswered）不承载状态，不进 lock 闭集。
@@ -1267,7 +1295,7 @@ def run_body_design(ctx: ChainContext) -> dict:
             {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
             chars.name_structure))
     def request_rules(protocol):
-        aliases = design_reference_aliases(brief) if protocol == STAGE4_DESIGN_WIRE_PROTOCOL else {}
+        aliases = design_reference_aliases(brief) if protocol != 'stage4-design-v9' else {}
         context = {**rules_context, 'fact_lock_ids': [aliases.get(f.kf_id, f.kf_id)
                    for f in brief.fact_locks if f.kind != 'unanswered']}
         rules = design_rules(**context, protocol=protocol)
@@ -1275,9 +1303,9 @@ def run_body_design(ctx: ChainContext) -> dict:
             **{key: value for key, value in context.items() if key != 'detail_refs'},
             obligations=obligation_index),
                            ensure_ascii=False, separators=(',', ':'))
-        return rules, legal
+        return rules, legal, design_wire_schema(**context, protocol=protocol)
 
-    protocol_rules, legal_values = request_rules(STAGE4_DESIGN_WIRE_PROTOCOL)
+    protocol_rules, legal_values, _design_schema = request_rules(STAGE4_DESIGN_WIRE_PROTOCOL)
     design_prompt = revision_prompt_for_owner(
         repository, 'design',
         pack_prompt(protocol_rules,
@@ -1297,12 +1325,12 @@ def run_body_design(ctx: ChainContext) -> dict:
                                            targets=[t.path for t in targets],
                                            identities=identities)
         # 旧候选窄复核仍使用它原来的引用语法；不改基底、不重铸付费摘要。
-        patch_rules, patch_legal = request_rules(base_wire['protocol_version'])
+        patch_rules, patch_legal, patch_schema = request_rules(base_wire['protocol_version'])
         return NarrowPatchRequest(
             rules=patch_rules,
             dependency=json.dumps(slice_payload, ensure_ascii=False,
                                   separators=(',', ':')),
-            legal_values=patch_legal)
+            legal_values=patch_legal, wire_schema=patch_schema)
 
     def inspect(w):
         return inspect_design_candidate(
@@ -1347,7 +1375,7 @@ def run_body_design(ctx: ChainContext) -> dict:
                     for r in repairs]))
         # CS-H H3：Design 自有字段与写手材料同面镜像——同一字面已由 Design 原文闸
         # （先投影再查）以带路径任务报出时，写手材料面的同源归因消息不再重复进反馈：
-        # 无路径的重复消息会让条目定位退整份返修、接受记录多计根因。
+        # 无路径的重复消息会让条目计划被拒绝、接受记录多计根因。
         from novel.core.validation import ValidationIssue as _ValidationIssue
         gated = {issue.location[-1] for issue in inspection.errors
                  if isinstance(issue, _ValidationIssue)
@@ -1447,8 +1475,8 @@ def run_body_design(ctx: ChainContext) -> dict:
     try:
         try:
             # CS-F1 局部修订（RC-47）：判据已在判定处给每条问题带 wire 路径；可全部定位时
-            # 只把最小完整父项发回返修，合并后重跑**完整**候选预检；有任一问题无法定位
-            # （全局覆盖闸、上游派生材料等）自动退整份返修，不静默漏项。
+            # 按schema与owner政策给足完整替换范围，合并后重跑**完整**候选预检。
+            # 无法定位是规划失败；只有登记的根结构/协议出口才能整份修订，不静默漏项。
             dw, design_ref = ctx.ask('design', design_prompt, validate, **ask_kwargs)
         except UpstreamOwned:
             route_upstream(last_inspection)
@@ -1672,7 +1700,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
                 registered_surfaces=expand_surface_releases(
                     {cid: {s.surface for s in c.surfaces}
                      for cid, c in chars.characters.items()},
-                    chars.name_structure)), ensure_ascii=False, separators=(',', ':')))
+                    chars.name_structure)), ensure_ascii=False, separators=(',', ':')),
+            wire_schema=hook_wire_schema(body))
 
     hw, hook_design_ref = ctx.ask('hook_design', hook_design_prompt,
                                   lambda w: hook_design_compile(w)[1],
@@ -1961,7 +1990,9 @@ def _write_hook(hook_context, ask_text) -> tuple[str | None, list[dict], Any]:
             continue
         prose_seen = True
         errors = validate(prose)
-        attempts.append({'attempt': attempt + 1, 'chars': count_non_whitespace_chars(prose), 'errors': errors})
+        attempts.append({'attempt': attempt + 1,
+                         'chars': count_non_whitespace_chars(resolve_hook_prose(prose, hook_context).text),
+                         'errors': errors})
         if not errors:
             return prose, attempts, ref
     return None, attempts, ref
@@ -1971,6 +2002,11 @@ def run_hook(ctx: ChainContext) -> dict:
     repository = ctx.repository
     hook_context = repository.read_model('stage4/context/hook/hook.json')
     prose, attempts_log, hook_ref = _write_hook(hook_context, ctx.ask_text)
+    resolved = resolve_hook_prose(prose, hook_context) if prose is not None else None
+    if resolved is not None:
+        if resolved.errors:
+            raise ValueError(f'已接受Hook身份引用复编译失败：{resolved.errors}')
+        prose = resolved.text
     status = 'hook_accepted_mechanical' if prose is not None else 'hook_rejected'
     receipt = HookReceipt(
         hook_context_sha256=context_sha256(hook_context),
@@ -1979,6 +2015,8 @@ def run_hook(ctx: ChainContext) -> dict:
                           else 'unidentified'),
         validator_version=HOOK_VALIDATOR_VERSION,
         status='accepted' if prose is not None else 'rejected',
+        name_mentions=resolved.mentions if resolved is not None else (),
+        non_name_spans=resolved.non_name_spans if resolved is not None else (),
         mechanical_checks=MECHANICAL_CHECKS)
     items: list[PublishItem] = []
     if prose is not None:
@@ -2073,6 +2111,8 @@ def _committed_set(repository, identities: dict[int, 'ChapterIdentities'],
             prose = repository.read_text(rel_prose)
             model = repository.inspect_sealed_model(rel_receipt)
         except (FileNotFoundError, ValidationError, UnsealedArtifact):
+            continue
+        if model.chapter_ordinal != ordinal:
             continue
         problems = check_chapter_receipt(
             model, identities=identities[ordinal], prose_sha256=sha256_text(prose))
@@ -2257,20 +2297,21 @@ def run_assemble(ctx: ChainContext) -> dict:
     chapter_prose = {ordinal: raw_prose[ordinal] for ordinal in access.accepted}
     chain_problems = verify_chapter_receipts(
         raw_receipts, raw_prose, identities_by_ordinal=identities)
-    replacements, errors = compile_surface_replacements(chars, name_map)
+    replacements, errors = compile_bound_replacements(chars, name_map)
     if errors:
         raise ValueError(errors)
     kept_literals = tuple(sorted({
         surface for entry in name_map.entries if entry.name is None
         for surface in _kept_surfaces(chars, entry.char_ref)}))
-    renamed_hook, hook_claims = apply_names(prose, replacements)
-    residual = check_residual(renamed_hook, replacements, hook_claims, kept_literals)
-    if residual:
-        raise ValueError(f'Hook 改名残留：{residual}')
+    renamed_hook, rename_errors = apply_bound_names(prose, receipt.name_mentions, replacements)
+    if rename_errors:
+        raise ValueError(f'Hook 身份改名失败：{rename_errors}')
     repository.write_text('runtime/delivery/hook_renamed.txt', renamed_hook)
     hook_sha = sha256_text(prose)
     outcome = assemble_delivery(
         chapter_prose=chapter_prose, body=access, hook_prose=prose,
+        chapter_receipts=raw_receipts,
+        identities_by_ordinal=identities,
         hook_receipt=receipt.model_dump(mode='json'),
         hook_context_sha256=context_sha256(hook_context),
         replacements=replacements, kept_literals=kept_literals)

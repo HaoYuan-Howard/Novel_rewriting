@@ -96,6 +96,10 @@ _STAGE457 = (
 )
 
 STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
+    # 结构修复原语只读schema与候选，不反向依赖stage、模型执行或持久化。
+    DependencyRule(
+        module='novel.core.repair', allows=(),
+        forbids=('novel.stages', 'novel.stages.*', 'novel.llm', 'novel.llm.*', 'novel.store')),
     # names 属 Stage2：禁止 import Stage4/5/7 模块与 LLM 面。
     DependencyRule(
         module='novel.stages.stage2.names',
@@ -114,7 +118,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         + tuple(m for m in _STAGE457 if m != 'novel.stages.stage4.hook_context')),
     # hook（Stage4 hook_design 的确定性臂与唯一 publisher）禁止 LLM 与
     # Stage5 写手／Stage7 模块，也不依赖 Stage4 编译面。design_paths 只承载
-    # 判据问题的构造约定（wire 路径＋稳定身份，仅依赖 novel.core.validation），
+    # 判据问题与纯修复范围约定（依赖contracts与novel.core的纯函数），
     # hook 的错误据此接条目返修（CS-F1），不是生产或编译模块。
     DependencyRule(
         module='novel.stages.stage4.hook',
@@ -132,6 +136,8 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage4.hook_validation',
         allows=('contracts.schema.*', 'novel.core.name_materials',
+                'novel.core.name_text',
+                'novel.stages.stage4.materials',
                 'novel.stages.stage4.hook_facts',
                 'novel.stages.stage4.design_paths'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
@@ -145,11 +151,12 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         + _STAGE457),
     # wire compiler 仅展开引用；不借 validator 或下游编译推断缺失语义。
     # novel.core.text：name_exposure 标注的命题回填与 hook_context 同尺
-    # （kp_statement，判据 25）；纯文本助手，不是生产或编译模块。
+    # （kp_statement，判据 25）；core.repair只给结构诊断，不做语义修复。
     DependencyRule(
         module='novel.stages.stage4.hook_wire',
         allows=('contracts.schema.*', 'novel.stages.stage4.hook_facts',
-                'novel.stages.stage4.design_paths', 'novel.core.text'),
+                'novel.stages.stage4.design_paths', 'novel.core.text', 'novel.core.name_text',
+                'novel.core.name_materials', 'novel.core.repair'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
                  'novel.stages.stage4.hook_validation') + _STAGE457),
     # hook_writer 只能消费 hook／receipt 契约：禁止 LLM 与 Stage2/4/7 模块。
@@ -161,7 +168,8 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         module='novel.stages.stage5.hook_writer',
         allows=('contracts.schema.hook', 'contracts.schema.receipt',
                 'contracts.schema.context', 'contracts.schema.state',
-                'contracts.schema.base', 'novel.stages.common', 'novel.core.text'),
+                'contracts.schema.base', 'novel.stages.common', 'novel.core.text',
+                'novel.core.name_text'),
         forbids=('novel.llm', 'novel.llm.*')
         + tuple(m for m in _STAGE457 if m != 'novel.stages.stage5.hook_writer')),
     # naming／assembly 禁止 import design／grounding／compile／book_ir／hook
@@ -169,7 +177,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     # F5 起 assembly 消费 body_checks（篇幅口径）与 body（前文拼接/文本 SHA）。
     DependencyRule(
         module='novel.stages.stage7.naming',
-        allows=('contracts.schema.*', 'novel.stages.common', 'novel.core.text'),
+        allows=('contracts.schema.*', 'novel.stages.common', 'novel.core.text', 'novel.core.name_text'),
         forbids=('novel.llm', 'novel.llm.*',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
@@ -177,6 +185,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage7.assembly',
         allows=('contracts.schema.*', 'novel.stages.common',
+                'novel.core.name_text',
                 'novel.stages.stage7.naming', 'novel.stages.stage5',
                 'novel.stages.stage5.body_checks', 'novel.stages.stage5.body'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.stage5.hook_writer',

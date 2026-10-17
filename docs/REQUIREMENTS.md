@@ -56,7 +56,7 @@ JUnit 分别为 .test_cache/missing-conflict-final.xml 与 missing-conflict-scop
 版本化请求压缩的顺序实现。授权用本书冻结材料向 DeepSeek 付费配对，保持 flash/high/thinking on；
 费用仍走原根工作单元与整书总闸，不追加额度。首轮完整可用率必须含写手材料完整预检，失败、
 返修、累计 provider 调用耗时与设计核读分别记录；单书结果不外推总体成功率或成书质量。
-已购 v9 候选在正式 Preserve 修订后优先走现有免费沿用／窄复核规则。
+2026-10-17 身份引用批次后，v9/v10 缺少当前逐次语义声明，只供只读诊断；不能免费补造后签成 v11。
 
 ## 未完成项
 
@@ -147,9 +147,9 @@ Phase 4（devices A/B）未立项，不随本路线执行。
 | 对象 | 有效义务与删除条件 |
 |---|---|
 | rc22→rc23 同根升级登记 | `contracts/contract_upgrades.py::HOOK_UPGRADE` 只接受冻结的精确身份边。旧 Hook 原字节归档后重建，不提供语义字段 adapter；正文按当前章包局部核对，账与 unknown 不改。所有 rc22 存量根已升级或只读归档后删除该历史身份边；通用计划／CAS／恢复机制保留。未登记版本继续阻断。2026-10-10 裁决追加：①旧升级返还调用适配——`refund_nodes` 仅限定该产物升级的同步范围，2026-10-11 起所有 LLM 节点正式升版共用 V3 节点版本重置；旧 `UpgradeRoundRefund` 只读保存，不能重复恢复同版；②免费换算登记面——`novel/orchestrator/upgrade_converters.py` 只收无损纯函数边，换出 wire 走 `--wire-dir` 免费采用；hook-rc22-rc23 因 emphasis/transition/reader_expectation/local_focus 语义缺口不登记，删除条件＝该升级边从 REGISTERED_UPGRADES 退役时一并删除；③hook_design 请求面派生标注（later_writes/name_exposure）与结构失败时的材料预检聚合（rc23 重跑 6/6 耗尽的反例驱动），目标是机械判据不消耗付费轮次 |
-| rc12／rc13 ExecutionPlan adapter | rc21 质量批删除已废止的五类旧质量产物迁移，仅 `novel/store.py::_upgrade_rc12_payload` 对形状未变的 ExecutionPlan 保留 rc12／rc13→rc14 无损适配。checkpoint／Brief／Binding／BodyDesign／WriterBookIR 须显式 rc22，PresentationGraph 须 rc23、HookContext 须 rc18；旧版或缺版本拒读，不补造细节、概括、Hook 组织或阅读期待。read_graph_hook 先验证当前图版本再摘组件，不绕版本读取旧图。存量 ExecutionPlan 全部重建或退役后删除此 adapter，禁止无限新增版本 |
+| rc12／rc13 ExecutionPlan adapter | rc21 质量批删除已废止的五类旧质量产物迁移，仅 `novel/store.py::_upgrade_rc12_payload` 对形状未变的 ExecutionPlan 保留 rc12／rc13→rc14 无损适配。checkpoint／Brief／Binding 保持 rc22；BodyDesign／PresentationGraph／WriterBookIR／HookContext 须显式 rc25（身份引用与坐标表）；旧版或缺版本拒读，不补造细节、概括、Hook 组织或阅读期待。read_graph_hook 先验证当前图版本再摘组件，不绕版本读取旧图。存量 ExecutionPlan 全部重建或退役后删除此 adapter，禁止无限新增版本 |
 | 工作单元账 V2 读迁移／旧契约返还适配 | `contracts/schema/workflow.py::work_unit_ledger_of_payload` 只无损读 V2→V3，不猜历史节点版本；首次显式同步恢复基础额度并建立版本基线。所有存量 V2 账升级或只读归档后删除 V2 读迁移；`novel/work_units.py::WorkUnitBudget.refund_for_upgrade` 只复读旧返还并调用统一版本同步，REGISTERED_UPGRADES 旧边退役后删除适配入口，历史账仍只读保留。 |
-| Design v9 已购候选 | 用户 2026-10-09 明确要求修订后优先沿用／窄复核；v10/v2 新生成使用短引用，`novel/stages/stage4/slim.py::design_wire_model` 集中解码 v9，canonical rc22 不变。旧候选窄复核只用原 v9 引用语法与 v1 切片，原请求／响应／patch 基底摘要不改，不新增 v9 整份生成路径。窄修失败的整份兜底仍请求当前 v10；选中已证明兼容的历史候选时，接受闸兼容该候选协议与当前协议（含沿用让位后的修订重放），两者都通过当前完整预检；无历史依据的新请求只接受当前协议。所有存量 v9 候选已采用、归档且不再续跑后删除 v9 schema、解码与切片分支 |
+| Design v9/v10 已购候选只读解码 | `novel/stages/stage4/slim.py::design_wire_model` 集中读取历史形状，仅供诊断与原始证据展示；当前生成、采用和修订必须是 v11，并经完整身份声明预检。旧字节不能靠改 protocol 或包入普通义片段机械升级。所有历史候选已归档且不再诊断后删除 v9/v10 schema 与分支。 |
 | OwnerIssue v1／v2 读兼容 | v3 显式 dispatch_pending、指纹历史与更正记录；只经 `contracts/schema/workflow.py::owner_issue_record_of_payload` 集中解码；所有存量 v1／v2 根只读归档／不再续跑后删除。旧错误路由账的更正按 RC-15 显式恢复，不重置轮数 |
 | OwnerRevisionRecord V1 读兼容 | V2 增必填 `applies_to_request_sha256` 与 kind `carried_forward`（CS-H H1b，RC-54/56：免费沿用的采用凭证）；只经 `contracts/schema/workflow.py::owner_revision_record_of_payload` 集中解码（v1 的应用身份即其 `baseline_request_sha256`——V1 只可能是 owner_patch／resample）。现存根盘上不再存在 `schema_version=1` 的修订记录（只读归档／不再续跑）后删除 V1 读兼容；未知版本显式拒绝，不向领域 schema 塞默认值 |
 | names／Characters旧信封 | names v2与两类信封v2显式拒识旧版；须新协议names重建后compile重建Characters，不推断空resolutions。原冻结根只读，授权新epoch再重建；无隐式adapter |
@@ -167,3 +167,49 @@ B1 迁移已完成，保留以下恢复索引：旧 request 一体记录由 Sema
 AcceptanceRecord 取代，adopt 由 ContentRevision＋CommitBundle 取代，body／hook attempts 由 ContentRevision＋ProviderAttempt
 取代。旧 admission 平行计数已退出，额度由现役工作单元、整书总闸和 ledger 承担，unknown 也占额。旧文件仅留原根只读证据；
 不恢复旧写路、不双写、不补造旧 runtime/request 文件。完整映射见重置前 `e84a169b` 本文件。
+
+## 身份引用文本（2026-10-17）
+
+用户授权按 Stage4 阻塞链做通用修复：identity-text-v1，Names wire v7/canonical v5，Preserve v6/policy11、Design v11、Hook Design v4；正文协议 v12、renderer v13。工程回归与用户节点实跑分别验收，不代签标注语义或文学质量。
+
+待验收：用户在原失败根升级后重跑 body_design，核对本节点新首答/返修、完整材料预检与后续身份改名；旧已购答费用和未接受状态保留，不把免费检查当成新首过。
+
+| 兼容面 | 删除条件 |
+|---|---|
+| NamesObservation v4 | `contracts/schema/observation.py::NamesObservation` 只读保留 v4 身份和原序列化形状，不声称源称谓完整；新 v5 必须显式提供补充称谓证据。所有 v4 存量当前根已重建或归档后删除读适配。 |
+| Preserve policy≤10 checkpoint | 仅保留原有正式 checkpoint 作为源材料；不把未标记源文字机械包装成普通义声明，不声明其具备新提及证明。当前 producer 只产 policy11。现役根全部重建 Preserve 或归档后删除旧输入口径。 |
+| rc24→rc25 同根升级 | 精确登记身份边，归档需重建的 Design、IR、Hook、正文与交付；保留原始源、Preserve、已购答、原成本与历史轮。无损转换不能补出新提及语义。所有 rc24 当前根升级或归档后删除该边。 |
+
+## Stage4 契约驱动返修计划（2026-10-17）
+
+用户要求按五点方案修复 `body_design` 的非法拍级 `reads` 死锁：逐项形状诊断、契约决定
+结构可修范围、owner声明语义边界、范围与依赖切片同源、完整预检和无进展纪律闭合。
+正式 artifact／wire 字段不变，继续完整对象替换；程序不搬移读取语义，不改历史已购
+响应、产物、成本账、采用身份或累计额度。
+Design派生返修切片统一v4并显式携带基底`wire_protocol_version`，不机械升级旧候选或返还额度。
+
+工程验证：基于 `7cea2f431a00f57a331d6eefd8d6aa631b31db05` 的当前工作树，使用
+`novel_refactor` 环境串行运行定向 unit/contract、stage 与恢复回归。最终子 schema
+校验版本的定向测试 **651 passed，0 failed/error/skipped**；真实 CLI 子进程修订用例
+**1 passed，0 failed/error/skipped**。JUnit 分母分别见
+`.test_cache/repair-schema-final.xml` 与 `.test_cache/repair-schema-cli.xml`。
+覆盖契约 §9.5 五文件、依赖层级、返修计划、动态 schema、非法字段整场替换、依赖切片、
+完整预检、双产物发布和免费恢复；CLI 用例继续验证下游交付与零新增调用重跑。
+按用户要求将身份引用文本与本批返修一并提交 main，追加默认非 corpus 回归。
+首轮 4435 项中 4426 通过、9 失败：补齐 Hook 完整语义记录边界，修正测试好稿
+越界删除合法对照字段，并精确登记纯返修原语的架构守卫。原失败断言保留，新增
+边界和越界留账反例；定向复验 **208 passed**。最终默认回归 **4444 passed，
+0 failed/error/skipped**，JUnit 为 `.test_cache/identity-repair-final.xml`。
+未运行 corpus 或 golden set，不以工程回归代签真实模型语义或成书质量。
+
+复现命令（在文件系统沙箱外运行）：
+
+```powershell
+& 'D:/Miniconda/envs/novel_refactor/python.exe' -B -m pytest -n 0 -x tests/test_repair_plan.py tests/test_str06_item_patch.py tests/test_str06_patch_routes.py tests/test_str06_design_slim.py tests/test_str06_design_patch.py tests/test_str06_hook.py tests/test_str06_candidate_preflight.py tests/test_docs_references.py tests/test_coverage.py tests/test_rules_registry.py tests/test_hard_counterexamples.py tests/test_ingest_fixtures.py tests/test_layering.py tests/test_test_selection.py::test_catalog_covers_every_module_and_every_override_is_a_real_case --basetemp=E:/_tr -o cache_dir=.test_cache --junitxml=.test_cache/repair-schema-final.xml
+& 'D:/Miniconda/envs/novel_refactor/python.exe' -B -m pytest -n 0 -x 'tests/test_str06_product_entry.py::test_obligation_unbound_replans_across_single_node_subprocesses[obligation_unbound]' --basetemp=E:/_tr -o cache_dir=.test_cache --junitxml=.test_cache/repair-schema-cli.xml
+& 'D:/Miniconda/envs/novel_refactor/python.exe' -X utf8 -B -m pytest -n 4 --dist loadgroup -m 'not corpus' -v --tb=short --basetemp=E:/_tr -o cache_dir=.test_cache --junitxml=.test_cache/identity-repair-final.xml
+```
+
+待实跑验收：按用户授权重跑原 `run_20261017_夫君不行_但我有孕啦` 根的 `stage4.body_design`，
+核对实际返修目标能删除非法键、整场依赖完整、读取语义裁决与合并后的完整预检及双产物
+发布。工程测试使用fake transport且零真实付费，不代替真实模型语义或成书质量验收。

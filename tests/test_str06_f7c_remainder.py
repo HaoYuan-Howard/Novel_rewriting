@@ -133,9 +133,9 @@ def test_withheld_literal_is_hard_failure_never_disclosed():
     packet = project_chapter_packet(book_ir, 1)
     dirty = '芸娘望着空房，' * 100 + '陆大哥没有回来。'
     clean = '芸娘坐在窗前，烛火摇了三摇，门外没有脚步声。' * 30
-    # 首稿后走现役行替换协议；合法修句回答仍泄漏同一未释放姓名，必须继续硬拒。
-    patch = json.dumps({'paragraphs': [{'index': 0, 'text': dirty}]}, ensure_ascii=False)
-    answers = [AnsweredText(text=dirty if i == 0 else patch, finish_reason='stop',
+    from tests.test_str06_hook import _declared_prose
+    # 身份引用超出本章目录走整章返修；每轮仍提交同一未授权提及，必须继续硬拒。
+    answers = [AnsweredText(text=_declared_prose(dirty), finish_reason='stop',
                             identity=f'attempt-{i}', cached=False)
                for i in range(1 + MAX_BODY_REWRITES)]
     systems = []
@@ -147,12 +147,12 @@ def test_withheld_literal_is_hard_failure_never_disclosed():
     outcome = write_chapter(packet=packet, ask=ask)
     assert outcome.prose is None and outcome.receipt is None, '硬失败不得披露放行'
     assert len(outcome.attempts) == 1 + MAX_BODY_REWRITES
-    assert systems == [None] + [BODY_PARAGRAPH_REPAIR_SYSTEM] * MAX_BODY_REWRITES
-    assert all(any(e.startswith('[withheld_literals]') for e in a.errors)
+    assert systems == [None] * (1 + MAX_BODY_REWRITES)
+    assert all(any(e.startswith('[name_text_reference]') for e in a.errors)
                for a in outcome.attempts)
     # 同一把标尺下，只用已释放称谓的稿正常接受（纪律针对未释放面，不是全部专名）。
     ok = write_chapter(packet=packet,
-                       ask=lambda prompt, validate: AnsweredText(text=clean, finish_reason='stop',
+                       ask=lambda prompt, validate: AnsweredText(text=_declared_prose(clean), finish_reason='stop',
                                                        identity='clean', cached=False))
     assert ok.prose == clean and ok.receipt is not None
     assert ok.receipt.status == 'accepted' and ok.length_disclosed is False

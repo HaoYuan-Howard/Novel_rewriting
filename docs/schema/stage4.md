@@ -17,7 +17,7 @@ Stage2 是源约束下的结构化观察：原文是证据，事件、认知和�
 理解；Preserve 再由 LLM 选择应保骨架及必要条件，义务并非逐字摘要，也不保证每条
 源观察都变成必保要求。compiler 只按正式选择派生引用与消费材料，不补做语义判断。
 
-Preserve 现役保存策略为 v10，wire 仍为 `stage4-preserve-v5`。源盲交接的必要触发、
+Preserve 现役保存策略为 v11，wire 为 `stage4-preserve-v6`。源盲交接的必要触发、
 答话、限制、权衡与选择须在 statement、satisfaction 及 requires 所指义务的联合材料中
 可理解；已经明确的前提不要求在 satisfaction 再抄一遍。同一时点、同一作用的触发与
 响应可以合写，不同时点的必要前提仍分别承载。可改写动作进可选 details，源文未给的
@@ -53,12 +53,12 @@ Preserve 现役保存策略为 v10，wire 仍为 `stage4-preserve-v5`。源盲�
 | `stage4/acceptance/guard/compile.json` | 自由形态派生记录 | `str06.stage4.compile` | Guard 编译错误清单 |
 | `stage4/acceptance/guard/report.json` | 自由形态派生记录 | `str06.stage4.compile` | Guard 报告（planned-only 读数） |
 | `stage4/acceptance/packet_metrics.json` | 自由形态派生记录 | `str06.stage4.compile` | WriterPacket 逐章指标（分区条目数、基线事实数、活跃/受保护线程数、重复比例、必须写出密度；audit_only 读数） |
-| `stage4/context/hook/hook.json` | `HookContext` | `str06.stage4.compile` | rc18 确定性投影（POV、起笔事实、有序材料与组织选择、阅读期待、正式风格与声线、禁止集、称谓释放） |
+| `stage4/context/hook/hook.json` | `HookContext` | `str06.stage4.compile` | rc25 确定性投影（POV、起笔事实、有序材料与组织选择、阅读期待、正式风格与声线、禁止集、身份称谓许可与验证候选） |
 | `stage4/ir/writer_book_ir.json` | `WriterBookIR` | `str06.stage4.compile` | 全书静态写作 IR（BookBrief 导航＋ChapterIR 双视图） |
 
 ## Hook 组织与事实交接（2026-10-10）
 
-现役模型 wire 为 `stage4-hook-design-v3`。`materials` 是唯一有序材料列表，每条显式
+现役模型 wire 为 `stage4-hook-design-v4`。`materials` 是唯一有序材料列表，每条显式
 选择 `emphasis`（develop／brief）和 `transition`（start／continue／time_skip／flashback／
 return／scene_cut）；首条为 start。默认围绕一个清楚、尚在推进的核心冲突，允许倒叙与
 跨场；切换须有时间定位并保留理解所需的因果前提。设计同时考虑正式第 1 章将新增什么
@@ -87,12 +87,49 @@ Context 从同一 BodyDesign 投影 `book_style`、出场 `character_voices` 与
 和世界事实保持区分，材料选择、称谓与披露纪律不变。
 正文章包从 BodyDesign 独立编译，背景消费闭包不再把 Hook 选择当成正文消费者；
 调整 Hook 的组织、期待或声线投影不改变已接受正文的章包与回执身份。
-PresentationGraph 单独升 rc23，HookContext 升 rc18；BodyDesign 及正文章包维持 rc22。
-旧 Hook v1／v2 的组织与期待无法机械推断，不隐式升级，也不再提供 v1→v2 恢复入口；
-历史已购字节与成本保留，现役接受需要新 v3 设计与正式输入重新编译。
+PresentationGraph、HookContext、BodyDesign 及正文章包使用 rc25 的身份文本协议。
+旧 Hook v1／v2／v3 缺少当前组织或身份声明，不隐式升级；历史已购字节与成本
+保留，现役接受需要新 v4 设计与正式输入重新编译。
 
 现有 Stage4 条目窄修继续按受影响条目工作，合并后经过完整设计、Context 和材料预检；
 免费重验只能接受与当前请求身份及契约一致的已购回答，不因修订放宽恢复身份。
+
+## 契约驱动的返修计划（2026-10-17）
+
+首次生成与返修使用相同的合法 wire 契约，但编辑权限不同。形状诊断保留错误类型、
+原始故障位置与所属 schema；`shape_errors.issue_path` 保留故障证据，`wire_paths` 提供
+结构定位依据，最终允许替换的位置还须经 owner 政策与计划校验，三者不能混同。
+定位器依据 schema 计算结构上可完成修复的范围，再应用 owner 的语义边界：额外键须
+替换包含该键的完整对象，缺少字段须允许替换可补齐它的对象，数组长度错误须允许替换
+整个数组；联合分支标签不作为真实 JSON 键。合法字段取值错误按其合法子 schema 修复。
+数组、对象、标量、空值等坏稿值的具体形态不决定修复权限。
+
+Design 场景内部的额外字段统一以完整场景作为语义修复边界。拍上非法 `reads` 携带的
+读取是否仍需保留、是否应写到合法场景级 `reads`，由模型在整场内判断；程序不搬字段、
+不推断所读状态，也不把 `[]`／`null` 视作删除。正式 `TargetScene.state_reads` 与
+`stage4-design-v11` 场景级 `reads` 契约均保持原样。
+Hook 按正式 schema 的顶层记录或顶层数组条目作为完整语义单元返修，阅读期待的类型、
+焦点与事实／后续引用共同复核；数组自身的长度错误仍替换数组，边界不由坏值形状决定。
+
+共享接受循环把目标、目标子 schema、问题覆盖与基底摘要冻结为同一返修计划，再据此
+生成目标列表、依赖切片、输出范围校验与合并操作。只读上下文不扩大编辑权限；整场
+目标须闭合该场所有拍所引用的义务、知情、事实锁、人物、状态与称谓释放前缀，不因原
+报错仅落在一个拍而漏送依赖。`state_history` 只读提供相关初始态和此前状态写入的原行及
+路径，沿显式确认地址补齐依赖，不推断状态值；未来写入与目标场已有行不重复送达。
+授权覆盖全书拍时，未标注承载的正式义务语义也须送达，不能只给合法编号。
+每个目标值是对应子 schema 的完整替换；省略额外键才能
+删除该键，不增加 `remove/move` 传输操作。发请求前检查子schema可执行性，回答合并前
+用同一子schema验证每个替换值；形状非法的片段留证拒收，不覆盖携带原始语义的基底。
+
+Design 返修切片统一为 `stage4-design-patch-slice-v4`，以 `wire_protocol_version` 原样标注
+基底候选的 v9／v10／v11 协议；切片版本是派生请求格式，不改变正式设计或 wire 契约，
+不据此重置节点额度，也不把历史候选冒充成新版本。
+
+发出返修请求前先验证结构可修复性：目标必须合法、互不重叠、覆盖全部问题并容许必要
+的新增或删除。计划无效或缺少定位依据时以工程错误停止并报告规则码，不购买一个无解
+的局部修订，也不自动扩大成整份重生；只有正式路由登记的顶层结构／协议出口可整份
+修订。合并版仍重跑完整 Design、Binding、执行计划与写手材料预检，未知、失败和未运行
+分别披露。无进展、历史采用身份、修订上限与累计额度维持现役规则。
 
 ## Guard M1–M8
 
@@ -145,3 +182,5 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 
 当前注册表共 **33 条**：**31 hard、1 metric、1 unver**（rc21 新增系列概括与细节引用闭集两条 hard）。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。
+
+2026-10-17 身份引用文本现役协议与旧源输入边界见 [name_text.md](name_text.md)。本批输出使用 rc25；身份选择的语义准确性保持未评。

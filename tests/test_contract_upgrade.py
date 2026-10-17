@@ -24,25 +24,54 @@ from tests.test_str06_body import _make_session, _run, _full_chain_wires
 
 SOURCE = 'a' * 64
 
+# 此边的真实历史执行版本。只改变版本声明，不改任何原轮、响应、采用或费用证据；
+# 不能把当前执行账仅换 workflow 标签后，期待同版本再次恢复额度。
+SOURCE_NODE_VERSION_OVERRIDES = {
+    'str06.stage4.body_design': {'wire': 10, 'artifact:stage4/design/body_design.json': 22},
+    'str06.stage4.hook_design': {'wire': 3, 'artifact:stage4/design/presentation_graph.json': 23},
+    'str06.stage5.body': {'protocol': 11, 'renderer': 12, 'validator': 3,
+                        'artifact:stage5/acceptance/body/ch{nn}.json': 17},
+    'str06.stage5.hook': {'context': 24, 'renderer': 12, 'validator': 4,
+                        'artifact:stage5/hook/receipt.json': 12},
+}
+
+
+def _old_node_versions(repo):
+    from novel import work_units
+    for unit_id in work_units.registered_unit_ids(repo.root.parent, repo.root.name):
+        budget = work_units.readonly_budget(repo.root.parent, repo.root.name, unit_id)
+        overrides = SOURCE_NODE_VERSION_OVERRIDES.get(budget.identity['node'])
+        if overrides is None:
+            continue
+        raw = budget._read().model_dump(mode='json')
+        for reset in raw['version_resets']:
+            reset['versions'].update(overrides)
+            reset['upgrade_id'] = work_units._digest({'node': raw['node'], 'versions': reset['versions']})
+        work_units._write(repo.root.parent, budget.path,
+                          work_units.WorkUnitLedgerV3.model_validate(raw))
+
+
+def _archive_bytes(repo):
+    """归档范围直接取登记边，不把任何旧正文解释成当前身份声明。"""
+    return {path.relative_to(repo.root).as_posix(): path.read_bytes()
+            for pattern in EDGE['archive_patterns'] for path in repo.root.glob(pattern)
+            if path.is_file()}
+
+
+def _assert_archived_bytes(repo, receipt, originals, *, current_absent=True):
+    subject = receipt['subject_sha256']
+    for rel, data in originals.items():
+        assert repo.path(f'runtime/upgrades/{subject}/files/{rel}').read_bytes() == data, rel
+        if current_absent:
+            assert not repo.path(rel).exists(), rel
+
 
 def _old_workflow(repo, source=SOURCE):
     epoch = candidate_epoch()._replace(contract_version=EDGE['source_version'])
     before = open_candidate_workflow(epoch=epoch, source_identity=source, created_at=epoch.created_at)
     before = before._replace(contract_identity=EDGE['source_identity'])
     repo.write(WORKFLOW_REL, workflow_to_disk(before))
-    # 真实存量版本在升版前已记录旧 Context；测试不能把当前版本的模型账仅换
-    # workflow 标签冒充旧版本，否则同版本不应再次获得额度。
-    from novel import work_units
-    for unit_id in work_units.registered_unit_ids(repo.root.parent, repo.root.name):
-        budget = work_units.readonly_budget(repo.root.parent, repo.root.name, unit_id)
-        if budget.identity['node'] != 'str06.stage5.hook':
-            continue
-        raw = budget._read().model_dump(mode='json')
-        for reset in raw['version_resets']:
-            reset['versions']['context'] = int(EDGE['source_version'].rsplit('rc', 1)[1])
-            reset['upgrade_id'] = work_units._digest({'node': raw['node'], 'versions': reset['versions']})
-        work_units._write(repo.root.parent, budget.path,
-                          work_units.WorkUnitLedgerV3.model_validate(raw))
+    _old_node_versions(repo)
     return before
 
 
@@ -53,7 +82,7 @@ def _preview(repo):
 def _apply(repo, plan):
     return apply(repo, base=repo.root.parent, sid=repo.root.name,
                  source_identity=SOURCE, code_version=prov.code_version(),
-                 subject_sha256=digest(plan.model_dump(mode='json')), actor='测试', reason='登记的 Hook 升级')
+                 subject_sha256=digest(plan.model_dump(mode='json')), actor='测试', reason='登记契约升级')
 
 
 def _minimal(tmp_path):
@@ -88,18 +117,19 @@ def test_already_upgraded_root_refuses_preview_as_up_to_date(tmp_path):
         _preview(repo)
 
 
-def test_apply_archives_original_bytes_keeps_body_and_is_idempotent(tmp_path):
+def test_apply_archives_registered_original_bytes_and_is_idempotent(tmp_path):
     repo = _minimal(tmp_path)
     original = repo.path(WORKFLOW_REL).read_bytes()
+    archived = _archive_bytes(repo)
     plan = _preview(repo)
     receipt = _apply(repo, plan)
     identity = receipt['subject_sha256']
     after = workflow_from_disk(repo.inspect(WORKFLOW_REL))
     assert after.epoch.reason == 'contract_drift' and after.epoch.ordinal == 2
     assert after.contract_identity == EDGE['target_identity']
-    assert repo.read_text('stage5/body/ch01.txt') == '保留章稿。'
-    assert not repo.path('stage5/hook/hook.txt').exists()
-    assert repo.read_text(f'runtime/upgrades/{identity}/files/stage5/hook/hook.txt') == '原楔子证据。'
+    assert {item.rel for item in plan.archive} == set(archived)
+    _assert_archived_bytes(repo, receipt, archived)
+    assert archived['stage5/body/ch01.txt'] == '保留章稿。'.encode()
     assert repo.path(f'runtime/upgrades/{identity}/workflow.json').read_bytes() == original
     repo.write_text('stage5/hook/hook.txt', '后来的新版。')
     assert _apply(repo, plan) == receipt
@@ -259,26 +289,27 @@ def test_abort_pending_only_before_any_archive(tmp_path, monkeypatch, window):
 
 
 @pytest.mark.parametrize('window', ['none', 'archive', 'workflow', 'receipt'])
-def test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body(tmp_path, monkeypatch, window):
+def test_upgrade_rebuilds_registered_consumers_and_preserves_archived_body_bytes(tmp_path, monkeypatch, window):
     repo, session, transport = _make_session(tmp_path, _full_chain_wires())
     _run(repo, session)
     _old_workflow(repo)
     body = {p: p.read_bytes() for prefix in ('stage5/body', 'stage5/acceptance/body')
             for p in (repo.root / prefix).glob('*')}
+    archived = _archive_bytes(repo)
     service = {p: p.read_bytes() for p in (repo.root.parent / '_service').rglob('*')
                if p.is_file() and not p.name.endswith('.lock')
                # 轮次返还会追加登记节点的单元账行（裁决「升级清账」），
                # 其余服务账面（费用／响应／登记）字节不变。
                and p.name != 'ledger.json'}
-    calls = len(transport.calls)
     plan = _preview(repo)
+    assert {item.rel for item in plan.archive} == set(archived)
     if window != 'none':
         original_archive, original_write = repo.archive_upgrade_file, repo.write
 
         def archive(upgrade, rel, sha):
             original_archive(upgrade, rel, sha)
             if window == 'archive' and rel == 'stage4/context/hook/hook.json':
-                raise OSError('模拟章稿仍保留、上下文已退出的窗口')
+                raise OSError('模拟登记产物部分归档的窗口')
 
         def write(rel, *args, **kwargs):
             result = original_write(rel, *args, **kwargs)
@@ -293,7 +324,7 @@ def test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body(tmp_path, monk
             with pytest.raises(OSError, match='模拟'):
                 _apply(repo, plan)
         assert _preview(repo) == plan
-    _apply(repo, plan)
+    receipt = _apply(repo, plan)
     assert all(p.read_bytes() == data for p, data in service.items()), '升级不改账／额度／响应'
     # 清账裁决：登记重建节点的付费单元获得轮次返还，历史轮与响应证据不变。
     from novel.work_units import readonly_budget, registered_unit_ids
@@ -301,7 +332,8 @@ def test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body(tmp_path, monk
         ledger = readonly_budget(repo.root.parent, 'run', unit_id)._read()
         if ledger.node in EDGE['refund_nodes']:
             assert ledger.version_resets[-1].additional > 0, ledger.node
-    assert all(p.read_bytes() == data for p, data in body.items())
+    _assert_archived_bytes(repo, receipt, archived)
+    assert all(p.relative_to(repo.root).as_posix() in archived for p in body)
     # 真实初始化入口必须接受新 epoch，历史账沿用同一 base／sid。
     from novel.llm.paid_requests import PaidRequestSession
     _, context = init_or_resume_candidate_workflow(repository=repo, base=repo.root.parent,
@@ -309,16 +341,97 @@ def test_upgrade_rebuilds_hook_and_delivery_without_rebuying_body(tmp_path, monk
         task_id='task-1', configured_model='fake', created_at=1759000001)
     session = PaidRequestSession(repo, context.ledger, transport, yes=True,
                                 allow_source_export=True, provider='fake', sid='run')
-    # 更换 Hook 的正式输入，新 Hook 不能冒充旧证据；正文设计和章包不变。
+    # 新 Hook 选择仍由当前作者协议重做；旧正文只有原字节证据，不能补空表假装合法。
     wires = deepcopy(transport.wires)
     wires['hook_design']['local_focus'] += '突出门后的未知。'
     transport.wires = wires
-    _run(repo, session, node_filter=('str06.stage4.hook_design', 'str06.stage4.compile',
-                                    'str06.stage5.hook', 'str06.stage5.body', 'str06.stage7.assemble'))
-    assert all(p.read_bytes() == data for p, data in body.items())
-    assert not any(c.startswith('body_') for c in transport.calls[calls:])
+    _run(repo, session, node_filter=EDGE['rebuild_nodes'])
+    _assert_archived_bytes(repo, receipt, archived, current_absent=False)
+    for ordinal in (1, 2):
+        current = repo.read_model(f'stage5/acceptance/body/ch{ordinal:02d}.json')
+        assert current.name_mentions and isinstance(current.non_name_spans, tuple)
     assert repo.inspect('stage7/final/delivery_manifest.json')['chapters']
     assert repo.inspect('runtime/workflow_status.json')['status'] == 'delivered'
+
+
+def test_upgrade_from_rejected_body_design_candidate_runs_current_author_protocol(tmp_path):
+    """当前用户根形态：Stage4 前置已在，只有未接受的旧 Design 答案，没有正式设计。"""
+    from novel.core.name_text import resolve_name_text
+    from novel.llm.transport import ChatRequest
+    from novel.stages.chain import NODE_ORDER
+    from novel.stages.common import SYS
+    from novel.work_units import WorkUnitBudget, read_book_budget
+
+    wires = _full_chain_wires()
+    repo, session, transport = _make_session(tmp_path, deepcopy(wires))
+    preserve_end = NODE_ORDER.index('str06.stage4.preserve') + 1
+    _run(repo, session, node_filter=NODE_ORDER[:preserve_end])
+    assert repo.path('stage4/grounding/reconstruction_brief.json').exists()
+    assert not repo.path('stage4/design/body_design.json').exists()
+
+    def historical_text(value):
+        if isinstance(value, str):
+            return resolve_name_text(value).text
+        if isinstance(value, dict):
+            return {key: historical_text(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [historical_text(item) for item in value]
+        return value
+
+    old_design = historical_text(wires['design'])
+    old_design['protocol_version'] = 'stage4-design-v10'
+    transport.wires['design'] = old_design
+    old_answer = session.send('design', ChatRequest(
+        model='fake', system=SYS, user='设计目标书：冻结历史已购但未接受的候选。',
+        reasoning_effort='high', thinking=True, json_mode=True, max_tokens=1000))
+    # 冻结旧判据留下的拒稿事实；不重新运行已经退役的姓名子串判据。
+    session.record_acceptance(old_answer, mode='json', parse='ok',
+                              errors=('历史姓名字面预检未通过',), accepted=False)
+    unit = WorkUnitBudget(repo.root.parent, repo.root.name, 'str06.stage4.body_design')
+    turns = unit._read().turns
+    evidence = {path: path.read_bytes() for path in unit.directory.glob('*.json')
+                if path != unit.path}
+    cost_path = repo.root.parent / '_service' / 'ledger.jsonl'
+    cost_bytes = cost_path.read_bytes()
+    book_budget = read_book_budget(repo.root.parent, repo.root.name)
+    assert json.loads(old_answer.text)['protocol_version'] == 'stage4-design-v10'
+    assert any(not row['accepted'] for _key, row in unit.acceptance_records())
+
+    _old_workflow(repo)
+    plan = _preview(repo)
+    assert plan.rebuild_nodes[0] == 'str06.stage4.body_design'
+    assert not any(row.rel == 'stage4/design/body_design.json' for row in plan.archive)
+    receipt = _apply(repo, plan)
+    assert unit._read().turns == turns
+    assert cost_path.read_bytes() == cost_bytes
+    assert read_book_budget(repo.root.parent, repo.root.name) == book_budget
+    assert all(path.read_bytes() == data for path, data in evidence.items())
+    assert workflow_from_disk(repo.inspect(WORKFLOW_REL)).contract_identity == EDGE['target_identity']
+    assert receipt['status'] == 'applied'
+
+    _, context = init_or_resume_candidate_workflow(repository=repo, base=repo.root.parent,
+        code=prov.code_version(), root_sha1='a' * 40, source_identity=SOURCE,
+        task_id='task-1', configured_model='fake', created_at=1759000001)
+    from novel.llm.paid_requests import PaidRequestSession
+    transport.wires = wires
+    session = PaidRequestSession(repo, context.ledger, transport, yes=True,
+                                allow_source_export=True, provider='fake', sid=repo.root.name)
+    calls = len(transport.calls)
+    _run(repo, session, node_filter=('str06.stage4.body_design',))
+    current = repo.read_model('stage4/design/body_design.json')
+    assert current.contract_version == EDGE['target_version']
+    assert transport.calls[calls:] == ['design']
+    historical_turns = unit._read().turns[:len(turns)]
+    assert len(historical_turns) == len(turns)
+    for before, after in zip(turns, historical_turns):
+        # 升级不动已购历史；新请求开始时正式 reconcile 才把未采用旧回答终结。
+        # 转态允许且必须准确，原请求、响应、attempt 和全部证据身份仍逐项不变。
+        assert before.state == 'delivered' and before.reason_code == ''
+        assert after.state == 'failed' and after.reason_code == 'superseded_unadopted'
+        assert after.model_dump(exclude={'state', 'reason_code'}) == before.model_dump(
+            exclude={'state', 'reason_code'})
+    assert cost_path.read_bytes().startswith(cost_bytes), '重跑只追加新调用，历史成本行不得改写'
+    assert all(path.read_bytes() == data for path, data in evidence.items())
 
 
 def test_validation_only_change_rechecks_original_prose_and_preserves_adoption(tmp_path):
@@ -341,7 +454,8 @@ def test_validation_only_change_rechecks_original_prose_and_preserves_adoption(t
     assert len(transport.calls) == calls
     assert repo.path('stage5/body/ch01.txt').read_bytes() == before
     assert renewed['request_identity'] == original['request_identity']
-    assert renewed['validator_version'] == 'str06-body-mechanical-v3'
+    from contracts.schema.receipt import BODY_VALIDATOR_VERSION
+    assert renewed['validator_version'] == BODY_VALIDATOR_VERSION
     # 免费重验不丢生成事实：回执继承原付费来源账（model/prompts/usage 原样，
     # inputs 换成本次验证真读到的），partial_rewrite 留痕。
     inherited = renewed['_provenance']
@@ -398,11 +512,10 @@ def test_recompile_changes_only_one_chapter_and_keeps_other_commit(tmp_path, mon
     repo, session, transport = _make_session(tmp_path, _full_chain_wires())
     _run(repo, session)
     monkeypatch.setattr(chain, 'inspect_body_materials', real)
-    _old_workflow(repo)
     before = repo.path('stage5/acceptance/body/ch02.json').read_bytes()
     calls = len(transport.calls)
-    _apply(repo, _preview(repo))
-    _run(repo, session, node_filter=('str06.stage4.hook_design', 'str06.stage4.compile', 'str06.stage5.hook'))
+    # 同一当前协议内的免费重编译才有逐章精确失效语义；跨身份协议升级须归档旧正文。
+    _run(repo, session, node_filter=('str06.stage4.compile',))
     # 监控／planner 必须识别局部绑定，不能只看正文字节仍存在。
     from novel.store import ArtifactStore
     from novel.orchestrator.state import artifact_state, readonly_ctx
@@ -525,11 +638,7 @@ def test_workflow_lock_contention_is_a_terminal_stop_with_zero_writes(tmp_path):
 
 
 def test_open_hook_design_issue_is_resolved_when_product_archived(tmp_path):
-    """升级保留 presentation_graph（rc24 边）时，hook_design 回派账不收口。
-
-    收口只随归档发生——归档后重建不能把已退出的旧版当修订模板；design 未
-    失效时修订模板仍可读，回派账继续有效，升级不越权清掉仍然承重的账。
-    """
+    """新边归档 graph，旧产物回派账随之收口，重建不能读取退出的修订模板。"""
     from contracts.schema.workflow import OwnerIssueV1
     from novel.stages.owner_revision import (
         OwnerRevisionRequired, discover_owner_issues, read_owner_issue_file,
@@ -544,12 +653,15 @@ def test_open_hook_design_issue_is_resolved_when_product_archived(tmp_path):
                                  message='组合检查不闭合（测试回派）')])
     assert read_owner_issue_file(repo, 'hook_design').status == 'open'
     _old_workflow(repo)
-    _apply(repo, _preview(repo))
-    assert read_owner_issue_file(repo, 'hook_design').status == 'open'
-    # design 保留 ⇒ 修订模板可读：重跑走回派修订路径，graph 保持 rc23 形状。
-    _run(repo, session, node_filter=('str06.stage4.hook_design', 'str06.stage4.compile'))
+    graph_bytes = repo.path('stage4/design/presentation_graph.json').read_bytes()
+    receipt = _apply(repo, _preview(repo))
+    assert read_owner_issue_file(repo, 'hook_design').status == 'resolved'
+    assert not repo.path('stage4/design/presentation_graph.json').exists()
+    assert repo.path(f'runtime/upgrades/{receipt["subject_sha256"]}/files/'
+                     'stage4/design/presentation_graph.json').read_bytes() == graph_bytes
+    _run(repo, session, node_filter=EDGE['rebuild_nodes'][:3])
     graph = repo.inspect('stage4/design/presentation_graph.json')
-    assert graph['contract_version'] == 'str06-rc23'
+    assert graph['contract_version'] == EDGE['target_version']
 
 
 def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):
@@ -640,18 +752,19 @@ def test_operator_and_agent_resume_same_root_to_delivery(tmp_path, monkeypatch):
         epoch=current.epoch._replace(contract_version=EDGE['source_version']),
         contract_identity=EDGE['source_identity'])
     repo.write(WORKFLOW_REL, workflow_to_disk(historical))
+    _old_node_versions(repo)
     original = {p: p.read_bytes() for prefix in ('stage5/body', 'stage5/acceptance/body')
                 for p in (repo.root / prefix).glob('*')}
     calls = len(transport.calls)
     plan = preview(repo, source_identity=current.source_identity, code_version=prov.code_version())
-    apply(repo, base=base, sid='9001', source_identity=current.source_identity,
+    receipt = apply(repo, base=base, sid='9001', source_identity=current.source_identity,
           code_version=prov.code_version(), subject_sha256=digest(plan.model_dump(mode='json')),
           actor='测试', reason='同根恢复真实自动编排入口')
     next_action = operator.next_action(base, '9001')
     assert next_action.state == 'ready' and next_action.action is not None
-    # rc24 边保留 presentation_graph：恢复从免费重编译开始（context 已归档），
-    # 不再回到 hook_design——design 仍是现役产物，不是重建面。
-    assert next_action.action.node == 'str06.stage4.compile'
+    assert next_action.action.node == EDGE['rebuild_nodes'][0]
+    _assert_archived_bytes(repo, receipt,
+        {path.relative_to(repo.root).as_posix(): data for path, data in original.items()})
     box = {'dispatched': [], 'processes': []}
     _install_inprocess_subprocess(monkeypatch, box)
     _install_step_argv(monkeypatch, box)
@@ -660,8 +773,9 @@ def test_operator_and_agent_resume_same_root_to_delivery(tmp_path, monkeypatch):
     assert agent.wait(run.run_id, 120)
     assert operator.next_action(base, '9001').state == 'pipeline_complete'
     assert {item['node'] for item in box['dispatched']} <= set(EDGE['rebuild_nodes'])
-    assert not any(owner.startswith('body_') for owner in transport.calls[calls:])
-    assert all(p.read_bytes() == data for p, data in original.items())
+    _assert_archived_bytes(repo, receipt,
+        {path.relative_to(repo.root).as_posix(): data for path, data in original.items()},
+        current_absent=False)
     assert repo.inspect('runtime/workflow_status.json')['status'] == 'delivered'
 
 
@@ -690,7 +804,8 @@ def test_cli_subprocess_preview_and_apply_are_free_and_reachable(tmp_path):
                              capture_output=True, text=True, encoding='utf-8', timeout=60)
     assert written.returncode == 0, written.stderr
     assert json.loads(written.stdout)['status'] == 'applied'
-    assert repo.read_text('stage5/body/ch01.txt') == '保留章稿。'
+    receipt = json.loads(written.stdout)
+    _assert_archived_bytes(repo, receipt, {'stage5/body/ch01.txt': '保留章稿。'.encode()})
 
 
 # ──────────── 裁决「升级清账」：登记节点轮次返还（2026-10-10） ────────────

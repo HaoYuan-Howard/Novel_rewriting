@@ -404,7 +404,8 @@ class NameStructure(StrictModel):
                 alias_literals=tuple(a.literal for a in person.aliases),
                 proper_literals=tuple(sorted(set(identity))),
                 name_bearing_surfaces=bearing))
-            proper.update(identity)
+            # 姓/名部件仅在 by_person 中供构词和候选召回；不能把“白”在
+            # “明白”中的出现机械宣布成人物指称。
             proper.update(bearing)
             if family:
                 family_literals.add(family)

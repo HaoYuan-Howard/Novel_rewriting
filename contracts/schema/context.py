@@ -53,7 +53,7 @@ from contracts.schema.grounding import BriefDetail, SourceObligation
 from typing import Literal, Mapping, Sequence
 
 __all__ = ['BeatIR', 'KnowledgeEntry', 'ObligationCarrier', 'OpenThreadIR',
-           'PriorSeriesEvent', 'StateEntry', 'SurfaceRelease', 'ThreadOpIR', 'UnansweredGuard',
+           'PriorSeriesEvent', 'StateEntry', 'SupportingBeatEvent', 'SurfaceRelease', 'ThreadOpIR', 'UnansweredGuard',
            'VerificationIR', 'WriterBrief', 'WriterContext', 'WriterDetail', 'WriterPacket']
 
 
@@ -202,6 +202,13 @@ class UnansweredGuard(StrictModel):
     carrier_ref: str = Field(min_length=1, description='承载位置（审计位）')
 
 
+class SupportingBeatEvent(StrictModel):
+    """跨场义务支撑拍的事件投影；引用与事件同时保留，不把来源编码进自然语言。"""
+
+    beat_ref: str = Field(pattern=r'^[^#]+#[^#]+$')
+    event: str = Field(min_length=1)
+
+
 class PriorSeriesEvent(StrictModel):
     """显式系列概括的目标实例；只引用目标 Design，不引用源章或源引文。
 
@@ -231,7 +238,7 @@ class VerificationIR(StrictModel):
         default=(), min_length=0)
     #: 明确禁止事项：只从已有显式限制（delivery.avoid）投影；不从未来剧情猜政策。
     prohibitions: tuple[str, ...] = Field(default=(), min_length=0)
-    continuity_fact_view: tuple[str, ...] = Field(
+    continuity_fact_view: tuple[SupportingBeatEvent, ...] = Field(
         default=(), min_length=0,
         description='前场已接受义务的事实视图（试点 judge 跨场回指误报的根因修复输入）')
     #: 本场拍上的线程操作（R2.4，must_realize 数据面；拍阅读序）。

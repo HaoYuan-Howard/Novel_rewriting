@@ -40,7 +40,7 @@ def _case():
         {'surface': '苏芸娘', 'source_refs': ['e01_03']})
     wires['names']['families']['f_su'] = {'literal': '苏', 'forms': []}
     wires['names']['people']['yun_niang'] = {
-        'family_id': 'f_su', 'given': '芸娘', 'aliases': []}
+        'family_id': 'f_su', 'given': '芸娘', 'aliases': [], 'additional_surfaces': []}
     wires['name_variants'] = {
         'protocol_version': 'stage2-name-variants-v1',
         'variants': [{'literal': '苏芸孃', 'verdict': 'same',
@@ -69,6 +69,110 @@ def _run(tmp_path, chapters, wires, ask):
         ask_body=lambda *a: pytest.fail('Stage2不得购买正文'), budget=800,
         through='stage2', node_filter=STAGE2_NODES)
     return repo
+
+
+def _supplement_case():
+    """Book 保留既有人物；Names 只声明源文已给的本名和称呼，不从部件扩词。"""
+    chapters, wires = deepcopy(CHAPTERS), _full_stage2_wires()
+    chapters[1]['text'] += '\n夫君本名陆远松，云娘唤他“远松”，门房则称他“陆公子”。'
+    wires['names']['people']['fu_jun'].update(
+        given='远松', additional_surfaces=[
+            {'surface': surface, 'evidence_refs': ['e02_03']}
+            for surface in ('陆远松', '远松', '陆公子')])
+    return chapters, wires
+
+
+def test_source_surface_supplement_reaches_characters_and_bound_stage7(tmp_path):
+    """Names→Stage2真实发布→Stage7真实改名：遗漏简称进入同一Characters真源。"""
+    from novel.core.name_text import resolve_name_text
+    from novel.stages.stage7.naming import apply_bound_names, compile_bound_replacements, compile_name_map
+    chapters, wires = _supplement_case()
+    before = deepcopy(wires['book'])
+    repo = _run(tmp_path, chapters, wires, _AcceptingAsk(wires))
+    book = repo.read_model('stage2/observations/book.json')
+    names = repo.read_model('stage2/observations/names.json')
+    characters = repo.read_model('stage2/characters/characters.json')
+    blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
+    assert [surface.surface for surface in book.characters['fu_jun'].surfaces] == ['夫君']
+    assert wires['book'] == before, '补面不得改写Book观察或付费输入'
+    assert names.protocol_version == 'stage2-names-v5'
+    assert {mention.surface for mention in names.additional_surfaces['fu_jun']} == {
+        '陆远松', '远松', '陆公子'}
+    extra = {surface.surface: surface for surface in characters.characters['fu_jun'].surfaces
+             if surface.surface != '夫君'}
+    assert set(extra) == {'陆远松', '远松', '陆公子'}
+    assert all(surface.from_chapter == 2 and surface.source_refs == ('e02_03',)
+               for surface in extra.values())
+    assert 'e02_03' in blueprint.evidence, '新增正式源引用须经唯一Blueprint证据窗口送达下游'
+    assert characters.name_structure.people['fu_jun'].surface_forms['远松'] == '{given}'
+    assert characters.name_structure.people['fu_jun'].surface_forms['陆公子'] == '{family}公子'
+    name_map, errors = compile_name_map({'entries': [{
+        'char_ref': 'fu_jun', 'name': {'family': '岑', 'given': '时舟'},
+        'aliases': {}, 'keep_reason': None}]}, characters)
+    assert name_map is not None and not errors, errors
+    replacements, errors = compile_bound_replacements(characters, name_map)
+    assert not errors, errors
+    resolved = resolve_name_text('[[name:fu_jun|远松]]回头，门房称他[[name:fu_jun|陆公子]]。',
+        {cid: tuple(surface.surface for surface in entry.surfaces)
+         for cid, entry in characters.characters.items()})
+    assert not resolved.errors
+    renamed, errors = apply_bound_names(resolved.text, resolved.mentions, replacements)
+    assert not errors and renamed == '时舟回头，门房称他岑公子。'
+
+
+@pytest.mark.parametrize('fault', ['missing_field', 'unknown_segment', 'missing_literal', 'duplicate', 'existing'])
+def test_surface_supplement_rejects_unproved_or_redundant_declarations(fault):
+    from novel.stages.stage2.names import compile_names_observation, names_patch_locate
+    chapters, wires = _supplement_case()
+    evidence = build_evidence(chapters, HOOK)
+    book = BookObservation.model_validate(wires['book'])
+    core, errors = character_core_view(book, evidence=evidence)
+    assert not errors
+    raw = wires['names']['people']['fu_jun']
+    if fault == 'missing_field':
+        raw.pop('additional_surfaces')
+    elif fault == 'unknown_segment':
+        raw['additional_surfaces'][0]['evidence_refs'] = ['e99_99']
+    elif fault == 'missing_literal':
+        raw['additional_surfaces'][0]['evidence_refs'] = ['e01_01']
+    elif fault == 'duplicate':
+        raw['additional_surfaces'].append(deepcopy(raw['additional_surfaces'][0]))
+    else:
+        raw['additional_surfaces'].append({'surface': '夫君', 'evidence_refs': ['e01_01']})
+    before = deepcopy(wires['names'])
+    full = '\n'.join(chapter['text'] for chapter in chapters)
+    observed, extended, errors = compile_names_observation(wires['names'], core, full, evidence=evidence)
+    assert observed is None and extended is None and errors
+    located = names_patch_locate(wires['names'], errors, core, full, evidence=evidence)
+    assert located is not None and {path for path, _errors in located} == {('people', 'fu_jun')}
+    assert wires['names'] == before
+
+
+def test_names_v4_read_adapter_keeps_historical_protocol_and_unknown_supplement_scope():
+    from pydantic import ValidationError
+    from contracts.schema.observation import NamesObservation
+    from novel.stages.stage2.names import extend_name_surfaces
+    from tests.test_str06_stage2_publish import _names_structure
+    payload = {'protocol_version': 'stage2-names-v4', 'structure': _names_structure()}
+    legacy = NamesObservation.model_validate(payload)
+    assert legacy.protocol_version == 'stage2-names-v4' and legacy.additional_surfaces == {}
+    assert 'additional_surfaces' not in legacy.model_dump(mode='json')
+    assert NamesObservation.model_validate(legacy.model_dump(mode='json')).protocol_version == 'stage2-names-v4'
+    with pytest.raises(ValidationError, match='v4 不得携带'):
+        NamesObservation.model_validate({**payload, 'additional_surfaces': {}})
+    with pytest.raises(ValidationError, match='v5 必须显式声明'):
+        NamesObservation.model_validate({**payload, 'protocol_version': 'stage2-names-v5'})
+    from contracts.schema.observation import SurfaceMention
+    from pydantic_core import PydanticSerializationError
+    forged = legacy.model_copy(update={'additional_surfaces': {
+        'fu_jun': (SurfaceMention(surface='陆公子', source_refs=('e01_01',)),)}})
+    with pytest.raises(PydanticSerializationError, match='拒绝丢弃证据'):
+        forged.model_dump(mode='json')
+    evidence = build_evidence(CHAPTERS, HOOK)
+    core, errors = character_core_view(BookObservation.model_validate(_full_stage2_wires()['book']), evidence=evidence)
+    assert not errors
+    preserved, errors = extend_name_surfaces(core, legacy, evidence=evidence)
+    assert preserved is core and not errors, '历史v4只读通过不代表已观察过补充称谓'
 
 
 def _structure_and_candidates(chapters, wires):
@@ -100,7 +204,7 @@ def test_variant_candidate_generation_is_deterministic_and_narrow():
         {'surface': '苏芸娘', 'source_refs': ['e01_03']})
     plain_wires['names']['families']['f_su'] = {'literal': '苏', 'forms': []}
     plain_wires['names']['people']['yun_niang'] = {
-        'family_id': 'f_su', 'given': '芸娘', 'aliases': []}
+        'family_id': 'f_su', 'given': '芸娘', 'aliases': [], 'additional_surfaces': []}
     evidence_plain = build_evidence(plain_chapters, HOOK)
     core_plain, errors = character_core_view(
         BookObservation.model_validate(plain_wires['book']), evidence=evidence_plain)
@@ -209,8 +313,7 @@ def test_names_candidate_decisions_are_complete_at_canonical_consumers(tmp_path)
     changed_plain['e03_99'] = {'chapter': 3, 'text': '苏芸娘推门进来。'}
     assert validate_name_resolutions(names.structure, core, evidence=changed_plain) == []
 
-    broken_names = NamesObservation(protocol_version=names.protocol_version,
-                                    structure=missing)
+    broken_names = names.model_copy(update={'structure': missing})
     outcome = compile_source_truth(
         book=book, chapters=chapter_obs, names=broken_names,
         associate=repo.read_model('stage2/observations/associate.json'),
@@ -249,9 +352,8 @@ def test_names_structure_edits_stop_before_associate_purchase(tmp_path, defect):
         people['yun_niang'] = people['yun_niang'].model_copy(update={'surface_forms': forms})
     else:
         people['yun_niang'] = people['yun_niang'].model_copy(update={'family_id': 'not_registered'})
-    edited = NamesObservation(
-        protocol_version=names.protocol_version,
-        structure=names.structure.model_copy(update={'people': people}))
+    edited = names.model_copy(update={
+        'structure': names.structure.model_copy(update={'people': people})})
     repo.context.begin_run()
     repo.read_model('stage2/observations/book.json')
     repo.write('stage2/observations/names.json', edited, owners=('names',),

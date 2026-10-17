@@ -119,6 +119,11 @@ def error_code(error: str) -> str:
 
 
 def replay_design_round(wire: dict, inputs: DesignInputs) -> dict:
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
+    if wire.get('protocol_version') != STAGE4_DESIGN_WIRE_PROTOCOL:
+        return {'status': 'obsolete', 'passed': False, 'checks': [], 'error_count': 0,
+                'codes': {}, 'material_count': 0, 'attribution': {}, 'reuse': 'obsolete',
+                'reason': '旧 Design 缺少当前逐次身份声明；只读解码不能补出语义，不可免费沿用'}
     inspection = inspect_design_candidate(
         wire, checkpoint=inputs.checkpoint, brief=inputs.brief, obligations=inputs.obligations,
         chars=inputs.chars, constraints=inputs.constraints, length_band=inputs.length_band,
@@ -161,6 +166,11 @@ def replay_preserve_round(wire: dict, chars, blueprint) -> dict:
     """已购 Preserve 回答在**现役判据**（含 CS-H H3 自闸）下的只读复检。"""
     from novel.stages.stage4.grounding import preserve_name_issues
     from contracts.schema.workflow import STAGE4_PRESERVE_POLICY_VERSION
+    from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
+    if wire.get('protocol_version') != STAGE4_PRESERVE_PROTOCOL:
+        return {'status': 'obsolete', 'passed': False, 'assembled': False,
+                'error_count': 0, 'codes': {}, 'gate_items': [], 'reuse': 'obsolete',
+                'reason': '旧 Preserve 回答没有新身份声明；原 checkpoint 按原 policy 保留读取'}
     checkpoint, errors = assemble_preserve(
         wire, policy_id='preserve-default',
         policy_version=STAGE4_PRESERVE_POLICY_VERSION,
@@ -374,6 +384,12 @@ def render(report: dict) -> str:
             lines.append(f'第{row["ordinal"]}轮 {_SHAPE[row["shape"]]}{salvage}  '
                          f'输入/输出/推理={tokens}  记录（当时输入）：{record}')
             replay_row = row['replay']
+            if replay_row.get('reuse') == 'obsolete':
+                protocol = replay_row.get('protocol')
+                label = '协议已淘汰' + (f'（{protocol}）' if protocol else '')
+                lines.append(f'    重放：{label}——{replay_row["reason"]}')
+                lines.append('    沿用：不可沿用')
+                continue
             if replay_row['status'] != 'ran':
                 lines.append(f'    重放：未运行——{replay_row["reason"]}')
                 continue

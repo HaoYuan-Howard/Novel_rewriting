@@ -13,6 +13,10 @@ rc23→rc24 只改 HookContext 形状（篇幅包络三字段）与请求字节�
 （rc23）与 design wire v3 不变，已发布 Hook 选择继续有效；旧上下文按契约表
 漂移拒读，免费重编译即得 rc24 形状。stage5.hook 的请求身份随交付要求变化，
 旧稿不沿用（付费重写，轮次按节点升版恢复）；正文与姓名映射原样保留。
+
+rc24→rc25 引入逐次身份声明。旧 Design 与正文不能机械补出 name/text 语义，
+因此从 body_design 重建并归档其消费链；保留原始上游、Preserve、姓名映射及
+已购账。Names v4 的集中只读适配不补造缺失称谓证据。
 """
 from typing import Final, TypedDict
 
@@ -73,4 +77,26 @@ HOOK_ENVELOPE_UPGRADE: Final[ContractUpgradeSpec] = {
     ),
 }
 
-REGISTERED_UPGRADES: Final = (HOOK_UPGRADE, HOOK_ENVELOPE_UPGRADE)
+IDENTITY_TEXT_UPGRADE: Final[ContractUpgradeSpec] = {
+    'id': 'identity-text-rc24-rc25',
+    'source_identity': '5a61ed782cd59035cee8d386bc03c3ed1dbee998fb204df688d3772b7442056c',
+    'target_identity': '9bb731fa6a2a8198163baafcba1998b905c1120427586223e806e2d6cb7f3900',
+    'source_version': 'str06-rc24',
+    'target_version': 'str06-rc25',
+    'rebuild_nodes': (
+        'str06.stage4.body_design', 'str06.stage4.hook_design', 'str06.stage4.compile',
+        'str06.stage5.hook', 'str06.stage5.body', 'str06.stage7.assemble',
+    ),
+    'refund_nodes': ('str06.stage4.body_design', 'str06.stage4.hook_design',
+                     'str06.stage5.hook', 'str06.stage5.body'),
+    # 旧正文没有逐次身份声明，程序不能从字面猜补；保留原始上游、已购答和成本。
+    'archive_patterns': (
+        'stage4/design/*', 'stage4/grounding/semantic_binding*.json',
+        'stage4/compiled/*', 'stage4/ir/*', 'stage4/context/hook/*',
+        'stage4/acceptance/*', 'stage4/acceptance/guard/*',
+        'stage5/body/*', 'stage5/acceptance/body/*', 'stage5/hook/*',
+        'stage7/final/*', 'runtime/delivery/*', 'runtime/workflow_status.json',
+    ),
+}
+
+REGISTERED_UPGRADES: Final = (HOOK_UPGRADE, HOOK_ENVELOPE_UPGRADE, IDENTITY_TEXT_UPGRADE)

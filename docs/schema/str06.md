@@ -54,7 +54,7 @@ compiler 产生 Blueprint v14 的 `source_expression`、`ex_nn` 和非空白段�
 
 Design 的形状源在 R9 时点为 v4 wire；v5 由其后 R10a a4（2026-10-01）引入
 （删 dramatic_intent；非知情/非读者 set 必填 modality；拍增 expression_refs；
-现役瘦 wire v10），请求 Schema
+现役瘦 wire v11），请求 Schema
 由该模型生成并注入本书人物／称谓闭集。`narration` 复用 HookPov；first 的场景 POV
 必须是唯一叙述者，third 的 POV 为许可 focalizers 或 narrator。每个表达项恰好一个
 keep／change，change 必须有理由与目标表达。BookBrief 的人称进不可违背分区，
@@ -105,14 +105,15 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 
 ### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
 
-现役版式为 `str06-rc24`（2026-10-10 Hook 篇幅包络批：HookContext 独立 rc24；Hook 组织与声线批：PresentationGraph 独立 rc23，BodyDesign／正文章包仍 rc22；2026-10-09 独立事件锚点批：Preserve v5/policy 8、Design wire v9（现役 v10）、可选细节与系列前情；Stage2 仍为 rc20；逐批历史见 `contracts/artifacts.py` 表注；R10a 收口曾统一 rc12
-`7d24e572…`，`tests/test_str06_f7e_freeze.py`）。节点仍为 14 个（CS-3 bind
-退役后 13），运行配置未变。
+现役版式为 `str06-rc25`（2026-10-17 身份引用、补充称谓与来源闭合；此前为 rc24）。
+BodyDesign、PresentationGraph、WriterBookIR、HookContext 及成文回执升 rc25，
+checkpoint／Brief／Binding 保持 rc22；每类版本以 `contracts/artifacts.py` 为准，
+冻结身份由 `tests/test_str06_f7e_freeze.py` 守卫。节点共 13 个，运行配置未变。
 book 观察 `stage2-book-v7`、chapters 独立 `stage2-chapters-v7`、names 独立
-`stage2-names-v4`、associate `stage2-associate-v5`（输入投影变经 RC 表换身份）；
-Preserve 当前 `stage4-preserve-v5`＋policy 10、Design 内部展开 `stage4-design-v5`
-（瘦 wire 现役 v10）；
-Hook Design 为 `stage4-hook-design-v3`；正式输入／呈现协议显式换身份。当前正文 renderer v12／写手协议 v11（2026-10-10 自然混称逐次投影、必要骨架联合交接；有限情节补桥归 Design，写手呈现自然移步与转场；历史 R10b 升 v7）。
+`stage2-names-v5`（wire v7，补充称谓证据）、associate `stage2-associate-v5`（输入投影变经 RC 表换身份）；
+Preserve 当前 `stage4-preserve-v6`＋policy 11、Design 内部展开 `stage4-design-v5`
+（瘦 wire 现役 v11）；
+Hook Design 为 `stage4-hook-design-v4`；正式输入／呈现协议显式换身份。当前正文 renderer v13／写手协议 v12（2026-10-10 自然混称逐次投影、必要骨架联合交接；有限情节补桥归 Design，写手呈现自然移步与转场；历史 R10b 升 v7）。
 
 **章观察瘦 wire（CS-2 第一步，2026-10-03）**：`str06.stage2.chapters` 的
 LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模型：
@@ -147,7 +148,7 @@ RC-26～29，反例 `tests/test_stage2_evidence_addressing.py`、
 `tests/test_str06_chapter_slim.py`。
 
 **设计瘦 wire（CS-3 审阅修复，2026-10-03；事实锁引用升 v8，2026-10-04）**：LLM 输出为
-`stage4-design-v10`（`contracts/schema/design.py::DesignWireV10`）。`real` 保留
+`stage4-design-v11`（`contracts/schema/design.py::DesignWireV11`）。`real` 保留
 义务接受拍/支撑拍；Brief 每条 requirement 的 `knowledge_changes` 从正式
 anchor 派生，完整保留每次变化的盲身份、holder、kp、mode。代码按盲身份排序
 派发 `obNN.kNN` 短引用，模型在对应义务 real 拍的 `know:[{ref}]` 声明实际
@@ -232,8 +233,8 @@ SourceTruth，不把猜测当原文事实，不新增重大前史、身份、人
 能完整表达当前反例，新增结构尚无独立闭包消费者；schema 完整不代签文学合理性。
 先组织目标故事，再附承载标注，原子条件仍不与自然叙事拍一一对应。
 
-现役 Preserve policy v10、正文 renderer v12、写手协议 v11；各 canonical/wire 形状
-保持。自然概括、局部视角省略和藏身突现不自动视为事实错误，既有锁与知情边界仍
+现役 Preserve policy v11、正文 renderer v13、写手协议 v12；身份声明与 rc25 的
+版本边界见 [name_text.md](name_text.md)。自然概括、局部视角省略和藏身突现不自动视为事实错误，既有锁与知情边界仍
 不可越过。旧 checkpoint 仍绑定旧 policy，不静默套用新版交接判据；修订、采用和下游
 恢复沿现役身份、材料变化与完整预检闭合。首答完整可用率、设计阅读效果、正文质量
 与成本仍待真实验证；本批工程验证零付费，不新增语义 Judge 或节点。
@@ -298,7 +299,7 @@ SourceTruth，不把猜测当原文事实，不新增重大前史、身份、人
   `expression_refs`（正向表达任务落具体拍）。kp 键规则、kf 锁标注（CS-F2：见上「事实锁引用」，
   不再是状态键）与必保锁兑现归 `assemble_body_design`（revise_self ≤2）。
 - **承载位（a5＋CS-3 bind 退役）**：`str06.stage4.bind` 节点与
-  stage4-bind-v1 wire 协议退役——义务落在哪一拍由 design wire（v6 起，现役 v10）的
+  stage4-bind-v1 wire 协议退役——义务落在哪一拍由 design wire（v6 起，现役 v11）的
   `real:["obNN"]` 标注唯一声明：末次标注拍＝接受拍、其余标注拍＝支撑位，
   `derive_semantic_binding` 派生 SemanticBinding（series 成员接受拍互斥，
   同拍 `series_collapsed` 并入 design 同节点修订轮；无标注的非必保义务进
@@ -470,7 +471,9 @@ ChapterWriterPacket
 完整 WriterIR 保留供存储与审计；运行时确定性投影章包，不另落重复章包文件。Compiler
 证明**已声明依赖的引用闭合**；语义依赖是否遗漏归质量验收，机械检查不冒充证明。
 
-**称谓投影（CS-F2，RC-40～43，IR rc16／renderer v10）**：`ChapterIR.withheld_bindings`（`WithheldNameBinding`：
+**历史称谓投影（CS-F2，RC-40～43，IR rc16／renderer v10）**：以下是旧字面投影机制；
+rc25 已改为按身份绑定，当前规则见 [name_text.md](name_text.md)，不以此历史段覆盖新契约。
+`ChapterIR.withheld_bindings`（当时的 `WithheldNameBinding`：
 字面＋人物＋包含它的更长称谓）是禁用字面中已证明唯一绑定人物的**完整登记称谓**子集——登记 surface、含姓名部件
 （构词非 null）、全书只属一个人物（归属统计包含纯称谓登记）、长度≥2、非姓／家族构词（`novel/core/name_materials.py::withheld_name_bindings`）。
 renderer 在正向材料行（含禁区行）把这类字面换成本场已释放称谓（`novel/stages/common.py::project_withheld_names`：绑定字面与其
@@ -494,7 +497,7 @@ renderer 在正向材料行（含禁区行）把这类字面换成本场已释�
 按 `delivery_mode` 分节、全部自然语言条目、不带内部 ID 与字段名（`sc01#b02` 式
 引用、`th{nn}`、工程字段名出现在任何分区即构造期拒），六个分区全部必填、空分区
 合法（I-14/I-42）；从不落盘（派生视图，I-16），其渲染字节进章回执的写手视图摘要。
-由确定性 renderer v12（`novel/stages/common.py::build_writer_packet`）从 Machine IR
+由确定性 renderer v13（`novel/stages/common.py::build_writer_packet`）从 Machine IR
 加送达登记生成；`render_chapter_packet` 渲染六分区——必须写出／不可违背／承接／
 导演说明／背景／禁区——不再把 VerificationIR 以 JSON 倾倒进 prompt。Hook 渲染
 （`novel/stages/stage4/hook_context.py` 与 Hook 写手协议）同规则分层：材料是
@@ -785,7 +788,7 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 
 | 模块 | 承载 | 关键不变量（构造期表达） |
 |---|---|---|
-| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v10）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
+| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v11）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
 | `contracts/schema/grounding.py` | `SourceObligation` / `PreserveCheckpoint` / `ReconstructionBrief` / `IdentityProjection` / `OutputConstraints` / `SemanticBinding` | 必保义务必有非空 `satisfaction`；checkpoint 无 Design/Bind 字段；Brief 无源章/源拍/叙述顺序/证据定位字段；Binding 是完整 snapshot |
 | `contracts/schema/design.py` | `BodyDesign`（rc11：narration、expression_decisions、可定位 entry；保留拍上线程、world_rules）／`PresentationGraph(BodyDesign)+hook` | source-blind；章号连续 1..N、场景全覆盖；POV 服从正文人称许可；表达决定恰好覆盖；entry 锚满足分支条件；hook 引用与线程生命周期闭合 |
 | `contracts/schema/hook.py` | `HookDesign`／`HookContext`／`HookReceipt` | 有序材料组织与阅读期待显式选择；起笔事实只引用已建立目标事实；声线同源；first 恰一人且非 narrator；篇幅包络按章预算派生（目标区间不拒稿、硬上限机械拒收），回执 semantic 恒 unverified |
@@ -837,7 +840,7 @@ Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契约与�
 
 旧形态（完整 WriterBookIR＋全部有效前文进请求，章级 prompt 53.9k–60.9k 线性增长）
 已由 D2 章包三件套取代（2026-09-27，rc8）。现役：每章运行时从完整 `WriterBookIR`
-确定性投影章包（`project_chapter_packet`），renderer v12＝`build_writer_packet` 六分区
+确定性投影章包（`project_chapter_packet`），renderer v13＝`build_writer_packet` 六分区
 阅读面（必须写出／不可违背／承接／导演说明／背景／禁区，R2 落地；见「两层 IR 与
 送达方式」节），请求只含当前章包；回执按 rc6 身份拆分绑定写手视图摘要与验证输入
 摘要（Machine 摘要仅审计）。
@@ -846,7 +849,7 @@ Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契约与�
 提交顺序：原响应耐久保存 → 编译与检查 → 选定候选 → 原子写正文 → 原子写章回执；
 各章经共享总槽并发执行，恢复按有效提交集合补缺。
 
-### Hook 的正式选择与确定性投影（现役；Hook wire v3）
+### Hook 的正式选择与确定性投影（现役；Hook wire v4）
 
 Hook 是同一目标故事的另一种呈现。Stage4 负责选材、入场、详略、转换、截断与阅读期待；
 Stage5 负责对白、即时反应、句法、措辞与节奏。楔子是高张力情节切片，不是完整场景的
@@ -873,8 +876,8 @@ kind／focus。
 引用存在和时序合法不证明它确实回答该问题，也不证明期待具有吸引力。
 独立显式选择的禁区继续负向投影；期待引用不自动转成禁区答案全文。
 
-2026-10-10 模型协议为 `stage4-hook-design-v3`，PresentationGraph 单独 rc23、
-HookContext rc24（篇幅包络三字段，见下），BodyDesign／正文章包维持 rc22。正式输入从 BodyDesign 投影完整
+当前模型协议为 `stage4-hook-design-v4`，PresentationGraph、HookContext、BodyDesign
+及正文章包为 rc25；篇幅包络三字段沿用 rc24（见下）。正式输入从 BodyDesign 投影完整
 故事决策材料和事实目录；`fact_ref` 由 compiler 根据建立位置／地址计算，目录保留
 op／value／modality／knowledge_mode／scope，不是第二份事实真源。材料 withheld
 必须属于该拍；起笔与事实禁区只能指向唯一 set。完整目录与分支 schema 进入初答和
@@ -894,7 +897,7 @@ Context 字节与请求身份（换预算即换请求，不沿用旧结论）；
 不拒稿，硬上限由机械验拒收——rc23 全放开后写手按材料戏剧密度膨胀（选材收缩到
 4 拍 1 develop 仍写满千字）的实证修订，锚定章预算而非源引子字数，也不回到早期
 对全书写死的 280/360。每段须推进局面、人物认识或期待，背景只解释到足以理解
-当前行动，在期待最强处截断。机械验覆盖非空、编码、包装行、withheld 专名字面与
+当前行动，在期待最强处截断。机械验覆盖非空、编码、包装行、身份声明及授权与
 篇幅硬上限；同 Context 有限重写仍首次＋最多两次，attempt 进请求身份。
 输出 token 预算是执行边界。回执 semantic 恒 unverified，不新增生产审稿节点或
 Stage5 段落 patch；现有 Stage4 条目窄修继续。
@@ -919,11 +922,11 @@ NameMap 是交付变换契约，不是第五类 semantic truth。源姓名构成
 canonical。按源名称结构给出必要名称位（登记了姓必须给新姓，反之不得给）；compile 以
 应改名集合核对完整覆盖，合法保留必须带理由；共享姓氏按 surface_forms 模板逐人渲染，
 同 family_id 新姓一致、不同源姓不得合并同姓；独立化名由 Naming 对已登记 alias_id
-显式赋值。`compile_surface_replacements(Characters, NameMap)` 是纯函数；ApplyNames
-单遍长名优先；残留检查只查应替换字面、跳过认领区间与合法保留；diff proof 机械证明
-差异恰为替换表。Assembly 的 body_access 按 accepted/rejected/missing/unknown 四态
-判定；交付身份由（逐章 (chapter_ordinal, prose_sha256)、hook hash、替换表、kept、
-`ASSEMBLY_FORMAT_VERSION`）派生，分章不同即不同交付（`R-10.10`）；换 NameMap 只变
+显式赋值。`compile_bound_replacements(Characters, NameMap)` 是纯函数；ApplyNames
+按回执的 char_id 与区间变换名称表达，普通义不改；diff proof 机械证明差异恰为
+这些提及的变换。Assembly 的 body_access 按 accepted/rejected/missing/unknown/stale
+五态判定；交付身份由（逐章 (chapter_ordinal, prose_sha256)、hook hash、身份映射、
+kept、两类声明表、`ASSEMBLY_FORMAT_VERSION`）派生，分章不同即不同交付（`R-10.10`）；换 NameMap 只变
 交付身份，不使 Stage5 回执失效。
 
 ### 恢复与历史采用（现役）
@@ -1023,12 +1026,13 @@ F-1/F-2/F-3），再做 D10 两本 golden（先修 `tests/golden.py` 的退役 r
 
 ### 名称同一性与材料返修（CS-R）
 
-【CS-S 1c 起的现役形态】names 结构 wire 为 `stage2-names-v6`（无 `surface_forms`、无
+【现役形态】names 结构 wire 为 `stage2-names-v7`（无 `surface_forms`、无
 `resolutions`）；变体同一性判定改由节点内窄调用 `name_variants`（wire
 `stage2-name-variants-v1`）逐候选给出。落盘的 `resolutions` 每条仍包含 literal、
 status（same／unresolved／not_name）、char_id、surface、basis 和 reason。same 指向已登记
 人物称谓（且只能是候选的近似锚人物）；unresolved／not_name 的两个指向字段必须为 null。
-basis 保留源句字面。以下为 CS-R 当时的 v3 记述，保留作历史背景：names wire 使用
+basis 保留源句字面。v7 另由每个人物的 `additional_surfaces` 提交源段支持的补充
+称谓；代码只合入既有人物，不推断漏名或新身份。以下为 CS-R 当时的 v3 记述，保留作历史背景：names wire 使用
 `stage2-names-v3`（rc15 段号按自然段寻址），显式提供 `resolutions`。
 名称观察与 Characters 的信封为 v2：旧版本不能补空 resolutions，须由 names
 按新协议重建后通过 compile 重建双真源。原观察不改；关联投影和 canonical
@@ -1059,11 +1063,11 @@ Preserve 同时收到正式归一文本、原句及名称同一性依据，不�
   空集合与null省略，缺省只表示原字段为空；false与空satisfaction保留。知情授权由各义务完整
   knowledge_changes三元组的并集，加knowledge_locks中的额外授权组成；不同变化实例不合并，
   requires_released、动机、因果和完整满足条件保留。propositions/fact_locks用kp/kf八位前缀短引用为键，
-  按完整Brief的盲身份稳定前缀派发（闭集检查唯一，碰撞显式拒绝）；`design_reference_aliases`与v10 compiler共用映射，只有类型化
+  按完整Brief的盲身份稳定前缀派发（闭集检查唯一，碰撞显式拒绝）；`design_reference_aliases`与v11 compiler共用映射，只有类型化
   引用字段展开，语义文本不替换。canonical Brief、BodyDesign与Binding继续使用完整身份，
   没有新领域真相源。动态schema闭集仍完整；输入版本和内容参与请求身份。
-  已购v9只经`design_wire_model`集中解码，原响应和付费摘要不改；窄复核保留v1输入切片与原v9
-  引用语法，新整份生成只用v10/v2。删除条件见REQUIREMENTS，旧canonical Brief不是wire模板。
+  已购v9/v10只经`design_wire_model`集中只读解码，原响应和付费摘要不改；当前生成、
+  采用和窄复核只用v11/v2及当前身份声明。删除条件见REQUIREMENTS，旧canonical Brief不是wire模板。
 
 这些版本只描述语义输入，不能当正式artifact版本；输入变化自然进入请求身份。
 
@@ -1083,3 +1087,5 @@ Preserve 同时收到正式归一文本、原句及名称同一性依据，不�
   旧正文/回执不静默补新身份，已购响应仍按正式免费复验与恢复入口处理。
 - Design的requires沿用顺序三分：同场允许接受拍交错，跨场逆序仍拒绝；事实读取与
   知情披露保留独立硬闸。修订权限由业务owner声明，通用接受循环只消费声明。
+
+2026-10-17 身份引用文本现役协议与旧源输入边界见 [name_text.md](name_text.md)。本批输出使用 rc25；身份选择的语义准确性保持未评。

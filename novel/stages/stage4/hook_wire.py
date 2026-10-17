@@ -1,4 +1,4 @@
-"""Hook v3 的确定性目录与 wire 展开。
+"""Hook v4 的确定性目录与 wire 展开；历史 v3 解码保留独立身份。
 
 模型仅选择已给出的引用与呈现策略；compiler 不补出旧版缺少的组织及读者期待。
 答案、后续承载位置只用于校验，不作为 Writer 的正向写作材料。
@@ -10,15 +10,25 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 from pydantic import ValidationError
 
 from contracts.schema.design import BodyDesign
-from contracts.schema.hook import HookDesignWire
+from contracts.schema.hook import HookDesignWire, HookDesignWireV3
 from contracts.schema.source import NameProjection
+from novel.core.name_materials import name_candidate_literals
+from novel.core.name_text import resolve_name_text
+from novel.core.repair import shape_repair_paths
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.hook_facts import hook_facts
+
+
+def hook_wire_model(wire: Mapping[str, Any]) -> HookDesignWire | HookDesignWireV3:
+    """历史 v3 仅在这里解码，不修改响应字节或冒充 v4 请求身份。"""
+    model = HookDesignWireV3 if wire.get('protocol_version') == 'stage4-hook-design-v3' else HookDesignWire
+    return model.model_validate(wire)
 
 
 def ref_parts(ref: str) -> str | dict[str, str]:
@@ -44,13 +54,18 @@ def hook_name_exposure(text: str | None, projection: NameProjection) -> dict[str
     exposure: dict[str, list[str]] = {}
     if not text:
         return exposure
+    resolved = resolve_name_text(text)
+    protected = (*resolved.mentions, *resolved.non_name_spans)
     for entry in projection.by_person:
-        literals = sorted(
-            {literal for literal in (*entry.proper_literals, *entry.name_bearing_surfaces)
-             if literal}, key=len, reverse=True)
-        found = [literal for literal in literals if literal in text]
+        found = {mention.surface for mention in resolved.mentions
+                 if mention.char_id == entry.char_id}
+        for literal in entry.name_bearing_surfaces:
+            if literal and any(not any(span.start <= match.start() and match.end() <= span.end
+                                       for span in protected)
+                               for match in re.finditer(re.escape(literal), resolved.text)):
+                found.add(literal)
         if found:
-            exposure[entry.char_id] = found
+            exposure[entry.char_id] = sorted(found, key=lambda value: (-len(value), value))
     return exposure
 
 
@@ -152,7 +167,10 @@ def project_hook_input(body: BodyDesign, *, projection: NameProjection | None = 
         return row
 
     return {
-        'input_version': 'stage4-hook-input-v3',
+        'input_version': 'stage4-hook-input-v4',
+        'name_candidates': list(name_candidate_literals(projection)) if projection is not None else [],
+        'identity_surfaces': {entry.char_id: sorted(set((*entry.name_bearing_surfaces, entry.display)) - {''})
+                              for entry in projection.by_person} if projection is not None else {},
         'facts': annotated_hook_catalog(body, projection=projection,
                                         kp_statements=kp_statements,
                                         world_statements=world_statements),
@@ -174,15 +192,28 @@ def project_hook_input(body: BodyDesign, *, projection: NameProjection | None = 
 
 def expand_hook_wire(wire: dict[str, Any], body: BodyDesign) -> tuple[dict | None, list[str]]:
     try:
-        parsed = HookDesignWire.model_validate(wire)
+        parsed = hook_wire_model(wire)
     except ValidationError as exc:
         errors = []
-        for row in exc.errors(include_url=False):
-            loc = tuple(row['loc'])
-            path = loc[:2] if len(loc) > 1 and isinstance(loc[1], int) else loc[:1]
-            errors.append(design_issue(f'Hook wire 形状非法：{loc}：{row["msg"]}',
-                                       code='hook_wire_shape', location=loc,
-                                       paths=(path,) if path and path[0] != 'protocol_version' else ()))
+        model = (HookDesignWireV3 if wire.get('protocol_version') == 'stage4-hook-design-v3'
+                 else HookDesignWire)
+        entries = shape_repair_paths(model.model_json_schema(), wire,
+                                     exc.errors(include_url=False))
+        for entry in entries:
+            path = entry['replace_path']
+            if path is None:
+                code = 'wire_shape_unlocatable'
+            elif not path or entry['issue_path'] == ['protocol_version']:
+                code = 'hook_wire_root_shape'
+                path = []
+            else:
+                code = 'hook_wire_shape'
+            location = tuple(entry['issue_path'] if entry['issue_path'] is not None
+                             else entry['raw_location'])
+            errors.append(design_issue(
+                f'Hook wire 形状非法：{location}：{entry["message"]}（{entry["error_type"]}）',
+                code=code, location=(location, entry['error_type']),
+                paths=(tuple(path),) if path else (), context={'shape_errors': [entry]}))
         return None, errors
     data = parsed.model_dump(mode='json', exclude={'protocol_version'})
     index = {fact.fact_ref: fact for fact in hook_facts(body)}

@@ -24,10 +24,10 @@ from novel.stages.owner_revision import (
 )
 from novel.store import Str06Repository
 from novel.work_units import WorkUnitBudget
-from tests.str06_facilities import make_context
+from tests.str06_facilities import make_context, republish_checkpoint
 from tests.test_str06_body import _RoutingTransport, _make_session, _run
 from tests.test_str06_candidate_preflight import _bad_design, _prepare
-from tests.test_str06_hook import _full_chain_wires
+from tests.test_str06_hook import _declared_prose, _full_chain_wires
 
 
 def _records(base, sid, node, scope):
@@ -121,7 +121,13 @@ def test_text_validation_is_recorded_and_empty_validate_keeps_the_old_semantics(
 # ─── 真实入口：Design 材料问题归 Preserve ────────────────────────────────────
 
 def test_design_whose_materials_belong_to_preserve_is_recorded_rejected_on_the_real_entry(tmp_path):
-    ctx, wires, transport, _ = _prepare(tmp_path, bad_preserve=True)
+    ctx, wires, transport, _ = _prepare(tmp_path)
+    # 当前协议的未登记引用在购买 Design 前免费拒绝。改用 Preserve 字段带入的
+    # 目标内部句柄：只有候选建立 sc01 后材料消费者才知道它是内部身份，仍须
+    # 如实把已购 Design 候选记成 rejected，再回派来源 owner。
+    republish_checkpoint(ctx.repository, lambda cp: cp.model_copy(update={'obligations': tuple(
+        o.model_copy(update={'statement': o.statement + 'sc01'})
+        if o.obligation_id == 'ob01' else o for o in cp.obligations)}))
     _bad_design(wires['design'])
     with pytest.raises(OwnerRevisionRequired) as stopped:
         run_workflow(repository=ctx.repository, chapters=ctx.chapters, ask=ctx.ask,
@@ -133,9 +139,10 @@ def test_design_whose_materials_belong_to_preserve_is_recorded_rejected_on_the_r
     assert len(rows) == 1 and transport.calls.count('design') == 1
     turn, accepted, parse, errors = rows[0]
     assert accepted is False and parse == 'failed', '被回派的 Design 候选不是已接受的候选'
-    assert any('positive_material_leak' in e for e in errors), '记录带这些材料问题'
+    assert any('内部句柄' in e and 'sc01' in e for e in errors), '记录带这些材料问题'
     # 回派账里每个材料问题只占一行（同一材料多处命中不重复）
     record = read_owner_issue_file(ctx.repository, 'preserve')
+    assert any(i.context['material_identity']['code'] == 'internal_id_leak' for i in record.issues)
     assert record and len(record.issues) == len({
         json.dumps(i.context['material_identity'], sort_keys=True, ensure_ascii=False)
         for i in record.issues})
@@ -220,9 +227,9 @@ def test_paragraph_patch_round_is_recorded_by_the_merged_prose_not_the_patch_jso
     fixed_paragraph = '洞房花烛，苏芸娘听夫君立下旧约，句句克制。' * 4
     draft = '\n'.join([paragraph] * 10)
     repaired = '\n'.join([fixed_paragraph] + [paragraph] * 9)
-    patch = '{"paragraphs": [{"index": 0, "text": "' + fixed_paragraph + '"}]}'
+    patch = '{"paragraphs": [{"index": 0, "text": "' + _declared_prose(fixed_paragraph) + '"}]}'
     assert len(patch) < 600 < len(repaired.replace('\n', '')) < 1300
-    transport = _Sequence([draft, patch])
+    transport = _Sequence([_declared_prose(draft), patch])
     base, _repo, session = _plain_session(tmp_path, transport)
     ask_body = body_ask(session)
     outcome = write_chapter(
@@ -236,30 +243,28 @@ def test_paragraph_patch_round_is_recorded_by_the_merged_prose_not_the_patch_jso
     assert transport.systems[1] == BODY_PARAGRAPH_REPAIR_SYSTEM != transport.systems[0],         '修句请求不用「只输出完整正文」的写手 system 提示'
 
 
-def test_withheld_paragraph_patch_runs_through_body_commit_and_free_missing_receipt_recovery(tmp_path):
-    """真实 Stage5 runner：姓名泄漏首稿被拒，窄修合并后提交；回执缺失免费重放两轮。"""
+def test_identity_rewrite_runs_through_body_commit_and_free_missing_receipt_recovery(tmp_path):
+    """真实 Stage5 runner：未授权身份首稿拒收，完整返修提交；缺回执免费重放两轮。"""
     from novel.stages.common import BODY_PARAGRAPH_REPAIR_SYSTEM
 
     draft = '\n'.join(('苏芸娘坐到天明。', '烛火未熄。', '陆大哥低声答应旧约。',
                        '她没有追问。', '窗外天色渐亮。'))
     repaired = draft.replace('陆大哥', '夫君')
-    patch = json.dumps({'paragraphs': [{'index': 2, 'text': repaired.split('\n')[2]}]},
-                       ensure_ascii=False)
 
     class NarrowNameTransport(_RoutingTransport):
         def __init__(self, wires):
             super().__init__(wires)
-            self.patch_requests = []
+            self.rewrite_requests = []
+            self.body_answers = [_declared_prose(draft), _declared_prose(repaired)]
 
         def send(self, request):
             if request.system == BODY_PARAGRAPH_REPAIR_SYSTEM:
-                self.patch_requests.append(request.user)
-                self.calls.append('body_ch01')
-                return ChatResponse(content=patch, finish_reason='stop',
-                                    usage={'prompt_tokens': 20, 'completion_tokens': 8}, model='fake')
+                raise AssertionError('身份授权问题须按当前完整协议返修，不能套旧字面窄修')
             if self._owner(request) == 'body_ch01':
+                if self.calls.count('body_ch01'):
+                    self.rewrite_requests.append(request.user)
                 self.calls.append('body_ch01')
-                return ChatResponse(content=draft, finish_reason='stop',
+                return ChatResponse(content=self.body_answers.pop(0), finish_reason='stop',
                                     usage={'prompt_tokens': 100, 'completion_tokens': 40}, model='fake')
             return super().send(request)
 
@@ -270,14 +275,14 @@ def test_withheld_paragraph_patch_runs_through_body_commit_and_free_missing_rece
     report = _run(repo, session, node_filter=('str06.stage5.body',))
     assert report['body_complete'] and repo.read_text('stage5/body/ch01.txt') == repaired
     assert repo.read_text('stage5/body/ch02.txt'), '其他章仍正常提交'
-    assert len(transport.patch_requests) == 1
-    narrow = transport.patch_requests[0]
-    assert '允许替换的行号：[2]' in narrow
-    assert '1（只读邻段）' in narrow and '3（只读邻段）' in narrow
-    assert '苏芸娘坐到天明。' not in narrow and '窗外天色渐亮。' not in narrow
+    assert len(transport.rewrite_requests) == 1
+    rewrite = transport.rewrite_requests[0]
+    assert '【重写要求】' in rewrite and '【必须写出】' in rewrite
+    assert '[name_text_reference]' in rewrite and '[[name:fu_jun|陆大哥]]' in rewrite
+    assert '[[' not in repo.read_text('stage5/body/ch01.txt'), '正式正文仅存确定性解码后的纯文'
     rows = _records(repo.root.parent, 'run', 'str06.stage5.body', 'chapter:1')
     assert [(turn, accepted) for turn, accepted, _parse, _errors in rows] == [(1, False), (2, True)]
-    assert all(e.startswith('[withheld_literals]') for e in rows[0][3])
+    assert all(e.startswith('[name_text_reference]') for e in rows[0][3])
     assert rows[1][2:] == ('ok', ())
     attempts = repo.inspect('runtime/body_attempts_ch01.json')['attempts']
     assert len(attempts) == 2 and attempts[-1]['errors'] == []

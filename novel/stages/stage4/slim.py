@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Design v10 的确定性编译层：real 声明验收/支撑拍，know 声明每次认知变化，
+"""Design v11 的确定性编译层：real 声明验收/支撑拍，know 声明每次认知变化，
 lock 在已选状态上标注事实锁。
+
+v11 自有自然语言使用身份引用文本。编译保留作者标记，不补造旧文本的人物或普通义；
+v10/v9 集中读取只供历史诊断，当前生产采用必须具有 v11 的明确语义声明。
 
 Brief.knowledge_changes 从 Preserve 正式 anchor 派生盲身份与完整三元组；
 代码派发 obNN.kNN 短引用，模型只标拍位。读者 known 另标 confirms 事实地址。
@@ -20,19 +23,20 @@ v5 形状，也不进 BodyDesign——BodyDesign 只持有目标事实（I-16）
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from pydantic import ValidationError
 
 from contracts.schema.design import (
-    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV9, DesignWireV10,
+    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV9, DesignWireV10, DesignWireV11,
 )
 from contracts.schema.grounding import ReconstructionBrief
 from contracts.schema.state import EffectDomain, StateAddress
+from novel.core.name_text import resolve_name_text
 
 
-# 显式 v9 付费候选适配面（删除条件登记在 REQUIREMENTS）；新生成只走 v10。
-DESIGN_READ_PROTOCOLS = (STAGE4_DESIGN_WIRE_PROTOCOL, 'stage4-design-v9')
+# v10/v9 历史诊断解码集中在此（删除条件登记在 REQUIREMENTS）；新生成只走 v11。
+DESIGN_READ_PROTOCOLS = (STAGE4_DESIGN_WIRE_PROTOCOL, 'stage4-design-v10', 'stage4-design-v9')
 
 
 def design_reference_aliases(brief: ReconstructionBrief) -> dict[str, str]:
@@ -54,8 +58,8 @@ class DesignReferenceError(ValueError):
         self.path = path
 
 
-def design_wire_model(wire: Any, brief: ReconstructionBrief | None = None) -> DesignWireV9 | DesignWireV10:
-    """集中解码 v10 与已购 v9；只展开引用字段，绝不替换自然语言文本。
+def design_wire_model(wire: Any, brief: ReconstructionBrief | None = None) -> DesignWireV9 | DesignWireV10 | DesignWireV11:
+    """集中解码 v11 与历史 v10/v9；只展开引用字段，绝不替换自然语言文本。
 
     无 Brief 只验证传输形状（候选兼容性）；有 Brief 时返回使用 canonical
     引用的同构 v9 内部模型，供同一 compiler/validator 消费。原始 wire 不变，
@@ -64,7 +68,8 @@ def design_wire_model(wire: Any, brief: ReconstructionBrief | None = None) -> De
     protocol = wire.get('protocol_version') if isinstance(wire, dict) else None
     if protocol == 'stage4-design-v9':
         return DesignWireV9.model_validate(wire)
-    model = DesignWireV10.model_validate(wire)
+    model = (DesignWireV11 if protocol == STAGE4_DESIGN_WIRE_PROTOCOL
+             else DesignWireV10).model_validate(wire)
     if brief is None:
         return model
     canonical = {short: full for full, short in design_reference_aliases(brief).items()}
@@ -302,7 +307,7 @@ def project_design_input(
         raise ValueError('Design 输入义务映射与正式 Brief 不一致')
     projection = brief.model_dump(mode='json', exclude={
         'brief_id', 'preserve_checkpoint_sha256', 'requirements'})
-    aliases = design_reference_aliases(brief) if protocol == STAGE4_DESIGN_WIRE_PROTOCOL else None
+    aliases = design_reference_aliases(brief) if protocol != 'stage4-design-v9' else None
     if protocol not in DESIGN_READ_PROTOCOLS:
         raise ValueError(f'未登记 Design 请求协议 {protocol!r}')
     projection['input_version'] = 'stage4-design-input-v2' if aliases is not None else 'stage4-design-input-v1'
@@ -618,9 +623,9 @@ def _scene_ranges(chapters) -> list[tuple[int, int]]:
     """章序 → 该章的场景下标区间（[start, end)），由 wire 章切片确定性派生。"""
     ranges: list[tuple[int, int]] = []
     cursor = 0
-    for chapter in chapters:
+    for chapter in chapters if isinstance(chapters, (list, tuple)) else ():
         count = chapter.get('scenes') if isinstance(chapter, dict) else None
-        if not isinstance(count, int) or count < 1:
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
             return []
         ranges.append((cursor, cursor + count))
         cursor += count
@@ -636,46 +641,84 @@ def design_patch_slice(
 
     · **目标拍所在场全文**：拍返修的上下文（driver／brief／reads／avoid／全部拍）；
     · **相邻拍一行提要**：阅读序上紧邻目标拍、且不在已含场内的拍（跨场边界的方向感）；
-    · **被引用的义务与锁**：目标拍 real／know／lock 与场内 reads 引用到的 ob、认知
+    · **被引用的义务与锁**：可编辑拍 real／know／lock 与场内 reads 引用到的 ob、认知
       变化、kp 命题与 kf 事实锁（源盲投影，不带 anchors／quotes 与前序材料全文）；
-    · **到该拍为止的释放前缀**：initial_surfaces 与阅读序上不晚于目标拍的 release；
-    · **涉及人物的身份投影**：目标拍 who／pov／release／state 主体涉及的人物。
+    · **到可编辑末拍为止的释放前缀**：initial_surfaces 与阅读序上不晚于它的 release；
+    · **所需键的既有状态历史**：初态与可编辑末拍之前、未随目标场发送的状态原行；
+      只沿显式 confirms 地址补齐依赖，不推断值、不把候选内容搬到其它字段。
+    · **涉及人物的身份投影**：可编辑拍、场读与所引义务／锁中显式出现的主体和 holder。
+    · **可上拍表达目录**：正式 Brief 中非 narration 的表达及语义，和 ex 合法闭集同源。
     切片不是 wire，不能当回答模板（模型只替换 `targets` 列出的路径）；它也不是
     整份原请求——全书义务清单、身份投影全集与已发布产物全文都不进来。
     """
     if not isinstance(wire, dict):
-        raise ValueError('Design 窄返修切片需要 v9 wire 对象')
-    scenes = wire.get('scenes')
-    if not isinstance(scenes, list):
-        raise ValueError('Design 窄返修切片需要 wire 的 scenes 数组')
-    chapters = wire.get('chapters') if isinstance(wire.get('chapters'), list) else []
+        raise ValueError('Design 窄返修切片需要 wire 对象')
+
+    def rows(value: Any) -> Sequence[Any]:
+        # 切片先于 wire 形状修复。非法值保留在候选上下文，不能把字符串或字典
+        # 当列表遍历，也不能为构造上下文先替模型删键、归一或猜测字段迁移。
+        return value if isinstance(value, (list, tuple)) else ()
+
+    def strings(value: Any) -> set[str]:
+        return {item for item in rows(value) if isinstance(item, str)}
+
+    raw_scenes = wire.get('scenes')
+    scenes = rows(raw_scenes)
+    raw_chapters = wire.get('chapters')
+    chapters = rows(raw_chapters)
+    protocol = wire.get('protocol_version')
+    aliases = design_reference_aliases(brief) if protocol != 'stage4-design-v9' else None
+    canonical_refs = {short: full for full, short in (aliases or {}).items()}
+
+    def canonical(ref: str) -> str:
+        return canonical_refs.get(ref, ref)
+
+    def scene_beats(scene_i: int) -> Sequence[Any]:
+        scene = scenes[scene_i]
+        return rows(scene.get('beats')) if isinstance(scene, dict) else ()
 
     wanted_scenes: set[int] = set()
-    whole_scene_targets: set[int] = set()
+    selected_beats: set[tuple[int, int]] = set()
+    wanted_chapters: set[int] = set()
     top_fields: set[str] = set()
     want_initial = False
-    target_beats: list[tuple[int, int]] = []
-    for path in targets:
-        beat = _beat_of(tuple(path))
+    for target in targets:
+        path = tuple(target)
+        if not path or path in (('scenes',), ('chapters',)):
+            wanted_scenes.update(range(len(scenes)))
+            selected_beats.update((si, bi) for si in range(len(scenes))
+                                  for bi in range(len(scene_beats(si))))
+            if not path or path == ('chapters',):
+                wanted_chapters.update(range(len(chapters)))
+            if not path:
+                want_initial = True
+                top_fields.update(wire)
+            continue
+        beat = _beat_of(path)
         if beat is not None:
-            if beat[0] >= len(scenes) or beat[1] >= len(scenes[beat[0]].get('beats') or ()):
+            if not 0 <= beat[0] < len(scenes) or not 0 <= beat[1] < len(scene_beats(beat[0])):
                 raise ValueError(f'窄返修目标越界：{path}')
-            target_beats.append(beat)
+            selected_beats.add(beat)
             wanted_scenes.add(beat[0])
             continue
         if len(path) >= 2 and path[0] == 'scenes' and isinstance(path[1], int):
-            if path[1] >= len(scenes):
+            if not 0 <= path[1] < len(scenes):
                 raise ValueError(f'窄返修目标越界：{path}')
             wanted_scenes.add(path[1])
-            whole_scene_targets.add(path[1])
+            selected_beats.update((path[1], bi) for bi in range(len(scene_beats(path[1]))))
             continue
         if len(path) >= 2 and path[0] == 'chapters' and isinstance(path[1], int):
             ranges = _scene_ranges(chapters)
-            if path[1] >= len(ranges):
+            if not 0 <= path[1] < len(chapters):
                 raise ValueError(f'窄返修目标越界：{path}')
-            start, end = ranges[path[1]]
-            wanted_scenes.update(range(start, min(end, len(scenes))))
-            whole_scene_targets.update(range(start, min(end, len(scenes))))
+            wanted_chapters.add(path[1])
+            # 章分场数本身可能就是待修形状，不能从坏值猜章场对应；此时保留全部
+            # 候选场供语义单位核对。合法切片仍严格按该章范围收集全部可编辑拍。
+            start, end = ranges[path[1]] if ranges else (0, len(scenes))
+            chapter_scenes = range(start, min(end, len(scenes)))
+            wanted_scenes.update(chapter_scenes)
+            selected_beats.update((si, bi) for si in chapter_scenes
+                                  for bi in range(len(scene_beats(si))))
             continue
         if path[:1] == ('initial_state',):
             want_initial = True
@@ -683,24 +726,28 @@ def design_patch_slice(
         if path:
             top_fields.add(str(path[0]))
 
-    beat_rows = [(scene_i, beat_i, beat)
-                 for scene_i, scene in enumerate(scenes)
-                 for beat_i, beat in enumerate(scene.get('beats') or ())]
+    beat_rows = [(si, bi, beat) for si in range(len(scenes))
+                 for bi, beat in enumerate(scene_beats(si))]
     index_of = {(scene_i, beat_i): order
                 for order, (scene_i, beat_i, _beat) in enumerate(beat_rows)}
 
     # 相邻拍一行提要：阅读序前后各一拍，且所在场没有整场进来。
     neighbors: list[dict[str, Any]] = []
-    for scene_i, beat_i in target_beats:
+    neighbor_positions: set[int] = set()
+    for scene_i, beat_i in sorted(selected_beats):
         for order in (index_of[(scene_i, beat_i)] - 1, index_of[(scene_i, beat_i)] + 1):
             if not 0 <= order < len(beat_rows):
                 continue
             near_scene, near_beat, near = beat_rows[order]
             if near_scene in wanted_scenes:
                 continue
+            if order in neighbor_positions:
+                continue
+            neighbor_positions.add(order)
             neighbors.append({
                 'ref': f'scenes[{near_scene}].beats[{near_beat}]',
-                'event': near.get('ev'), 'who': list(near.get('who') or ())})
+                'event': near.get('ev') if isinstance(near, dict) else near,
+                'who': sorted(strings(near.get('who'))) if isinstance(near, dict) else []})
 
     # 被引用的义务、认知变化、命题与事实锁（源盲投影）。
     obligations = obligations or {}
@@ -709,51 +756,79 @@ def design_patch_slice(
     referenced_locks: set[str] = set()
     referenced_keys: set[str] = set()
     involved: set[str] = set()
-    for scene_i, beat_i in target_beats:
-        beat = scenes[scene_i]['beats'][beat_i]
-        referenced_obs.update(beat.get('real') or ())
-        for placement in beat.get('know') or ():
+
+    def collect_addresses(value: Any) -> None:
+        """只读显式引用／主体；非法位置的原值也可提供材料，不赋予它合法语义。"""
+        if isinstance(value, dict):
+            key = value.get('key')
+            if isinstance(key, str):
+                referenced_keys.add(canonical(key))
+            lock = value.get('lock')
+            if isinstance(lock, str):
+                referenced_locks.add(canonical(lock))
+            involved.update(strings(value.get('subjects')))
+            for field in ('holder', 'char_id'):
+                person = value.get(field)
+                if isinstance(person, str):
+                    involved.add(person)
+            address = value.get('at')
+            if isinstance(address, str) and address != 'world':
+                involved.update(address.split('+'))
+            for child in value.values():
+                collect_addresses(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                collect_addresses(child)
+        elif isinstance(value, str) and '[[name:' in value:
+            # 只消费作者已经声明的身份引用，不从自然语言、姓名候选或自由字段猜人。
+            involved.update(mention.char_id for mention in resolve_name_text(value).mentions)
+
+    for scene_i, beat_i in sorted(selected_beats):
+        beat = scene_beats(scene_i)[beat_i]
+        if not isinstance(beat, dict):
+            continue
+        referenced_obs.update(strings(beat.get('real')))
+        involved.update(strings(beat.get('who')))
+        collect_addresses(beat)
+        for placement in rows(beat.get('know')):
             ref = placement.get('ref') if isinstance(placement, dict) else None
             if isinstance(ref, str):
                 referenced_refs.add(ref)
                 referenced_obs.add(ref.split('.', 1)[0])
-        for ref in beat.get('details') or ():
-            if isinstance(ref, str):
-                referenced_obs.add(ref.split('.', 1)[0])
-        for state in beat.get('state') or ():
-            if isinstance(state, dict):
-                if isinstance(state.get('lock'), str):
-                    referenced_locks.add(state['lock'])
-                referenced_keys.add(str(state.get('key')))
-        for read in (scenes[scene_i].get('reads') or ()):
-            if isinstance(read, dict) and isinstance(read.get('key'), str):
-                referenced_keys.add(read['key'])
-    # 场级/章级返修须带全部所选软细节的归属；细节可来自没有 real 标注的义务。
-    # 拍级返修仍只带目标拍所选项，不因场全文的邻拍而扩大义务清单。
-    for scene_i in whole_scene_targets:
-        for beat in scenes[scene_i].get('beats') or ():
-            for ref in beat.get('details') or ():
-                if isinstance(ref, str):
-                    referenced_obs.add(ref.split('.', 1)[0])
-    # 目标场整体进来时（场级/章级目标），场读与场拍的事实键同样只取必需的。
+        for ref in strings(beat.get('details')):
+            referenced_obs.add(ref.split('.', 1)[0])
+    # 场级上下文总会送达；拍目标不因同场其它拍而扩大义务／锁依赖。
     for scene_i in wanted_scenes:
         scene = scenes[scene_i]
-        for read in scene.get('reads') or ():
-            if isinstance(read, dict) and isinstance(read.get('key'), str):
-                referenced_keys.add(read['key'])
-        for beat in scene.get('beats') or ():
-            for state in beat.get('state') or ():
-                if isinstance(state, dict) and isinstance(state.get('key'), str):
-                    referenced_keys.add(str(state['key']))
+        if not isinstance(scene, dict):
+            continue
+        collect_addresses({key: value for key, value in scene.items() if key != 'beats'})
+        driver = scene.get('driver')
+        focal = driver.get('focal_actor') if isinstance(driver, dict) else None
+        if isinstance(focal, str):
+            involved.add(focal)
+        pov = scene.get('pov')
+        if isinstance(pov, str):
+            involved.add(pov)
+    if want_initial:
+        collect_addresses(wire.get('initial_state'))
+    for neighbor in neighbors:
+        involved.update(strings(neighbor.get('who')))
+        collect_addresses(neighbor.get('event'))
 
     changes = knowledge_change_index(obligations)
-    # 被引用的概括要求必须同时送达其真正 covers 的实例语义；未承载实例没有
-    # real 标注，不能仅按现有拍引用收集，否则窄修只能看见盲句柄而无法补写。
+    # 全部拍都在授权闭集内时，漏标义务本来就不会出现在任何 real 中。依赖必须
+    # 从完整授权范围决定，不能让模型只拿到合法 ID 却看不到该义务的正式语义。
+    if selected_beats and selected_beats == set(index_of):
+        referenced_obs.update(obligations)
+    # 所引义务的正式依赖闭包：概括要求 covers 的实例与因果前提都须送达语义，
+    # 未承载实例可能没有 real 标注，不能让窄修只看见盲句柄。
     ob_of_core = {requirement.core_id: ob for ob, requirement in obligations.items()}
     summary_frontier = list(referenced_obs & set(obligations))
     while summary_frontier:
         ob = summary_frontier.pop()
-        for core in obligations[ob].summarizes_cores:
+        requirement = obligations[ob]
+        for core in (*requirement.summarizes_cores, *requirement.requires_cores):
             covered = ob_of_core[core]
             if covered not in referenced_obs:
                 referenced_obs.add(covered)
@@ -762,51 +837,94 @@ def design_patch_slice(
     fact_locks = {f.kf_id: f.model_dump(mode='json') for f in brief.fact_locks}
     world_rules = {c.constraint_id: c.model_dump(mode='json')
                    for c in brief.book_constraints}
-    protocol = wire.get('protocol_version')
-    aliases = design_reference_aliases(brief) if protocol == STAGE4_DESIGN_WIRE_PROTOCOL else None
     requirements = {ob: _project_requirement(ob, obligations, aliases=aliases)
                     for ob in sorted(referenced_obs & set(obligations))}
-    for requirement in requirements.values():
-        referenced_keys.update(requirement.get('locks', ()))
-        referenced_locks.update(requirement.get('realize_locks', ()))
-        referenced_keys.update(c['kp'] for c in requirement.get('knowledge_changes', {}).values())
+    for ob in requirements:
+        requirement = obligations[ob]
+        involved.update(requirement.participants)
+        for ref in requirement.locks:
+            (referenced_locks if ref.startswith('kf_') else referenced_keys).add(ref)
+        referenced_locks.update(requirement.realize_locks)
+        for change in requirement.knowledge_changes:
+            referenced_keys.add(change.kp)
+            involved.add(change.holder)
+
+    # 修正读取需要知道入场前已经写过什么，目标场全文不能代替这些来源。原行与
+    # 路径仅作为只读证据；匹配的是已明确引用的 canonical 键，不猜地址同义或值。
+    last_order = max((index_of[t] for t in selected_beats), default=-1)
+    history_candidates: list[tuple[str, dict]] = [
+        (f'initial_state[{index}]', row)
+        for index, row in enumerate(rows(wire.get('initial_state'))) if isinstance(row, dict)]
+    for scene_i, beat_i, beat in beat_rows:
+        if (scene_i in wanted_scenes or index_of[(scene_i, beat_i)] >= last_order
+                or not isinstance(beat, dict)):
+            continue
+        history_candidates.extend(
+            (f'scenes[{scene_i}].beats[{beat_i}].state[{index}]', row)
+            for index, row in enumerate(rows(beat.get('state'))) if isinstance(row, dict))
+    selected_history: set[str] = set()
+    while True:
+        added = False
+        for ref, row in history_candidates:
+            key = row.get('key')
+            if ref in selected_history or not isinstance(key, str) or canonical(key) not in referenced_keys:
+                continue
+            selected_history.add(ref)
+            collect_addresses(row)  # 包括显式 confirms 的目标键与历史行涉及的身份。
+            added = True
+        if not added:
+            break
+    state_history = [{'ref': ref, 'value': row} for ref, row in history_candidates
+                     if ref in selected_history]
+    for key in referenced_locks:
+        if key in fact_locks:
+            involved.update(fact_locks[key].get('subjects', ()))
+    for key in referenced_keys:
+        if key in propositions:
+            involved.update(propositions[key].get('publicly_claimed_by', ()))
+    knowledge_locks = [row.model_dump(mode='json') for row in brief.knowledge_locks
+                       if row.kp in referenced_keys]
+    for row in knowledge_locks:
+        involved.add(row['holder'])
     if aliases is not None:
         projection = project_design_input(brief, obligations)
         propositions = projection.get('propositions', {})
         fact_locks = projection.get('fact_locks', {})
+        referenced_keys = {aliases.get(key, key) for key in referenced_keys}
+        referenced_locks = {aliases.get(key, key) for key in referenced_locks}
+        # 每次认知变化的授权已在 requirements 内；只补正式 Brief 中的额外授权，
+        # 与整份输入使用同一差集，不能让场级修订遗失合法的初始知情模式。
+        knowledge_locks = [row for row in projection.get('knowledge_locks', ())
+                           if row.get('kp') in referenced_keys]
 
-    # 涉及人物的身份投影（目标拍 who／pov／release／state 与 reads 的主体）。
-    for scene_i, beat_i in target_beats:
-        beat = scenes[scene_i]['beats'][beat_i]
-        involved.update(str(who) for who in (beat.get('who') or ()))
-        for release in beat.get('release') or ():
-            if isinstance(release, dict) and isinstance(release.get('char_id'), str):
-                involved.add(release['char_id'])
-        pov = scenes[scene_i].get('pov')
-        if isinstance(pov, str):
-            involved.add(pov)
-    identity_rows = [i.model_dump(mode='json') for i in identities
-                     if getattr(i, 'char_id', None) in involved]
-
-    # 到该拍为止的释放前缀（阅读序，含本拍释放）。
+    # 到可编辑末拍为止的释放前缀；整场／整章与拍目标使用同一集合，避免场级
+    # 替换没有任何 target_beats 而把全部前缀遗漏。前缀主体同样进入身份依赖。
     release_prefix = [{'ref': 'initial_surfaces', **row}
-                      for row in (wire.get('initial_surfaces') or ())]
+                      for row in rows(wire.get('initial_surfaces')) if isinstance(row, dict)]
     for scene_i, beat_i, beat in beat_rows:
-        if not any(index_of[(scene_i, beat_i)] <= index_of[t] for t in target_beats):
+        if index_of[(scene_i, beat_i)] > last_order or not isinstance(beat, dict):
             continue
-        for release in beat.get('release') or ():
+        for release in rows(beat.get('release')):
             if isinstance(release, dict):
                 release_prefix.append({
                     'ref': f'scenes[{scene_i}].beats[{beat_i}]', **release})
+    collect_addresses(release_prefix)
+    identity_rows = [i.model_dump(mode='json') for i in identities
+                     if getattr(i, 'char_id', None) in involved]
 
     slice_payload: dict[str, Any] = {
-        'slice_version': 'stage4-design-patch-slice-v2' if aliases is not None else 'stage4-design-patch-slice-v1',
-        'scenes': [scenes[i] for i in sorted(wanted_scenes)],
+        'slice_version': 'stage4-design-patch-slice-v4',
+        'wire_protocol_version': protocol,
+        'scenes': ([scenes[i] for i in sorted(wanted_scenes)]
+                   if isinstance(raw_scenes, (list, tuple)) else raw_scenes),
         'neighbor_beats': neighbors,
         'requirements': requirements,
+        'beat_expressions': {item.ex_id: item.model_dump(mode='json', exclude={'ex_id'})
+                             for item in brief.expression if item.kind != 'narration'},
         'knowledge_changes': {
             ref: changes[ref][1].model_dump(mode='json', exclude={'change_id'})
             for ref in sorted(referenced_refs) if ref in changes},
+        'knowledge_locks': knowledge_locks,
         'propositions': {key: propositions[key] for key in sorted(referenced_keys)
                          if key in propositions},
         'world_constraints': {key: world_rules[key] for key in sorted(referenced_keys)
@@ -814,12 +932,17 @@ def design_patch_slice(
         'fact_locks': {key: fact_locks[key] for key in sorted(referenced_locks)
                        if key in fact_locks},
         'release_prefix': release_prefix,
+        'state_history': state_history,
         'identities': identity_rows,
     }
     if aliases is not None:
         slice_payload.pop('knowledge_changes')  # 所属义务已带完整逐次变化，不重复发送。
     if want_initial:
-        slice_payload['initial_state'] = list(wire.get('initial_state') or ())
+        slice_payload['initial_state'] = wire.get('initial_state')
+    if wanted_chapters:
+        slice_payload['chapters'] = [chapters[i] for i in sorted(wanted_chapters)]
+    elif any(tuple(path) == ('chapters',) for path in targets):
+        slice_payload['chapters'] = raw_chapters
     for field in sorted(top_fields):
         if field in ('scenes', 'chapters', 'initial_state'):
             continue
@@ -831,6 +954,8 @@ def design_patch_slice(
 def design_patch_legal_values(
     *, known_char_ids: Iterable[str] = (), obligations: Mapping[str, Any] | None = None,
     knowledge_refs: Mapping[str, bool] | None = None, fact_lock_ids: Iterable[str] = (),
+    expression_ids: Iterable[str] = (),
+    name_candidates: Iterable[str] = (),
     registered_surfaces: Mapping[str, set[str]] | None = None,
 ) -> dict[str, Any]:
     """窄返修请求的合法取值（RC-57）：可引用闭集，模型不得给出闭集外的字面。
@@ -846,6 +971,8 @@ def design_patch_legal_values(
         'knowledge_refs': {ref: required for ref, required
                            in sorted((knowledge_refs or {}).items())},
         'detail_refs': sorted(detail_index(obligations)),
+        'expression_ids': sorted(expression_ids),
+        'name_candidates': sorted(set(name_candidates)),
         'fact_lock_ids': sorted(fact_lock_ids),
         'surfaces': {char_id: sorted(faces)
                      for char_id, faces in sorted((registered_surfaces or {}).items())},

@@ -2763,7 +2763,7 @@ def test_execution_plan_migration_is_pure_and_keeps_its_independent_version(vers
     original = copy.deepcopy(source)
     migrated = _upgrade_rc12_payload('stage4/compiled/execution_plan.json', source)
     assert source == original, '内存迁移不能修改输入或封存字节'
-    assert STR06_RC_VERSION == 'str06-rc24'
+    assert STR06_RC_VERSION == 'str06-rc25'
     assert migrated['contract_version'] == 'str06-rc14', '全局版式头不决定独立产物版本'
     scene = migrated['scenes'][0]
     reader = scene['establishments'][0]
@@ -2873,7 +2873,7 @@ def test_graph_body_consumption_keeps_body_version_and_ignores_hook_selection():
     project = projection_for('str06.stage5.body', 'stage4/design/presentation_graph.json')
     assert project is body_graph_payload
     assert project(raw) == body.model_dump(mode='json')
-    assert project(raw)['contract_version'] == 'str06-rc22'
+    assert project(raw)['contract_version'] == 'str06-rc25'
     changed_hook = copy.deepcopy(raw)
     changed_hook['hook']['local_focus'] = '以人物对答推进，落在荒唐计划提出的瞬间'
     assert project(changed_hook) == project(raw)

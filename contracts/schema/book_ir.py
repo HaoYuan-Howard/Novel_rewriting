@@ -137,8 +137,8 @@ class ChapterIR(StrictModel):
     携带——Stage5 只做语言实现，不再从 Design／Characters 现场推导。
     rc10（R2）：`continuity` 必填——本章 entry＋上一章末场机械投影（章缝合
     契约的数据面；缺失即拒，不用空值冒充「已考虑承接」）。
-    rc16（CS-F2）：`withheld_bindings` 是禁用字面中「可唯一绑定人物」的子集，
-    供渲染期确定性投影；空表是合法值（没有可证明的绑定＝一律不投影）。
+    rc25：`withheld_bindings` 按本人释放面派生 (char_id, literal) 绑定；同形多人
+    可分别登记。显式引用按身份投影，旧裸文还须全书唯一归属证明；空表合法。
     """
 
     chapter_ordinal: int = Field(ge=1)
@@ -149,10 +149,14 @@ class ChapterIR(StrictModel):
     continuity: ChapterContinuity
     #: 章级已释放称谓字面（本章含之前全部释放位置的并集；机械 validator 的认领面）。
     released_surfaces: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 人物身份与已释放称谓同源；正文引用不能从扁平字面反猜 char_id。
+    released_names: tuple[SurfaceRelease, ...]
+    #: 逐次语义声明的词法候选；命中只表示待解释，不表示泄漏。
+    name_candidates: tuple[str, ...]
     #: 本章禁用字面（全部专名／带名 surface 与家族级构词 − 已释放称谓；
     #: 机械 validator 的检查面，不渲染进 Writer 阅读面）。
     withheld_literals: tuple[str, ...] = Field(default=(), min_length=0)
-    #: 禁用字面中已证明唯一绑定人物的完整登记称谓（渲染期投影的验证材料，不进阅读面）。
+    #: 本人未释放的个人姓名面及裸文唯一归属证明（不进阅读面）。
     withheld_bindings: tuple[WithheldNameBinding, ...] = Field(default=(), min_length=0)
     #: 显示面前缀（CS-H H3，RC-60；**章首**取位）：每人按**释放顺序**的已释放称谓，
     #: 覆盖全体已释放人物（不再只收本场参与者、不按字典序）。只含**已释放**称谓：
@@ -176,9 +180,9 @@ class ChapterIR(StrictModel):
         ids = [s.scene_id for s in self.scenes]
         if len(set(ids)) != len(ids):
             raise ValueError(f'章 {self.chapter_ordinal} 内 scene_id 重复')
-        literals = [b.literal for b in self.withheld_bindings]
-        if len(set(literals)) != len(literals):
-            raise ValueError(f'章 {self.chapter_ordinal} 的称谓绑定字面重复')
+        bindings = [(b.char_id, b.literal) for b in self.withheld_bindings]
+        if len(set(bindings)) != len(bindings):
+            raise ValueError(f'章 {self.chapter_ordinal} 的人物称谓绑定重复')
         return self
 
 
@@ -190,7 +194,7 @@ class WriterBookIR(StrictModel):
     rc8（D2，B4）：ChapterIR 增章级验证材料；完整 IR 只作存储与审计面，
     运行时经 `ChapterWriterPacket` 按章投影。"""
 
-    contract_version: Literal['str06-rc22'] = 'str06-rc22'
+    contract_version: Literal['str06-rc25'] = 'str06-rc25'
     book_brief: BookBrief
     chapters: tuple[ChapterIR, ...] = Field(min_length=1)
     provenance: FreeProvenance | LlmProvenance | None = Field(

@@ -99,13 +99,13 @@ def _chapter_wire(*beats: dict) -> dict:
 
 
 def _names_wire() -> dict:
-    # CS-S 1c：v6 结构 wire——无 surface_forms／resolutions（构词派生＋窄调用）。
+    # 现役 v7：构词由代码派生，遗漏称谓显式声明为空。
     return {
         'protocol_version': STAGE2_NAMES_WIRE_PROTOCOL,
         'families': {'f_lu': {'literal': '陆', 'forms': []}},
         'people': {
-            'fu_jun': {'family_id': None, 'given': None, 'aliases': []},
-            'yun_niang': {'family_id': None, 'given': None, 'aliases': []},
+            'fu_jun': {'family_id': None, 'given': None, 'aliases': [], 'additional_surfaces': []},
+            'yun_niang': {'family_id': None, 'given': None, 'aliases': [], 'additional_surfaces': []},
         },
     }
 

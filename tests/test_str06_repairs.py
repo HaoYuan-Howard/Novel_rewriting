@@ -138,7 +138,8 @@ def test_compound_obligation_uses_prior_beats_without_premature_whole_fact():
                                    supporting_beat_refs=('s01#bt1',)),)
     context = contexts(graph, binding)['s02'][0]
     assert context.verification_ir.obligations == cp.obligations
-    assert context.verification_ir.continuity_fact_view == ('s01#bt1：事件s01',)
+    assert [(fact.beat_ref, fact.event) for fact in
+            context.verification_ir.continuity_fact_view] == [('s01#bt1', '事件s01')]
     # 义务清单属于事实约束视图（IR），不在呈现视图里重复
     assert '义务ob30' in context.verification_ir.obligations[0].statement
     assert not hasattr(context.writer_brief, 'required_content')
@@ -210,7 +211,7 @@ def _stage2_outcome_with_ch02(ch02: dict):
         chapters={no: ChapterObservation.model_validate(chapters[f'ch{no:02d}'])
                   for no in range(1, len(chapters) + 1)},
         names=NamesObservation.model_validate(
-            {'protocol_version': PV, 'structure': _names_structure()}),
+            {'protocol_version': PV, 'structure': _names_structure(), 'additional_surfaces': {}}),
         associate=AssociateObservation.model_validate(_associate_wire()),
         evidence=EVIDENCE)
 

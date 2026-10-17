@@ -773,7 +773,7 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 # rc24（2026-10-10）：HookContext 恢复按书级章预算派生的篇幅包络（目标区间
 # 随请求送达 + 硬上限机械拒收），并修订 Hook 设计选材倾向为高张力情节切片；
 # 正文设计保持 rc22。rc23「篇幅由叙事需要决定」的观察结论由包络修订。
-STR06_RC_VERSION: Final = 'str06-rc24'
+STR06_RC_VERSION: Final = 'str06-rc25'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
@@ -781,7 +781,7 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
                           'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15',
                           'str06-rc16', 'str06-rc17', 'str06-rc18', 'str06-rc19',
                           'str06-rc20', 'str06-rc21', 'str06-rc22', 'str06-rc23',
-                          'str06-rc24')
+                          'str06-rc24', 'str06-rc25')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒
@@ -807,16 +807,16 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 #: believes→believes；asserts 转公开声称标记）＋kf 事实锁（时态/值未知/
 #: 原文未回答）；requirement 带 series 盲标记与 mechanism。kp/kf 键规则与
 #: 必保锁兑现归 assemble_body_design（revise_self）。
-STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v5'
+STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v6'
 # 2026-10-10 用户授权有限补桥：Preserve 必要源因果完整交接，Design 只在
 # 骨架、事实、结局与知情/未知边界内补局部行动、沟通和决策；wire/canonical 不变。
 # v10：正式交接材料合起来保住骨架，不要求各字段重复因果；唯一登记称谓可自然混用。
-STAGE4_PRESERVE_POLICY_VERSION: Final = 10
+STAGE4_PRESERVE_POLICY_VERSION: Final = 11
 STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v5'
 # CS-3（2026-10-03）：`str06.stage4.bind` 退役——承载位由 design wire 的 real
 # 标注派生（stage4-design-v6 的面），stage4-bind-v1 wire 协议随之退役。
 # Hook v2：事实引用由代码目录给出；canonical 的位置＋地址形状保持不变。
-STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v3'
+STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v4'
 
 #: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`
 #: 是 typed 修复的显式 producer 边界（对齐正式 ExecutionEpochReason 的 continue）。

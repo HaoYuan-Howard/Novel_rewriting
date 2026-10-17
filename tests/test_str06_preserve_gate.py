@@ -4,15 +4,16 @@
 
 注册判据：`preserve_name_literal_gate`（本文件即其反例套件）。
 
-自闸＝与下游材料归因同一把尺：能被显示面投影的唯一归属带名面合法；**永不投影**
-的字面（裸姓／多义带名面；未登记别名因含裸姓成分同被查出；家族构词不拒）在义务
-statement／satisfaction 里被逐条定位（`obligations[i]` 路径）。条目返修＝同一
+policy11 自闸按作者声明区分人物与普通义；未声明候选是未决，不伪称已经泄漏。
+人物引用只取登记称谓，显式 char_id 能区分同形称谓。义务 statement／satisfaction
+及细节问题逐条定位到 `obligations[i]`；历史 policy 保留原身份。条目返修＝同一
 协议：窄输入（协议规则＋失败条目＋该义务 anchors 的源原子切片＋合法取值），
 无关义务字节不变。零付费：fake transport。
 """
 from __future__ import annotations
 
 from copy import deepcopy
+from tests.factories import declared_stage4_text
 
 
 def _wires():
@@ -37,7 +38,7 @@ def _prepared(tmp_path, wires, transport=None):
 
 
 def test_self_gate_flags_bare_surname_and_unregistered_alias_with_item_paths(tmp_path):
-    """裸姓／未登记别名逐条定位（`obligations[i]`）；可投影带名面与家族构词合法。"""
+    """未声明候选逐条定位；显式登记引用与家族名称表达合法。"""
     from contracts.schema.workflow import STAGE4_PRESERVE_POLICY_VERSION
     from novel.stages.stage4 import assemble_preserve, preserve_name_issues
     wires = _wires()
@@ -51,7 +52,7 @@ def test_self_gate_flags_bare_surname_and_unregistered_alias_with_item_paths(tmp
             provider='x', model='y', request_sha256='r' * 64)
 
     wire = deepcopy(wires['preserve'])
-    wire['obligations'][0]['statement'] = '陆某登门兴师问罪，芸娘心神不宁'
+    wire['obligations'][0]['statement'] = declared_stage4_text('陆某登门兴师问罪，芸娘心神不宁')
     checkpoint, errors = assemble(wire)
     assert checkpoint is not None and not errors, errors
     issues = preserve_name_issues(checkpoint, chars)
@@ -59,7 +60,7 @@ def test_self_gate_flags_bare_surname_and_unregistered_alias_with_item_paths(tmp
                for i in issues}
     assert flagged == {('ob01', 'statement', '陆')}, flagged
     assert issues[0].context['wire_paths'] == [['obligations', 0]]
-    assert all(i.code == 'preserve_name_literal' and i.owner == 'preserve'
+    assert all(i.code == 'name_text_unclassified' and i.owner == 'preserve'
                for i in issues)
     # 绿对照：现役好稿（纯称谓＋可投影带名面）不触发。
     checkpoint, _errors = assemble(wires['preserve'])
@@ -117,7 +118,7 @@ def test_replay_preserve_round_reports_gate_items(tmp_path):
     wire['obligations'][0]['statement'] = '陆某登门兴师问罪'
     report = replay_preserve_round(wire, chars, blueprint)
     assert report['status'] == 'ran' and not report['passed']
-    assert report['codes'].get('preserve_name_literal') == 1
+    assert report['codes'].get('name_text_unclassified') == 1
     assert report['gate_items'] == ['ob01:statement:陆']
     good = replay_preserve_round(wires['preserve'], chars, blueprint)
     assert good['passed'] and good['reuse'] == 'green'
@@ -137,14 +138,13 @@ def _checkpoint_with(statement: str):
                                                   character_ids=('fu_jun',)),
         must_preserve=True, satisfaction='自然落地')
     return PreserveCheckpoint(
-        checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256='a' * 64,
+        checkpoint_id='cp', policy_id='p', policy_version=11, characters_sha256='a' * 64,
         blueprints_sha256='a' * 64, provider='x', model='y', request_sha256='r' * 64,
         obligations=(obligation,), checkpoint_sha256='a' * 64)
 
 
 def test_self_gate_flags_ambiguous_name_bearing_surface():
-    """多义带名面（同一登记称谓属于两个人物）永不投影——下游必成泄漏，必须在 Preserve
-    自己的接受循环里被定位；可投影的唯一归属带名面仍合法（绿对照）。"""
+    """同形称谓不靠字面猜人；明确 char_id 的声明才解除本次提及的未决。"""
     from contracts.schema.source import CharactersArtifactV6
     from novel.stages.stage4 import preserve_name_issues
     from tests.test_str06_hook import _characters
@@ -158,9 +158,16 @@ def test_self_gate_flags_ambiguous_name_bearing_surface():
     chars = CharactersArtifactV6.model_validate(data)
     ambiguous = preserve_name_issues(_checkpoint_with('陆大哥登门兴师问罪'), chars)
     assert [(i.context['literal'], i.context['field']) for i in ambiguous] == \
-        [('陆', 'statement')], '多义带名面不可绑定、不可投影，须被逐条定位'
+        [('陆大哥', 'statement')], '未声明的多义称谓保持未决，不从裸姓猜人物'
     # 绿对照：唯一归属的带名面（陆二）可投影，合法。
-    assert preserve_name_issues(_checkpoint_with('陆二登门兴师问罪'), chars) == []
+    assert preserve_name_issues(_checkpoint_with('[[name:lu_er|陆二]]登门兴师问罪'), chars) == []
+    assert preserve_name_issues(_checkpoint_with('[[name:fu_jun|陆大哥]]登门兴师问罪'), chars) == []
+    ordinary = _checkpoint_with('[[text|陆续苏醒]]')
+    assert preserve_name_issues(ordinary, chars) == [], '普通义声明不被同形姓名部件误伤'
+    historical = _checkpoint_with('陆续苏醒').model_copy(update={'policy_version': 10})
+    assert preserve_name_issues(historical, chars) == [], '旧源文本不补猜身份或伪造普通义声明'
+    bad_reference = preserve_name_issues(_checkpoint_with('[[name:fu_jun|陆某]]'), chars)
+    assert {issue.code for issue in bad_reference} == {'name_text_reference'}
 
 
 def test_optional_details_use_same_name_gate_and_detail_item_paths():
@@ -174,12 +181,12 @@ def test_optional_details_use_same_name_gate_and_detail_item_paths():
     changed = checkpoint.model_copy(update={'obligations': (
         obligation.model_copy(update={'details': (detail,)}),)})
     issues = preserve_name_issues(changed, _characters())
-    assert len(issues) == 1 and issues[0].code == 'preserve_name_literal'
+    assert len(issues) == 1 and issues[0].code == 'name_text_unclassified'
     assert issues[0].context['field'] == 'details/dt_1234567890abcdef'
     assert issues[0].context['wire_paths'] == [['obligations', 0, 'details', 0]]
     allowed = changed.model_copy(update={'obligations': (
         obligation.model_copy(update={'details': (
-            detail.model_copy(update={'text': '陆大哥从床底钻出，陆兄拍去衣角'}),)}),)})
+            detail.model_copy(update={'text': declared_stage4_text('陆大哥从床底钻出，陆兄拍去衣角')}),)}),)})
     assert preserve_name_issues(allowed, _characters()) == []
 
 
@@ -246,7 +253,7 @@ def test_preserve_registered_forms_are_accepted_without_mutating_evidence():
     chars = CharactersArtifactV6.model_validate(data)
     checkpoint = _checkpoint_with('表弟来了')
     obligation = checkpoint.obligations[0].model_copy(update={
-        'satisfaction': "裴书远以夫君表弟的身份出现，'表弟/书远'指裴书远；不得张冠李戴。"})
+        'satisfaction': "[[name:pei_shuyuan|裴书远]]以夫君表弟的身份出现，'表弟/[[name:pei_shuyuan|书远]]'指[[name:pei_shuyuan|裴书远]]；不得张冠李戴。"})
     checkpoint = checkpoint.model_copy(update={'obligations': (obligation,)})
     before = checkpoint.model_dump()
     issues = preserve_name_issues(checkpoint, chars)
@@ -269,7 +276,7 @@ def test_natural_mixed_names_reach_the_writer_packet_without_preserve_repair(tmp
     wires = _wires()
     mixed = deepcopy(wires['preserve'])
     # 叙述称谓与对白称呼已登记同人；每次提及及其间行动都应保留。
-    mixed['obligations'][0]['statement'] = '陆大哥向娘子坦白，陆兄确有难言之隐'
+    mixed['obligations'][0]['statement'] = declared_stage4_text('陆大哥向娘子坦白，陆兄确有难言之隐')
     transport = PatchingTransport(wires, mixed, owner='preserve')
     ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires, transport=transport)
     run_preserve(ctx)
@@ -306,7 +313,8 @@ def test_normal_name_reveal_is_not_rewritten_by_preserve_portability_gate(tmp_pa
     _ctx, _repo, chars, blueprint = _prepared(tmp_path, wires)
     wire = deepcopy(wires['preserve'])
     wire['obligations'][0].update(kind='identity', anchors=['b01_01.c1'],
-        statement='陆大哥正是陆兄', satisfaction='第一次点明陆大哥就是陆兄')
+        statement=declared_stage4_text('陆大哥正是陆兄'),
+        satisfaction=declared_stage4_text('第一次点明陆大哥就是陆兄'))
     checkpoint, errors = assemble_preserve(wire, policy_id='preserve-default',
         policy_version=STAGE4_PRESERVE_POLICY_VERSION, characters=chars.core_view(),
         blueprint=blueprint, provider='x', model='y', request_sha256='r' * 64)
