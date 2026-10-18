@@ -230,10 +230,21 @@ Stage0～Stage2 源 schema 与正式字节不变；`str06.stage4.naming` 前移�
 | 批次 | 内容 | 状态 |
 |---|---|---|
 | A 冻结新契约 | 命名节点前移登记（str06.stage4.naming＋stage4/naming/name_map.json＋NameMap v6）、模块迁 stage4 包、版式头升 rc26、登记 naming-forward-rc25-rc26 同根升级边（含升级器 preserve checkpoint 归档缺口修复）、判据/计数/冻结基线重钉 | **已完成**（2026-10-18） |
-| B 打通目标材料 | 命名前移；Preserve 生成目标表述；关闭源自由文本直接流入 Design、Binding、正文及 Hook 的入口 | 未开始 |
+| B 打通目标材料 | 命名前移；Preserve 生成目标表述；关闭源自由文本直接流入 Design、Binding、正文及 Hook 的入口 | **已完成**（2026-10-18） |
 | C 切换正文与装配 | 删 identity-text 协议、候选覆盖硬闸、两类区间回执及末端替换；修订普通正文回执与交付身份 | 未开始 |
 | D 恢复与公开读面 | 闭合存量升级、历史账读取、预算、CLI、API 和监控页 | 未开始 |
 | E 验收与删除旧路径 | 完成工程验证及真实正文验收，删除失去消费者的代码和测试 | 未开始 |
+
+批次 B 工程验证（2026-10-18，fake transport、零付费）：Preserve 正式读取
+`stage4/naming/name_map.json`（来源账边记账，名字一变 checkpoint／Brief 及下游
+经新鲜度失效）；PRESERVE_RULES 升 policy 12／wire v7，prompt 带「目标名称表」
+确定性投影；checkpoint 增 `name_map_sha256` 绑定；Brief／Binding 升 rc26；
+IdentityProjection 增 `target_name`（Design 输入用目标姓名）；policy 12 硬闸按
+义务/细节条目定位源旧字面与身份文本标记残片（进 preserve 同节点修订环）；
+run_body_design 读取序与 Preserve 一致（来源账边顺序稳定，同身份重放字节一致）；
+契约五文件与默认非 corpus 回归 **4446 passed，0 failed/error/skipped**。
+中间态说明：写手材料（IR 释放面／合法身份引用）仍按源登记面，目标姓名以 Brief
+直书文本到达写手包——切目标面属批次 C。
 
 批次 A 工程验证（2026-10-18，fake transport、零付费）：契约五文件（docs_references／
 coverage／rules_registry／hard_counterexamples／ingest_fixtures）与 naming／store／
@@ -260,3 +271,5 @@ Stage7 腿只剩 assemble）；旧 `stage7/naming/name_map.json` 进
 | rc25→rc26 同根升级登记 | `contracts/contract_upgrades.py` 新增精确身份边：保留 Stage0～Stage2、原始证据、已购响应、历史轮次与成本账；归档旧 Preserve checkpoint、Brief 及全部 Stage4～Stage7 目标产物；从新目标命名节点重建；不恢复内容额度，不用移动文件／删除标记／重新序列化把旧语义稿转成新稿。所有 rc25 当前根升级或只读归档后删除该边；通用计划／CAS／中断恢复机制保留，未登记版本继续阻断。 |
 | 旧 Stage7 naming 历史账只读入口 | 集中只读解码旧 naming 工作单元与 ledger；禁止执行、追加授权或修改历史身份；旧成本计入整书账。所有存量根只读归档且不再续跑后删除该入口，不扩展为通用旧链兼容层（S-03）。 |
 | identity-text-v1 及两类区间回执旧协议测试 | 随批次 C 退出维护；删除依据＝普通正文回执新职责反例覆盖同一行为面。保留仍有效的职责反例（结构、引用、完整性、来源绑定）与现役判据红例，不删反例提速（I-50～I-52）。 |
+| Preserve policy ≤11 候选覆盖闸 | 随 identity-text 退役：旧口径（`name_text_unclassified` 候选覆盖、标记声明）只服务 v6 wire 历史回答，现役 wire v7 拒绝旧协议字面量；历史 checkpoint 已由 rc25→rc26 升级归档，不再进现役接受环。存量根全部升级或只读归档后删除 `_legacy_preserve_name_issues` 残留与相关测试登记。 |
+| 旧 Stage7 naming 历史账只读入口 | 集中只读解码旧 naming 工作单元与 ledger；禁止执行、追加授权或修改历史身份；旧成本计入整书账。所有存量根只读归档且不再续跑后删除该入口，不扩展为通用旧链兼容层（S-03）。 |

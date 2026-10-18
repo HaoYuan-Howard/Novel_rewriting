@@ -299,6 +299,10 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'name_text_syntax': 'locate',
     'name_text_reference': 'locate',
     'name_text_unclassified': 'locate',
+    # 命名前移批（policy 12）：义务文本旧名面与身份文本标记残片，按义务/细节
+    # 条目路径定位（进 preserve 同节点修订轮）。
+    'preserve_old_name_literal': 'locate',
+    'preserve_name_text_marker': 'locate',
     'design_unknown_char': 'locate',
     'design_unregistered_surface': 'locate',
     'design_confirm_unestablished': 'locate',

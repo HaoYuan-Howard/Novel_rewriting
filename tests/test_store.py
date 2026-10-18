@@ -2673,7 +2673,7 @@ def _quality_model(rel: str):
     )
     from tests.test_str06_contracts import _binding, _brief, _checkpoint
     if rel == 'runtime/preserve_checkpoint.json':
-        return PreserveCheckpoint(**_checkpoint())
+        return PreserveCheckpoint(name_map_sha256='n' * 64,**_checkpoint())
     if rel == 'stage4/grounding/reconstruction_brief.json':
         return ReconstructionBrief(**_brief())
     if rel == 'stage4/grounding/semantic_binding.json':
@@ -2792,7 +2792,7 @@ def test_execution_plan_formal_read_migrates_without_rewriting_sealed_bytes(tmp_
     assert repo.path(rel).read_bytes() == original
 
 
-@pytest.mark.parametrize('version', [None, 'str06-rc13', 'str06-rc14', 'str06-rc20', 'str06-rc22'])
+@pytest.mark.parametrize('version', [None, 'str06-rc13', 'str06-rc14', 'str06-rc20', 'str06-rc26'])
 def test_old_graph_hook_component_cannot_bypass_quality_version_refusal(tmp_path, version):
     from tests.str06_facilities import synthetic_ref
     from tests.test_str06_hook import _green_pair

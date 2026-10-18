@@ -96,7 +96,7 @@ def _binding(graph) -> SemanticBinding:
         anchors=anchor_stub(),
         lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('ch1',)),
         must_preserve=True, satisfaction='正文呈现')
-    return SemanticBinding(
+    return SemanticBinding(contract_version='str06-rc26',
         binding_id='bd', preserve_checkpoint_sha256=H64, obligations=(ob,),
         entries=(BindingEntry(obligation_id='ob1', scene_id=first.scene_id,
                               beat_ref=f'{first.scene_id}#{first.beats[0].beat_id}'),

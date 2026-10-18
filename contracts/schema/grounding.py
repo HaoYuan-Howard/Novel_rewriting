@@ -226,9 +226,12 @@ class PreserveCheckpoint(StrictModel):
     ReconstructionBrief / SemanticBinding。执行身份记录 provider/model/请求
     hash，供「同请求身份下历史采用」与成本对账（I-37/I-43）。
     R10a a2：义务带类型化 anchors；顶层增 series（同一机制的多次发生）。
+    rc26（命名前移批）：policy 12 起义务文本用目标姓名转述；`name_map_sha256`
+    绑定 `stage4/naming/name_map.json`（NameMapV6）——名字一变，依赖它的
+    checkpoint／Brief 及下游明确失效，不静默沿用（§4 升级与失效规则）。
     """
 
-    contract_version: Literal['str06-rc22'] = 'str06-rc22'
+    contract_version: Literal['str06-rc26'] = 'str06-rc26'
     provenance: FreeProvenance | LlmProvenance | None = Field(
         default=None, alias='_provenance', exclude=True)
     checkpoint_id: str = Field(min_length=1)
@@ -236,6 +239,7 @@ class PreserveCheckpoint(StrictModel):
     policy_version: int = Field(ge=1)
     characters_sha256: str = Field(min_length=64, max_length=64)
     blueprints_sha256: str = Field(min_length=64, max_length=64)
+    name_map_sha256: str = Field(min_length=64, max_length=64)
     provider: str = Field(min_length=1)
     model: str = Field(min_length=1)
     request_sha256: str = Field(min_length=64, max_length=64)
@@ -269,11 +273,14 @@ class IdentityProjection(StrictModel):
     """Design 的输入之一：稳定 char_id → 身份声明。
 
     来源 Characters（公共投影）；只给身份与稳定约束，不给源坐标。Design 由此
-    在 source-blind 前提下仍能引用「同一个人」。
+    在 source-blind 前提下仍能引用「同一个人」。rc26（命名前移批）起
+    `target_name` 给目标姓名（NameMapV6 的全名或保留称谓）——进入创作链的
+    自然语言一律用目标名字，源旧名只留在审计链。
     """
 
     char_id: str = Field(min_length=1)
     identity_statement: str = Field(min_length=1)
+    target_name: str = Field(min_length=1)
     stable_constraints: tuple[str, ...] = Field(default=(), min_length=0)
 
 
@@ -436,7 +443,7 @@ class ReconstructionBrief(StrictModel):
     不得经状态或说明改写；兑现与越权校验归 assemble_body_design。
     """
 
-    contract_version: Literal['str06-rc22'] = 'str06-rc22'
+    contract_version: Literal['str06-rc26'] = 'str06-rc26'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
@@ -568,7 +575,7 @@ class SemanticBinding(StrictModel):
     产物没有该映射，由 `contract_version` 字面量拒读——缺省空表不会冒充旧产物。
     """
 
-    contract_version: Literal['str06-rc22'] = 'str06-rc22'
+    contract_version: Literal['str06-rc26'] = 'str06-rc26'
     binding_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     obligations: tuple[SourceObligation, ...] = Field(min_length=1)

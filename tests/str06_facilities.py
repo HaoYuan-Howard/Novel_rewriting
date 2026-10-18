@@ -75,6 +75,47 @@ def names_v6_wire(structure: dict) -> dict:
             'people': people}
 
 
+def name_map_of(characters) -> object:
+    """命名前移批（rc26）测试替身：对给定 Characters 的**全部保留** NameMapV6。
+
+    覆盖应改名集合（name-bearing 称谓面／化名／given 非空的人物）并逐条给
+    keep_reason——`compile_name_map` 的闭合核对因此满足。不关心目标姓名的
+    测试用最简形态；关心改名的测试自行构造 entries。
+    """
+    from contracts.schema.naming import NameAssignment, NameMapV6
+    structure = getattr(characters, 'name_structure', None)
+    entries = []
+    if structure is not None:
+        for slug, person in structure.people.items():
+            bearing = any(form is not None for form in person.surface_forms.values())
+            if not (bearing or person.aliases or person.given):
+                continue          # 纯称谓人物不进应改名集合
+            entries.append(NameAssignment(
+                char_ref=slug, name=None, aliases={},
+                keep_reason='测试替身：全部保留'))
+    if not entries:
+        # 无名称结构或无人需要改名：至少一条显式保留，满足 min_length=1。
+        slug = next(iter(characters.characters))
+        entries.append(NameAssignment(
+            char_ref=slug, name=None, aliases={}, keep_reason='测试替身：全部保留'))
+    return NameMapV6(entries=tuple(entries))
+
+
+def hook_naming_map() -> object:
+    """hook 夹具 naming wire 的等价 NameMapV6（yun_niang→柳婉，fu_jun→顾）。
+
+    与 `tests/test_str06_hook._full_chain_wires()['naming']` 同一批改名事实；
+    只读复检／自闸测试用它得到**真实旧名闭集**（全部保留替身没有旧名可拦）。
+    """
+    from contracts.schema.naming import NameAssignment, NameMapV6
+    return NameMapV6(entries=(
+        NameAssignment(char_ref='fu_jun', name={'family': '顾', 'given': None},
+                       aliases={}, keep_reason=None),
+        NameAssignment(char_ref='yun_niang', name={'family': '柳', 'given': '婉'},
+                       aliases={}, keep_reason=None),
+    ))
+
+
 def anchor_stub(handle: str = 's0_01') -> tuple:
     """R10a a2 fixture：手工构造 checkpoint 的最小 anchors（不经 assemble_preserve
     的下游测试统一引用；正式 anchors 由 assemble 从投影句柄类型化拷贝）。"""

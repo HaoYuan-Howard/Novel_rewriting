@@ -294,7 +294,7 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 产物同批显式升版；rc21/v4 不做隐式迁移，FREE owner patch 全量复验。
     # checkpoint 也携带 contract_version；旧版/缺版本不可补空值作为新证据。
     # 旧五质量产物迁移退役，仅未变化 ExecutionPlan 保留登记的 rc12/13 适配。
-    'runtime/preserve_checkpoint.json': 'str06-rc22',
+    'runtime/preserve_checkpoint.json': 'str06-rc26',
     # rc13（2026-10-03 CS-3 余项，D5 统一＋world 规则 id）：读者揭示统一走
     # knowledge(holder=reader)（TargetDelta 删 reader 域与 confirms；Brief 知
     # 情锁同写法）；Brief.book_constraints 升 WorldConstraint（wc_{nn} 稳定
@@ -303,11 +303,11 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc17（2026-10-06 CS-H H3，RC-61）：Brief 认知变化条目新增 requires_released
     # （必保揭名派生，随认知增量携带）；缺省读入兼容旧盘，身份随 rc17 换。
     # rc18：ObligationAnchor.visibility 删（effect 命题锚只在 cognition）。
-    'stage4/grounding/reconstruction_brief.json': 'str06-rc22',
+    'stage4/grounding/reconstruction_brief.json': 'str06-rc26',
     # rc16（2026-10-04 CS-F2）：Binding 增 fact_bindings（事实锁→已有目标状态的
     # 映射，只存引用不复制 value）；旧 rc12 Binding 缺该映射、无损推不回，拒读。
     # rc17（2026-10-06 CS-H H3，RC-63）：BriefFactLock 增 subjects（主体包含判定）。
-    'stage4/grounding/semantic_binding.json': 'str06-rc22',
+    'stage4/grounding/semantic_binding.json': 'str06-rc26',
     'stage4/compiled/execution_plan.json': 'str06-rc14',
     'stage4/acceptance/guard/compile.json': 'str06-rc12',
     'stage4/acceptance/guard/report.json': 'str06-rc12',

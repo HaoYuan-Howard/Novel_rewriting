@@ -13,7 +13,7 @@ from contracts.schema.policy import PreserveKind
 from contracts.schema.source import (
     BlueprintsArtifactV17, ChapterBlueprint, CharactersCore,
 )
-from tests.str06_facilities import v13_beat
+from tests.str06_facilities import name_map_of, v13_beat
 from novel.stages.stage4.grounding import (
     assemble_preserve, derive_semantic_binding, project_brief,
 )
@@ -61,9 +61,9 @@ def _source_pair():
 
 
 def _preserve_wire():
-    """stage4-preserve-v6 形状：义务以 anchors 引用投影句柄
+    """stage4-preserve-v7 形状（命名前移批）：义务以 anchors 引用投影句柄
     （b拍.e序/.c序/.l序、s0_*、wc_*），lineage 不再由模型输出。"""
-    return {'protocol_version': 'stage4-preserve-v6', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v7', 'obligations': [
         {'kind': 'event_core', 'statement': '借种之约成立',
          'anchors': ['b01_01.e1'],
          'must_preserve': True, 'satisfaction': '正文呈现约定被提出且被接受',
@@ -78,12 +78,20 @@ def _preserve_wire():
     ]}
 
 
-def _assemble():
+def _assemble(wire=None, **kw):
+    from tests.str06_facilities import name_map_of
     chars, bp = _source_pair()
+    kw.setdefault('policy_id', 'preserve-default')
+    kw.setdefault('policy_version', 1)
+    kw.setdefault('characters', chars)
+    kw.setdefault('blueprint', bp)
+    kw.setdefault('provider', 'deepseek')
+    kw.setdefault('model', 'flash')
+    kw.setdefault('request_sha256', 'r' * 64)
+    kw.setdefault('name_map', name_map_of(kw['characters']))
+    kw.setdefault('name_map_sha256', 'n' * 64)
     cp, errors = assemble_preserve(
-        _preserve_wire(), policy_id='preserve-default', policy_version=1,
-        characters=chars, blueprint=bp, provider='deepseek', model='flash',
-        request_sha256='r' * 64)
+        wire if wire is not None else _preserve_wire(), **kw)
     assert cp is not None and not errors, errors
     return chars, bp, cp
 
@@ -108,7 +116,7 @@ def test_assemble_preserve_green_and_hash_stable():
     assert [o.obligation_id for o in cp.obligations] == ['ob01', 'ob02', 'ob03']
     assert cp.obligations[1].requires == ('ob01',)
     # 同输入重放 → 同 checkpoint hash（paid checkpoint 的可恢复身份）
-    cp2, _ = assemble_preserve(
+    _c, _b, cp2 = _assemble(
         _preserve_wire(), policy_id='preserve-default', policy_version=1,
         characters=chars, blueprint=bp, provider='deepseek', model='flash',
         request_sha256='r' * 64)
@@ -116,7 +124,7 @@ def test_assemble_preserve_green_and_hash_stable():
     # Truth 变化 → hash 变（绑定的 Source 身份有效）
     chars2, _ = _source_pair()
     chars2.characters['fu_jun'].canonical = '别人'
-    cp3, _ = assemble_preserve(
+    _c, _b, cp3 = _assemble(
         _preserve_wire(), policy_id='preserve-default', policy_version=1,
         characters=chars2, blueprint=bp, provider='deepseek', model='flash',
         request_sha256='r' * 64)
@@ -129,10 +137,11 @@ def test_assemble_preserve_rejects_dangling_and_cycles():
     bad['obligations'][0]['anchors'] = ['b99_99.e1']
     _, errors = assemble_preserve(
         bad, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
-        provider='x', model='y', request_sha256='r' * 64)
+        provider='x', model='y', request_sha256='r' * 64,
+        name_map=name_map_of(chars), name_map_sha256='n' * 64)
     assert any('未知句柄' in e for e in errors)
 
-    cyclic = {'protocol_version': 'stage4-preserve-v6', 'obligations': [
+    cyclic = {'protocol_version': 'stage4-preserve-v7', 'obligations': [
         {'kind': 'event_core', 'statement': 'a',
          'anchors': ['b01_01.e1'],
          'must_preserve': False, 'satisfaction': '', 'requires': [2]},
@@ -141,7 +150,8 @@ def test_assemble_preserve_rejects_dangling_and_cycles():
          'must_preserve': False, 'satisfaction': '', 'requires': [1]}]}
     _, errors = assemble_preserve(
         cyclic, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
-        provider='x', model='y', request_sha256='r' * 64)
+        provider='x', model='y', request_sha256='r' * 64,
+        name_map=name_map_of(chars), name_map_sha256='n' * 64)
     assert any('成环' in e for e in errors)
 
     # 编号不是模型的输出（I-21）：带 obligation_id 的旧形状拒收
@@ -149,7 +159,8 @@ def test_assemble_preserve_rejects_dangling_and_cycles():
     stale['obligations'][0]['obligation_id'] = 'ob01'
     _, errors = assemble_preserve(
         stale, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
-        provider='x', model='y', request_sha256='r' * 64)
+        provider='x', model='y', request_sha256='r' * 64,
+        name_map=name_map_of(chars), name_map_sha256='n' * 64)
     assert any('未知字段' in e for e in errors)
 
     # requires 序号越界 / 自指精确拒
@@ -157,13 +168,15 @@ def test_assemble_preserve_rejects_dangling_and_cycles():
     oob['obligations'][1]['requires'] = [9]
     _, errors = assemble_preserve(
         oob, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
-        provider='x', model='y', request_sha256='r' * 64)
+        provider='x', model='y', request_sha256='r' * 64,
+        name_map=name_map_of(chars), name_map_sha256='n' * 64)
     assert any('越界' in e for e in errors)
     self_ref = _preserve_wire()
     self_ref['obligations'][1]['requires'] = [2]
     _, errors = assemble_preserve(
         self_ref, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
-        provider='x', model='y', request_sha256='r' * 64)
+        provider='x', model='y', request_sha256='r' * 64,
+        name_map=name_map_of(chars), name_map_sha256='n' * 64)
     assert any('自指' in e for e in errors)
 
     # 协议版本漏带/错带即拒（I-13 无隐式迁移）
@@ -171,7 +184,8 @@ def test_assemble_preserve_rejects_dangling_and_cycles():
     wrong['protocol_version'] = 'stage4-preserve-v9'
     _, errors = assemble_preserve(
         wrong, policy_id='p', policy_version=1, characters=chars, blueprint=bp,
-        provider='x', model='y', request_sha256='r' * 64)
+        provider='x', model='y', request_sha256='r' * 64,
+        name_map=name_map_of(chars), name_map_sha256='n' * 64)
     assert any('protocol_version' in e for e in errors)
 
 
@@ -179,7 +193,7 @@ def test_assemble_preserve_rejects_dangling_and_cycles():
 
 def test_project_brief_source_blind_projection():
     chars, bp, cp = _assemble()
-    brief, identity = project_brief(cp, chars, bp)
+    brief, identity = project_brief(cp, chars, bp, name_map=name_map_of(chars))
     # 只有 event_core 进骨架；reveal/identity 义务不进 cores
     assert len(brief.requirements) == len(cp.obligations)
     assert {c.satisfaction for c in brief.requirements} == {o.satisfaction for o in cp.obligations}
@@ -221,7 +235,7 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
                                       'quote': '夫君藏进床底'}]}],
             'loops': []}]})
     assert observation.beats[0].cognition
-    _brief, identity = project_brief(cp, chars, bp)
+    _brief, identity = project_brief(cp, chars, bp, name_map=name_map_of(chars))
     dumped = ' '.join(' '.join(i.stable_constraints) for i in identity)
     assert '床底' not in dumped and '藏身' not in dumped
     assert '以为' not in dumped and '离开' not in dumped

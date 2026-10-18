@@ -14,12 +14,20 @@ from novel.llm.paid_requests import digest
 from novel.llm.transport import ChatResponse
 from novel.stages.chain import ChainContext, run_body_design, run_preserve, run_workflow
 from novel.stages.stage4 import design_obligation_index, inspect_design_candidate, project_brief
-from tests.str06_facilities import (
+from tests.str06_facilities import (name_map_of,
     carry_forward_ask, json_ask, republish_checkpoint, text_ask,
 )
 from tests.test_str06_body import _chapters, _make_session
 from tests.test_str06_hook import _full_chain_wires
 
+
+def _assemble(wire, **kw):
+    """命名前移批测试垫片：自动补 NameMapV6（全部保留替身）与内容摘要。"""
+    from novel.stages.stage4.grounding import assemble_preserve
+    from tests.str06_facilities import name_map_of
+    kw.setdefault('name_map', name_map_of(kw['characters']))
+    kw.setdefault('name_map_sha256', 'n' * 64)
+    return assemble_preserve(wire, **kw)
 
 def _prepare(tmp_path, *, bad_preserve=False):
     wires = _full_chain_wires()
@@ -33,21 +41,27 @@ def _prepare(tmp_path, *, bad_preserve=False):
     run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask,
                  ask_text=ctx.ask_text, ask_body=ctx.ask_body, budget=ctx.budget,
                  through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask,
+                 ask_text=ctx.ask_text, ask_body=ctx.ask_body, budget=ctx.budget,
+                 through='stage4', node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     if bad_preserve:
-        # CS-H H3d 起 Preserve 自闸在义务文本拦下不可投影字面（陆郎）——上游材料
-        # 反例改经已发布 checkpoint 的正式修订注入（republish 换 seal＝上游新版本），
-        # 不再经 Preserve 购买回答（那里会被自闸逐条定位）。
+        # 命名前移批（policy 12）起 Preserve 自闸在义务文本拦下源旧字面——上游
+        # 材料反例改经已发布 checkpoint 的正式修订注入（republish 换 seal＝上游
+        # 新版本），不再经 Preserve 购买回答（那里会被自闸逐条定位）。
         republish_checkpoint(repo, lambda cp: cp.model_copy(update={'obligations': tuple(
-            o.model_copy(update={'statement': '[[name:fu_jun|陆郎]]与[[name:yun_niang|芸娘]]成亲且立下旧约'})
+            o.model_copy(update={'statement': '陆大哥与柳婉成亲且立下旧约'})
             if o.obligation_id == 'ob01' else o
             for o in cp.obligations)}))
     chars = repo.read_model('stage2/characters/characters.json')
     checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
     brief, _ = project_brief(checkpoint, chars.core_view(),
-                             repo.read_model('stage2/blueprints/chapter_blueprints.json'))
+                             repo.read_model('stage2/blueprints/chapter_blueprints.json'),
+name_map=name_map_of(chars.core_view()))
     args = dict(checkpoint=checkpoint, brief=brief,
                 obligations=design_obligation_index(checkpoint, brief), chars=chars,
+                name_map=repo.read_model('stage4/naming/name_map.json'),
                 constraints=OutputConstraints(target_chapter_count=2, total_length_budget=2000),
                 length_band=ctx.length_band)
     return ctx, wires, transport, args
@@ -75,7 +89,7 @@ def test_candidate_aggregates_direct_and_inherited_errors_without_mutation(tmp_p
     assert view.body is not None and view.binding is not None and not view.passed
     assert sum(getattr(error, 'code', '') == 'name_text_unclassified' for error in view.errors) >= 2
     assert any(getattr(error, 'owner', '') == 'preserve'
-               and getattr(error, 'code', '') == 'name_text_reference' for error in view.errors)
+               and getattr(error, 'code', '') == 'preserve_old_name_literal' for error in view.errors)
     checks = {c.name: c.status for c in view.checks}
     assert checks['design'] == checks['preserve_input'] == 'failed'
     assert checks['binding'] == checks['execution_plan'] == 'passed'
@@ -104,7 +118,8 @@ def test_real_acceptance_routes_upstream_first_and_preserves_all_diagnostics(tmp
     with pytest.raises(OwnerRevisionRequired) as stopped:
         run_workflow(repository=ctx.repository, chapters=ctx.chapters, ask=ctx.ask,
                      ask_text=ctx.ask_text, ask_body=ctx.ask_body, budget=ctx.budget,
-                     node_filter=('str06.stage4.body_design',))
+                     through='stage4', node_filter=('str06.stage4.naming',
+                                                    'str06.stage4.body_design'))
     assert stopped.value.node == 'str06.stage4.preserve'
     report = stopped.value.context['input_preflight']
     assert report['errors']
@@ -458,10 +473,14 @@ def _lineage_only_mutation(checkpoint):
 
 
 def _appellation_only_rewrite(checkpoint):
-    """换登记称谓不改语义：苏芸娘→芸娘、夫君→陆大哥（同一人物的其它登记面）。"""
+    """只改标点不改称谓与语义：规范形归一标点空白后相等 ⇒ 零调用采用。
+
+    命名前移批（policy 12）后源登记面是旧字面，换用它们会被目标姓名闸拦；
+    「规范形相等」的最纯形态是标点差异（`canonical_appellation_form` 归一
+    标点与空白），同样证明免费沿用。
+    """
     obligations = tuple(
-        o.model_copy(update={'statement': o.statement.replace('苏芸娘', '芸娘')
-                             .replace('夫君', '陆大哥')})
+        o.model_copy(update={'statement': o.statement.replace('且', '，且')})
         for o in checkpoint.obligations)
     return checkpoint.model_copy(update={'obligations': obligations})
 
@@ -831,7 +850,8 @@ def _material_reuse_setup(tmp_path, wires):
     from tests.test_str06_body import _RoutingTransport
     from tests.test_str06_preserve_gate import _prepared
     transport = _RoutingTransport(wires)
-    ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires, transport=transport)
+    ctx, repo, _chars, _blueprint = _prepared(
+        tmp_path, wires, transport=transport, nodes=('str06.stage4.naming',))
     run_preserve(ctx)
     run_body_design(_design_ctx(ctx, _reopened_session(repo, transport)))
     return ctx, transport
@@ -842,9 +862,11 @@ def _reassemble_preserve_for_reuse(repo, checkpoint, wire):
     from novel.stages.stage4 import assemble_preserve
     chars = repo.read_model('stage2/characters/characters.json')
     blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
-    updated, errors = assemble_preserve(
+    from tests.str06_facilities import name_map_of
+    updated, errors = _assemble(
         wire, policy_id=checkpoint.policy_id, policy_version=checkpoint.policy_version,
         characters=chars.core_view(), blueprint=blueprint,
+        name_map=name_map_of(chars), name_map_sha256='n' * 64,
         provider=checkpoint.provider, model=checkpoint.model,
         request_sha256=checkpoint.request_sha256)
     assert updated is not None and not errors, errors
@@ -857,10 +879,11 @@ def _inspect_reuse_wire(ctx, wire):
     checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
     blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
     brief, _ = project_brief(checkpoint, chars.core_view(), blueprint,
-                             structure=chars.name_structure)
+                             structure=chars.name_structure,
+name_map=name_map_of(chars.core_view()))
     return inspect_design_candidate(
         wire, checkpoint=checkpoint, brief=brief,
-        obligations=design_obligation_index(checkpoint, brief), chars=chars,
+        obligations=design_obligation_index(checkpoint, brief), chars=chars, name_map=name_map_of(chars),
         constraints=OutputConstraints(target_chapter_count=2, total_length_budget=2000),
         length_band=ctx.length_band)
 
@@ -1024,7 +1047,7 @@ def test_series_covers_only_revision_narrowly_reviews_summary_and_affected_insta
     from tests.test_str06_design_patch import PatchingTransport
     wires = _full_chain_wires()
     wires['preserve']['obligations'].extend([
-        {'kind': 'event_core', 'statement': '[[name:yun_niang|芸娘]]在新婚夜立誓查清旧约',
+        {'kind': 'event_core', 'statement': '柳婉在新婚夜立誓查清旧约',
          'anchors': ['b01_01.e1'], 'must_preserve': False,
          'satisfaction': '立誓查清旧约的决意已经发生', 'requires': []},
         {'kind': 'event_core', 'statement': '门外人声远去后渐渐安静',

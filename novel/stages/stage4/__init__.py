@@ -56,9 +56,10 @@ from novel.stages.stage4.fold import (
 )
 from novel.stages.stage4.grounding import (
     assemble_preserve, design_obligation_index, derive_semantic_binding,
-    fact_lock_subjects, obligation_core_id, preserve_name_issues,
+    fact_lock_subjects, name_map_content_sha256, obligation_core_id,
+    preserve_name_issues,
     preserve_patch_slice, project_brief, project_preserve_view,
-    preserve_revision_wire,
+    project_target_names, preserve_revision_wire, target_name_faces,
 )
 from novel.stages.stage4.preflight import (
     hook_candidate_material_errors, hook_combination_errors,
@@ -103,9 +104,12 @@ __all__ = [
     'design_reference_aliases', 'design_wire_model', 'DESIGN_READ_PROTOCOLS', 'design_issue',
     'derive_semantic_binding', 'locate_design_patches', 'wire_paths_of',
     'expected_thread_faces', 'fold_accepted_prefix', 'fold_thread_faces',
-    'init_establishments', 'lock_order_violations', 'obligation_core_id',
+    'init_establishments', 'lock_order_violations', 'name_map_content_sha256',
+    'obligation_core_id',
     'project_brief', 'project_design_input', 'project_hook_semantics', 'project_preserve_view',
+    'project_target_names',
     'preserve_name_issues', 'preserve_patch_slice', 'preserve_revision_wire', 'fact_lock_subjects',
+    'target_name_faces',
     'hook_combination_errors', 'hook_patch_legal_values', 'hook_patch_slice',
     'hook_catalog', 'hook_wire_schema', 'project_hook_input',
     'publish_graph', 'run_mechanical_guard', 'scene_order', 'validate_hook_design',

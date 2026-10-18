@@ -301,7 +301,7 @@ def _binding(body):
                                   character_ids=('fu_jun',)),
             must_preserve=True, satisfaction='悬念保留为悬念，正文不得作答'),
     )
-    cp = PreserveCheckpoint(
+    cp = PreserveCheckpoint(name_map_sha256='n' * 64,
         checkpoint_id='cp', policy_id='p', policy_version=5, characters_sha256=H64,
         blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
         obligations=obligations, checkpoint_sha256=H64)

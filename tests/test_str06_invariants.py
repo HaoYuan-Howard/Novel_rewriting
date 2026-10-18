@@ -83,7 +83,7 @@ def _obligation(oid: str, must: bool = True) -> SourceObligation:
 
 
 def _checkpoint(*obligations: SourceObligation, sha: str = H64) -> PreserveCheckpoint:
-    return PreserveCheckpoint(
+    return PreserveCheckpoint(name_map_sha256='n' * 64,
         checkpoint_id='cp1', policy_id='preserve-default', policy_version=1,
         characters_sha256=H64, blueprints_sha256=H64, provider='deepseek',
         model='flash', request_sha256=H64, obligations=obligations,
@@ -394,7 +394,7 @@ def test_verification_ir_carries_continuity_fact_view():
 
 
 def test_brief_hides_source_topology_behaviorally():
-    brief = ReconstructionBrief(**sample_brief_expression(),
+    brief = ReconstructionBrief(contract_version='str06-rc26',**sample_brief_expression(),
         brief_id='br1', preserve_checkpoint_sha256=H64,
         requirements=(
             BriefRequirement(kind='event_core', must_preserve=False, satisfaction='', core_id='c1', summary='约定成立', participants=('ch1',)),

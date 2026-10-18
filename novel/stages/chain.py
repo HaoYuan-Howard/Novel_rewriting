@@ -118,9 +118,11 @@ from novel.stages.stage4 import (
     assemble_hook_design,
     assemble_preserve, compile_execution_plan, compile_hook_context,
     compile_writer_book_ir, design_obligation_index,
-    detail_index, knowledge_change_index, lock_order_violations, obligation_core_id,
+    detail_index, knowledge_change_index, lock_order_violations,
+    name_map_content_sha256, obligation_core_id,
     preserve_name_issues, preserve_patch_slice, project_brief,
-    project_design_input, project_preserve_view, preserve_revision_wire,
+    project_design_input, project_preserve_view, project_target_names,
+    preserve_revision_wire,
     publish_graph,
     apply_bound_names, compile_name_map, compile_bound_replacements,
     naming_patch_locate, naming_projection,
@@ -975,6 +977,10 @@ def run_preserve(ctx: ChainContext) -> dict:
     chars = repository.read_model('stage2/characters/characters.json')
     core = chars.core_view()
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+    # 命名前移批（rc26）：目标名称表是本节点的正式输入——读盘即记来源账边，
+    # 名字一变 checkpoint／Brief 及其下游明确失效（§4）。
+    name_map = repository.read_model('stage4/naming/name_map.json')
+    name_map_sha = name_map_content_sha256(name_map)
     # R10a a2：源证据投影视图（确定性渲染＋逐字引文＋证据窗口）取代整份
     # Blueprint JSON 倾倒（R10-0.3 实证 29.9k token/轮）；视图是文本块，
     # 人物表保持 JSON——pack_prompt 只装 JSON，视图直拼。
@@ -990,8 +996,9 @@ def run_preserve(ctx: ChainContext) -> dict:
            + json.dumps([r.model_dump(mode='json') for r in chars.name_structure.resolutions],
                         ensure_ascii=False, sort_keys=True)
            if chars.name_structure and chars.name_structure.resolutions else '')
-        + '\n身份文本候选（只召回，不证明指人）：'
-        + json.dumps(name_candidate_literals(chars.name_projection(), chars.name_structure), ensure_ascii=False)
+        + '\n目标名称表（进入创作链的自然语言一律用这些目标姓名；源旧名只出现在'
+          '上面的源证据视图里，义务文本不得抄回）：'
+        + json.dumps(project_target_names(name_map, chars), ensure_ascii=False)
         + '\n人物表：' + json.dumps(core.model_dump(mode='json', include={'characters'}),
                                     ensure_ascii=False, sort_keys=True,
                                     separators=(',', ':')),
@@ -1002,11 +1009,13 @@ def run_preserve(ctx: ChainContext) -> dict:
     def preserve_compile(w):
         checkpoint, errors = assemble_preserve(w, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,
                                                characters=core, blueprint=blueprint,
+                                               name_map=name_map,
+                                               name_map_sha256=name_map_sha,
                                                provider=ctx.provider, model=ctx.model,
                                                request_sha256=ctx.digest(preserve_prompt))
-        # CS-H H3（RC-64）自闸：义务文本里的裸姓／未登记别名在本接受循环里被
-        # 逐条定位（与下游材料归因同一把尺），不再等跨节点回派。
-        return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars)
+        # 命名前移批（policy 12）：义务文本旧名/标记硬闸按条目定位（与下游材料
+        # 归因同一把尺），不再等跨节点回派。
+        return checkpoint, list(errors) + preserve_name_issues(checkpoint, chars, name_map)
 
     def locate_preserve_patches(wire, errors):
         """Preserve 自闸按义务或完整细节对象定位；其余问题沿用整份修订。"""
@@ -1054,6 +1063,7 @@ def run_preserve(ctx: ChainContext) -> dict:
                 'detail_keys': ['anchor', 'text'],
                 'obligation_count': len(base_wire.get('obligations') or []),
                 'protocol_version': STAGE4_PRESERVE_PROTOCOL,
+                'target_names': project_target_names(name_map, chars),
             }, ensure_ascii=False, separators=(',', ':')))
 
     pw, preserve_ref = ctx.ask('preserve', preserve_prompt,
@@ -1072,7 +1082,8 @@ def run_preserve(ctx: ChainContext) -> dict:
         _backfill_source_evidence_conflicts(repository, conflicts)
         raise AssertionError('discover_owner_issues 必然抛错，不可达')
     brief, identities = project_brief(checkpoint, core, blueprint,
-                                      structure=chars.name_structure)
+                                      structure=chars.name_structure,
+                                      name_map=name_map)
     # R6 输出组发布：checkpoint 与它的投影 brief 同组一个 seal——同一份付费
     # 产出的第二个 key（生成事实继承，用量不重复认领）。
     repository.publish((
@@ -1263,7 +1274,12 @@ def run_body_design(ctx: ChainContext) -> dict:
     chars = repository.read_model('stage2/characters/characters.json')
     core = chars.core_view()
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
-    inherited_name_issues = preserve_name_issues(checkpoint, chars)
+    blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+    # 命名前移批（rc26）：目标名称表是身份投影与 policy 12 预检闸的正式输入。
+    # 读取序与 Preserve（chars→blueprint→name_map）一致，来源账边顺序跨阶段
+    # 稳定，同身份重放发布字节一致。
+    name_map = repository.read_model('stage4/naming/name_map.json')
+    inherited_name_issues = preserve_name_issues(checkpoint, chars, name_map)
     if inherited_name_issues:
         # 重新验证当前输入的声明，不为不属于 Design 的源义务缺陷购买 Design。
         try:
@@ -1279,9 +1295,9 @@ def run_body_design(ctx: ChainContext) -> dict:
                 'checks': [{'name': 'preserve_input', 'status': 'failed'}],
                 'errors': list(inherited_name_issues)}
             raise
-    blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
     brief, identities = project_brief(checkpoint, core, blueprint,
-                                      structure=chars.name_structure)
+                                      structure=chars.name_structure,
+                                      name_map=name_map)
     obligation_index = design_obligation_index(checkpoint, brief)
     constraints = OutputConstraints(target_chapter_count=len(ctx.chapters),
                                     total_length_budget=ctx.budget)
@@ -1340,7 +1356,7 @@ def run_body_design(ctx: ChainContext) -> dict:
     def inspect(w):
         return inspect_design_candidate(
             w, checkpoint=checkpoint, brief=brief, obligations=obligation_index,
-            chars=chars, constraints=constraints,
+            chars=chars, name_map=name_map, constraints=constraints,
             length_band=ctx.length_band, book_title=ctx.book_title)
 
     def repairs_for(inspection):
@@ -1638,8 +1654,9 @@ def run_hook_design(ctx: ChainContext) -> dict:
     checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
     blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
     brief = repository.read_model('stage4/grounding/reconstruction_brief.json')
+    name_map = repository.read_model('stage4/naming/name_map.json')
     _, identities = project_brief(checkpoint, chars.core_view(), blueprint,
-                                  structure=chars.name_structure)
+                                  structure=chars.name_structure, name_map=name_map)
     projection = chars.name_projection()
     kp_statements = {p.kp_id: p.statement for p in brief.propositions}
     world_statements = {wc.constraint_id: wc.statement for wc in brief.book_constraints}

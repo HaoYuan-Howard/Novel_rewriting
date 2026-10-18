@@ -680,9 +680,9 @@ def test_r2_version_constants():
     from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
     from contracts.schema.grounding import SemanticBinding
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/grounding/semantic_binding.json'] \
-        == 'str06-rc22'
+        == 'str06-rc26'
     assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v11'
-    assert SemanticBinding.model_fields['contract_version'].default == 'str06-rc22'
+    assert SemanticBinding.model_fields['contract_version'].default == 'str06-rc26'
 
 
 # ═════════════════ 九、Design wire v2（生产侧同步） ═════════════════

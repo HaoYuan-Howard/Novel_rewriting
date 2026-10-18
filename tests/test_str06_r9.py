@@ -12,9 +12,18 @@ from novel.stages.revisions import (
     activate_node_revisions, adopted_patch, preview_owner_patch, revision_states_at,
     sampling_request, stage_revision, resolve_node_revisions,
 )
+from tests.str06_facilities import name_map_of
 from tests.test_str06_r3_selfheal import _json_session, _ScriptedTransport, _request
 from tests.test_str06_body import _green_book_ir
 
+
+def _assemble(wire, **kw):
+    """命名前移批测试垫片：自动补 NameMapV6（全部保留替身）与内容摘要。"""
+    from novel.stages.stage4.grounding import assemble_preserve
+    from tests.str06_facilities import name_map_of
+    kw.setdefault('name_map', name_map_of(kw['characters']))
+    kw.setdefault('name_map_sha256', 'n' * 64)
+    return assemble_preserve(wire, **kw)
 
 def test_positive_material_leaks_claim_full_names_before_single_char():
     assert not validate_positive_materials(
@@ -121,7 +130,7 @@ def test_equal_wire_cross_identity_owner_patch_stages_and_replays(tmp_path, evid
     baseline = purchased_baseline(root, 'preserve', baseline_identity)
     chars, blueprint = _source_pair()
     def compile_current(candidate):
-        return assemble_preserve(candidate, policy_id='preserve-default',
+        return _assemble(candidate, policy_id='preserve-default',
             policy_version=STAGE4_PRESERVE_POLICY_VERSION,
             characters=chars, blueprint=blueprint, provider='fake', model=answer.model,
             request_sha256=current)
@@ -498,7 +507,7 @@ def test_source_expression_refs_are_checked_and_brief_is_source_blind():
     bad['expression']['mechanisms'][0]['source_refs'] = ['e99_99']
     assert compile_book_observation(bad, evidence=SEGMENTS)[1]
     chars, blueprint, checkpoint = _assemble()
-    brief, _identities = project_brief(checkpoint, chars, blueprint)
+    brief, _identities = project_brief(checkpoint, chars, blueprint, name_map=name_map_of(chars))
     text = brief.model_dump_json()
     assert brief.expression and 'source_refs' not in text and 'e01_01' not in text
 

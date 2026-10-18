@@ -35,7 +35,7 @@ from novel.stages.stage2 import (
     compile_source_truth, project_association_space,
     project_identity_candidates, project_cause_candidates,
 )
-from tests.str06_facilities import make_context, synthetic_ref
+from tests.str06_facilities import name_map_of, make_context, synthetic_ref
 from tests.str06_expression_inputs import (
     sample_book_expression,
 )
@@ -1217,14 +1217,15 @@ def test_stage4_reads_only_canonical(tmp_path, synonymous):
     assert '夫君' in preserve_prompt and '床底' in preserve_prompt
     # Design 的身份投影来自 Characters core（不含名称结构变更面）。
     checkpoint, errors = __import__('novel.stages.stage4.grounding', fromlist=['assemble_preserve']).assemble_preserve(
-            {'protocol_version': 'stage4-preserve-v6', 'obligations': [
+            {'protocol_version': 'stage4-preserve-v7', 'obligations': [
                 {'kind': 'event_core',
                  'statement': '[[name:fu_jun|夫君]]藏身床底',
                  'anchors': ['b01_01.e1'],
                  'must_preserve': True, 'satisfaction': '呈现藏身', 'requires': []}]},
             policy_id='p', policy_version=3, characters=core, blueprint=blueprint,
+            name_map=name_map_of(chars), name_map_sha256='n' * 64,
             provider='fake', model='fake', request_sha256='r' * 64)
     assert checkpoint is not None and not errors, errors
-    brief, identities = project_brief(checkpoint, core, blueprint)
+    brief, identities = project_brief(checkpoint, core, blueprint, name_map=name_map_of(core))
     assert identities and all(i.char_id in {'fu_jun', 'yun_niang'} for i in identities)
     assert DESIGN_RULES  # 规则面常量在位（生产 prompt 由 run_body_design 组装）

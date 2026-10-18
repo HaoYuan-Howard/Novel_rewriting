@@ -136,15 +136,15 @@ def test_must_preserve_requires_satisfaction():
 
 
 def test_preserve_checkpoint_isolated_from_design_and_bind():
-    PreserveCheckpoint(**_checkpoint())
+    PreserveCheckpoint(name_map_sha256='n' * 64,**_checkpoint())
     with pytest.raises(ValidationError):
         # Preserve 不接收 Design 或 Bind 的失败/结果信息：混入即拒（S-04 的一面）
-        PreserveCheckpoint(**_checkpoint(design_feedback='retry'))
+        PreserveCheckpoint(name_map_sha256='n' * 64,**_checkpoint(design_feedback='retry'))
     with pytest.raises(ValidationError):
-        PreserveCheckpoint(**_checkpoint(bind_failures=['x']))
+        PreserveCheckpoint(name_map_sha256='n' * 64,**_checkpoint(bind_failures=['x']))
     with pytest.raises(ValidationError):
         # obligation_id 重复 = 稳定 ID 被破坏（I-31）
-        PreserveCheckpoint(**_checkpoint(obligations=(
+        PreserveCheckpoint(name_map_sha256='n' * 64,**_checkpoint(obligations=(
             SourceObligation(**_obligation()),
             SourceObligation(**_obligation()),
         )))
@@ -164,10 +164,10 @@ def test_reconstruction_brief_is_source_blind():
 
 
 def test_identity_projection_is_id_only():
-    IdentityProjection(char_id='ch1', identity_statement='裴书远，主角', stable_constraints=())
+    IdentityProjection(char_id='ch1', identity_statement='裴书远，主角', target_name='裴书远', stable_constraints=())
     with pytest.raises(ValidationError):
         # 身份投影不带源坐标：first_mention_chapter 属于 Characters 源事实
-        IdentityProjection(char_id='ch1', identity_statement='x',
+        IdentityProjection(char_id='ch1', identity_statement='x', target_name='x',
                            first_mention_chapter=3)
 
 
@@ -206,7 +206,7 @@ def test_binding_fact_bindings_reference_states_and_never_copy_values():
     bound = FactLockBinding(kf_id=kf, beat_ref='sc01#b06', address=address)
     assert set(bound.model_dump()) == {'kf_id', 'beat_ref', 'address'}, '不复制目标 value'
     binding = SemanticBinding(**_binding(fact_bindings=(bound,)))
-    assert binding.contract_version == 'str06-rc22'
+    assert binding.contract_version == 'str06-rc26'
     assert SemanticBinding(**_binding()).fact_bindings == (), '空表＝没有锁被兑现'
     with pytest.raises(ValidationError):
         SemanticBinding(**_binding(fact_bindings=(bound, bound)))   # 一锁一承载

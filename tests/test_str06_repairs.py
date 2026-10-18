@@ -24,7 +24,7 @@ from novel.stages.common import canonical_sha256
 from novel.stages.stage4.guard import run_mechanical_guard
 from novel.stages.stage4.grounding import assemble_preserve, derive_semantic_binding, project_brief
 from novel.stages.stage2 import compile_source_truth
-from tests.str06_facilities import make_context
+from tests.str06_facilities import name_map_of, make_context
 from tests.test_str06_execution_ir import _graph, _binding, _cp, _ob
 from tests.test_str06_target import _assemble, _preserve_wire, _source_pair
 from tests.str06_expression_inputs import (
@@ -46,10 +46,13 @@ def test_diamond_requires_is_not_cycle_and_brief_all_kinds_are_closed():
     wire = _preserve_wire()
     wire['obligations'][0]['requires'] = [2, 3]
     wire['obligations'][1]['requires'] = [3]
+    from tests.str06_facilities import name_map_of
     cp, errors = assemble_preserve(wire, policy_id='p', policy_version=1, characters=chars,
-                                  blueprint=bp, provider='x', model='x', request_sha256='a'*64)
+                                  blueprint=bp, name_map=name_map_of(chars),
+                                  name_map_sha256='n' * 64,
+                                  provider='x', model='x', request_sha256='a'*64)
     assert not errors, errors
-    brief, _ = project_brief(cp, chars, bp)
+    brief, _ = project_brief(cp, chars, bp, name_map=name_map_of(chars))
     assert len(brief.requirements) == 3
     ids = {c.core_id for c in brief.requirements}
     assert all(set(c.requires_cores) <= ids for c in brief.requirements)

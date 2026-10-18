@@ -20,7 +20,7 @@ from novel.stages.stage4.grounding import (
     assemble_preserve, project_preserve_view,
 )
 from tests.str06_expression_inputs import sample_blueprint_expression
-from tests.str06_facilities import v13_beat, v13_effect
+from tests.str06_facilities import name_map_of, v13_beat, v13_effect
 from tests.str06_semantic_cases import CASES_BY_BATCH
 
 A2_CASES = CASES_BY_BATCH['R10a-a2']
@@ -93,10 +93,18 @@ def _wire(**over) -> dict:
     return wire
 
 
-def _assemble(wire: dict):
-    return assemble_preserve(
-        wire, policy_id='p', policy_version=5, characters=_characters(),
-        blueprint=_blueprint(), provider='x', model='y', request_sha256='r' * 64)
+def _assemble(wire: dict, **kw):
+    from tests.str06_facilities import name_map_of
+    kw.setdefault('policy_id', 'p')
+    kw.setdefault('policy_version', 5)
+    kw.setdefault('characters', _characters())
+    kw.setdefault('blueprint', _blueprint())
+    kw.setdefault('provider', 'x')
+    kw.setdefault('model', 'y')
+    kw.setdefault('request_sha256', 'r' * 64)
+    kw.setdefault('name_map', name_map_of(kw['characters']))
+    kw.setdefault('name_map_sha256', 'n' * 64)
+    return assemble_preserve(wire, **kw)
 
 
 # ───────────────────────── 投影视图：确定性渲染 ─────────────────────────
@@ -141,7 +149,7 @@ def test_event_only_obligation_and_detail_copy_evidence_without_inventing_locks(
         'satisfaction': '呈现夫君主动藏身', 'requires': [],
         'details': [{'anchor': 'b01_02.v1', 'text': '云娘因响动起疑'}]}])
     before = bp.model_dump(mode='json')
-    checkpoint, errors = assemble_preserve(
+    checkpoint, errors = _assemble(
         wire, policy_id='p', policy_version=8, characters=_characters(), blueprint=bp,
         provider='x', model='y', request_sha256='a' * 64)
     assert not errors
@@ -151,7 +159,7 @@ def test_event_only_obligation_and_detail_copy_evidence_without_inventing_locks(
         ('e01_01', bp.evidence['e01_01'])]
     assert anchor.quotes == () and anchor.holder is anchor.modality is None
     assert checkpoint.obligations[0].lineage.character_ids == ('fu_jun',)
-    brief, _ = project_brief(checkpoint, _characters(), bp)
+    brief, _ = project_brief(checkpoint, _characters(), bp, name_map=name_map_of(_characters()))
     assert not brief.knowledge_locks and not brief.fact_locks
     assert brief.requirements[0].details[0].text == '云娘因响动起疑'
     assert 'b01_01' not in str(brief.model_dump())
@@ -166,7 +174,7 @@ def test_selected_event_missing_evidence_and_old_protocol_fail_closed():
     wire = _wire()
     wire['obligations'][0]['anchors'] = ['b01_01.v1']
     bp = _blueprint().model_copy(update={'evidence': {}})
-    checkpoint, errors = assemble_preserve(
+    checkpoint, errors = _assemble(
         wire, policy_id='p', policy_version=8, characters=_characters(), blueprint=bp,
         provider='x', model='y', request_sha256='a' * 64)
     assert checkpoint is None and any('完整证据窗口' in str(e) for e in errors)
@@ -347,7 +355,7 @@ def test_empty_beat_accepts_missing_conflict_but_not_obligation_anchor():
     before = blueprint.model_dump(mode='json')
 
     def assemble(wire):
-        return assemble_preserve(wire, policy_id='p', policy_version=7,
+        return _assemble(wire, policy_id='p', policy_version=7,
                                  characters=_characters(), blueprint=blueprint,
                                  provider='x', model='y', request_sha256='r' * 64)
 
@@ -511,7 +519,7 @@ def test_detail_revision_and_brief_projection_keep_content_but_remove_source_coo
     assert revision['obligations'][0]['details'] == wire['obligations'][0]['details']
     assert revision['series'] == wire['series']
     assert _assemble(revision)[0] == checkpoint
-    brief, _identity = project_brief(checkpoint, _characters(), _blueprint())
+    brief, _identity = project_brief(checkpoint, _characters(), _blueprint(), name_map=name_map_of(_characters()))
     by_core = {r.core_id: r for r in brief.requirements}
     detail = by_core[obligation_core_id('ob01')].details[0]
     assert detail.text == wire['obligations'][0]['details'][0]['text']
@@ -533,7 +541,7 @@ def test_series_summary_covers_only_instances_in_same_group_and_can_precede_futu
     assert not errors, errors
     summary = checkpoint.series[0].summaries[0]
     assert summary.member == 'ob02' and summary.covers == ('ob01',)
-    binding = SemanticBinding(
+    binding = SemanticBinding(contract_version='str06-rc26',
         binding_id='bind', preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
         obligations=checkpoint.obligations, series=checkpoint.series, entries=(), unbound=())
     assert binding.series == checkpoint.series

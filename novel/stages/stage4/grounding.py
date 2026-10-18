@@ -15,8 +15,11 @@ CS-3 bind LLM 退役）。
     Brief 投影全部类别及满足条件（去源坐标，引用改为不带源顺序的需求 ID）；
     Blueprint 的 world_constraints 机械填入 `book_constraints`（R2.5 世界
     约束通道——Design 侧决定沿用或改写成目标 world_rules）。
-    IdentityProjection 从 Characters v6 公共投影。
+    IdentityProjection 从 Characters v6 公共投影＋NameMapV6 目标姓名（命名
+    前移批：进入创作链的自然语言一律用目标名字）。
     Design 拿到的是这两份 + OutputConstraints，**读不到 checkpoint 内部**。
+  • `project_target_names`：命名前移批（rc26）Preserve 输入的「目标名称表」
+    确定性投影——模型据此用目标姓名转述义务；源旧名只留审计链。
   • `derive_semantic_binding`：design 的 real 承载标注 → SemanticBinding
     （CS-3，2026-10-03）：bind LLM 退役——义务落在哪一拍由 design wire 的
     `real:["obNN"]` 标注唯一声明（末次标注拍＝接受拍，其余＝支撑拍；无标注
@@ -43,6 +46,7 @@ from contracts.schema.source import (
     BlueprintsArtifactV17, CharactersCore,
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
+from contracts.schema.naming import NameMapV6
 from novel.core.name_materials import expand_surface_releases, name_candidate_literals
 from novel.core.name_text import resolve_name_text
 from novel.core.validation import ValidationIssue
@@ -58,6 +62,15 @@ def _sha256_payload(obj: Any) -> str:
     import json
     return hashlib.sha256(
         json.dumps(obj, ensure_ascii=False, sort_keys=True).encode('utf-8')).hexdigest()
+
+
+def name_map_content_sha256(name_map: NameMapV6) -> str:
+    """NameMap 内容摘要（与 characters/blueprints 同一把尺；进 checkpoint 绑定）。
+
+    命名前移批：checkpoint 的 `name_map_sha256` 记这一格——目标名字一变，
+    依赖它的 checkpoint／Brief 内容身份随之失效（盘面级失效另由来源账边承载）。
+    """
+    return _sha256_payload(name_map.model_dump(mode='json'))
 
 
 #: wire 键白名单（Q-1：多余键在 compile 入口报错，不静默丢弃）。
@@ -406,23 +419,33 @@ def assemble_preserve(
     wire: Any, *,
     policy_id: str, policy_version: int,
     characters: CharactersCore, blueprint: BlueprintsArtifactV17,
+    name_map: NameMapV6, name_map_sha256: str,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
-    """Preserve wire（stage4-preserve-v5）→ checkpoint。
+    """Preserve wire（stage4-preserve-v7）→ checkpoint。
 
     确定性校验：协议版本、义务 anchors 在投影句柄闭集内（每条义务至少锚定
     一个原子）、requires 序号闭合无环、series 成员闭集互斥且 mechanism 属源
     表达、evidence_conflicts 的锚点与句段在闭集且句段属该拍证据。义务编号
     由 compiler 按列表序派发（I-21）；lineage 由 anchors 派生（I-15）。
-    `characters_sha256` 绑定 core view（F6 裁决）。冲突非空时本函数照常返回
-    校验结果——「冲突不发布 checkpoint、回派 Stage2」是 a3 `run_preserve` 的
-    编排决定，不混入 validator（I-36）。"""
+    `characters_sha256` 绑定 core view（F6 裁决）。rc26（命名前移批）起
+    `name_map`＋`name_map_sha256` 绑定目标名称表：policy 12 的义务文本以
+    目标姓名转述，名字一变 checkpoint 内容身份随之失效。冲突非空时本函数
+    照常返回校验结果——「冲突不发布 checkpoint、回派 Stage2」是 a3
+    `run_preserve` 的编排决定，不混入 validator（I-36）。"""
     errors = _preserve_shape_errors(wire)
     if errors:
         return None, errors
     if wire.get('protocol_version') != STAGE4_PRESERVE_PROTOCOL:
         errors.append(f'protocol_version 必须是 {STAGE4_PRESERVE_PROTOCOL}，'
                       f'实得 {wire.get("protocol_version")!r}（I-13 无隐式迁移）')
+    # 命名前移批：NameMap 的 char_ref 必须落在 Characters 闭集内——目标名称表
+    # 与源人物身份是同一批人（人物 ID 稳定），表外引用显式拒。
+    for entry in name_map.entries:
+        if entry.char_ref not in characters.characters:
+            errors.append(f'NameMap 条目引用未知人物：{entry.char_ref!r}')
+    if errors:
+        return None, errors
     _reject_unknown_keys(errors, wire,
                          frozenset({'protocol_version', 'obligations', 'series',
                                     'evidence_conflicts'}),
@@ -598,6 +621,7 @@ def assemble_preserve(
             policy_id=policy_id, policy_version=policy_version,
             characters_sha256=_sha256_payload(characters.model_dump()),
             blueprints_sha256=_sha256_payload(blueprint.model_dump()),
+            name_map_sha256=name_map_sha256,
             provider=provider, model=model, request_sha256=request_sha256,
             obligations=obligations, series=tuple(series_list),
             checkpoint_sha256='0' * 64)  # 占位：先构造再回填内容 hash
@@ -609,7 +633,8 @@ def assemble_preserve(
     content_hash = _sha256_payload({
         'checkpoint_id': checkpoint.checkpoint_id,
         'policy': [policy_id, policy_version],
-        'truth': [checkpoint.characters_sha256, checkpoint.blueprints_sha256],
+        'truth': [checkpoint.characters_sha256, checkpoint.blueprints_sha256,
+                  checkpoint.name_map_sha256],
         'obligations': [o.model_dump() for o in obligations],
         'series': [s.model_dump() for s in series_list]})
     return checkpoint.model_copy(update={'checkpoint_sha256': content_hash}), []
@@ -873,9 +898,66 @@ def _derive_brief_locks(
     )
 
 
+def target_name_faces(
+    name_map: NameMapV6, characters: CharactersCore,
+) -> dict[str, tuple[str, ...]]:
+    """命名前移批：每个人物的**目标称谓面**（char_id → 字面闭集）。
+
+    改名人物＝目标全名（或姓氏）＋改名化名；保留人物＝其 canonical 保留称谓。
+    下游身份投影与「可用称呼」只认本表——源旧名留在 Stage2 审计链，不进创作链
+    自然语言。人物 ID 与 alias ID 保持稳定（命名节点契约）；表外 char_id
+    （NameMap 覆盖应改名集合，Characters 可能有更多纯称谓人物）不在本表。
+    """
+    faces: dict[str, tuple[str, ...]] = {}
+    for entry in name_map.entries:
+        if entry.name is not None:
+            literals = [entry.name.full or entry.name.family,
+                        *entry.aliases.values()]
+        else:
+            literals = [characters.characters[entry.char_ref].canonical]
+        faces[entry.char_ref] = tuple(dict.fromkeys(literals))
+    return faces
+
+
+def project_target_names(
+    name_map: NameMapV6, characters: CharactersArtifactV6,
+) -> dict[str, Any]:
+    """命名前移批（rc26）：Preserve 输入的「目标名称表」（确定性投影，不落盘）。
+
+    进入创作链的自然语言只认目标姓名：每个应改名人物的目标全名与化名赋值、
+    保留人物的保留称谓与理由，逐 char_ref 给全。源证据视图里的旧名是审计
+    面——义务文本抄回旧名＝源文抄回，按条目返修（policy 12 硬闸）。
+    """
+    structure = characters.name_structure
+    rows: list[dict[str, Any]] = []
+    for entry in sorted(name_map.entries, key=lambda e: e.char_ref):
+        core_entry = characters.characters[entry.char_ref]
+        if entry.name is not None:
+            rows.append({
+                'char_ref': entry.char_ref,
+                'kept': False,
+                'target_name': entry.name.full or entry.name.family,
+                'family': entry.name.family,
+                'given': entry.name.given,
+                'aliases': dict(entry.aliases),
+                'source_display': core_entry.canonical,
+            })
+        else:
+            row: dict[str, Any] = {
+                'char_ref': entry.char_ref,
+                'kept': True,
+                'keep_reason': entry.keep_reason,
+                'target_name': core_entry.canonical,
+            }
+            if structure is not None:
+                row['surfaces'] = sorted(structure.people[entry.char_ref].surface_forms)
+            rows.append(row)
+    return {'name_map': rows}
+
+
 def project_brief(
     checkpoint: PreserveCheckpoint, characters: CharactersCore,
-    blueprint: BlueprintsArtifactV17, structure=None,
+    blueprint: BlueprintsArtifactV17, structure=None, *, name_map: NameMapV6,
 ) -> tuple[ReconstructionBrief, tuple[IdentityProjection, ...]]:
     """checkpoint → (Brief, IdentityProjection)。Design 的全部语义输入。
 
@@ -888,7 +970,9 @@ def project_brief(
     确定性派生（`_derive_brief_locks`）；series 以盲组 token 标记到成员义务
     （不泄源序号；mechanism＝源表达 ex_id）。CS-H H3：`structure`（名称结构）
     供必保揭名识别的「带名」判定；缺席时不派生 `requires_released`（漏检
-    退化为普通投影，不比现状差）。
+    退化为普通投影，不比现状差）。rc26（命名前移批）：`name_map`（NameMapV6）
+    是身份投影的目标姓名权威——IdentityProjection 的 statement 与 target_name
+    一律用目标名字；缺席即显式 KeyError，不拿源名冒充（I-13/I-21）。
     """
     # 不以源义务序号暴露叙述顺序；所有类型与满足条件等量投影，依赖闭合。
     core_ids = {o.obligation_id: obligation_core_id(o.obligation_id)
@@ -933,18 +1017,28 @@ def project_brief(
         book_constraints=tuple(
             BookConstraint(constraint_id=wc.constraint_id, statement=wc.statement)
             for wc in blueprint.world_constraints))
-    identity = tuple(
-        IdentityProjection(
+    # rc26：身份投影的目标姓名权威是 NameMapV6；表外人物（无需改名的纯称谓
+    # 人物不进应改名集合）保留原称谓——「保留」本身就是目标面。
+    faces = target_name_faces(name_map, characters)
+    identity: list[IdentityProjection] = []
+    for slug, entry in characters.characters.items():
+        if slug in faces:
+            target = faces[slug][0]
+            statement = (f'{target}（可用称呼：'
+                         + '、'.join(sorted(set(faces[slug][1:]))) + '）')
+        else:
+            target = entry.canonical
+            statement = (f'{entry.canonical}（可用称呼：'
+                         + '、'.join(sorted({s.surface for s in entry.surfaces})) + '）')
+        identity.append(IdentityProjection(
             char_id=slug,
-            identity_statement=(
-                f"{entry.canonical}（可用称呼："
-                + '、'.join(sorted({s.surface for s in entry.surfaces})) + '）'),
+            identity_statement=statement,
+            target_name=target,
             stable_constraints=tuple(
                 f'{a.key}={a.value}' for a in characters.initial_state
                 if a.persistence == 'stable' and a.target.kind == 'character'
-                and a.target.char_id == slug))
-        for slug, entry in characters.characters.items())
-    return brief, identity
+                and a.target.char_id == slug)))
+    return brief, tuple(identity)
 
 
 def design_obligation_index(
@@ -970,21 +1064,35 @@ def _preserve_issue(message: str, code: str, location: tuple,
 
 
 def preserve_name_issues(
-    checkpoint: PreserveCheckpoint | None, chars,
+    checkpoint: PreserveCheckpoint | None, chars, name_map: NameMapV6,
 ) -> list[ValidationIssue]:
-    """新策略验证作者的身份/普通义声明；旧源文本不由裸部件命中宣布为泄漏。
+    """policy 12（命名前移批）：义务文本只认目标姓名。
 
-    policy 11 起义务自有文本逐次覆盖姓名候选，未决只报未决。历史 checkpoint
-    保留原 policy 身份，只复验已有标记，不为旧源文猜身份或补普通义声明。
-    quotes、anchors、源句证据不进入改写或候选覆盖面。纯函数，不改输入。
+    两条硬闸，都按义务/细节条目路径定位（进同节点修订环）：
+      · 改名人物的源旧字面（name-bearing 称谓面）落 statement/satisfaction/
+        details.text＝源文抄回——compiler 不做全局替换（I-21），模型按条目
+        重写；
+      · 文本携带 `[[`／`]]` 标记残片（identity-text 协议已随普通正文退役，
+        义务文本直接写目标姓名，不再需要声明标记）。
+    保留人物与纯称谓人物的字面是合法目标面，不拦；裸姓名单字是候选召回事，
+    不作硬闸。policy ≤11 的候选覆盖闸随 identity-text-v1 一同退役（历史
+    checkpoint 已由 rc25→rc26 升级归档，不再进现役接受环）。
     """
     structure = chars.name_structure
     if checkpoint is None or structure is None:
         return []
-    projection = chars.name_projection()
-    candidates = name_candidate_literals(projection, structure) if checkpoint.policy_version >= 11 else ()
-    surfaces = expand_surface_releases(
-        {cid: tuple(person.surface_forms) for cid, person in structure.people.items()}, structure)
+    # 旧字面闭集：只取 name-bearing 称谓面（多字完整名），不取裸姓名单字——
+    # 单字候选会把「云彩」一类普通词误判成旧名（候选召回与硬闸是两件事）。
+    renamed_old: dict[str, str] = {}
+    for entry in name_map.entries:
+        if entry.name is None:
+            continue
+        person = structure.people[entry.char_ref]
+        # 只拦 name-bearing 称谓面（form 非 None）：纯称谓（如「夫君」）不在
+        # 改名集内，是合法目标面；裸姓名单字不作硬闸（候选召回另论）。
+        for literal, form in person.surface_forms.items():
+            if literal and len(literal) > 1 and form is not None:
+                renamed_old[literal] = entry.char_ref
     issues: list[ValidationIssue] = []
     for index, obligation in enumerate(checkpoint.obligations):
         fields = [(field, getattr(obligation, field) or '', ('obligations', index))
@@ -995,13 +1103,27 @@ def preserve_name_issues(
         for field, text, path in fields:
             if not text:
                 continue
-            for error in resolve_name_text(text, surfaces, candidate_literals=candidates).errors:
+            for old, char_ref in sorted(renamed_old.items()):
+                if old in text:
+                    issue = _preserve_issue(
+                        f'义务 {obligation.obligation_id} 的 {field}：源旧字面'
+                        f'「{old}」（{char_ref}）进入目标文本——用目标名称表'
+                        f'转述，不全局替换、可按条目重写',
+                        'preserve_old_name_literal',
+                        (obligation.obligation_id, field, old),
+                        (path,))
+                    issue.context.update({'obligation_id': obligation.obligation_id,
+                                          'field': field, 'literal': old})
+                    issues.append(issue)
+            if '[[' in text or ']]' in text:
                 issue = _preserve_issue(
-                    f'义务 {obligation.obligation_id} 的 {field}：{error}', error.code,
-                    (obligation.obligation_id, field, error.start, error.literal),
+                    f'义务 {obligation.obligation_id} 的 {field}：身份文本标记'
+                    f'已随普通正文退役，直接写目标姓名',
+                    'preserve_name_text_marker',
+                    (obligation.obligation_id, field, '[['),
                     (path,))
                 issue.context.update({'obligation_id': obligation.obligation_id,
-                                      'field': field, 'literal': error.literal})
+                                      'field': field, 'literal': '[['})
                 issues.append(issue)
     return issues
 

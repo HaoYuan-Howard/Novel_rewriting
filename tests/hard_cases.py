@@ -19,8 +19,16 @@ from typing import Callable, NamedTuple
 from tests.str06_expression_inputs import (
     sample_narration, sample_requirements, sample_blueprint_expression, sample_design_expression,
 )
-from tests.str06_facilities import anchor_stub
+from tests.str06_facilities import name_map_of, anchor_stub
 
+
+def _assemble(wire, **kw):
+    """命名前移批测试垫片：自动补 NameMapV6（全部保留替身）与内容摘要。"""
+    from novel.stages.stage4.grounding import assemble_preserve
+    from tests.str06_facilities import name_map_of
+    kw.setdefault('name_map', name_map_of(kw['characters']))
+    kw.setdefault('name_map_sha256', 'n' * 64)
+    return assemble_preserve(wire, **kw)
 
 class Case(NamedTuple):
     stage: str
@@ -294,8 +302,8 @@ def _preserve_bad_wire() -> list:
     entry = {'obligation_id': 'o1', 'kind': 'event_core', 'statement': 's',
              'must_preserve': True, 'satisfaction': '明确呈现',
              'anchors': ['b01_01.e1']}
-    _checkpoint, errors = assemble_preserve(
-        {'protocol_version': 'stage4-preserve-v5', 'obligations': [entry]},
+    _checkpoint, errors = _assemble(
+        {'protocol_version': 'stage4-preserve-v7', 'obligations': [entry]},
         policy_id='preserve-default', policy_version=1,
         characters=CharactersCore(characters={'ch1': CharacterEntry(
             canonical='苏姑娘',
@@ -319,6 +327,7 @@ def _checkpoint_with(*obligation_ids: str):
     return PreserveCheckpoint(
         checkpoint_id='cp1', policy_id='preserve-default', policy_version=1,
         characters_sha256='a' * 64, blueprints_sha256='b' * 64,
+        name_map_sha256='n' * 64,
         provider='p', model='m', request_sha256='c' * 64,
         checkpoint_sha256='d' * 64,
         obligations=tuple(SourceObligation(
@@ -841,8 +850,8 @@ def _preserve_unknown_anchor() -> list:
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_facilities import v13_beat, v13_effect
-    _checkpoint, errors = assemble_preserve(
-        {'protocol_version': 'stage4-preserve-v5', 'obligations': [
+    _checkpoint, errors = _assemble(
+        {'protocol_version': 'stage4-preserve-v7', 'obligations': [
             {'kind': 'event_core', 'statement': 's', 'anchors': ['b09_99.e1'],
              'must_preserve': True, 'satisfaction': '明确呈现', 'requires': []}]},
         policy_id='preserve-default', policy_version=1,

@@ -82,6 +82,10 @@ def _build_root(tmp_path, *, designs=None, through_design=True):
                        ask_body=no_body, chapters=chapters, budget=budget, digest=digest)
     run_workflow(repository=repo, chapters=chapters, ask=ctx.ask, ask_text=ctx.ask_text,
                  ask_body=ctx.ask_body, budget=budget, through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=budget, through='stage4',
+                 node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     if through_design:
         run_body_design(ctx)

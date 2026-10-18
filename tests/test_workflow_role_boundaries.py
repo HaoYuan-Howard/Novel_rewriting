@@ -20,7 +20,8 @@ def _prepared(tmp_path, *, through_design=False, wires=None, before_associate=Fa
     nodes = ['str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
              'str06.stage2.associate', 'str06.stage2.compile']
     if through_design:
-        nodes += ['str06.stage4.preserve', 'str06.stage4.body_design']
+        nodes += ['str06.stage4.naming', 'str06.stage4.preserve',
+                  'str06.stage4.body_design']
     if before_associate:
         nodes = nodes[:3]
     run_workflow(repository=repo, chapters=_chapters(), ask=json_ask(session),

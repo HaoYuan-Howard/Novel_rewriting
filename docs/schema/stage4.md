@@ -20,7 +20,7 @@ Stage2 是源约束下的结构化观察：原文是证据，事件、认知和�
 理解；Preserve 再由 LLM 选择应保骨架及必要条件，义务并非逐字摘要，也不保证每条
 源观察都变成必保要求。compiler 只按正式选择派生引用与消费材料，不补做语义判断。
 
-Preserve 现役保存策略为 v11，wire 为 `stage4-preserve-v6`。源盲交接的必要触发、
+Preserve 现役保存策略为 v12，wire 为 `stage4-preserve-v7`。源盲交接的必要触发、
 答话、限制、权衡与选择须在 statement、satisfaction 及 requires 所指义务的联合材料中
 可理解；已经明确的前提不要求在 satisfaction 再抄一遍。同一时点、同一作用的触发与
 响应可以合写，不同时点的必要前提仍分别承载。可改写动作进可选 details，源文未给的

@@ -52,7 +52,7 @@ def _ob(oid, kind=PreserveKind.EVENT_CORE, must=True, requires=(), chars=('ch1',
 
 def _cp(*obligations):
     from contracts.schema.grounding import PreserveCheckpoint
-    return PreserveCheckpoint(
+    return PreserveCheckpoint(name_map_sha256='n' * 64,
         checkpoint_id='cp1', policy_id='p', policy_version=1,
         characters_sha256=H64, blueprints_sha256=H64, provider='x', model='y',
         request_sha256=H64, obligations=obligations, checkpoint_sha256=H64)
@@ -89,7 +89,7 @@ def _binding(cp):
         if o.kind is not PreserveKind.CAUSAL else
         BindingEntry(beat_ref=('s02' + '#bt1'), obligation_id=o.obligation_id, scene_id='s02')
         for o in cp.obligations)
-    return SemanticBinding(
+    return SemanticBinding(contract_version='str06-rc26',
         binding_id='b1', preserve_checkpoint_sha256=H64,
         obligations=cp.obligations, entries=entries, unbound=())
 

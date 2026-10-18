@@ -35,7 +35,7 @@ from novel.stages.common import (
     RENDERER_VERSION, WRITER_PROTOCOL, WRITER_PROTOCOL_VERSION,
     project_chapter_packet,
 )
-from tests.str06_facilities import anchor_stub
+from tests.str06_facilities import name_map_of, anchor_stub
 from tests.str06_expression_inputs import (
     sample_narration, sample_requirements, sample_design_expression, sample_canonical_expression,
 )
@@ -44,6 +44,14 @@ H64 = 'a' * 64
 
 # ═════════════════════════ 富线程设计基座（三 章／四 场） ═════════════════════════
 
+
+def _assemble(wire, **kw):
+    """命名前移批测试垫片：自动补 NameMapV6（全部保留替身）与内容摘要。"""
+    from novel.stages.stage4.grounding import assemble_preserve
+    from tests.str06_facilities import name_map_of
+    kw.setdefault('name_map', name_map_of(kw['characters']))
+    kw.setdefault('name_map_sha256', 'n' * 64)
+    return assemble_preserve(wire, **kw)
 
 def _chars():
     from tests.test_str06_hook import _characters
@@ -206,8 +214,8 @@ def _rich_binding(body):
         must_preserve=True, satisfaction='正文呈现旧约成立与芸娘起疑')
     cp = PreserveCheckpoint(
         checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256=H64,
-        blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
-        obligations=(ob,), checkpoint_sha256=H64)
+        blueprints_sha256=H64, name_map_sha256=H64, provider='x', model='y',
+        request_sha256='r' * 64, obligations=(ob,), checkpoint_sha256=H64)
     # CS-3 bind 退役：real 标注投影派生（支撑 sc01#b01→接受 sc01#b02）。
     sites = {f'{s.scene_id}#{b.beat_id}': (i, j)
              for i, s in enumerate(body.scenes) for j, b in enumerate(s.beats)}
@@ -627,11 +635,11 @@ def test_project_brief_fills_book_constraints_from_blueprint():
     from tests.test_str06_target import _preserve_wire, _source_pair
     chars, bp = _source_pair()
     wire = _preserve_wire()
-    cp, errors = assemble_preserve(wire, policy_id='p', policy_version=1,
+    cp, errors = _assemble(wire, policy_id='p', policy_version=1,
                                    characters=chars, blueprint=bp,
                                    provider='x', model='y', request_sha256='r' * 64)
     assert not errors, errors
-    empty_brief, _ = project_brief(cp, chars, bp)
+    empty_brief, _ = project_brief(cp, chars, bp, name_map=name_map_of(chars))
     assert empty_brief.book_constraints == ()
     # 带世界约束的 Blueprint：statement 原样机械投影（无语义推断）
     bp = bp.model_copy(update={'world_constraints': (
@@ -642,7 +650,7 @@ def test_project_brief_fills_book_constraints_from_blueprint():
         WorldConstraint(constraint_id='wc_2', kind='social_norm',
                         statement='官府不涉异事', source_refs=('b01_01',),
                         basis=({'segment': 'e01_01', 'quote': '官府不涉异事'},)))})
-    brief, _ = project_brief(cp, chars, bp)
+    brief, _ = project_brief(cp, chars, bp, name_map=name_map_of(chars))
     assert [(w.constraint_id, w.statement) for w in brief.book_constraints] ==         [('wc_1', '术法须以寿命为代价'), ('wc_2', '官府不涉异事')]
 
 

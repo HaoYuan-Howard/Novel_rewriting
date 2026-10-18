@@ -176,11 +176,12 @@ def test_event_only_details_reach_design_and_writer_with_source_kept_in_audit(tm
 
 def test_required_event_without_transfers_reaches_its_real_writer_position(tmp_path):
     wires = _full_chain_wires()
-    condition = '夫君离开后，芸娘须独自发现玉佩线索'
+    # 命名前移批（policy 12）：义务文本直书目标姓名（芸娘→柳婉；夫君为保留称谓）。
+    condition = '夫君离开后，柳婉须独自发现玉佩线索'
     wires['preserve']['obligations'].append({
         'kind': 'event_core', 'statement': '夜半离家与玉佩线索',
         'anchors': ['b02_01.v1'], 'must_preserve': True,
-        'satisfaction': declared_stage4_text(condition), 'requires': []})
+        'satisfaction': condition, 'requires': []})
     wires['design']['scenes'][1]['beats'][0]['real'] = ['ob02']
     ctx, transport = _prepare(tmp_path, wires, through='stage5')
     repo = ctx.repository
@@ -196,10 +197,10 @@ def test_required_event_without_transfers_reaches_its_real_writer_position(tmp_p
     assert condition not in transport.requests['body_ch01'][0]
 
 
-CAUSAL_CONDITION = '周澄先提出账页齐全才能取货，陈禾发现缺页后决定先补账再出发'
-TRANSITION_CONDITION = '次日账页补齐后，陈禾从柜台走到后院门口，前后不是同一时刻'
+CAUSAL_CONDITION = '宋玉先提出账页齐全才能取货，柳明发现缺页后决定先补账再出发'
+TRANSITION_CONDITION = '次日账页补齐后，柳明从柜台走到后院门口，前后不是同一时刻'
 OPTIONAL_ACTION = '用摊开账册逐页清点的动作表现迟疑'
-DESIGN_COMMUNICATION_BRIDGE = '陈禾将缺页处指给周澄，当面说明自己先补账再出发'
+DESIGN_COMMUNICATION_BRIDGE = '柳明将缺页处指给宋玉，当面说明自己先补账再出发'
 
 
 def _causal_material_wires(*, select_detail=False, invent_quantity=False,
@@ -311,15 +312,15 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
                       'same_proposition': [], 'loop_pairing': [], 'cross_chapter_cause': [],
                       'scene_continuation': [{'left': 'ch01.sc1', 'right': 'ch02.sc1',
                                               'verdict': 'distinct'}]},
-        'preserve': {'protocol_version': 'stage4-preserve-v6', 'obligations': [
-            {'kind': 'initial_state', 'statement': '陈禾开场已是商铺学徒',
+        'preserve': {'protocol_version': 'stage4-preserve-v7', 'obligations': [
+            {'kind': 'initial_state', 'statement': '柳明开场已是商铺学徒',
              'anchors': ['s0_01'], 'must_preserve': True,
-             'satisfaction': '陈禾原本就是商铺学徒，不改成新来求职', 'requires': []},
-            {'kind': 'causal', 'statement': '取货条件未满足使陈禾决定先补账',
+             'satisfaction': '柳明原本就是商铺学徒，不改成新来求职', 'requires': []},
+            {'kind': 'causal', 'statement': '取货条件未满足使柳明决定先补账',
              'anchors': ['b01_02.v1', 'b01_03.v1'], 'must_preserve': True,
              'satisfaction': CAUSAL_CONDITION, 'requires': [],
              'details': [{'anchor': 'b01_03.v1', 'text': OPTIONAL_ACTION}]},
-            {'kind': 'event_core', 'statement': '补账完成后陈禾前往后院',
+            {'kind': 'event_core', 'statement': '补账完成后柳明前往后院',
              'anchors': ['b02_01.v1'], 'must_preserve': True,
              'satisfaction': TRANSITION_CONDITION, 'requires': [2]},
             {'kind': 'world_fact', 'statement': '木箱中的货量尚未查明',
@@ -339,13 +340,9 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
     if cause_in_statement:
         cause = wires['preserve']['obligations'][1]
         cause['statement'] = CAUSAL_CONDITION
-        cause['satisfaction'] = '陈禾暂缓取货，先补账再出发'
-    # 只声明目标作者的自然语言；源观察、引文、登记称谓与引用 ID 不加标记。
-    for obligation in wires['preserve']['obligations']:
-        for field in ('statement', 'satisfaction'):
-            obligation[field] = _shop_text(obligation[field])
-        for detail in obligation.get('details', []):
-            detail['text'] = _shop_text(detail['text'])
+        cause['satisfaction'] = '柳明暂缓取货，先补账再出发'
+    # 命名前移批（policy 12）：义务文本直书目标姓名，不再做身份文本标记包装；
+    # 源观察、引文、登记称谓与引用 ID 保持原样。
     for scene in design['scenes']:
         for beat in scene['beats']:
             beat['ev'] = _shop_text(beat['ev'])
@@ -509,7 +506,9 @@ def test_preserve_preview_runs_without_checkpoint_and_keeps_conflicts_unpublisha
     from novel.stages.review import dry_run_patch
     from tests.test_str06_preserve_gate import _prepared
     wires = _detail_wires()
-    _ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires)
+    # 命名前移批：preserve 预览的正式输入含目标名称表，先跑 naming 节点。
+    _ctx, repo, _chars, _blueprint = _prepared(
+        tmp_path, wires, nodes=('str06.stage4.naming',))
     assert not repo.path('runtime/preserve_checkpoint.json').exists()
     before = {p: p.read_bytes() for p in repo.root.rglob('*') if p.is_file()}
     options = dict(evidence={}, budget=2000, chapter_count=2)
@@ -530,7 +529,9 @@ def test_source_conflict_closure_keeps_preserve_request_replayable(tmp_path):
     from novel.stages.owner_revision import OwnerRevisionRequired, read_owner_issue_file
     from tests.test_str06_preserve_gate import _prepared
     wires = _detail_wires()
-    ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires)
+    # 命名前移批：run_preserve 的正式输入含目标名称表，先跑 naming 节点。
+    ctx, repo, _chars, _blueprint = _prepared(
+        tmp_path, wires, nodes=('str06.stage4.naming',))
     with pytest.raises(OwnerRevisionRequired):
         _backfill_source_evidence_conflicts(repo, [{'anchor': 'b01_01.v1',
             'segment': 'e01_01', 'note': '经核读保持原解释'}])
@@ -628,7 +629,7 @@ def test_real_summary_narrow_repair_sends_covered_unbound_instance_semantics(tmp
 
     wires = _full_chain_wires()
     wires['preserve']['obligations'].extend([
-        {'kind': 'event_core', 'statement': declared_stage4_text('芸娘在新婚夜立誓查清旧约'),
+        {'kind': 'event_core', 'statement': '柳婉在新婚夜立誓查清旧约',
          'anchors': ['b01_01.e1'], 'must_preserve': False,
          'satisfaction': '立誓查清旧约的决意已经发生', 'requires': []},
         {'kind': 'event_core', 'statement': '次日回顾新婚立约与立誓',
@@ -643,7 +644,8 @@ def test_real_summary_narrow_repair_sends_covered_unbound_instance_semantics(tmp
     bad['scenes'][0]['beats'][2].pop('real')
     patched = ('scenes', 0, 'beats', 2)
     transport = PatchingTransport(wires, bad, patch_paths=(patched,))
-    ctx, repo, _chars, _blueprint = _prepared(tmp_path, wires, transport=transport)
+    ctx, repo, _chars, _blueprint = _prepared(
+        tmp_path, wires, transport=transport, nodes=('str06.stage4.naming',))
     run_preserve(ctx)
     result = run_body_design(ctx)
     assert result['candidate_preflight']['passed']
@@ -651,7 +653,7 @@ def test_real_summary_narrow_repair_sends_covered_unbound_instance_semantics(tmp
     first, narrow = transport.owner_requests
     assert '【条目返修】' not in first and '【条目返修】' in narrow
     assert '【依赖切片】' in narrow
-    assert declared_stage4_text('芸娘在新婚夜立誓查清旧约') in narrow
+    assert '柳婉在新婚夜立誓查清旧约' in narrow
     assert '立誓查清旧约的决意已经发生' in narrow
     assert 'ob02' in narrow
     assert 'b01_01.e1' not in narrow

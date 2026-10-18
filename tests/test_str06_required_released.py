@@ -24,6 +24,7 @@ from contracts.schema.source import (
 )
 from novel.stages.common import BODY_PARAGRAPH_REPAIR_SYSTEM
 from novel.stages.stage4.grounding import project_brief, required_releases
+from tests.str06_facilities import name_map_of
 from tests.test_str06_a4_design_locks import _blueprint
 from tests.test_str06_hook import _declared_prose
 
@@ -54,12 +55,13 @@ def _ident_setup(*, kind=PreserveKind.IDENTITY, must=True, first_segment='e01_01
         obligation_id='ob01', kind=kind, statement=statement, anchors=(anchor,),
         lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('cousin',)),
         must_preserve=must, satisfaction='首次点名自然落地')
-    checkpoint = PreserveCheckpoint(
+    checkpoint = PreserveCheckpoint(name_map_sha256='n' * 64,
         checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256=H64,
         blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
         obligations=(obligation,), checkpoint_sha256=H64)
     brief, _ = project_brief(checkpoint, characters, _blueprint(),
-                             structure=name_structure if structure else None)
+                             structure=name_structure if structure else None,
+name_map=name_map_of(characters))
     return brief
 
 

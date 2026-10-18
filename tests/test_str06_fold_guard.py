@@ -83,7 +83,7 @@ def _graph() -> BodyDesign:
 
 
 def _binding(*entries: BindingEntry) -> SemanticBinding:
-    return SemanticBinding(
+    return SemanticBinding(contract_version='str06-rc26',
         binding_id='bd1', preserve_checkpoint_sha256=H64,
         obligations=tuple(_ob(e.obligation_id) for e in entries),
         entries=tuple(entries), unbound=())

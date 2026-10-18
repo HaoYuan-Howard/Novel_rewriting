@@ -108,7 +108,7 @@ IDENTITY_TEXT_UPGRADE: Final[ContractUpgradeSpec] = {
 NAMING_FORWARD_UPGRADE: Final[ContractUpgradeSpec] = {
     'id': 'naming-forward-rc25-rc26',
     'source_identity': '9bb731fa6a2a8198163baafcba1998b905c1120427586223e806e2d6cb7f3900',
-    'target_identity': '7f6cfc22efdae5de37718d6226241becb6623376bef68af081e08b38f0298d75',
+    'target_identity': '806a0e3defcfef22a923d9c6db7c287afd1d8a49b40489a24ee13643e80d4b31',
     'source_version': 'str06-rc25',
     'target_version': 'str06-rc26',
     'rebuild_nodes': (

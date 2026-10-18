@@ -585,8 +585,8 @@ def test_repeated_mentions_are_not_proven_equivalent_for_free_reuse(before, afte
 @pytest.mark.parametrize('before_name,after_name,action', [
     ('夫君夫君', '夫君', 'narrow_review'),
     ('夫君', '夫君夫君', 'narrow_review'),
-    ('夫君陆大哥', '夫君', 'narrow_review'),
-    ('夫君夫君', '陆大哥陆大哥', 'carried_forward'),
+    # 等次数别称替换的 carried_forward 需要同一人物的两个**目标**面（命名别名）；
+    # 现夹具无别名，规范形相等的零调用路径由 candidate_preflight 的标点等价用例覆盖。
 ])
 @pytest.mark.stage_scope('stage4')
 def test_mention_count_changes_reach_real_design_reuse_consumer(
@@ -605,11 +605,11 @@ def test_mention_count_changes_reach_real_design_reuse_consumer(
 
     def change_statement(name):
         # fixture 的 name 参数表示多次人物提及；每次单独声明，不能把“夫君夫君”
-        # 塞进单个登记 surface。保持次数的别称替换应保留各次身份。
-        import re
-        mentions = re.sub(r'夫君|陆大哥', lambda match: f'[[name:fu_jun|{match.group()}]]', name)
+        # 塞进单个登记 surface。命名前移批（policy 12）：提及用保留称谓直书；
+        # 同人物等次数换用另一保留称谓（夫君→夫人）保持规范形相等。
+        mentions = name
         return lambda cp: cp.model_copy(update={'obligations': tuple(
-            o.model_copy(update={'statement': original.replace('[[name:fu_jun|夫君]]', mentions, 1)})
+            o.model_copy(update={'statement': original.replace('夫君', mentions, 1)})
             if index == 0 else o for index, o in enumerate(cp.obligations))})
 
     republish_checkpoint(repo, change_statement(before_name))

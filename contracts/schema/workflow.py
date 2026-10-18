@@ -812,11 +812,15 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 #: believes→believes；asserts 转公开声称标记）＋kf 事实锁（时态/值未知/
 #: 原文未回答）；requirement 带 series 盲标记与 mechanism。kp/kf 键规则与
 #: 必保锁兑现归 assemble_body_design（revise_self）。
-STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v6'
+STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v7'
 # 2026-10-10 用户授权有限补桥：Preserve 必要源因果完整交接，Design 只在
 # 骨架、事实、结局与知情/未知边界内补局部行动、沟通和决策；wire/canonical 不变。
 # v10：正式交接材料合起来保住骨架，不要求各字段重复因果；唯一登记称谓可自然混用。
-STAGE4_PRESERVE_POLICY_VERSION: Final = 11
+# rc26 v12（2026-10-18 命名前移批）：preserve 消费 stage4/naming/name_map.json
+# （NameMapV6），义务/满足条件/细节等进入创作链的自然语言一律用目标姓名；
+# 源旧字面落义务文本即源文抄回，按条目定位返修（policy 12 起）。wire 同批
+# 升 v7（材料集变化换请求身份，防同身份缓存重放源名回答）。
+STAGE4_PRESERVE_POLICY_VERSION: Final = 12
 STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v5'
 # CS-3（2026-10-03）：`str06.stage4.bind` 退役——承载位由 design wire 的 real
 # 标注派生（stage4-design-v6 的面），stage4-bind-v1 wire 协议随之退役。

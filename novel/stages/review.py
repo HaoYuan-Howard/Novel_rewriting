@@ -33,7 +33,9 @@ from novel.stages.stage5 import (
 from novel.stages.stage7 import (
     assemble_delivery, chapter_access, verify_chapter_receipts,
 )
-from novel.stages.stage4 import compile_name_map, compile_bound_replacements
+from novel.stages.stage4 import (
+    compile_name_map, compile_bound_replacements, name_map_content_sha256,
+)
 from novel.stages.common import (
     chapter_identities, project_chapter_packet, validate_writer_materials, validate_hook_materials,
     material_identities,
@@ -159,15 +161,17 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         projection = chars.name_projection()
         if owner == 'preserve':
             blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+            name_map = repository.read_model('stage4/naming/name_map.json')
             checkpoint, errors = assemble_preserve(
                 candidate, policy_id='preserve-default', policy_version=STAGE4_PRESERVE_POLICY_VERSION,
                 characters=chars.core_view(), blueprint=blueprint,
+                name_map=name_map, name_map_sha256=name_map_content_sha256(name_map),
                 provider='preview', model='preview', request_sha256='0' * 64)
-            errors = list(errors) + preserve_name_issues(checkpoint, chars)
+            errors = list(errors) + preserve_name_issues(checkpoint, chars, name_map)
             conflicts = candidate.get('evidence_conflicts', []) if isinstance(candidate, dict) else []
             if checkpoint is not None and not errors:
                 project_brief(checkpoint, chars.core_view(), blueprint,
-                              structure=chars.name_structure)
+                              structure=chars.name_structure, name_map=name_map)
             # 新候选的义务集合与身份可能变化，旧 Binding 不得 model_copy 冒充
             # 重新承载；接受 Preserve 后由正式 Design 恢复入口重建。
             return {'node': 'str06.stage4.preserve', 'status': 'ran', 'errors': errors,
@@ -181,7 +185,8 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
         # 分母时不猜值。Design 补丁先验证候选，不能被待修复的旧正文阻断。
         brief, _ = project_brief(checkpoint, chars.core_view(),
                                   repository.read_model('stage2/blueprints/chapter_blueprints.json'),
-                                  structure=chars.name_structure)
+                                  structure=chars.name_structure,
+                                  name_map=repository.read_model('stage4/naming/name_map.json'))
         if owner == 'design':
             return _design_preview(repository, candidate, checkpoint, brief, chars,
                                    budget=budget, chapter_count=chapter_count,
@@ -228,6 +233,7 @@ def _design_preview(repository, candidate, checkpoint, brief, chars, *, budget,
     inspection = inspect_design_candidate(
         candidate, checkpoint=checkpoint, brief=brief,
         obligations=design_obligation_index(checkpoint, brief), chars=chars,
+        name_map=repository.read_model('stage4/naming/name_map.json'),
         constraints=OutputConstraints(target_chapter_count=chapter_count, total_length_budget=budget),
         length_band=length_band, book_title=book_title)
     report = inspection.report()

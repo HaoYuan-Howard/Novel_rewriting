@@ -313,7 +313,7 @@ def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, ch
 
 
 def inspect_design_candidate(wire, *, checkpoint, brief, obligations, chars,
-                             constraints: OutputConstraints, length_band,
+                             name_map, constraints: OutputConstraints, length_band,
                              book_title='') -> DesignInspection:
     """同一候选完成全部可执行检查；不因自有文字错误遮住只读上游材料错误。
 
@@ -328,7 +328,7 @@ def inspect_design_candidate(wire, *, checkpoint, brief, obligations, chars,
                              for cid, c in chars.characters.items()},
         brief=brief, obligations=obligations, characters=chars.core_view())
     checks = [PreflightCheck('design', 'failed' if errors else 'passed')]
-    preserve_errors = preserve_name_issues(checkpoint, chars)
+    preserve_errors = preserve_name_issues(checkpoint, chars, name_map)
     errors = list(preserve_errors) + errors
     checks.append(PreflightCheck('preserve_input', 'failed' if preserve_errors else 'passed'))
     binding = None

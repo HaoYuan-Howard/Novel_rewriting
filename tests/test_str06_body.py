@@ -81,7 +81,8 @@ def _green_binding(body):
         must_preserve=True, satisfaction='正文呈现婚约成立且夫君立下旧约')
     cp = PreserveCheckpoint(
         checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256=H64,
-        blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
+        blueprints_sha256=H64, name_map_sha256=H64, provider='x', model='y',
+        request_sha256='r' * 64,
         obligations=(ob,), checkpoint_sha256=H64)
     sites = _site_index(body)
     placements = {'ob01': [sites['sc01#b01'], sites['sc01#b02']]}
@@ -125,7 +126,8 @@ def _two_obligation_binding(body, ob1_beat, ob2_beat):
         must_preserve=True, satisfaction='正文在该揭示点呈现确认', requires=('ob01',))
     cp = PreserveCheckpoint(
         checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256=H64,
-        blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
+        blueprints_sha256=H64, name_map_sha256=H64, provider='x', model='y',
+        request_sha256='r' * 64,
         obligations=(ob1, ob2), checkpoint_sha256=H64)
     sites = _site_index(body)
     placements = {'ob01': [sites[f'{ob1_beat[0]}#{ob1_beat[1]}']],
@@ -177,7 +179,8 @@ def _series_binding(body, placements, *, optional_instance=False):
         for index, statement in enumerate(('婚礼实例', '旧约实例', '回顾两次经历'), 1))
     checkpoint = PreserveCheckpoint(
         checkpoint_id='cp', policy_id='p', policy_version=1, characters_sha256=H64,
-        blueprints_sha256=H64, provider='x', model='y', request_sha256='r' * 64,
+        blueprints_sha256=H64, name_map_sha256=H64, provider='x', model='y',
+        request_sha256='r' * 64,
         obligations=obligations, checkpoint_sha256=H64,
         series=(ObligationSeries(
             members=('ob01', 'ob02', 'ob03'),

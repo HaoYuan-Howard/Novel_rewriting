@@ -23,6 +23,7 @@ from novel.llm.transport import ChatResponse
 from novel.stages.chain import run_body_design
 from novel.stages.stage4 import locate_design_patches
 from novel.stages.stage4.design_paths import design_issue, wire_paths_of
+from tests.str06_facilities import name_map_of
 from tests.test_str06_body import _RoutingTransport
 from tests.test_str06_candidate_preflight import _bad_design, _prepare
 
@@ -269,7 +270,7 @@ def test_book_expression_is_excluded_from_full_and_narrow_design_requests(tmp_pa
     """真实入口从 Brief 类别派生闭集；坏稿仍留证，局部纠正后才发布正式设计。"""
     from novel.llm.paid_requests import digest
     from novel.stages.chain import ChainContext, run_preserve, run_workflow
-    from tests.str06_facilities import json_ask, text_ask
+    from tests.str06_facilities import name_map_of, json_ask, text_ask
     from tests.test_str06_body import _chapters, _make_session
     from tests.test_str06_hook import _full_chain_wires
 
@@ -284,6 +285,10 @@ def test_book_expression_is_excluded_from_full_and_narrow_design_requests(tmp_pa
                        chapters=_chapters(), budget=2000, digest=digest)
     run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
                  ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage4',
+                 node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     run_body_design(ctx)
 
@@ -325,6 +330,10 @@ def test_item_patch_round_resends_only_the_failing_beats_and_merges_to_a_full_gr
                        ask_body=no_body, chapters=_chapters(), budget=2000, digest=digest)
     run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
                  ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage4',
+                 node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     run_body_design(ctx)
 
@@ -339,7 +348,7 @@ def test_item_patch_round_resends_only_the_failing_beats_and_merges_to_a_full_gr
     assert [b.event for b in body.scenes[0].beats[:2]] == [
         beat['ev'] for beat in wires['design']['scenes'][0]['beats'][:2]]
     assert not any('陆大哥' in b.event for s in body.scenes for b in s.beats)
-    assert repo.read_model('stage4/grounding/semantic_binding.json').contract_version == 'str06-rc22'
+    assert repo.read_model('stage4/grounding/semantic_binding.json').contract_version == 'str06-rc26'
     # 成本记账：原轮＋条目返修各一次实付，不是整份重写两遍的另一种计法。
     from novel.llm.ledger import read_cost_snapshot
     rows, _ = read_cost_snapshot(repo.root.parent)
@@ -371,6 +380,10 @@ def test_illegal_beat_read_is_repaired_as_a_whole_scene_and_replays_without_purc
                        chapters=_chapters(), budget=2000, digest=digest)
     run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
                  ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage4',
+                 node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     result = run_body_design(ctx)
 
@@ -398,10 +411,10 @@ def test_illegal_beat_read_is_repaired_as_a_whole_scene_and_replays_without_purc
     chars = repo.read_model('stage2/characters/characters.json')
     checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
     blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
-    brief, _ = project_brief(checkpoint, chars.core_view(), blueprint)
+    brief, _ = project_brief(checkpoint, chars.core_view(), blueprint, name_map=name_map_of(chars.core_view()))
     expected = inspect_design_candidate(
         good, checkpoint=checkpoint, brief=brief,
-        obligations=design_obligation_index(checkpoint, brief), chars=chars,
+        obligations=design_obligation_index(checkpoint, brief), chars=chars, name_map=name_map_of(chars),
         constraints=OutputConstraints(target_chapter_count=len(ctx.chapters),
                                       total_length_budget=ctx.budget),
         length_band=ctx.length_band)
@@ -439,6 +452,10 @@ def test_patch_that_does_not_fix_the_leak_is_stopped_by_the_existing_no_progress
                        chapters=_chapters(), budget=2000, digest=digest)
     run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
                  ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage4',
+                 node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     with pytest.raises(ValidationStop) as stopped:
         run_body_design(ctx)
@@ -473,6 +490,10 @@ def test_carrier_missing_gets_one_optional_closed_set_round_instead_of_full_rewr
                        chapters=_chapters(), budget=2000, digest=digest)
     run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
                  ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage4',
+                 node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     run_body_design(ctx)
     assert transport.calls.count('design') == 2, '首答＋一轮可选目标返修，不整份重写'
@@ -525,6 +546,10 @@ def test_optional_round_adopts_a_subset_of_the_closed_set_and_keeps_other_beats_
                        chapters=_chapters(), budget=2000, digest=digest)
     run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
                  ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage4',
+                 node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     run_body_design(ctx)
     assert transport.calls.count('design') == 2, '一轮可选目标返修即采纳'
@@ -533,10 +558,10 @@ def test_optional_round_adopts_a_subset_of_the_closed_set_and_keeps_other_beats_
     chars = repo.read_model('stage2/characters/characters.json')
     checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
     blueprint = repo.read_model('stage2/blueprints/chapter_blueprints.json')
-    brief, _ = project_brief(checkpoint, chars.core_view(), blueprint)
+    brief, _ = project_brief(checkpoint, chars.core_view(), blueprint, name_map=name_map_of(chars.core_view()))
     expected = inspect_design_candidate(
         wires['design'], checkpoint=checkpoint, brief=brief,
-        obligations=design_obligation_index(checkpoint, brief), chars=chars,
+        obligations=design_obligation_index(checkpoint, brief), chars=chars, name_map=name_map_of(chars),
         constraints=OutputConstraints(target_chapter_count=len(ctx.chapters),
                                       total_length_budget=ctx.budget),
         length_band=ctx.length_band)
@@ -564,6 +589,10 @@ def test_a_globally_unlocatable_problem_sends_the_whole_design_back(tmp_path):
                        chapters=_chapters(), budget=2000, digest=digest)
     run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
                  ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage4',
+                 node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     run_body_design(ctx)
     assert '【修订要求】' in transport.owner_requests[1]
@@ -704,6 +733,10 @@ def test_unestablished_read_gets_an_item_patch_round_and_publishes(tmp_path):
                        chapters=_chapters(), budget=2000, digest=digest)
     run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
                  ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage4',
+                 node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     run_body_design(ctx)
 
@@ -746,6 +779,10 @@ def test_hook_design_item_patch_round_fixes_only_the_failing_material(tmp_path):
                        chapters=_chapters(), budget=2000, digest=digest)
     run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
                  ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage4',
+                 node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     run_body_design(ctx)
     run_hook_design(ctx)

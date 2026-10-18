@@ -111,7 +111,7 @@ checkpoint／Brief／Binding 保持 rc22；每类版本以 `contracts/artifacts.
 冻结身份由 `tests/test_str06_f7e_freeze.py` 守卫。节点共 13 个，运行配置未变。
 book 观察 `stage2-book-v7`、chapters 独立 `stage2-chapters-v7`、names 独立
 `stage2-names-v5`（wire v7，补充称谓证据）、associate `stage2-associate-v5`（输入投影变经 RC 表换身份）；
-Preserve 当前 `stage4-preserve-v6`＋policy 11、Design 内部展开 `stage4-design-v5`
+Preserve 当前 `stage4-preserve-v7`＋policy 12、Design 内部展开 `stage4-design-v5`
 （瘦 wire 现役 v11）；
 Hook Design 为 `stage4-hook-design-v4`；正式输入／呈现协议显式换身份。当前正文 renderer v13／写手协议 v12（2026-10-10 自然混称逐次投影、必要骨架联合交接；有限情节补桥归 Design，写手呈现自然移步与转场；历史 R10b 升 v7）。
 

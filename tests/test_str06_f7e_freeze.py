@@ -169,7 +169,7 @@ from novel.llm.paid_requests import candidate_contract_identity
 # RC 版式头与全链统一 rc26 随批次 D 的 rc25→rc26 同根升级边落地（避免出现
 # 无升级路径的拒读窗口）；旧候选根按契约表漂移只读拒收，原因见 REQUIREMENTS
 # 「目标命名前置与普通正文主链」节。
-FROZEN_CONTRACT_IDENTITY = '7f6cfc22efdae5de37718d6226241becb6623376bef68af081e08b38f0298d75'
+FROZEN_CONTRACT_IDENTITY = '806a0e3defcfef22a923d9c6db7c287afd1d8a49b40489a24ee13643e80d4b31'
 
 #: 冻结时的节点集合（命名前移批后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 五（含 naming）＋Stage5 两＋Stage7 一；bind 的承载位决定并入
@@ -269,9 +269,11 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     # 升 v4——条目级窄 resolver；rc20（CS-S Phase 3）升 v5——same_state_dimension
     # 消失（change 键闭集＝键即 canonical）。
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v5',
-    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v6',
+    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v7',
     # 2026-10-10 用户授权有限补桥：必要源因果完整交接，形状与 wire 不变。
-    'STAGE4_PRESERVE_POLICY_VERSION': 11,
+    # rc26 批次 B（2026-10-18 目标材料）：policy 12——Preserve 消费 NameMapV6，
+    # 义务文本用目标姓名转述（源旧字面／身份文本标记按条目硬闸）。
+    'STAGE4_PRESERVE_POLICY_VERSION': 12,
     'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
     'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v4',
     # CS-3（2026-10-03）：bind 协议随节点退役——wire 面由 design v6 的 real

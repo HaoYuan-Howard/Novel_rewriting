@@ -46,6 +46,7 @@ from novel.core.validation import validation_identity
 from novel.errors import ProvenanceRefused, UnsealedArtifact, UpstreamMissing
 from novel.llm.paid_requests import digest, semantic_owner_unit
 from novel.stages.candidates import purchased_rounds
+from novel.stages.stage4 import name_map_content_sha256
 from novel.stages.chain import derive_total_length_budget, load_stage1_chapters
 from novel.stages.stage4 import (
     assemble_preserve, design_obligation_index, inspect_design_candidate,
@@ -85,6 +86,8 @@ class DesignInputs:
     length_band: tuple[float, float]
     book_title: str
     checkpoint_sha256: str
+    # 命名前移批（rc26）：目标名称表是 Design 预检与身份投影的正式输入。
+    name_map: Any = None
 
 
 def design_inputs(repository: Str06Repository, *, chapter_count: int, budget: int,
@@ -97,16 +100,18 @@ def design_inputs(repository: Str06Repository, *, chapter_count: int, budget: in
         chars = repository.read_model('stage2/characters/characters.json')
         checkpoint = repository.read_model('runtime/preserve_checkpoint.json')
         blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+        name_map = repository.read_model('stage4/naming/name_map.json')
     except (FileNotFoundError, UnsealedArtifact, ProvenanceRefused, ValidationError) as exc:
         raise ReplayNotRun(f'上游正式输入缺失、未封存或不符当前契约：{type(exc).__name__}：{exc}') from exc
     brief, _ = project_brief(checkpoint, chars.core_view(), blueprint,
-                              structure=chars.name_structure)
+                              structure=chars.name_structure, name_map=name_map)
     return DesignInputs(
         chars=chars, checkpoint=checkpoint, brief=brief,
         obligations=design_obligation_index(checkpoint, brief),
         constraints=OutputConstraints(target_chapter_count=chapter_count, total_length_budget=budget),
         length_band=length_band, book_title=book_title,
-        checkpoint_sha256=Str06Repository.file_sha256(repository.path('runtime/preserve_checkpoint.json')))
+        checkpoint_sha256=Str06Repository.file_sha256(repository.path('runtime/preserve_checkpoint.json')),
+        name_map=repository.read_model('stage4/naming/name_map.json'))
 
 
 def error_code(error: str) -> str:
@@ -126,8 +131,8 @@ def replay_design_round(wire: dict, inputs: DesignInputs) -> dict:
                 'reason': '旧 Design 缺少当前逐次身份声明；只读解码不能补出语义，不可免费沿用'}
     inspection = inspect_design_candidate(
         wire, checkpoint=inputs.checkpoint, brief=inputs.brief, obligations=inputs.obligations,
-        chars=inputs.chars, constraints=inputs.constraints, length_band=inputs.length_band,
-        book_title=inputs.book_title)
+        chars=inputs.chars, name_map=inputs.name_map, constraints=inputs.constraints,
+        length_band=inputs.length_band, book_title=inputs.book_title)
     repairs = ()
     if inspection.body is not None and inspection.binding is not None and inspection.materials:
         repairs = plan_material_repairs(
@@ -153,30 +158,35 @@ def _design_replayer(base: Path, sid: str, repository: Str06Repository,
 
 
 def preserve_inputs(repository: Str06Repository):
-    """Preserve 重放的正式输入（Characters＋Blueprint）；读不到＝ReplayNotRun。"""
+    """Preserve 重放的正式输入（Characters＋Blueprint＋NameMap）；读不到＝ReplayNotRun。
+
+    命名前移批（rc26）：目标名称表是 Preserve 的正式输入，重放面同读。
+    """
     try:
         chars = repository.read_model('stage2/characters/characters.json')
         blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+        name_map = repository.read_model('stage4/naming/name_map.json')
     except (FileNotFoundError, UnsealedArtifact, ProvenanceRefused, ValidationError) as exc:
         raise ReplayNotRun(f'上游正式输入缺失、未封存或不符当前契约：{type(exc).__name__}：{exc}') from exc
-    return chars, blueprint
+    return chars, blueprint, name_map
 
 
-def replay_preserve_round(wire: dict, chars, blueprint) -> dict:
-    """已购 Preserve 回答在**现役判据**（含 CS-H H3 自闸）下的只读复检。"""
+def replay_preserve_round(wire: dict, chars, blueprint, name_map) -> dict:
+    """已购 Preserve 回答在**现役判据**（policy 12 目标姓名闸）下的只读复检。"""
     from novel.stages.stage4.grounding import preserve_name_issues
     from contracts.schema.workflow import STAGE4_PRESERVE_POLICY_VERSION
     from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
     if wire.get('protocol_version') != STAGE4_PRESERVE_PROTOCOL:
         return {'status': 'obsolete', 'passed': False, 'assembled': False,
                 'error_count': 0, 'codes': {}, 'gate_items': [], 'reuse': 'obsolete',
-                'reason': '旧 Preserve 回答没有新身份声明；原 checkpoint 按原 policy 保留读取'}
+                'reason': '旧 Preserve 回答没有目标姓名转述；原 checkpoint 按原 policy 保留读取'}
     checkpoint, errors = assemble_preserve(
         wire, policy_id='preserve-default',
         policy_version=STAGE4_PRESERVE_POLICY_VERSION,
         characters=chars.core_view(), blueprint=blueprint,
+        name_map=name_map, name_map_sha256=name_map_content_sha256(name_map),
         provider='replay', model='replay', request_sha256='0' * 64)
-    gate = preserve_name_issues(checkpoint, chars)
+    gate = preserve_name_issues(checkpoint, chars, name_map)
     problems = list(errors) + list(gate)
     return {
         'status': 'ran', 'passed': checkpoint is not None and not problems,
@@ -191,8 +201,8 @@ def replay_preserve_round(wire: dict, chars, blueprint) -> dict:
 
 def _preserve_replayer(base: Path, sid: str, repository: Str06Repository,
                        source: dict) -> Callable[[dict], dict]:
-    chars, blueprint = preserve_inputs(repository)
-    return lambda wire: replay_preserve_round(wire, chars, blueprint)
+    chars, blueprint, name_map = preserve_inputs(repository)
+    return lambda wire: replay_preserve_round(wire, chars, blueprint, name_map)
 
 
 # ─── associate：已购 wire 对当前候选集的只读重放（CS-H H4；CS-S Phase 3 起 v5） ──

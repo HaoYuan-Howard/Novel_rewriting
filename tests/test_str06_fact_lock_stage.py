@@ -18,7 +18,7 @@ import pytest
 from contracts.schema.grounding import OutputConstraints, _lock_id
 from novel.llm.paid_requests import ValidationStop, digest
 from novel.stages.chain import ChainContext, run_body_design, run_preserve, run_workflow
-from tests.str06_facilities import json_ask, stub_body_runner, text_ask
+from tests.str06_facilities import name_map_of, json_ask, stub_body_runner, text_ask
 from tests.test_str06_body import _chapters, _make_session
 from tests.test_str06_hook import _full_chain_wires
 
@@ -61,6 +61,10 @@ def _prepare(tmp_path, wires):
                        ask_body=no_body, chapters=_chapters(), budget=2000, digest=digest)
     run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
                  ask_body=ctx.ask_body, budget=ctx.budget, through='stage2')
+    # 命名前移批：naming 是 Preserve 的正式输入，先跑该节点。
+    run_workflow(repository=repo, chapters=ctx.chapters, ask=ctx.ask, ask_text=ctx.ask_text,
+                 ask_body=ctx.ask_body, budget=ctx.budget, through='stage4',
+                 node_filter=('str06.stage4.naming',))
     run_preserve(ctx)
     return ctx, transport
 
@@ -80,7 +84,7 @@ def test_body_design_publishes_binding_with_lock_mapping_and_no_kf_state_key(tmp
     repo = ctx.repository
     body = repo.read_model('stage4/design/body_design.json')
     binding = repo.read_model('stage4/grounding/semantic_binding.json')
-    assert binding.contract_version == 'str06-rc22'
+    assert binding.contract_version == 'str06-rc26'
     [mapping] = binding.fact_bindings
     assert (mapping.kf_id, mapping.beat_ref) == (KF_PLAN, 'sc01#b03')
     assert (mapping.address.domain.value, mapping.address.key) == ('world', 'agreement')
@@ -143,10 +147,11 @@ def test_ambiguous_fact_lock_is_rejected_by_full_candidate_paid_entry_and_free_p
     chars = repo.read_model('stage2/characters/characters.json')
     checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
     brief, _ = project_brief(checkpoint, chars.core_view(),
-                             repo.read_model('stage2/blueprints/chapter_blueprints.json'))
+                             repo.read_model('stage2/blueprints/chapter_blueprints.json'),
+name_map=name_map_of(chars.core_view()))
     view = inspect_design_candidate(
         wires['design'], checkpoint=checkpoint, brief=brief,
-        obligations=design_obligation_index(checkpoint, brief), chars=chars,
+        obligations=design_obligation_index(checkpoint, brief), chars=chars, name_map=name_map_of(chars),
         constraints=OutputConstraints(target_chapter_count=2, total_length_budget=2000),
         length_band=ctx.length_band)
     assert not view.passed
@@ -187,9 +192,11 @@ def _candidate_args(ctx):
     chars = repo.read_model('stage2/characters/characters.json')
     checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
     brief, _ = project_brief(checkpoint, chars.core_view(),
-                             repo.read_model('stage2/blueprints/chapter_blueprints.json'))
+                             repo.read_model('stage2/blueprints/chapter_blueprints.json'),
+name_map=name_map_of(chars.core_view()))
     return dict(checkpoint=checkpoint, brief=brief,
                 obligations=design_obligation_index(checkpoint, brief), chars=chars,
+                name_map=repo.read_model('stage4/naming/name_map.json'),
                 constraints=OutputConstraints(target_chapter_count=2,
                                               total_length_budget=ctx.budget),
                 length_band=ctx.length_band)

@@ -712,7 +712,7 @@ def _binding_for(body):
         anchors=anchor_stub(),
         lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('yun_niang',)),
         must_preserve=False, satisfaction='', requires=())
-    checkpoint = PreserveCheckpoint(
+    checkpoint = PreserveCheckpoint(name_map_sha256='n' * 64,
         checkpoint_id='cp1', policy_id='p', policy_version=1,
         characters_sha256=H64, blueprints_sha256=H64, provider='x', model='y',
         request_sha256=H64, obligations=(obligation,), checkpoint_sha256=H64)
@@ -1001,12 +1001,14 @@ def _full_chain_wires():
                           {'left': 'ch01.sc1', 'right': 'ch02.sc1',
                            'verdict': 'distinct'}]},
         'cross_cause': {'protocol_version': 'stage2-cross-cause-v1', 'causes': []},
-        'preserve': {'protocol_version': 'stage4-preserve-v6', 'obligations': [
+        # 命名前移批（policy 12）：义务文本用目标姓名、无身份文本标记；
+        # naming wire 把 yun_niang→柳婉、fu_jun→顾（姓位），夫君是保留称谓。
+        'preserve': {'protocol_version': 'stage4-preserve-v7', 'obligations': [
             {'kind': 'event_core',
-             'statement': '[[name:yun_niang|苏芸娘]]嫁入[[name:fu_jun|陆家]]且[[name:fu_jun|夫君]]立下旧约',
+             'statement': '柳婉嫁入顾家且夫君立下旧约',
              'anchors': ['b01_01.e1'],
              'must_preserve': True,
-             'satisfaction': '正文呈现婚约成立且[[name:fu_jun|夫君]]立下旧约', 'requires': []}]},
+             'satisfaction': '正文呈现婚约成立且夫君立下旧约', 'requires': []}]},
         'design': _design_wire_v7(),
         'hook_design': hook_wire,
         'naming': naming_wire,

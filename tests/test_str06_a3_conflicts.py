@@ -308,7 +308,8 @@ def _run_to_preserve(tmp_path, transport_factory, monkeypatch, prepare=None):
             budget=2000, through='stage4',
             node_filter=['str06.stage2.book', 'str06.stage2.chapters',
                          'str06.stage2.names', 'str06.stage2.associate',
-                         'str06.stage2.compile', 'str06.stage4.preserve'])
+                         'str06.stage2.compile', 'str06.stage4.naming',
+                         'str06.stage4.preserve'])
     return runner, repo, transport
 
 

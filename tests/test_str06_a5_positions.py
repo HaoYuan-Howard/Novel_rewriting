@@ -33,7 +33,7 @@ from novel.stages.stage4.grounding import (
 )
 from novel.stages.stage4.guard import check_epistemic_lock_order
 from tests.str06_expression_inputs import sample_narration, sample_readings, sample_requirements
-from tests.str06_facilities import v13_beat, v13_effect
+from tests.str06_facilities import name_map_of, v13_beat, v13_effect
 from tests.str06_semantic_cases import CASES_BY_BATCH
 
 A5_CASES = CASES_BY_BATCH['R10a-a5']
@@ -42,6 +42,13 @@ BASIS = ({'segment': 'e01_01', 'quote': '芸娘觉得夫君像是看穿了什么
 CONFIRM_BASIS = ({'segment': 'e01_02', 'quote': '芸娘亲眼证实了此事'},)
 READER_BASIS = ({'segment': 'e01_02', 'quote': '证据摆到了明处'},)
 
+
+def _assemble(wire, **kw):
+    """命名前移批测试垫片：自动补 NameMapV6（全部保留替身）与内容摘要。"""
+    from tests.str06_facilities import name_map_of
+    kw.setdefault('name_map', name_map_of(kw['characters']))
+    kw.setdefault('name_map_sha256', 'n' * 64)
+    return assemble_preserve(wire, **kw)
 
 def _characters() -> CharactersCore:
     return CharactersCore.model_validate({
@@ -139,7 +146,7 @@ def _blueprint() -> BlueprintsArtifactV17:
 
 
 def _preserve_wire() -> dict:
-    return {'protocol_version': 'stage4-preserve-v6', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v7', 'obligations': [
         {'kind': 'event_core', 'statement': '芸娘从起疑到证实同一件事',
          'anchors': ['b01_01.c1', 'b01_02.c1'],
          'must_preserve': True, 'satisfaction': '怀疑渐进到证实',
@@ -163,7 +170,7 @@ def _preserve_wire() -> dict:
 
 
 def _checkpoint() -> PreserveCheckpoint:
-    checkpoint, errors = assemble_preserve(
+    checkpoint, errors = _assemble(
         _preserve_wire(), policy_id='p', policy_version=5,
         characters=_characters(), blueprint=_blueprint(),
         provider='x', model='y', request_sha256='r' * 64)
@@ -172,7 +179,7 @@ def _checkpoint() -> PreserveCheckpoint:
 
 
 def _brief() -> ReconstructionBrief:
-    brief, _ = project_brief(_checkpoint(), _characters(), _blueprint())
+    brief, _ = project_brief(_checkpoint(), _characters(), _blueprint(), name_map=name_map_of(_characters()))
     return brief
 
 
@@ -189,7 +196,7 @@ def _summary_design_fixture(placements, *, optional_instance=False):
         for index, (core, text) in enumerate((
             ('core_first', '第一次经历'), ('core_second', '第二次经历'),
             ('core_summary', '回顾两次经历')), 1))
-    brief = ReconstructionBrief(
+    brief = ReconstructionBrief(contract_version='str06-rc26',
         brief_id='br_summary', preserve_checkpoint_sha256='a' * 64,
         requirements=requirements, source_narration=sample_narration(),
         expression=sample_requirements(), expression_readings=sample_readings())
@@ -321,6 +328,7 @@ def test_summary_real_candidate_preflight_keeps_narrow_repair(
     checkpoint = PreserveCheckpoint(
         checkpoint_id='cp', policy_id='p', policy_version=1,
         characters_sha256='a' * 64, blueprints_sha256='a' * 64,
+        name_map_sha256='n' * 64,
         provider='x', model='y', request_sha256='r' * 64,
         checkpoint_sha256='a' * 64,
         obligations=tuple(SourceObligation(
@@ -333,7 +341,8 @@ def test_summary_real_candidate_preflight_keeps_narrow_repair(
             SeriesSummary(member='ob03', covers=('ob01', 'ob02')),)),))
     inspection = inspect_design_candidate(
         wire, checkpoint=checkpoint, brief=brief, obligations=index,
-        chars=full_characters(), constraints=OutputConstraints(
+        chars=full_characters(), name_map=name_map_of(full_characters()),
+        constraints=OutputConstraints(
             target_chapter_count=2, total_length_budget=2000), length_band=(0.6, 1.3))
     assert not inspection.passed
     issues = [e for e in inspection.errors if getattr(e, 'code', '') == code]
@@ -542,7 +551,7 @@ def test_same_summary_does_not_merge_obligation_knowledge_modes():
     rows = list(checkpoint.obligations)
     rows[1] = rows[1].model_copy(update={'statement': rows[0].statement})
     checkpoint = checkpoint.model_copy(update={'obligations': tuple(rows)})
-    brief, _ = project_brief(checkpoint, _characters(), _blueprint())
+    brief, _ = project_brief(checkpoint, _characters(), _blueprint(), name_map=name_map_of(_characters()))
     index = design_obligation_index(checkpoint, brief)
     assert index['ob01'].core_id != index['ob02'].core_id
     assert {c.holder for c in index['ob01'].knowledge_changes} == {'yun_niang'}
@@ -753,9 +762,10 @@ def _a5_wires():
 
     wires = deepcopy(looped_full_chain_wires())
     wires['preserve'] = {
-        'protocol_version': 'stage4-preserve-v6',
+        'protocol_version': 'stage4-preserve-v7',
         'obligations': [
-            {'kind': 'event_core', 'statement': '苏芸娘嫁入陆家且夫君立下旧约',
+            # 命名前移批（policy 12）：目标姓名直书（yun_niang→柳婉；夫君保留）。
+            {'kind': 'event_core', 'statement': '柳婉嫁入顾家且夫君立下旧约',
              'anchors': ['b01_01.e1'], 'must_preserve': True,
              'satisfaction': '正文呈现婚约成立且夫君立下旧约', 'requires': []},
             {'kind': 'event_core', 'statement': '同一婚约的第二次回响',
@@ -765,10 +775,6 @@ def _a5_wires():
     # design wire（v6）：ob01 支撑 b01＋接受 b02；ob02 接受 b01（绿基座）。
     wires['design']['scenes'][0]['beats'][0]['real'] = ['ob01']
     wires['design']['scenes'][0]['beats'][1]['real'] = ['ob01']
-    from tests.factories import declared_stage4_text
-    for obligation in wires['preserve']['obligations']:
-        for field in ('statement', 'satisfaction'):
-            obligation[field] = declared_stage4_text(obligation[field])
     return wires
 
 
@@ -828,8 +834,8 @@ def _run_to_design(tmp_path, transport_factory, monkeypatch):
             budget=4000, through='stage4',
             node_filter=['str06.stage2.book', 'str06.stage2.chapters',
                          'str06.stage2.names', 'str06.stage2.associate',
-                         'str06.stage2.compile', 'str06.stage4.preserve',
-                         'str06.stage4.body_design'])
+                         'str06.stage2.compile', 'str06.stage4.naming',
+                         'str06.stage4.preserve', 'str06.stage4.body_design'])
     return runner, repo, transport
 
 
@@ -881,8 +887,8 @@ def test_preserve_model_validation_error_feeds_revision_not_crash():
               'must_preserve': False, 'satisfaction': '',
               'anchors': ['b01_01.e1']}
     try:
-        checkpoint, errors = assemble_preserve(
-            {'protocol_version': 'stage4-preserve-v6',
+        checkpoint, errors = _assemble(
+            {'protocol_version': 'stage4-preserve-v7',
              'obligations': [entry, entry2],
              'series': [{'members': [1, 2], 'mechanism': None},
                         {'members': [1, 2], 'mechanism': None}]},  # 全员双 series

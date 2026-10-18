@@ -37,7 +37,7 @@ from novel.stages.stage4.slim import (
     design_fact_marks, design_placements, knowledge_change_index,
 )
 from tests.str06_expression_inputs import sample_narration, sample_readings
-from tests.str06_facilities import v13_beat, v13_effect
+from tests.str06_facilities import name_map_of, v13_beat, v13_effect
 from tests.str06_semantic_cases import CASES_BY_BATCH
 
 A4_CASES = CASES_BY_BATCH['R10a-a4']
@@ -132,7 +132,7 @@ def _blueprint() -> BlueprintsArtifactV17:
 
 
 def _preserve_wire() -> dict:
-    return {'protocol_version': 'stage4-preserve-v6', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v7', 'obligations': [
         {'kind': 'event_core', 'statement': '芸娘从起疑到证实同一件事',
          'anchors': ['b01_01.c1', 'b01_02.c1'],
          'must_preserve': True, 'satisfaction': '正文呈现怀疑渐进到证实',
@@ -160,16 +160,18 @@ def _preserve_wire() -> dict:
 
 
 def _checkpoint() -> PreserveCheckpoint:
+    from tests.str06_facilities import name_map_of
     checkpoint, errors = assemble_preserve(
         _preserve_wire(), policy_id='p', policy_version=5,
         characters=_characters(), blueprint=_blueprint(),
+        name_map=name_map_of(_characters()), name_map_sha256='n' * 64,
         provider='x', model='y', request_sha256='r' * 64)
     assert checkpoint is not None and not errors, errors
     return checkpoint
 
 
 def _brief() -> ReconstructionBrief:
-    brief, _ = project_brief(_checkpoint(), _characters(), _blueprint())
+    brief, _ = project_brief(_checkpoint(), _characters(), _blueprint(), name_map=name_map_of(_characters()))
     return brief
 
 
@@ -261,7 +263,7 @@ def test_reader_knowledge_keeps_locks_without_becoming_a_character():
     assert reader_ob.lineage.character_ids == ()
     assert reader_ob.lineage.blueprint_refs == ('b01_02',)
     assert person_ob.lineage.character_ids == ('yun_niang',)
-    brief, _ = project_brief(checkpoint, _characters(), _blueprint())
+    brief, _ = project_brief(checkpoint, _characters(), _blueprint(), name_map=name_map_of(_characters()))
     reader_req = next(r for r in brief.requirements if r.summary == '读者得知实证')
     person_req = next(r for r in brief.requirements if r.summary == '芸娘从起疑到证实同一件事')
     assert reader_req.participants == ()
@@ -287,16 +289,18 @@ def test_reader_lineage_defense_ignores_forged_character_entry_and_keeps_proxy()
     chapter = blueprint.chapters[0].model_copy(update={'beats': (
         first, *blueprint.chapters[0].beats[1:])})
     blueprint = blueprint.model_copy(update={'chapters': (chapter,)})
+    from tests.str06_facilities import name_map_of
     checkpoint, errors = assemble_preserve(
         _preserve_wire(), policy_id='p', policy_version=5,
         characters=forged, blueprint=blueprint,
+        name_map=name_map_of(forged), name_map_sha256='n' * 64,
         provider='x', model='y', request_sha256='r' * 64)
     assert checkpoint is not None and not errors, errors
     reader_ob = next(o for o in checkpoint.obligations if o.statement == '读者得知实证')
     person_ob = next(o for o in checkpoint.obligations if o.statement == '芸娘从起疑到证实同一件事')
     assert reader_ob.lineage.character_ids == ()
     assert person_ob.lineage.character_ids == ('reader_proxy', 'yun_niang')
-    brief, _ = project_brief(checkpoint, forged, blueprint)
+    brief, _ = project_brief(checkpoint, forged, blueprint, name_map=name_map_of(forged))
     reader_req = next(r for r in brief.requirements if r.summary == '读者得知实证')
     person_req = next(r for r in brief.requirements if r.summary == '芸娘从起疑到证实同一件事')
     assert reader_req.participants == ()
@@ -937,12 +941,14 @@ def test_shared_fact_lock_carrier_belongs_to_any_sharing_obligation(
     preserve['obligations'][3].update({
         'statement': '归期预计也支撑夫君的承诺', 'anchors': ['b01_01.e1'],
         'must_preserve': True, 'satisfaction': '保留预计承诺'})
+    from tests.str06_facilities import name_map_of
     checkpoint, errors = assemble_preserve(
         preserve, policy_id='p', policy_version=5,
         characters=_characters(), blueprint=_blueprint(),
+        name_map=name_map_of(_characters()), name_map_sha256='n' * 64,
         provider='x', model='y', request_sha256='r' * 64)
     assert checkpoint is not None and not errors, errors
-    brief, _ = project_brief(checkpoint, _characters(), _blueprint())
+    brief, _ = project_brief(checkpoint, _characters(), _blueprint(), name_map=name_map_of(_characters()))
     obligations = design_obligation_index(checkpoint, brief)
     assert required_fact_locks(checkpoint.obligations) == {
         ob: req.realize_locks for ob, req in obligations.items() if req.must_preserve}
@@ -1017,12 +1023,14 @@ def test_shared_fact_lock_carrier_later_than_a_sharing_obligation_is_locatable()
     preserve['obligations'][3].update({
         'statement': '归期预计也支撑夫君的承诺', 'anchors': ['b01_01.e1'],
         'must_preserve': True, 'satisfaction': '保留预计承诺'})
+    from tests.str06_facilities import name_map_of
     checkpoint, errors = assemble_preserve(
         preserve, policy_id='p', policy_version=5,
         characters=_characters(), blueprint=_blueprint(),
+        name_map=name_map_of(_characters()), name_map_sha256='n' * 64,
         provider='x', model='y', request_sha256='r' * 64)
     assert checkpoint is not None and not errors, errors
-    brief, _ = project_brief(checkpoint, _characters(), _blueprint())
+    brief, _ = project_brief(checkpoint, _characters(), _blueprint(), name_map=name_map_of(_characters()))
     kf = _kf(brief, 'expected')
     wire = _design_wire_v8(brief)
     wire['scenes'][0]['beats'][0]['real'] = ['ob04']     # ob04 在 b01 验收；承载拍 b06 只属 ob02

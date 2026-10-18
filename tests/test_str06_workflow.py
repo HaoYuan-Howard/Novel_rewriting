@@ -38,13 +38,13 @@ PV = 'stage2-chapters-v7'   # R10a a1：章观察独立协议字面量（names �
 
 
 def _declared_preserve(wire):
-    """本文件当前故事的义务作者声明；源观察、锚点与人物 ID 保持原样。"""
+    """命名前移批（policy 12）：义务文本直书目标姓名（yun→苏婉；夫君为保留
+    称谓），不再使用身份文本标记；源观察、锚点与人物 ID 保持原样。"""
     result = deepcopy(wire)
-    result['protocol_version'] = 'stage4-preserve-v6'
+    result['protocol_version'] = 'stage4-preserve-v7'
     for obligation in result['obligations']:
         for field in ('statement', 'satisfaction'):
-            obligation[field] = declared_stage4_text(
-                obligation[field], owners={'夫君': 'fu_jun', '云娘': 'yun'})
+            obligation[field] = obligation[field].replace('云娘', '苏婉')
     return result
 
 
@@ -408,7 +408,7 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
              'beats': [{'ev': '确认床底有人', 'who': ['yun', 'fu_jun'],
                         'real': ['ob02'], 'know': [{'ref': 'ob02.k01', 'confirms': {'domain': 'world', 'key': 'secret'}}]}]}],
         'chapters': [{'purpose': '夜半响动到床底确认', 'scenes': 2}]}
-    preserve = _declared_preserve({'protocol_version': 'stage4-preserve-v6', 'obligations': [
+    preserve = _declared_preserve({'protocol_version': 'stage4-preserve-v7', 'obligations': [
         {'kind': 'event_core',
          'statement': '夫君佯称离开实则藏身床底',
          'anchors': ['b01_01.e1'],

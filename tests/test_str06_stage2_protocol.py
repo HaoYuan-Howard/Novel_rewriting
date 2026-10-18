@@ -118,7 +118,7 @@ def test_observation_artifacts_are_registered_with_independent_versions():
     for rel in ('runtime/preserve_checkpoint.json',
                 'stage4/grounding/reconstruction_brief.json',
                 'stage4/grounding/semantic_binding.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc22'
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc26'
     for rel in ('stage4/design/body_design.json', 'stage4/ir/writer_book_ir.json',
                 'stage4/design/presentation_graph.json'):
         assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc25'

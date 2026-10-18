@@ -122,7 +122,7 @@ def test_design_input_keeps_details_source_blind_and_projects_summary_coverage()
 def _brief() -> ReconstructionBrief:
     return ReconstructionBrief.model_validate({
         'brief_id': 'brief_test', 'preserve_checkpoint_sha256': 'a' * 64,
-        'contract_version': 'str06-rc22',
+        'contract_version': 'str06-rc26',
         'requirements': [
             {'core_id': 'req_aaaa', 'summary': '芸娘确知夫君不育',
              'kind': 'reveal', 'must_preserve': True, 'satisfaction': '开场揭示',
@@ -865,7 +865,7 @@ def _scene_repair_slice_fixture(protocol):
               'first_release', 'last_release', 'state_actor', 'knowledge_holder',
               'requirement_actor', 'lock_subject', 'illegal_holder', 'unrelated_actor',
               'future_actor', 'extra_holder', 'mentioned_actor', 'lu_fujun', 'yun_niang')
-    identities = tuple(IdentityProjection(char_id=person, identity_statement=f'{person}的身份')
+    identities = tuple(IdentityProjection(char_id=person, target_name=person, identity_statement=f'{person}的身份')
                        for person in people)
     return wire, brief, _obligations(brief), identities
 
@@ -977,7 +977,7 @@ def test_scene_repair_state_history_supplies_initial_and_prior_values_and_closes
         {'domain': 'relation', 'key': 'marriage', 'subjects': ['history_left', 'history_right']}]
     wire['scenes'][2]['beats'][0]['state'].append(
         {'at': 'history_left+history_right', 'key': 'marriage', 'val': '尚未发生的未来婚事'})
-    identities += tuple(IdentityProjection(char_id=person, identity_statement=f'{person}的身份')
+    identities += tuple(IdentityProjection(char_id=person, target_name=person, identity_statement=f'{person}的身份')
                         for person in ('history_left', 'history_right', 'history_holder',
                                        'past_left', 'past_right', 'proof_subject', 'intent_actor'))
     before = deepcopy(wire)
