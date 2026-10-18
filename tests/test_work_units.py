@@ -6,7 +6,7 @@ import pytest
 
 from novel.work_units import (
     WorkUnitBudget, WorkUnitBudgetExhausted, WorkUnitRefused,
-    initialize_workflow, list_unit_views,
+    historical_unit_ledger, initialize_workflow, list_unit_views,
 )
 
 
@@ -439,3 +439,24 @@ def test_old_stage2_ledger_rewrite_cannot_reset_current_work_unit(tmp_path):
                 'f' * 64, run_id='attempted-budget-reset')
         assert unit.path.read_bytes() == ledger_before
         assert unit.used == 4
+
+
+def test_retired_node_unit_is_read_only_through_historical_entry(tmp_path):
+    """命名前移批：退役节点（旧 str06.stage7.naming）的工作单元只读可查。
+
+    历史轮次与成本继续计入整书账（I-17）；退役节点不在现役 NODES——不能
+    执行、不能授权、不能改历史身份，只读入口集中在
+    `historical_unit_ledger`（删除条件见 REQUIREMENTS）。
+    """
+    unit = WorkUnitBudget(tmp_path, '42', 'str06.stage4.body_design', 'executor', 'book')
+    unit.reserve(sha('r'), run_id='run-1')
+    unit_id = unit.unit_id
+    # 退役节点构造只读预算：现役入口关闭式拒绝（禁执行/授权）。
+    with pytest.raises(WorkUnitRefused, match='未登记的工作单元节点'):
+        WorkUnitBudget(tmp_path, '42', 'str06.stage7.naming', 'executor', 'book',
+                       read_only=True)
+    # 历史入口照读现役单元的账（集中读取不挑节点）。
+    ledger = historical_unit_ledger(tmp_path, '42', unit_id)
+    assert ledger.node == 'str06.stage4.body_design' and len(ledger.turns) == 1
+    with pytest.raises(FileNotFoundError):
+        historical_unit_ledger(tmp_path, '42', '0' * 64)

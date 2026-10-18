@@ -267,9 +267,12 @@ def _refund_rebuild_units(repository: Str06Repository, base: Path, sid: str,
                    f"轮次恢复到基础额度；subject={subject_sha256}；"
                    f"actor={actor}；{reason}")
     for unit_id in work_units.registered_unit_ids(base, sid):
-        budget = work_units.readonly_budget(base, sid, unit_id)
-        if budget.identity['node'] not in nodes:
+        # 命名前移批：退役节点（旧 str06.stage7.naming）的单元只读可查、不进
+        # 返还范围——历史成本继续计入整书账，禁执行/授权/改历史身份。
+        ledger = work_units.historical_unit_ledger(base, sid, unit_id)
+        if ledger.node not in nodes:
             continue
+        budget = work_units.readonly_budget(base, sid, unit_id)
         refund = budget.refund_for_upgrade(
             subject_sha256, reason=reason_line)
         summary.append({'unit_id': unit_id, 'node': budget.identity['node'],

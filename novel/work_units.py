@@ -1351,6 +1351,25 @@ def readonly_budget(base: str | os.PathLike[str], sid: str, unit_id: str) -> Wor
     return budget
 
 
+def historical_unit_ledger(base: str | os.PathLike[str], sid: str,
+                           unit_id: str) -> WorkUnitLedgerV3:
+    """**已退役节点**工作单元的集中只读账入口（命名前移批，rc26）。
+
+    旧 `str06.stage7.naming` 退出现役后，其历史轮次与已购响应仍须可读：
+    整书成本继续计入（I-17），升级返还范围也要能按节点过滤。退役节点不在
+    现役 `NODES`：不能经本入口执行、追加授权或修改历史身份——只读盘上
+    ledger.json，身份仍按盘上记录（不猜节点版本、不重置轮数）。
+    读不到即显式 `FileNotFoundError`，不补造空账。
+
+    删除条件：所有存量根只读归档且不再续跑（REQUIREMENTS「目标命名前置与
+    普通正文主链」节）；不扩展为通用旧链兼容层（S-03）。
+    """
+    path = paths.work_unit_dir(base, sid, unit_id) / 'ledger.json'
+    if not path.is_file():
+        raise FileNotFoundError(f'历史工作单元预算账不存在：{unit_id}')
+    return _read(base, path, WorkUnitLedgerV3)
+
+
 def executor_scope(node: str, purpose: str, progress: Any = None) -> str:
     """只从登记的业务拓扑取 scope，修复 purpose 不铸新单元。
 

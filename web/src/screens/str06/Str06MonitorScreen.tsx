@@ -51,6 +51,9 @@ export function Str06MonitorScreen() {
       {m.run.data ? <RunPane run={m.run.data} /> : null}
       {m.characters.data ? <CharactersPane chars={m.characters.data} /> : null}
       {m.blueprint.data ? <BlueprintPane blueprint={m.blueprint.data} /> : null}
+      {/* 命名前移批：目标人物命名移到故事设计之前（str06.stage4.naming 在
+          Stage2 compile 之后、Preserve／Design 之前）。 */}
+      {m.naming.data ? <NamingPane naming={m.naming.data} /> : null}
       {m.design.data ? <DesignPane design={m.design.data} /> : null}
       {m.ir.data ? <IrPane ir={m.ir.data} /> : null}
       <ChapterPane
@@ -60,7 +63,6 @@ export function Str06MonitorScreen() {
         chapter={m.chapter.data}
       />
       {m.hook.data ? <HookPane hook={m.hook.data} /> : null}
-      {m.naming.data ? <NamingPane naming={m.naming.data} /> : null}
       {m.delivery.data ? <DeliveryPane delivery={m.delivery.data} onBook={m.openBook} /> : null}
     </section>
   )
