@@ -47,8 +47,7 @@ from contracts.schema.source import (
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
 from contracts.schema.naming import NameMapV6
-from novel.core.name_materials import expand_surface_releases, name_candidate_literals
-from novel.core.name_text import resolve_name_text
+from novel.core.name_materials import target_face_table
 from novel.core.validation import ValidationIssue
 from novel.stages.common import check_binding_covers_checkpoint
 from novel.stages.stage4.design_paths import design_issue
@@ -758,6 +757,7 @@ def _requires_released_surfaces(
     obligation: SourceObligation, anchor: ObligationAnchor, *,
     characters: CharactersCore | None, structure,
     first_appearance: dict[str, str], prop_segments: dict[str, set[str]],
+    faces: Mapping[str, Mapping[str, str]] | None = None,
 ) -> tuple[str, ...]:
     """必保揭名识别（CS-H H3，RC-61）——三项类型化信号**合取**：
 
@@ -765,7 +765,8 @@ def _requires_released_surfaces(
     ② 该命题的源证据句段（Blueprint 里该命题 basis 的句段）正是某**带名**称谓
       在源文首次出现的句段（Characters 的 SurfaceWindow.source_refs[0]；
       带名＝名称结构构词非 null）；
-    ③ 命题文本含该称谓字面。
+    ③ 命题文本含该称谓的**目标字面**（rc26：义务文本已按目标姓名转述，
+      `faces` 把带名源面映射到目标面后再匹配）。
 
     任一不满足即无揭名要求（漏检退化为普通投影，不比现状差）；不用文本共现
     作判定。返回按字面排序去重的称谓清单（不暴露句段号，保持源盲）。
@@ -783,18 +784,21 @@ def _requires_released_surfaces(
         person = structure.people.get(char_id)
         if person is None:
             continue
+        table = (faces or {}).get(char_id, {})
         for window in entry.surfaces:
             surface = window.surface
             bearing = person.surface_forms.get(surface) is not None
+            target = table.get(surface, surface)
             if (bearing and first_appearance.get(surface) in segments
-                    and surface in statement):
-                matched.add(surface)
+                    and target in statement):
+                matched.add(target)
     return tuple(sorted(matched))
 
 
 def _derive_brief_locks(
     checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV17,
     characters: CharactersCore | None = None, structure=None,
+    faces: Mapping[str, Mapping[str, str]] | None = None,
 ) -> tuple[tuple[BriefProposition, ...], tuple[BriefKnowledgeLock, ...],
            tuple[BriefFactLock, ...], dict[str, dict[str, tuple]]]:
     """义务 anchors＋canonical loops → Brief 锁定项（a4 唯一派生点）。
@@ -864,7 +868,7 @@ def _derive_brief_locks(
                         requires_released=_requires_released_surfaces(
                             obligation, anchor, characters=characters,
                             structure=structure, first_appearance=first_appearance,
-                            prop_segments=prop_segments))
+                            prop_segments=prop_segments, faces=faces))
                 elif anchor.mode == 'asserts' and anchor.holder \
                         and anchor.holder != 'public':
                     entry = propositions[kp]
@@ -978,7 +982,9 @@ def project_brief(
     core_ids = {o.obligation_id: obligation_core_id(o.obligation_id)
                 for o in checkpoint.obligations}
     propositions, knowledge_locks, fact_locks, derived_locks = \
-        _derive_brief_locks(checkpoint, blueprint, characters, structure)
+        _derive_brief_locks(checkpoint, blueprint, characters, structure,
+                            faces=(target_face_table(structure, name_map)[0]
+                                   if structure is not None else {}))
     series_group: dict[str, str] = {}
     series_mechanism: dict[str, str | None] = {}
     summarizes: dict[str, tuple[str, ...]] = {}

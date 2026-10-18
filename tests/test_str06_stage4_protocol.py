@@ -255,11 +255,13 @@ def test_book_style_and_voices_project_into_book_brief_and_packet():
         unbound=())
     plan, errors = compile_execution_plan(body, binding)
     assert not errors, errors
+    from tests.str06_facilities import name_map_of
     ir = compile_writer_book_ir(graph=body, plan=plan, binding=binding,
                                 total_budget=1000, length_band=(0.6, 1.3),
                                 book_title='t',
                                 projection=_characters().name_projection(),
-                                structure=None)
+                                structure=_characters().name_structure,
+                                name_map=name_map_of(_characters()))
     assert ir.book_brief.book_style.startswith('冷峻克制')
     assert ir.book_brief.character_voices[0].char_id == 'yun'
     from novel.stages.common import project_chapter_packet, render_chapter_packet

@@ -6,10 +6,11 @@ receipt／draft repair 审计（全部免费，零模型调用）。
 【public_state_ref 接管边界】旧 Blueprint `public_state_ref` 的三项职责——公开
 身份与表面角色的来源（身份隔离）、跨章携入的时点纪律、公开状态的解除——由新链
 的 IR 称谓释放位置表（BookBrief.release_schedule ＋ 逐场 SurfaceRelease ＋ 章级
-释放集／禁用面）与公共投影接管（消费投影族 character_exposure，坐标域 DUAL：
+释放集／姓名监视行）与公共投影接管（消费投影族 character_exposure，坐标域 DUAL：
 源时点是源事实，目标时点由 Design 派生）。本文件用免费反例钉住接管行为：
 ① 身份隔离——participants 出现不等于揭示；未释放称谓逐个独立释放、不提前合并；
-   未释放专名是硬失败，重写耗尽后停止而不是披露放行；
+   rc26 起未释放称谓进写手材料硬闸与正文定位报告（正文命中不阻断；硬失败是
+   身份协议定界符残片，重写耗尽后停止而不是披露放行）；
 ② 跨章携入——释放位置按阅读序折叠，后章（含同章后场）引入不向前携入，前章
    释放集对后章编辑稳定；
 ③ 状态解除——unset 以显式解除标记携入消费面：不是 stale 旧值、不是静默消失、
@@ -34,7 +35,7 @@ from novel.llm.paid_requests import (
 from novel.stages.stage5.body_checks import MAX_BODY_REWRITES
 from novel.stages.stage5.body import AnsweredText, write_chapter
 from novel.stages.stage4.book_ir import (
-    chapter_surface_releases, chapter_withheld_literals, compile_writer_book_ir,
+    chapter_surface_releases, compile_writer_book_ir,
 )
 from novel.stages.stage4.compile import compile_execution_plan
 from novel.stages.stage4.design import assemble_body_design
@@ -45,7 +46,7 @@ from novel.stages.common import (
 )
 from novel.store import Str06Repository
 from novel.work_units import WorkUnitBudget, read_book_budget
-from tests.str06_facilities import make_context
+from tests.str06_facilities import make_context, name_map_of
 from tests.test_str06_body import (
     _RoutingTransport, _chapters, _fake_ask, _fake_body, _fake_text, _green_binding,
 )
@@ -87,7 +88,13 @@ def _ir(body):
                                   total_budget=2000, length_band=(0.6, 1.3),
                                   book_title='报恩',
                                   projection=chars.name_projection(),
-                                  structure=chars.name_structure)
+                                  structure=chars.name_structure,
+                                  name_map=name_map_of(chars))
+
+
+def _watch(book_ir, chapter: int) -> set[str]:
+    """章级姓名监视行字面平链（rc26：未释放称谓与旧名残留的统一消费面）。"""
+    return {l for row in book_ir.chapter(chapter).name_watch for l in row.literals}
 
 
 def _scene_releases(book_ir, chapter: int, scene: int = 0) -> dict[str, set[str]]:
@@ -99,17 +106,16 @@ def _scene_releases(book_ir, chapter: int, scene: int = 0) -> dict[str, set[str]
 # ────────────────── public_state_ref 接管 · ① 身份隔离 ──────────────────────
 
 def test_participation_alone_never_releases_a_surface():
-    """参与不等于揭示：未声明释放的人物不进 usable_surfaces，其带名面进禁用面。"""
+    """参与不等于揭示：未声明释放的人物不进 usable_surfaces，其带名面进监视行。"""
     body = _delayed_release_design()
     book_ir = _ir(body)
     releases = surface_engine_release(body, 'sc01')
     assert {r.char_id for r in releases} == {'yun_niang'}, 'participants 不得冒充已释放称谓'
     assert _scene_releases(book_ir, 1)['yun_niang'] == {'苏芸娘', '芸娘'}
     assert 'fu_jun' not in _scene_releases(book_ir, 1)
-    chars = _characters()
-    withheld = chapter_withheld_literals(
-        chars.name_projection(), body, 1, chars.name_structure)
-    assert {'陆大哥', '陆兄'} <= set(withheld), '未释放的带名 surface 必须留在章级禁用面'
+    # rc26：未释放的带名 surface 进章级姓名监视行（写手材料硬闸与正文定位报告同源）
+    assert {'陆大哥', '陆兄'} <= _watch(book_ir, 1), \
+        '未释放的带名 surface 必须留在章级监视行'
 
 
 def test_unrevealed_surfaces_release_independently_without_early_merge():
@@ -127,14 +133,15 @@ def test_unrevealed_surfaces_release_independently_without_early_merge():
 
 
 def test_withheld_literal_is_hard_failure_never_disclosed():
-    """未释放专名是硬失败：重写耗尽后无合法候选即停止，不按披露放行。"""
+    """rc26：硬失败（身份协议定界符残片）重写耗尽后无合法候选即停止，不按披露放行；
+    正文里的未释放称谓只进定位报告（R-7.9，不阻断）。"""
     body = _delayed_release_design()
     book_ir = _ir(body)
     packet = project_chapter_packet(book_ir, 1)
-    dirty = '芸娘望着空房，' * 100 + '陆大哥没有回来。'
+    dirty = '[[name:fu_jun|陆大哥]]没有回来。' * 20
     clean = '芸娘坐在窗前，烛火摇了三摇，门外没有脚步声。' * 30
     from tests.test_str06_hook import _declared_prose
-    # 身份引用超出本章目录走整章返修；每轮仍提交同一未授权提及，必须继续硬拒。
+    # 每轮仍提交同一带定界符残片的稿：硬失败必须继续拒，不能披露放行。
     answers = [AnsweredText(text=_declared_prose(dirty), finish_reason='stop',
                             identity=f'attempt-{i}', cached=False)
                for i in range(1 + MAX_BODY_REWRITES)]
@@ -148,7 +155,7 @@ def test_withheld_literal_is_hard_failure_never_disclosed():
     assert outcome.prose is None and outcome.receipt is None, '硬失败不得披露放行'
     assert len(outcome.attempts) == 1 + MAX_BODY_REWRITES
     assert systems == [None] * (1 + MAX_BODY_REWRITES)
-    assert all(any(e.startswith('[name_text_reference]') for e in a.errors)
+    assert all(any(e.startswith('[no_wrapper]') for e in a.errors)
                for a in outcome.attempts)
     # 同一把标尺下，只用已释放称谓的稿正常接受（纪律针对未释放面，不是全部专名）。
     ok = write_chapter(packet=packet,
@@ -158,24 +165,32 @@ def test_withheld_literal_is_hard_failure_never_disclosed():
     assert ok.receipt.status == 'accepted' and ok.length_disclosed is False
     assert ok.receipt.writer_view_sha256 == chapter_identities(
         packet).writer_view_sha256
+    # rc26：未释放称谓以普通文本进正文只形成定位报告——不阻断、不披露放行例外。
+    from novel.stages.stage5 import chapter_name_residues
+    residue_prose = '芸娘望着空房，' * 100 + '陆大哥没有回来。'
+    reported = write_chapter(
+        packet=packet,
+        ask=lambda prompt, validate: AnsweredText(text=residue_prose,
+                                                  finish_reason='stop',
+                                                  identity='residue', cached=False))
+    assert reported.prose == residue_prose and reported.receipt is not None
+    hits = chapter_name_residues(packet, residue_prose)
+    assert hits and all(h.char_id == 'fu_jun' for h in hits)
+    assert len(hits) == residue_prose.count('陆大哥')
 
 
 # ────────────────── public_state_ref 接管 · ② 跨章携入 ──────────────────────
 
 def test_later_chapter_introduction_never_carries_backward():
-    """第 2 章引入的称谓不进第 1 章释放集；第 1 章禁用面含它，释放后退出禁用面。"""
+    """第 2 章引入的称谓不进第 1 章释放集；第 1 章监视行含它，释放后退出监视行。"""
     body = _delayed_release_design()
     book_ir = _ir(body)
-    chars = _characters()
     released1, released2 = chapter_surface_releases(body, 1), chapter_surface_releases(body, 2)
     assert '陆大哥' not in released1
     assert {'夫君', '陆大哥'} <= released2
-    withheld1 = chapter_withheld_literals(
-        chars.name_projection(), body, 1, chars.name_structure)
-    withheld2 = chapter_withheld_literals(
-        chars.name_projection(), body, 2, chars.name_structure)
-    assert '陆大哥' in withheld1 and '陆大哥' not in withheld2
-    assert '陆兄' in withheld1 and '陆兄' in withheld2, '全书未引入的称谓两章都禁用'
+    watch1, watch2 = _watch(book_ir, 1), _watch(book_ir, 2)
+    assert '陆大哥' in watch1 and '陆大哥' not in watch2
+    assert '陆兄' in watch1 and '陆兄' in watch2, '全书未引入的称谓两章都监视'
     assert 'fu_jun' not in _scene_releases(book_ir, 1)
     assert _scene_releases(book_ir, 2)['fu_jun'] == {'夫君', '陆大哥'}
 
@@ -277,7 +292,8 @@ def test_unset_public_state_is_carried_as_explicit_removal():
     book_ir = compile_writer_book_ir(graph=body, plan=plan, binding=binding,
                                      total_budget=2000, length_band=(0.6, 1.3),
                                      projection=chars.name_projection(),
-                                     structure=chars.name_structure)
+                                     structure=chars.name_structure,
+                                     name_map=name_map_of(chars))
     entry = [e for e in book_ir.chapter(3).scenes[0].verification_ir.entry_state
              if e.key == 'residence']
     assert len(entry) == 1, '解除项必须显式到达消费面，不得静默消失'

@@ -128,35 +128,36 @@ def test_design_view_survives_pre_upgrade_hook_shape(base):
     assert '不可推导' in design.hook.design_brief
 
 
-def test_design_and_ir_display_decode_only_explicit_text_without_rewriting_artifacts(base):
+def test_design_and_ir_display_show_plain_text_without_rewriting_artifacts(base):
+    """rc26：普通目标文本原样展示——无解码步骤，遗留标记式字面不被改写。"""
     run = base / 'cand' / 'run'
     graph_path = run / 'stage4/design/presentation_graph.json'
     ir_path = run / 'stage4/ir/writer_book_ir.json'
     blueprint_path = run / 'stage2/blueprints/chapter_blueprints.json'
     graph = json.loads(graph_path.read_text(encoding='utf-8'))
     scene = graph['scenes'][0]
-    scene['realization_brief'] = '[[text|旁白]]贴近[[name:yun_niang|苏芸娘]]。'
-    scene['driver']['immediate_want'] = '问清[[name:fu_jun|夫君]]去向'
-    scene['delivery']['voice'] = '[[text|对白短促]]'
-    scene['delivery']['avoid'] = ['[[text|不写未来]]']
-    scene['beats'][0]['event'] = '[[name:yun_niang|苏芸娘]]望着[[text|白墙]]。'
-    scene['beats'][0]['delivery_hint'] = '[[text|留白]]'
-    graph['chapters'][0]['purpose'] = '[[text|若有所疑]]'
-    graph['hook']['local_focus'] = '[[text|看清眼前动作]]'
-    graph['hook']['reader_expectation']['focus'] = '[[name:fu_jun|夫君]]为何离开'
+    scene['realization_brief'] = '旁白接近柳婉。'
+    scene['driver']['immediate_want'] = '问清夫君去向'
+    scene['delivery']['voice'] = '对白短促'
+    scene['delivery']['avoid'] = ['不写未来']
+    scene['beats'][0]['event'] = '柳婉望着白墙。'
+    scene['beats'][0]['delivery_hint'] = '留白'
+    graph['chapters'][0]['purpose'] = '若有所疑'
+    graph['hook']['local_focus'] = '看清眼前动作'
+    graph['hook']['reader_expectation']['focus'] = '夫君为何离开'
     graph_path.write_text(json.dumps(graph, ensure_ascii=False), encoding='utf-8')
     ir = json.loads(ir_path.read_text(encoding='utf-8'))
-    ir['book_brief']['chapters'][0]['purpose'] = '[[text|若有所疑]]'
-    ir['chapters'][0]['purpose'] = '[[text|若有所疑]]'
-    ir['book_brief']['chapters'][0]['scene_lines'][0] = '[[text|旁白]]观察[[name:fu_jun|夫君]]'
+    ir['book_brief']['chapters'][0]['purpose'] = '若有所疑'
+    ir['chapters'][0]['purpose'] = '若有所疑'
+    ir['book_brief']['chapters'][0]['scene_lines'][0] = '旁白观察夫君'
     ir_path.write_text(json.dumps(ir, ensure_ascii=False), encoding='utf-8')
     before = {path: path.read_bytes() for path in (graph_path, ir_path, blueprint_path)}
     design = views.design_view(base, 'cand')
     nav = views.ir_nav_view(base, 'cand')
-    assert design.scenes[0].realization_brief == '旁白贴近苏芸娘。'
+    assert design.scenes[0].realization_brief == '旁白接近柳婉。'
     assert design.scenes[0].driver['immediate_want'] == '问清夫君去向'
     assert design.scenes[0].voice == '对白短促' and design.scenes[0].avoid == ('不写未来',)
-    assert design.scenes[0].beats[0]['event'] == '苏芸娘望着白墙。'
+    assert design.scenes[0].beats[0]['event'] == '柳婉望着白墙。'
     assert design.scenes[0].beats[0]['delivery_hint'] == '留白'
     assert design.scenes[0].beats[0]['beat_id'] == scene['beats'][0]['beat_id']
     assert design.chapters[0].purpose == '若有所疑'
@@ -172,12 +173,13 @@ def test_design_and_ir_display_decode_only_explicit_text_without_rewriting_artif
 
 
 def test_display_beat_preserves_machine_references_and_source_quotes():
-    beat = {'beat_id': 'b01', 'event': '[[name:a|白若]]走来',
-            'source_refs': ['e01_01'], 'delivery_hint': '[[text|对白]]',
-            'target_delta': [{'key': 'intent', 'subjects': ['a'], 'value': '[[text|若非如此]]',
-                              'basis': [{'segment': 'e01_01', 'quote': '[[text|原文原字]]'}]}],
-            'threads': [{'ref': 'th01', 'subject': 'a', 'text': '[[text|何时离开]]',
-                         'progress': '[[text|已经动身]]'}]}
+    """rc26：普通文本原样展示；机器引用（beat_ref/subjects）与源引文保留。"""
+    beat = {'beat_id': 'b01', 'event': '白若走来',
+            'source_refs': ['e01_01'], 'delivery_hint': '对白',
+            'target_delta': [{'key': 'intent', 'subjects': ['a'], 'value': '若非如此',
+                              'basis': [{'segment': 'e01_01', 'quote': '原文原字'}]}],
+            'threads': [{'ref': 'th01', 'subject': 'a', 'text': '何时离开',
+                         'progress': '已经动身'}]}
     import copy
     before = copy.deepcopy(beat)
     shown = views._display_design_beat(beat, path='sc01#b01')
@@ -190,24 +192,26 @@ def test_display_beat_preserves_machine_references_and_source_quotes():
 
 
 @pytest.mark.parametrize('endpoint', ['design', 'ir'])
-def test_malformed_identity_text_is_typed_unreadable_over_http(base, endpoint):
+def test_marker_like_text_is_shown_verbatim_over_http(base, endpoint):
+    """rc26：遗留的标记式字面只是普通字面——监控面原样展示，不作为不可读。"""
     run = base / 'cand' / 'run'
     path = run / ('stage4/design/presentation_graph.json' if endpoint == 'design'
                   else 'stage4/ir/writer_book_ir.json')
     raw = json.loads(path.read_text(encoding='utf-8'))
     if endpoint == 'design':
-        raw['scenes'][0]['realization_brief'] = '[[text|未闭合'
+        raw['scenes'][0]['realization_brief'] = '[[text|半开'
     else:
-        raw['book_brief']['chapters'][0]['scene_lines'][0] = '[[text|未闭合'
+        raw['book_brief']['chapters'][0]['scene_lines'][0] = '[[text|半开'
     path.write_text(json.dumps(raw, ensure_ascii=False), encoding='utf-8')
     before = path.read_bytes()
     reader = views.design_view if endpoint == 'design' else views.ir_nav_view
-    with pytest.raises(ArtifactUnreadable, match='身份文本语法损坏，显示不可读'):
-        reader(base, 'cand')
+    view = reader(base, 'cand')
+    shown = (view.scenes[0].realization_brief if endpoint == 'design'
+             else view.chapters[0].scene_lines[0])
+    assert shown == '[[text|半开', '遗留标记不解码、不报不可读'
     with TestClient(create_app(base)) as client:
         response = client.get(f'/api/str06/candidates/cand/{endpoint}')
-    assert response.status_code == 409 and response.json()['kind'] == 'ArtifactUnreadable'
-    assert '显示不可读' in response.json()['message']
+    assert response.status_code == 200
     assert path.read_bytes() == before
 
 
@@ -250,7 +254,7 @@ def test_views_cover_the_whole_delivered_chain(base):
     assert ch1.receipt.mechanical_checks
 
     hook = views.hook_view(base, name)
-    assert hook.present and hook.prose == '苏芸娘望着空房。'
+    assert hook.present and hook.prose == '柳婉望着空房。'
     assert hook.receipt['status'] == 'accepted'
 
     naming = views.naming_view(base, name)

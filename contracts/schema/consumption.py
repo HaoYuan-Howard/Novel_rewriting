@@ -11,8 +11,9 @@ Stage5/7 不需要新 canonical truth，只需要消费投影；消费投影的*
 旧 Prepare 坐标分离（PrepareMaterials／SourceHookEvidence／TargetOpening）随
 Stage6 prepare 节点一并退役：Hook 的正式选择改由 `hook_material` 投影承载
 （Design 保存必要选择，compiler 确定性投影）。`body_access` 的来源删去
-stage6.prepare，改按 Stage5 有效接受回执过滤。`rename_materials` 写明 Naming
-（只读投影）与 Apply（唯一应用者）的权限分界。
+stage6.prepare，改按 Stage5 有效接受回执过滤。rc26（命名前移批次
+C）末端替换退役后，`rename_materials` 只记目标姓名表向章包称谓许可的 compile
+映射（写手直接以目标姓名成文，无 Apply 应用位）。
 
 【坐标域纪律】
 源首次提及、身份揭示、姓名可用时点是**源事实**（Characters 三投影，坐标=源章）；
@@ -98,8 +99,8 @@ STR06_CONSUMPTION_PROJECTIONS: dict[str, ProjectionFamilySpec] = {
         coordinate=ProjectionCoordinate.TARGET),
     'rename_materials': ProjectionFamilySpec(
         name='rename_materials',
-        shape_note='Naming 只消费名称结构与稳定身份的只读投影；ApplyNames 是替换的'
-                   '唯一应用者（权限分界：投影不落交付，Apply 不改映射）',
+        shape_note='Naming 只消费名称结构与稳定身份的只读投影；目标姓名表经 compile'
+                   '映射进章包称谓许可（权限分界：投影不落交付，写手不改映射）',
         source_owners=('str06.stage2.compile', 'str06.stage4.naming'),
         coordinate=ProjectionCoordinate.DUAL),
 }
@@ -134,7 +135,7 @@ class DeliveryConsumer(str, Enum):
 
     WRITER_PACKET = 'writer_packet'   # 写手章包分区（正文写手的输入面）
     HOOK_CONTEXT = 'hook_context'     # HookContext（楔子写手的输入面）
-    NAMING = 'naming'                 # Naming／ApplyNames（改名面）
+    NAMING = 'naming'                 # Naming（目标命名面）
     VALIDATOR = 'validator'           # 机械验证器（认领/检查材料）
     AUDIT = 'audit'                   # 仅审计（存储/对账/追溯）
 
@@ -146,7 +147,7 @@ class DeliveryScope(str, Enum):
     CHAPTER_FIELD = 'chapter_field'   # 章级字段：只进该章章包（验证材料、章目的）
     SCENE_OWNER = 'scene_owner'       # 场景/条目级：只进含该场景的章
     HOOK_ONLY = 'hook_only'           # 只进 HookContext，不进正文章包
-    NAMING_ONLY = 'naming_only'       # 只进 Naming/Apply 面
+    NAMING_ONLY = 'naming_only'       # 只进 Naming 面
     NOT_DELIVERED = 'not_delivered'   # 不进任何写手面（导航/总表/传输身份等审计位）
 
 
@@ -293,20 +294,30 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
         note='章级已释放称谓并集：机械 validator 的认领面；'
              '写手许可经场景级 released_surfaces 送达'),
+    # rc26（命名前移批次 C）：称谓许可是平链字面清单（【可用称谓】），不再带
+    # 人物句柄——char_id 只服务归因与审计，不进写手阅读面。
     'writer_book_ir.chapters[].released_names[].char_id': _spec(
-        'writer_book_ir.chapters[].released_names[].char_id', consumers=(_W, _V),
-        scope=_CHAP, mode=DeliveryMode.MUST_RESPECT, note='身份引用目录的授权人物'),
+        'writer_book_ir.chapters[].released_names[].char_id', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY, note='授权人物（归因/审计面；'
+             'rc26 起阅读面只送平链字面，无人物句柄）'),
     'writer_book_ir.chapters[].released_names[].surfaces': _spec(
         'writer_book_ir.chapters[].released_names[].surfaces', consumers=(_W, _V),
         scope=_CHAP, mode=DeliveryMode.MUST_RESPECT, note='身份引用目录的授权称谓'),
-    'writer_book_ir.chapters[].name_candidates': _spec(
-        'writer_book_ir.chapters[].name_candidates', consumers=(_V,),
+    # rc26（命名前移批次 C）：姓名监视行取代 name_candidates＋
+    # withheld_literals 两面——字面平链供写手材料硬闸，带归因的同一份字面
+    # 在正文里只形成定位报告（不阻断、不购修）。
+    'writer_book_ir.chapters[].name_watch[].code': _spec(
+        'writer_book_ir.chapters[].name_watch[].code', consumers=(_V,),
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
-        note='未声明文本的逐次候选覆盖；不把未来姓名候选目录送写手'),
-    'writer_book_ir.chapters[].withheld_literals': _spec(
-        'writer_book_ir.chapters[].withheld_literals', consumers=(_V,),
+        note='监视行类别：old_name_residue（旧名残留）/unreleased_name（未释放目标名）'),
+    'writer_book_ir.chapters[].name_watch[].char_id': _spec(
+        'writer_book_ir.chapters[].name_watch[].char_id', consumers=(_V,),
         scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
-        note='本章禁用字面：validator 检查面，不进写手阅读面'),
+        note='监视行归因人物（定位报告用，不进写手面）'),
+    'writer_book_ir.chapters[].name_watch[].literals': _spec(
+        'writer_book_ir.chapters[].name_watch[].literals', consumers=(_V,),
+        scope=_CHAP, mode=DeliveryMode.AUDIT_ONLY,
+        note='该人物的监视字面；平链是写手材料硬闸，带归因同一份字面在正文里只定位'),
     # rc25：按本人释放面派生 (char_id, literal)；同形多人分别登记。表不进阅读面，
     # renderer 显式按身份投影；旧裸文另须全书唯一归属证明，验证输入摘要含本表。
     'writer_book_ir.chapters[].withheld_bindings[].literal': _spec(
@@ -1051,14 +1062,19 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     'hook_context.usable_surfaces[].surfaces': _spec(
         'hook_context.usable_surfaces[].surfaces', consumers=(_H, _V),
         scope=_HOOK, mode=DeliveryMode.MUST_RESPECT, note='Hook 可用称谓'),
-    'hook_context.withheld_literals': _spec(
-        'hook_context.withheld_literals', consumers=(_V,), scope=_HOOK,
+    # rc26（命名前移批次 C）：同章 IR——监视行一份两用。
+    'hook_context.name_watch[].code': _spec(
+        'hook_context.name_watch[].code', consumers=(_V,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY,
-        note='Hook 禁用字面（validator 检查面）；不进 Hook 阅读面'),
-    'hook_context.name_candidates': _spec(
-        'hook_context.name_candidates', consumers=(_V,), scope=_HOOK,
+        note='监视行类别：old_name_residue/unreleased_name'),
+    'hook_context.name_watch[].char_id': _spec(
+        'hook_context.name_watch[].char_id', consumers=(_V,), scope=_HOOK,
         mode=DeliveryMode.AUDIT_ONLY,
-        note='身份文本逐次覆盖候选；只供验证，不向写手暴露隐藏姓名'),
+        note='监视行归因人物（定位报告用）'),
+    'hook_context.name_watch[].literals': _spec(
+        'hook_context.name_watch[].literals', consumers=(_V,), scope=_HOOK,
+        mode=DeliveryMode.AUDIT_ONLY,
+        note='该人物的监视字面；平链是 Hook 材料硬闸，带归因同一份字面只定位'),
     # rc25：与章 IR 同一人物绑定目录；按 Hook 自选 surface_releases 逐人物推导，
     # 显式引用按身份投影、旧裸文另验全书唯一归属。表不进阅读面，来源保持原字段。
     'hook_context.withheld_bindings[].literal': _spec(
@@ -1109,7 +1125,7 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     # ── NameMapV6（改名面；不经任何写手）──────────────────────────────────
     'name_map.contract_version': _spec(
         'name_map.contract_version', consumers=(_N, _A), scope=_NAME,
-        mode=DeliveryMode.AUDIT_ONLY, note='交付变换版本（审计位）'),
+        mode=DeliveryMode.AUDIT_ONLY, note='目标姓名表版本（审计位；正文不再经末端替换）'),
     'name_map.provenance': _spec(
         'name_map.provenance', consumers=(_A,), scope=_NAME,
         mode=DeliveryMode.AUDIT_ONLY, note='来源账（exclude 传输位）'),
@@ -1119,16 +1135,16 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     'name_map.entries[].name.family': _spec(
         'name_map.entries[].name.family', consumers=(_N,), scope=_NAME,
         mode=DeliveryMode.AUDIT_ONLY,
-        note='目标姓氏；写手看不到（替换发生在 Apply，正文按许可称谓成文）'),
+        note='目标姖氏；经 compile 映射进章包称谓许可（写手直接使用）'),
     'name_map.entries[].name.given': _spec(
         'name_map.entries[].name.given', consumers=(_N,), scope=_NAME,
-        mode=DeliveryMode.AUDIT_ONLY, note='目标名（Apply 应用位）'),
+        mode=DeliveryMode.AUDIT_ONLY, note='目标名（经 compile 映射进称谓许可）'),
     'name_map.entries[].name.full': _spec(
         'name_map.entries[].name.full', consumers=(_N,), scope=_NAME,
         mode=DeliveryMode.AUDIT_ONLY, note='compiler 拼接的全名（审计位）'),
     'name_map.entries[].aliases': _spec(
         'name_map.entries[].aliases', consumers=(_N,), scope=_NAME,
-        mode=DeliveryMode.AUDIT_ONLY, note='化名赋值（Apply 应用位）'),
+        mode=DeliveryMode.AUDIT_ONLY, note='化名赋值（经 compile 映射进称谓许可）'),
     'name_map.entries[].keep_reason': _spec(
         'name_map.entries[].keep_reason', consumers=(_N, _A), scope=_NAME,
         mode=DeliveryMode.AUDIT_ONLY, note='合法保留的理由（在案登记）'),

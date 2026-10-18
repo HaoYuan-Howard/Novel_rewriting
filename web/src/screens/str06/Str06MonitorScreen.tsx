@@ -561,6 +561,21 @@ function DeliveryPane({ delivery, onBook }: {
                 </li>
               ))}
             </ul>
+            {delivery.name_residue && Object.keys(delivery.name_residue).length > 0 ? (
+              <div className={'text-tag text-ink-4'}>
+                疑似姓名残留定位（不阻断）：{' '}
+                {Object.entries(delivery.name_residue).map(([scope, counts]) => (
+                  <span key={scope} className={'mr-12'}>
+                    {scope}{' '}
+                    <Mono>
+                      {Object.entries(counts)
+                        .map(([code, n]) => `${code}×${n}`)
+                        .join(' ')}
+                    </Mono>
+                  </span>
+                ))}
+              </div>
+            ) : null}
             {delivery.disclosure ? <Prose className={'text-tag text-ink-4'} text={delivery.disclosure} /> : null}
             <div>
               <button

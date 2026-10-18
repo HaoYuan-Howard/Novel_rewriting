@@ -157,72 +157,8 @@ def _emitted_codes() -> set[str]:
     codes: set[str] = set()
     for rel in JUDGMENT_MODULES:
         codes |= _code_literals(REPO / rel)
-    codes |= _name_text_emission_chain()[0]
     codes |= SYNTHESIS_CODES | DISPATCH_CODES
     return codes - EXECUTION_CONTROL_CODES
-
-
-def _name_text_emission_chain() -> tuple[set[str], bool]:
-    """追真实身份文本链：core 的可达 emitter → adapter 的同一错误及 wire 路径。
-
-    只沿 ``name_text_field_issues`` 实际调用的解析器及其 core 内调用取码；
-    canonical 区间表 validator 的 span/surface 码不进入作者 wire 修复路由。
-    路径证据来自适配器的 AST 数据流，不能给动态码另列一个免检闭集。
-    """
-    tree = ast.parse((REPO / 'novel/stages/stage4/materials.py').read_text(encoding='utf-8'))
-    adapter = next(node for node in tree.body
-                   if isinstance(node, ast.FunctionDef) and node.name == 'name_text_field_issues')
-    imports = {alias.asname or alias.name: (node.module, alias.name)
-               for node in tree.body if isinstance(node, ast.ImportFrom)
-               and node.module == 'novel.core.name_text' for alias in node.names}
-    resolved = [(node.targets[0].id, node.value.func.id)
-                for node in ast.walk(adapter)
-                if isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name) and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Name) and node.value.func.id in imports]
-    assert len(resolved) == 1, '身份文本适配器须有可追踪的唯一 core 解析结果'
-    result_name, resolver_alias = resolved[0]
-    module, resolver_name = imports[resolver_alias]
-    core = ast.parse((REPO / (module.replace('.', '/') + '.py')).read_text(encoding='utf-8'))
-    functions = {node.name: node for node in core.body if isinstance(node, ast.FunctionDef)}
-    frontier, reached, codes = [resolver_name], set(), set()
-    while frontier:
-        name = frontier.pop()
-        if name in reached:
-            continue
-        reached.add(name)
-        assert name in functions, f'身份文本 core 解析入口不存在：{name}'
-        for call in (node for node in ast.walk(functions[name]) if isinstance(node, ast.Call)):
-            callee = getattr(call.func, 'id', '')
-            if callee in functions:
-                frontier.append(callee)
-            if callee == 'NameTextIssue' and call.args:
-                literal = _literal(call.args[0])
-                assert literal, '身份文本底层 emitter 的规则码须可枚举'
-                codes.add(literal)
-    assert codes, '适配器实际调用的 core 解析链没有发现身份文本问题码'
-
-    for result in (node for node in ast.walk(adapter) if isinstance(node, ast.ListComp)):
-        call = result.elt
-        if not isinstance(call, ast.Call) or getattr(call.func, 'id', '') != 'design_issue':
-            continue
-        keywords = {kw.arg: kw.value for kw in call.keywords}
-        code = keywords.get('code')
-        for generator in result.generators:
-            source = generator.iter
-            if not (isinstance(generator.target, ast.Name)
-                    and isinstance(source, ast.Attribute) and source.attr == 'errors'
-                    and isinstance(source.value, ast.Name) and source.value.id == result_name):
-                continue
-            same_error = (isinstance(code, ast.Attribute) and code.attr == 'code'
-                          and isinstance(code.value, ast.Name)
-                          and code.value.id == generator.target.id)
-            path = keywords.get('paths')
-            has_path = path is not None and any(
-                isinstance(node, ast.Name) and node.id == 'path' for node in ast.walk(path))
-            if same_error and has_path:
-                return codes, True
-    return codes, False
 
 
 def test_route_table_is_one_to_one_with_live_judgment_codes():
@@ -275,13 +211,35 @@ def test_whole_answer_route_is_confined_to_the_closed_set():
 
 def _actual_design_shape_issues(wire):
     """直接捕获真实Pydantic错误，再走生产诊断构造，避免手造loc掩盖类型丢失。"""
-    from contracts.schema.design import DesignWireV11
+    from contracts.schema.design import DesignWireV12
     from novel.stages.stage4.design import _wire_shape_issues
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError) as caught:
-        DesignWireV11.model_validate(wire)
+        DesignWireV12.model_validate(wire)
     return _wire_shape_issues(caught.value, 'wire 形状错误', wire=wire)
+
+
+def _design_wire() -> dict:
+    """全链 fake wires 的 design 夹具，协议字面量按现役读面钉住。
+
+    `tests/test_str06_hook.py::_full_chain_wires` 的 design 仍声明
+    `stage4-design-v11`（已只读归档，不在 `DESIGN_READ_PROTOCOLS`）——本文件只
+    改协议字面量，其余事实仍取自同一夹具。
+    """
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
+    from tests.test_str06_hook import _full_chain_wires
+
+    wire = _full_chain_wires()['design']
+    wire['protocol_version'] = STAGE4_DESIGN_WIRE_PROTOCOL
+    return wire
+
+
+def _hook_design_wire() -> dict:
+    """全链 fake wires 的 hook_design 夹具（协议字面量由夹具自身维护）。"""
+    from tests.test_str06_hook import _full_chain_wires
+
+    return _full_chain_wires()['hook_design']
 
 
 @pytest.mark.parametrize('field', ['reads', 'unregistered_payload'])
@@ -293,9 +251,8 @@ def test_real_extra_field_diagnostic_always_allows_deleting_the_key(field, value
     """同一个非法键不得随值类型改变权限；Design场内形状归属错误由整场判断语义。"""
     from copy import deepcopy
     from novel.stages.stage4 import locate_design_patches
-    from tests.test_str06_hook import _full_chain_wires
 
-    wire = _full_chain_wires()['design']
+    wire = _design_wire()
     wire['scenes'][0]['beats'][0][field] = deepcopy(value)
     before = deepcopy(wire)
     errors = _actual_design_shape_issues(wire)
@@ -315,9 +272,8 @@ def test_real_extra_field_diagnostic_always_allows_deleting_the_key(field, value
 def test_shape_diagnostics_survive_root_cause_aggregation_with_both_edit_targets():
     from novel.stages.stage4 import locate_design_patches
     from novel.stages.stage4.preflight import _root_cause_tasks
-    from tests.test_str06_hook import _full_chain_wires
 
-    wire = _full_chain_wires()['design']
+    wire = _design_wire()
     wire['scenes'][0]['beats'][0]['misplaced'] = []
     wire['scenes'][1]['beats'][0]['misplaced'] = None
     errors = _actual_design_shape_issues(wire)
@@ -340,9 +296,8 @@ def test_shape_diagnostics_survive_root_cause_aggregation_with_both_edit_targets
 def test_real_shape_errors_choose_a_schema_legal_complete_replacement(change, expected):
     from copy import deepcopy
     from novel.stages.stage4 import locate_design_patches
-    from tests.test_str06_hook import _full_chain_wires
 
-    wire = _full_chain_wires()['design']
+    wire = _design_wire()
     beat = wire['scenes'][0]['beats'][0]
     if change == 'missing-event':
         beat.pop('ev')
@@ -365,9 +320,8 @@ def test_real_discriminated_union_location_does_not_become_a_fake_json_key():
     from contracts.schema.hook import HookDesignWire
     from novel.core.repair import schema_at_path, shape_repair_paths
     from pydantic import ValidationError
-    from tests.test_str06_hook import _full_chain_wires
 
-    wire = _full_chain_wires()['hook_design']
+    wire = _hook_design_wire()
     wire['reader_expectation']['fact_ref'] = 7
     with pytest.raises(ValidationError) as caught:
         HookDesignWire.model_validate(wire)
@@ -385,9 +339,8 @@ def test_real_discriminated_union_location_does_not_become_a_fake_json_key():
 
 def test_only_real_root_shape_failure_uses_the_registered_whole_answer_exit():
     from novel.stages.stage4 import locate_design_patches
-    from tests.test_str06_hook import _full_chain_wires
 
-    wire = _full_chain_wires()['design']
+    wire = _design_wire()
     wire.pop('book_style')
     errors = _actual_design_shape_issues(wire)
     assert len(errors) == 1 and errors[0].code == 'design_wire_root_shape'
@@ -406,9 +359,8 @@ def test_live_hook_shape_diagnostics_follow_the_same_root_and_local_routes(chang
     from copy import deepcopy
     from novel.stages.stage4 import locate_design_patches
     from novel.stages.stage4.hook_wire import expand_hook_wire
-    from tests.test_str06_hook import _full_chain_wires
 
-    wire = _full_chain_wires()['hook_design']
+    wire = _hook_design_wire()
     if change == 'root-extra':
         wire['unknown_root'] = []
     elif change == 'material-extra':
@@ -556,9 +508,6 @@ def test_every_locate_code_attaches_paths_at_its_emission_site():
     wrapped = WRAPPED_CODES | MATERIAL_CODES
     real = [hole for hole in holes if hole[1] not in wrapped]
     assert not real, f'这些 locate 码的发射点没有给 wire 路径：{real}'
-    codes, has_paths = _name_text_emission_chain()
-    assert has_paths and all(PATCH_ROUTES.get(code) == 'locate' for code in codes), (
-        'core 身份文本问题必须由同一错误对象转成带当前作者路径的 locate 问题')
 
 
 def test_locate_codes_emit_wire_paths_on_their_red_examples():
@@ -581,39 +530,6 @@ def test_locate_codes_emit_wire_paths_on_their_red_examples():
         for issue in matched:
             assert wire_paths_of(issue), f'{code} 的问题没有 wire 路径（RC-57 只发目标路径）'
         covered.add(code)
-    # 动态码的真实红/绿入口：不是只在静态扫描里承认构造器存在。
-    # 自有字段即使不足以构造完整 Design，也必须立刻给作者精确编辑位置。
-    from copy import deepcopy
-    from novel.stages.stage4 import locate_design_patches
-    from novel.stages.stage4.materials import design_wire_name_text_issues
-    from tests.test_str06_hook import _characters
-
-    chars = _characters()
-    args = dict(projection=chars.name_projection(), structure=chars.name_structure,
-                registered_surfaces={cid: tuple(s.surface for s in character.surfaces)
-                                     for cid, character in chars.characters.items()},
-                require_classification=True)
-    name_cases = (
-        ('name_text_syntax', '[[text|普通文字', '[[text|普通文字]]'),
-        ('name_text_reference', '[[name:ghost|苏芸娘]]进门', '[[name:yun_niang|苏芸娘]]进门'),
-        ('name_text_unclassified', '苏芸娘进门', '[[name:yun_niang|苏芸娘]]进门'),
-    )
-    assert {code for code, _red, _green in name_cases} == _name_text_emission_chain()[0], (
-        '适配器可达的每个身份文本规则码都须有真实路径红例与绿对照')
-    for code, red, green in name_cases:
-        wire = {'scenes': [{'beats': [{'ev': red}]}]}
-        before = deepcopy(wire)
-        errors = design_wire_name_text_issues(wire, **args)
-        matched = [e for e in errors if e.code == code]
-        assert matched, f'{code} 的真实身份文本红例未触发'
-        assert all(wire_paths_of(e) == (('scenes', 0, 'beats', 0, 'ev'),)
-                   for e in matched)
-        assert wire == before, '身份文本 validator 不得改写作者输入'
-        located = locate_design_patches(wire, errors)
-        assert located is not None and [row[0] for row in located] == [('scenes', 0, 'beats', 0)]
-        wire['scenes'][0]['beats'][0]['ev'] = green
-        assert not design_wire_name_text_issues(wire, **args), f'{code} 的绿对照仍被拒绝'
-        covered.add(code)
     assert covered, '本文件至少要有一个直接红例'
     locate = {code for code, route in PATCH_ROUTES.items() if route == 'locate'}
     # 结构性扫描：发射点走过 paths 形参（`design_issue` 统一入口）。
@@ -632,9 +548,6 @@ def _emission_site_passes_paths(code: str) -> bool:
     同型（都转调 `design_issue`）。判据只要走这些入口就具备给路径的能力——
     实际给不给由各反例断言，这里只验「没有绕过入口」。
     """
-    name_codes, name_paths = _name_text_emission_chain()
-    if code in name_codes:
-        return name_paths
     for rel in JUDGMENT_MODULES:
         tree = ast.parse((REPO / rel).read_text(encoding='utf-8'))
         defaults = _module_local_codes(tree)

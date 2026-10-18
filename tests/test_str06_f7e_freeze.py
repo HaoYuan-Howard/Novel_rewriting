@@ -169,7 +169,7 @@ from novel.llm.paid_requests import candidate_contract_identity
 # RC 版式头与全链统一 rc26 随批次 D 的 rc25→rc26 同根升级边落地（避免出现
 # 无升级路径的拒读窗口）；旧候选根按契约表漂移只读拒收，原因见 REQUIREMENTS
 # 「目标命名前置与普通正文主链」节。
-FROZEN_CONTRACT_IDENTITY = '806a0e3defcfef22a923d9c6db7c287afd1d8a49b40489a24ee13643e80d4b31'
+FROZEN_CONTRACT_IDENTITY = 'fc59cab7521487810d5e5b7bfa33f61ce42213867fd6581e4dede040f3c5726f'
 
 #: 冻结时的节点集合（命名前移批后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 五（含 naming）＋Stage5 两＋Stage7 一；bind 的承载位决定并入

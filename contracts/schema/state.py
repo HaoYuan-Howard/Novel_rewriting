@@ -140,3 +140,23 @@ class WithheldNameBinding(StrictModel):
     #: 先被认领并原样保留——例如绑定字面「陆大哥」不会在更长的「陆大哥夫人」里被单独
     #: 替换。预先随绑定算好，渲染因此只依赖本表，不依赖验证材料（禁用／许可字面）。
     enclosing: tuple[str, ...] = Field(default=(), min_length=0)
+
+
+class NameWatch(StrictModel):
+    """compile 期派生的姓名监视行（IR/HookContext 携带；普通正文主链）。
+
+    命名前移批（rc26）：identity-text 协议退役后，正文里的姓名只形成**定位报告**，
+    不阻断、不购返修。监视行给报告提供归因（哪个人物、哪类字面）：
+
+    · `old_name_residue`——改名人物的源旧字面（name-bearing 面、姓、名、化名）。
+      目标链任何自然语言都不应再出现；出现在写手材料（确定性投影面）是
+      `positive_material_leak` 硬闸，出现在正文只进定位报告；
+    · `unreleased_name`——本章尚未释放的人物的目标字面。出现在写手材料是
+      提前披露硬闸；出现在正文只进定位报告（疑似提前揭名）。
+
+    字面集合由 compiler 从 NameMap＋名称结构按章派生，LLM 不生成（I-15/I-21）。
+    """
+
+    code: Literal['old_name_residue', 'unreleased_name']
+    char_id: str = Field(min_length=1)
+    literals: tuple[str, ...] = Field(min_length=1)

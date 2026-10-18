@@ -4,9 +4,11 @@ from dataclasses import replace
 import pytest
 
 from novel.core.material_trace import (
-    MaterialFragment, MaterialIssue, MaterialLines, MaterialSource, sources_for_span,
+    MaterialFragment, MaterialIssue, MaterialLines, MaterialSource, MaterialSpan,
+    sources_for_span,
 )
 from novel.stages.stage4 import inspect_body_materials, plan_material_repairs
+from tests.str06_facilities import name_map_of
 from tests.test_str06_hook import _characters
 from tests.test_str06_r10b_writer_packet import _design, _binding, _requirements
 
@@ -57,7 +59,8 @@ def test_registered_full_surface_is_projected_not_leaked():
     body, binding, brief, chars = _conflict(ch1_has_allowed_surface=True)
     before = [x.model_dump_json() for x in (body, binding, brief, chars)]
     view = inspect_body_materials(body, binding, brief, chars, budget=4000,
-                                  length_band=(0.6, 1.3))
+                                  length_band=(0.6, 1.3),
+                                  name_map=name_map_of(chars))
     assert not view.errors and not view.materials, '可证明的完整称谓不再是泄漏'
     assert view.name_projections and {
         (p['literal'], p['char_id'], p['replacement'], p['chapter_ordinal'])
@@ -76,7 +79,8 @@ def test_knowledge_placement_routes_design_from_actual_writer_material():
     body, binding, brief, chars = _conflict()
     before = [x.model_dump_json() for x in (body, binding, brief, chars)]
     view = inspect_body_materials(body, binding, brief, chars, budget=4000,
-                                  length_band=(0.6, 1.3))
+                                  length_band=(0.6, 1.3),
+                                  name_map=name_map_of(chars))
     assert not view.errors
     assert view.materials
     repairs = plan_material_repairs(view.materials, body=body, binding=binding,
@@ -137,7 +141,8 @@ def test_identity_excludes_display_location_and_wording():
     from novel.stages.owner_revision import _fingerprint
     body, binding, brief, chars = _conflict()
     issue = inspect_body_materials(body, binding, brief, chars, budget=4000,
-                                   length_band=(0.6, 1.3)).materials[0]
+                                   length_band=(0.6, 1.3),
+                                   name_map=name_map_of(chars)).materials[0]
     a, = plan_material_repairs([issue], body=body, binding=binding, brief=brief)
     b, = plan_material_repairs([replace(issue, where='另一展示行', start=999)],
                                body=body, binding=binding, brief=brief)
@@ -148,7 +153,8 @@ def test_identity_excludes_display_location_and_wording():
 def test_projection_wrong_beat_and_unregistered_source_name_stop():
     body, binding, brief, chars = _conflict()
     issue = inspect_body_materials(body, binding, brief, chars, budget=4000,
-                                   length_band=(0.6, 1.3)).materials[0]
+                                   length_band=(0.6, 1.3),
+                                   name_map=name_map_of(chars)).materials[0]
     origin = issue.sources[0]
     broken = replace(issue, sources=(replace(origin, position='sc03#b99'),))
     assert plan_material_repairs([broken], body=body, binding=binding, brief=brief)[0].action == 'stop'
@@ -190,6 +196,7 @@ def test_correction_preserves_history_and_refuses_stale_preview(tmp_path):
         ('stage4/design/presentation_graph.json', publish_graph(body, hook), 'hook_design'),
         ('stage4/grounding/semantic_binding.json', binding, 'design'),
         ('stage4/grounding/reconstruction_brief.json', brief, 'preserve'),
+        ('stage4/naming/name_map.json', name_map_of(chars), 'naming'),
         ('stage2/characters/characters.json', chars, 'compile')]:
         repo.write(rel, model, refs=(synthetic_ref(owner, '更正夹具'),))
     original = OwnerIssueFileV2(owner='preserve', node='str06.stage4.preserve',
@@ -227,7 +234,8 @@ def test_material_repairs_group_owners_and_keep_unknown_unwritten(tmp_path):
                        ('preserve', 'runtime/preserve_checkpoint.json')]:
         repo.write(rel, {'owner': owner}, owners=(owner,), refs=(synthetic_ref(owner, '归因夹具'),))
     issues = list(inspect_body_materials(body, binding, brief, chars, budget=4000,
-                                        length_band=(0.6, 1.3)).materials)
+                                        length_band=(0.6, 1.3),
+                                        name_map=name_map_of(chars)).materials)
     ob = binding.obligations[0]
     issues.append(MaterialIssue('positive_material_leak', 'positive', 0, ob.statement,
         (MaterialSource('obligation', ob.obligation_id, 'statement', ob.statement),), 1))
@@ -307,48 +315,55 @@ def test_material_span_survives_projection_and_dedup_only_with_proof():
     folding.append_fragments('他', MaterialFragment('原称谓', (source,)))
     folded, = folding.parts()
     assert folded.text == '他原称谓' and folded.sources == (source,)
-    assert folded.ordinary_spans == ((0, 1),)
-    assert sources_for_span(folded, 1, 4) == (source,), '模板不参与语义字段的同位语折叠'
+    assert folded.spans == (MaterialSpan(1, 4, (source,)),), '模板不参与语义字段的同位语折叠'
+    assert sources_for_span(folded, 1, 4) == (source,)
+    assert sources_for_span(folded, 0, 1) == (), '模板区没有来源证明'
 
 
-def test_identity_candidates_do_not_join_across_declared_or_template_boundaries():
+def test_plain_text_leaks_keep_span_attribution_across_template_boundaries():
+    """rc26（命名前移批 C）：写手材料是普通目标文本——未释放字面按区间归因，
+    已释放字面不报；模板行里的同一字面照报但无来源（归因停在未知）。"""
     from novel.stages.common import positive_material_issues
-    text = '[[name:a|白]][[text|若非如此]]'
-    origin = MaterialSource('design', 'book', 'book_style', text)
+    released = MaterialSource('design', 'book', 'book_style', '白')
     lines = MaterialLines()
-    lines.append_fragments('旁白：', MaterialFragment(text, (origin,)))
+    lines.append_fragments('旁白：', MaterialFragment('白', (released,)))
     assert positive_material_issues({'row': lines.parts()[0]}, released=('白',),
-        withheld=('白若', '旁白'), internal_ids=()) == ()
+        withheld=('白若',), internal_ids=()) == (), '已释放字面不是泄漏'
     blocked = MaterialLines()
-    blocked_origin = replace(origin, text='[[name:a|白若]]')
-    blocked.append_fragments(MaterialFragment('[[name:a|白若]]', (blocked_origin,)))
+    blocked_origin = MaterialSource('design', 'book', 'book_style', '白若')
+    blocked.append_fragments('旁白：', MaterialFragment('白若', (blocked_origin,)))
     issue, = positive_material_issues({'row': blocked.parts()[0]}, released=(),
         withheld=('白若',), internal_ids=())
     assert issue.code == 'positive_material_leak' and issue.literal == '白若'
-    assert issue.sources == (blocked_origin,)
+    assert issue.sources == (blocked_origin,), '字段片段覆盖的区间才带来源'
+    template = MaterialLines()
+    template.append('白若')
+    unproven, = positive_material_issues({'row': template.parts()[0]}, released=(),
+        withheld=('白若',), internal_ids=())
+    assert unproven.literal == '白若' and unproven.sources == (), '模板无来源，归因停'
 
 
-@pytest.mark.parametrize('code', ['name_text_syntax', 'name_text_reference', 'name_text_unclassified'])
-def test_identity_protocol_failures_keep_actual_code_and_only_route_mutable_fields(code):
+def test_material_code_keeps_actual_code_and_only_routes_mutable_fields():
+    """RC-03/04：码如实保留；Design 自有字段归 Design 改写，只读来源与未知码都停。"""
     body, binding, brief, _ = _conflict()
-    text = {'name_text_syntax': '[[text|字面',
-            'name_text_reference': '[[name:unknown|字面]]',
-            'name_text_unclassified': '字面'}[code]
-    body = body.model_copy(update={'book_style': text})
     field = MaterialSource('design', 'book', 'book_style', body.book_style)
-    issue = MaterialIssue(code, 'row', 0, '字面', (field,), 1, reason='明确的身份协议诊断')
-    own, = plan_material_repairs([issue], body=body, binding=binding, brief=brief)
-    assert own.owner == 'design' and own.issue.context['validation_code'] == code
-    assert '内部句柄' not in issue.message and '未释放专名字面' not in issue.message
-    proposition = brief.propositions[0]
-    readonly = MaterialSource('knowledge', proposition.kp_id, 'statement', proposition.statement)
-    for origins in ((), (readonly,), (MaterialSource('projection', 'sc01', 'readonly', '字面'),)):
-        stopped, = plan_material_repairs([replace(issue, sources=origins)], body=body,
-                                        binding=binding, brief=brief)
-        assert stopped.action == 'stop' and stopped.owner == ''
-    unknown, = plan_material_repairs([replace(issue, code='future_unknown_code')], body=body,
-                                    binding=binding, brief=brief)
-    assert unknown.action == 'stop' and '未识别' in replace(issue, code='future_unknown_code').message
+    for code, wording in (('positive_material_leak', '未释放专名字面'),
+                          ('internal_id_leak', '内部句柄')):
+        issue = MaterialIssue(code, 'row', 0, '字面', (field,), 1, reason='明确的材料诊断')
+        own, = plan_material_repairs([issue], body=body, binding=binding, brief=brief)
+        assert own.owner == 'design' and own.issue.context['validation_code'] == code
+        assert wording in issue.message
+        proposition = brief.propositions[0]
+        readonly = MaterialSource('knowledge', proposition.kp_id, 'statement', proposition.statement)
+        for origins in ((), (MaterialSource('projection', 'sc01', 'readonly', '字面'),),
+                        (MaterialSource('world', 'wc_01', 'statement', '字面'),)):
+            stopped, = plan_material_repairs([replace(issue, sources=origins)], body=body,
+                                            binding=binding, brief=brief)
+            assert stopped.action == 'stop' and stopped.owner == ''
+        assert readonly.kind == 'knowledge', '只读命题来源另由 stale 反例覆盖'
+    unknown = MaterialIssue('future_unknown_code', 'row', 0, '字面', (field,), 1)
+    stopped, = plan_material_repairs([unknown], body=body, binding=binding, brief=brief)
+    assert stopped.action == 'stop' and '未识别' in unknown.message
 
 
 def test_cross_scene_support_event_keeps_exact_design_origin_through_writer():
@@ -366,7 +381,8 @@ def test_cross_scene_support_event_keeps_exact_design_origin_through_writer():
     brief, chars = _requirements(), _characters()
     before = [value.model_dump_json() for value in (body, binding, brief, chars)]
     view = inspect_body_materials(body, binding, brief, chars, budget=4000,
-                                  length_band=(0.6, 1.3))
+                                  length_band=(0.6, 1.3),
+                                  name_map=name_map_of(chars))
     assert not view.errors and view.ir is not None
     packet = project_chapter_packet(view.ir, 2)
     supporting, = packet.chapter.scenes[0].verification_ir.continuity_fact_view
@@ -403,7 +419,8 @@ def test_internal_id_in_design_own_value_routes_design_not_code_defect():
     binding, brief, chars = _binding(body), _requirements(), _characters()
     before = [x.model_dump_json() for x in (body, binding, brief, chars)]
     view = inspect_body_materials(body, binding, brief, chars, budget=4000,
-                                  length_band=(0.6, 1.3))
+                                  length_band=(0.6, 1.3),
+                                  name_map=name_map_of(chars))
     leaks = [m for m in view.materials if m.code == 'internal_id_leak']
     assert {m.chapter_ordinal for m in leaks} == {1, 2}
     assert all(m.sources for m in leaks)

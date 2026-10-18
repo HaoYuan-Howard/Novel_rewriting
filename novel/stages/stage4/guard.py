@@ -496,6 +496,7 @@ def run_mechanical_guard(
     binding: SemanticBinding,
     context: WriterContext,
     graph: BodyDesign,
+    faces: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[str]:
     """写前 M1–M8 的唯一聚合入口：遍历 `GUARD_CHECKS` 登记表（R5b 表驱动化）。
 
@@ -509,7 +510,7 @@ def run_mechanical_guard(
         binding=binding, context=context, graph=graph, order=order,
         appeared=frozenset(appeared_chars(graph, order, context.scene_id)),
         scene=next((s for s in graph.scenes if s.scene_id == context.scene_id), None),
-        expected_surfaces=surface_engine_release(graph, context.scene_id))
+        expected_surfaces=surface_engine_release(graph, context.scene_id, faces))
     problems: list[str] = []
     for check in GUARD_CHECKS.values():
         problems.extend(check(scope))

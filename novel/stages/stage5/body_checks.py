@@ -4,9 +4,9 @@
 
 【能查什么、不能证明什么】
 整章自由正文不提供可靠的场景边界，机械检查只覆盖章级明确事项：非空、编码、
-包装（围栏/章号标题/场景标记）、身份引用许可、候选逐次声明与篇幅带。机械通过**不证明**
-身份声明语义正确、章内揭示位置、逐场义务兑现或成文质量——限制如实进入交付披露，回执 semantic
-恒 unverified。
+包装（围栏/章号标题/场景标记/身份协议定界符）、必保揭名字面与篇幅带。机械通过**不证明**
+章内揭示位置、逐场义务兑现、疑似旧名残留与提前揭名（只定位报告，不阻断）或成文质量
+——限制如实进入交付披露，回执 semantic 恒 unverified。
 
 【验证材料随章包（D2，B4）】
 禁用字面与称谓许可在 compile 时算好并随 ChapterIR 携带（推导唯一产地
@@ -25,11 +25,7 @@ import re
 from typing import Callable, Iterable, Mapping
 
 from contracts.schema.receipt import BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION
-from contracts.schema.name_text import NameMention, NameTextSpan
-
-from novel.core.name_text import resolve_name_text, validate_resolved_name_text
 from novel.core.text import count_non_whitespace_chars
-from novel.core.validation import ValidationIssue
 from novel.stages.common import ChapterWriterPacket
 
 #: realization failure 的同输入重写上限（首次 + 再 2 次）。
@@ -47,54 +43,37 @@ def count_body_chars(text: str) -> int:
     return count_non_whitespace_chars(text)
 
 
+#: 身份协议定界符（rc26：identity-text 退役后正文不得再带标记）。
+_PROTOCOL_DELIMITERS = ('[[', ']]')
+
+
 def validate_chapter_prose(
-    text: str, *, withheld_literals: tuple[str, ...], released_surfaces,
+    text: str, *,
     target_chars: int, band_low: int, band_high: int,
     scene_markers: tuple[str, ...] = (),
     required_literals: tuple[str, ...] = (),
-    name_surfaces: Mapping[str, Iterable[str]] | None = None,
-    name_candidates: tuple[str, ...] = (),
-    name_mentions: tuple[NameMention, ...] | None = None,
-    non_name_spans: tuple[NameTextSpan, ...] | None = None,
 ) -> list[str]:
     """章级机械校验：只报告，不修改；错误带检查项名（I-36）。
 
-    `withheld_literals`／`released_surfaces` 仅扩大待声明候选召回，不宣布姓名泄漏。
-    `name_surfaces` 才是身份与称谓许可。wire 先解析；正式纯文复验同时提供两类
-    canonical 声明表。`required_literals` 只以人物提及兑现，普通义同形词不能顶替揭名。
+    rc26（命名前移批次 C）：普通正文主链——不再解析身份文本标记、不再做候选覆盖硬闸。
+    疑似旧名残留与疑似提前揭名只进定位报告（`novel.core.name_residue`，不阻断、不购修）；
+    本函数只保留硬机械项：非空、编码、包装（含身份协议定界符）、必保揭名字面与篇幅带。
+    必保揭名改按纯正文字面判定（目标姓名成文，无提及块可抹）。
     """
     errors: list[str] = []
-    surfaces = name_surfaces or {}
-    if name_mentions is None and non_name_spans is None:
-        resolved = resolve_name_text(text or '', surfaces=surfaces,
-                                     candidate_literals=(*name_candidates, *withheld_literals,
-                                                         *released_surfaces))
-        raw, mentions, name_issues = resolved.text, resolved.mentions, resolved.errors
-    elif name_mentions is not None and non_name_spans is not None:
-        raw, mentions = text or '', name_mentions
-        name_issues = validate_resolved_name_text(
-            raw, surfaces=surfaces, candidate_literals=(*name_candidates, *withheld_literals,
-                                                       *released_surfaces),
-            name_mentions=name_mentions, non_name_spans=non_name_spans)
-    else:
-        return ['[name_text] 人物提及与普通义声明须同时提供，缺失不是合法空表']
-    for issue in name_issues:
-        errors.append(ValidationIssue(
-            f'[{issue.code}] {issue.message}', code=issue.code,
-            location=(issue.coordinate_space, issue.start, issue.end), owner='body',
-            context={'literal': issue.literal, 'start': issue.start, 'end': issue.end,
-                     'coordinate_space': issue.coordinate_space}))
-    body = raw.strip()
+    body = (text or '').strip()
     if not body:
         return ['[non_empty] 章正文为空']
-    if '\ufffd' in body or _CONTROL.search(body):
+    if '�' in body or _CONTROL.search(body):
         errors.append('[encoding] 存在 U+FFFD 或控制字符')
     first_line = body.splitlines()[0].strip()
     if ('```' in body or body.lstrip().startswith('#') or _CHAPTER_TITLE.match(first_line)
-            or any(marker in body for marker in scene_markers)):
-        errors.append('[no_wrapper] 存在围栏、章号标题或场景标记（章号由系统添加）')
+            or any(marker in body for marker in scene_markers)
+            or any(delimiter in body for delimiter in _PROTOCOL_DELIMITERS)):
+        errors.append('[no_wrapper] 存在围栅、章号标题、场景标记或身份协议定界符'
+                      '（章号由系统添加，正文不带标记）')
     for literal in required_literals:
-        if literal not in {mention.surface for mention in mentions}:
+        if literal not in body:
             errors.append(f'[required_literals] 必保揭名的称谓字面 {literal!r} 未在正文出现'
                           '（人物的首次正式点名不得只以别称带过）')
     count = count_body_chars(body)
@@ -105,15 +84,13 @@ def validate_chapter_prose(
 
 
 def chapter_prose_validator(
-    packet: ChapterWriterPacket, *,
-    name_mentions: tuple[NameMention, ...] | None = None,
-    non_name_spans: tuple[NameTextSpan, ...] | None = None,
+    packet: ChapterWriterPacket,
 ) -> Callable[[str], list[str]]:
     """本章机械校验的**唯一构造点**（纯函数，只读章包）。
 
     写章控制流、付费边界的接受记录（RC-54）、wire 显式采用与 owner 补丁预检共用
     这一把尺：规则只在 `validate_chapter_prose` 里定义，各处只经此取得绑定了本章
-    验证材料的校验器——不再各自拼参数（此前补丁／采用面漏带 `required_literals`
+    验证材料的校验器——不再各自拼参数（此前补丁？采用面漏带 `required_literals`
     与 `scene_markers`，缺必保揭名字面的 wire 能被采用、随后在写章循环里被拒）。
     """
     chapter = packet.chapter
@@ -122,12 +99,8 @@ def chapter_prose_validator(
 
     def validate(prose: str) -> list[str]:
         return validate_chapter_prose(
-            prose, withheld_literals=chapter.withheld_literals,
-            released_surfaces=chapter.released_surfaces,
+            prose,
             target_chars=contract.target_chars, band_low=contract.band_low,
             band_high=contract.band_high, scene_markers=scene_markers,
-            required_literals=chapter.requires_released,
-            name_surfaces={row.char_id: row.surfaces for row in chapter.released_names},
-            name_candidates=chapter.name_candidates,
-            name_mentions=name_mentions, non_name_spans=non_name_spans)
+            required_literals=chapter.requires_released)
     return validate

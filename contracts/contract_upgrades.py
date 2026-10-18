@@ -35,7 +35,7 @@ class ContractUpgradeSpec(TypedDict):
 HOOK_UPGRADE: Final[ContractUpgradeSpec] = {
     'id': 'hook-rc22-rc23',
     'source_identity': '9a7e1067bbbcca471d237f52ee2df63fc75020ed2166ff0aceb4272b2a51932d',
-    'target_identity': '2c833f1a715a4fcee944b5377cd5b12e8d2b7d84f77262f9c9261ec8861682ff',
+    'target_identity': 'fc59cab7521487810d5e5b7bfa33f61ce42213867fd6581e4dede040f3c5726f',
     'source_version': 'str06-rc22',
     'target_version': 'str06-rc23',
     'rebuild_nodes': (
@@ -62,7 +62,7 @@ HOOK_UPGRADE: Final[ContractUpgradeSpec] = {
 HOOK_ENVELOPE_UPGRADE: Final[ContractUpgradeSpec] = {
     'id': 'hook-rc23-rc24',
     'source_identity': '2c833f1a715a4fcee944b5377cd5b12e8d2b7d84f77262f9c9261ec8861682ff',
-    'target_identity': '5a61ed782cd59035cee8d386bc03c3ed1dbee998fb204df688d3772b7442056c',
+    'target_identity': 'fc59cab7521487810d5e5b7bfa33f61ce42213867fd6581e4dede040f3c5726f',
     'source_version': 'str06-rc23',
     'target_version': 'str06-rc24',
     'rebuild_nodes': (
@@ -80,7 +80,7 @@ HOOK_ENVELOPE_UPGRADE: Final[ContractUpgradeSpec] = {
 IDENTITY_TEXT_UPGRADE: Final[ContractUpgradeSpec] = {
     'id': 'identity-text-rc24-rc25',
     'source_identity': '5a61ed782cd59035cee8d386bc03c3ed1dbee998fb204df688d3772b7442056c',
-    'target_identity': '9bb731fa6a2a8198163baafcba1998b905c1120427586223e806e2d6cb7f3900',
+    'target_identity': 'fc59cab7521487810d5e5b7bfa33f61ce42213867fd6581e4dede040f3c5726f',
     'source_version': 'str06-rc24',
     'target_version': 'str06-rc25',
     'rebuild_nodes': (
@@ -108,7 +108,7 @@ IDENTITY_TEXT_UPGRADE: Final[ContractUpgradeSpec] = {
 NAMING_FORWARD_UPGRADE: Final[ContractUpgradeSpec] = {
     'id': 'naming-forward-rc25-rc26',
     'source_identity': '9bb731fa6a2a8198163baafcba1998b905c1120427586223e806e2d6cb7f3900',
-    'target_identity': '806a0e3defcfef22a923d9c6db7c287afd1d8a49b40489a24ee13643e80d4b31',
+    'target_identity': 'fc59cab7521487810d5e5b7bfa33f61ce42213867fd6581e4dede040f3c5726f',
     'source_version': 'str06-rc25',
     'target_version': 'str06-rc26',
     'rebuild_nodes': (

@@ -231,9 +231,9 @@ Stage0～Stage2 源 schema 与正式字节不变；`str06.stage4.naming` 前移�
 |---|---|---|
 | A 冻结新契约 | 命名节点前移登记（str06.stage4.naming＋stage4/naming/name_map.json＋NameMap v6）、模块迁 stage4 包、版式头升 rc26、登记 naming-forward-rc25-rc26 同根升级边（含升级器 preserve checkpoint 归档缺口修复）、判据/计数/冻结基线重钉 | **已完成**（2026-10-18） |
 | B 打通目标材料 | 命名前移；Preserve 生成目标表述；关闭源自由文本直接流入 Design、Binding、正文及 Hook 的入口 | **已完成**（2026-10-18） |
-| C 切换正文与装配 | 删 identity-text 协议、候选覆盖硬闸、两类区间回执及末端替换；修订普通正文回执与交付身份 | 未开始 |
+| C 切换正文与装配 | 删 identity-text 协议、候选覆盖硬闸、两类区间回执及末端替换；修订普通正文回执与交付身份；疑似旧名/提前揭名改定位报告 | **已完成**（2026-10-18） |
 | D 恢复与公开读面 | 闭合存量升级、历史账读取、预算、CLI、API 和监控页 | **已完成**（2026-10-18） |
-| E 验收与删除旧路径 | 完成工程验证及真实正文验收，删除失去消费者的代码和测试 | 未开始 |
+| E 验收与删除旧路径 | 完成工程验证及真实正文验收，删除失去消费者的代码和测试 | 未开始（真实正文验收待用户手动跑书） |
 
 批次 B 工程验证（2026-10-18，fake transport、零付费）：Preserve 正式读取
 `stage4/naming/name_map.json`（来源账边记账，名字一变 checkpoint／Brief 及下游
@@ -254,6 +254,33 @@ run_body_design 读取序与 Preserve 一致（来源账边顺序稳定，同身
 CLI through 映射与 API 命名路由读新产物（批次 A 已闭合）。默认非 corpus
 回归 **4447 passed，0 failed/error/skipped**；前端 typecheck／124 测试／
 seams／build 全绿。
+
+批次 C 工程验证（2026-10-18，fake transport、零付费；回归分母见交付说明）：
+
+- 协议退役：身份文本协议模块（契约 schema 与 novel core 两侧）整模删除；
+  ChapterReceipt／HookReceipt 的 name_mentions／non_name_spans、body/hook
+  机械检查项 name_text、Design wire v11（现役 v12，自有自然语言普通目标文本）、
+  Preserve policy ≤11 候选覆盖闸一并退出；对应协议测试整份删除，
+  行为面由普通正文回执反例与 `tests/test_name_residue.py` 覆盖。
+- 回执与正文：WRITER_PROTOCOL v13／render v14／body validator v5／hook
+  validator v6；prose_sha256 绑定最终正文；必保揭名按纯文本判定（requires_released
+  目标面合取，R-5.21）；定界符残片并入 no_wrapper。
+- 目标字面主链：`novel/core/name_materials.py::target_face_table` 源登记字面→
+  目标字面；ChapterIR／HookContext 的称谓许可、监视行（`NameWatch`）、绑定表、
+  显示面前缀与 requires_released 一律目标面；场景级释放面与拍级引入面同过
+  字面表（与监视行同面，写手材料不自我拦截）；manifest 记 name_residue 计数、
+  不再记 name_map_sha256。
+- 零改名装配：末端替换链（apply_bound_names／diff_proof／
+  compile_bound_replacements）与 hook_renamed.txt 删除；交付身份改
+  `str06-assembly-v4`（format＋hook hash＋逐章 digests）；R-10.2／R-10.9 转退
+  役条款，R-7.2／R-7.8 按新主链改写，新增 R-7.9 定位报告披露面。
+- 新披露面：疑似旧名残留／疑似提前揭名由 `novel/core/name_residue.py` 长名优
+  先单遍定位，落 `runtime/acceptance/name_report/chNN.json` 与
+  `runtime/hook_name_report.json`，计数进交付 manifest 与监控页——不阻断、
+  不购返修；写手材料侧同类命中仍是硬闸（`body_name_watch`）。
+- 升级边与冻结基线随批重钉（naming-forward-rc25-rc26 的 target 与
+  `tests/test_str06_f7e_freeze.py::FROZEN_CONTRACT_IDENTITY` 改为
+  `fc59cab7521487810d5e5b7bfa33f61ce42213867fd6581e4dede040f3c5726f`）。
 
 批次 A 工程验证（2026-10-18，fake transport、零付费）：契约五文件（docs_references／
 coverage／rules_registry／hard_counterexamples／ingest_fixtures）与 naming／store／
@@ -279,6 +306,6 @@ Stage7 腿只剩 assemble）；旧 `stage7/naming/name_map.json` 进
 |---|---|
 | rc25→rc26 同根升级登记 | `contracts/contract_upgrades.py` 新增精确身份边：保留 Stage0～Stage2、原始证据、已购响应、历史轮次与成本账；归档旧 Preserve checkpoint、Brief 及全部 Stage4～Stage7 目标产物；从新目标命名节点重建；不恢复内容额度，不用移动文件／删除标记／重新序列化把旧语义稿转成新稿。所有 rc25 当前根升级或只读归档后删除该边；通用计划／CAS／中断恢复机制保留，未登记版本继续阻断。 |
 | 旧 Stage7 naming 历史账只读入口 | 集中只读解码旧 naming 工作单元与 ledger；禁止执行、追加授权或修改历史身份；旧成本计入整书账。所有存量根只读归档且不再续跑后删除该入口，不扩展为通用旧链兼容层（S-03）。 |
-| identity-text-v1 及两类区间回执旧协议测试 | 随批次 C 退出维护；删除依据＝普通正文回执新职责反例覆盖同一行为面。保留仍有效的职责反例（结构、引用、完整性、来源绑定）与现役判据红例，不删反例提速（I-50～I-52）。 |
-| Preserve policy ≤11 候选覆盖闸 | 随 identity-text 退役：旧口径（`name_text_unclassified` 候选覆盖、标记声明）只服务 v6 wire 历史回答，现役 wire v7 拒绝旧协议字面量；历史 checkpoint 已由 rc25→rc26 升级归档，不再进现役接受环。存量根全部升级或只读归档后删除 `_legacy_preserve_name_issues` 残留与相关测试登记。 |
-| 旧 Stage7 naming 历史账只读入口 | 集中只读解码旧 naming 工作单元与 ledger；禁止执行、追加授权或修改历史身份；旧成本计入整书账。所有存量根只读归档且不再续跑后删除该入口，不扩展为通用旧链兼容层（S-03）。 |
+| identity-text-v1 及两类区间回执旧协议 | **批次 C 已退出维护**（2026-10-18）：协议模块、`name_mentions`／`non_name_spans` 回执字段、`name_text` 机械检查项与 Design wire v11 已删；删除依据＝普通正文回执新职责反例（无标记正文经真实入口接受并交付、定界符残片被 no_wrapper 拒、疑似旧名/提前揭名只进 R-7.9 定位报告）覆盖同一行为面。保留的职责反例（结构、引用、完整性、来源绑定、必保揭名、材料泄漏）已迁移到新形状。 |
+| Preserve policy ≤11 候选覆盖闸 | 随 identity-text 退役（批次 B/C）：旧口径（`name_text_unclassified` 候选覆盖、标记声明）只服务 v6 wire 历史回答，现役 wire v7 拒绝旧协议字面量；历史 checkpoint 已由 rc25→rc26 升级归档，不再进现役接受环。 |
+| 普通正文主链的源侧字面兼容（`target_face_table` 表外恒等） | compile 经 NameMap 目标字面表映射称谓材料；表外源字面恒等兜底只可能出现在不持 NameMap 的离线诊断路径。所有现役根经 `str06.stage4.naming` 正式命名产物驱动后，删除恒等兜底与「源侧释放声明」读面（Design wire 的 release/initial_surfaces 维持源登记面直至 canonical 升版，删除条件同 rc25→rc26 边）。 |

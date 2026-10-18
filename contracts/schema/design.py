@@ -58,7 +58,6 @@ from contracts.schema.base import StrictModel
 from contracts.schema.common import CharacterVoice, FreeProvenance, LlmProvenance
 from contracts.schema.hook import HookDesign, HookPov
 from contracts.schema.expression import ExpressionDecision, ExpressionDecisionWire
-from contracts.schema.name_text import NAME_TEXT_INSTRUCTIONS
 from contracts.schema.state import (
     EffectDomain, StateAddress, StateChange, StateRead, SurfaceIntroduction, change_schema,
 )
@@ -353,7 +352,9 @@ class BodyDesign(StrictModel):
     （`TargetBeat.threads`，折叠走 ThreadFold）。rc7 的四个静态锚定列表
     已删除（AUD-04：无消费者；裁决 3）。
     """
-    contract_version: Literal['str06-rc25'] = 'str06-rc25'
+    # rc26（命名前移批次 C）：自有自然语言为普通目标文本
+    # （identity-text 协议退役，无标记、无区间）。
+    contract_version: Literal['str06-rc26'] = 'str06-rc26'
     graph_id: str = Field(min_length=1)
     narration: HookPov
     expression_decisions: tuple[ExpressionDecision, ...] = Field(min_length=1)
@@ -496,7 +497,9 @@ class PresentationGraph(BodyDesign):
     语义合法（withheld ⊆ 该拍 delta、时序、披露自洽）归 assemble_hook_design。
     """
     # Hook 组织协议独立升版；正文 view 仍为 rc22，不扩大正文失效面。
-    contract_version: Literal['str06-rc25'] = 'str06-rc25'
+    # rc26（命名前移批次 C）：自有自然语言为普通目标文本
+    # （identity-text 协议退役，无标记、无区间）。
+    contract_version: Literal['str06-rc26'] = 'str06-rc26'
     hook: HookDesign
     #: 来源账（F7a）：盘上键 `_provenance`；`exclude=True` 保 prompt 字节不变。
     provenance: FreeProvenance | LlmProvenance | None = Field(
@@ -729,7 +732,10 @@ class DesignWireV5(StrictModel):
 #: v9（rc21，2026-10-09）：可改写细节由短引用选择，文本来自正式 Brief。
 #: v10（2026-10-09）：请求投影 v2 省略机械空值/重复知情授权；kp/kf 改短引用。
 #: v9 已购候选显式解码仍支持沿用与窄复核，删除条件在 REQUIREMENTS 登记。
-STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v11'
+#: v12（rc26，2026-10-18 命名前移批 C）：identity-text-v1 协议退役——Design
+#: 自有自然语言一律直接写目标姓名普通文本，不再生成姓名标记、普通义标记或字符
+#: 区间；候选覆盖硬闸随协议退役。v11 已购候选只读归档（删除条件见 REQUIREMENTS）。
+STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v12'
 
 
 class SlimDesignState(StrictModel):
@@ -910,8 +916,14 @@ class DesignWireV10(DesignWireV9):
     scenes: tuple[SlimDesignSceneV10, ...] = Field(min_length=1)
 
 
-class DesignWireV11(DesignWireV10):
-    """v11 的自有自然语言使用身份引用文本；坐标由 compiler 计算，文本原样留证。"""
+class DesignWireV12(DesignWireV10):
+    """v12（rc26，命名前移批 C）：自有自然语言一律普通文本。
 
-    model_config = {'json_schema_extra': {'description': NAME_TEXT_INSTRUCTIONS}}
-    protocol_version: Literal['stage4-design-v11']
+    identity-text-v1 协议退役：不再生成 [[name:…]]／[[text|…]] 标记，不再有
+    候选覆盖硬闸与字符区间声明。人物称谓一律用目标姓名（输入身份投影的
+    target_name）；疑似旧名与提前揭名只进定位报告
+    （`contracts/schema/state.py::NameWatch` 派生），不阻断。v11 及更早已购
+    候选只读归档（删除条件见 REQUIREMENTS）。
+    """
+
+    protocol_version: Literal['stage4-design-v12']

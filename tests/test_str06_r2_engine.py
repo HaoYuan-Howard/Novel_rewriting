@@ -243,7 +243,8 @@ def _rich_ir():
                                 total_budget=4000, length_band=(0.6, 1.3),
                                 book_title='报恩',
                                 projection=chars.name_projection(),
-                                structure=chars.name_structure)
+                                structure=chars.name_structure,
+                                name_map=name_map_of(chars))
     return body, binding, plan, ir
 
 
@@ -395,10 +396,14 @@ def test_design_thread_mutations_flow_to_packets_by_consumer():
         binding = _no_obligation_binding()
         plan, errors = compile_execution_plan(graph, binding)
         assert not errors, errors
+        # 本组合成设计用 ch1/ch2/ch3 替身人物；rc26 起 name_map 必填且非空
+        # （空 entries 非法），配真实名称结构——替身不在结构内，字面原样透传。
+        chars = _chars()
         ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
                                     total_budget=1000, length_band=(0.6, 1.3),
-                                    projection=_chars().name_projection(),
-                                    structure=None)
+                                    projection=chars.name_projection(),
+                                    structure=chars.name_structure,
+                                    name_map=name_map_of(chars))
         for chapter in ir.chapters:
             for context in chapter.scenes:
                 problems = run_mechanical_guard(binding=binding, context=context,
@@ -691,9 +696,9 @@ def test_render_has_six_partitions_and_protocol_v5():
     text = _render(ir, 2)
     for name in SECTIONS:
         assert f'【{name}】' in text
-    # 协议 v7 按三类身份组织（六分区仍在）；版本常量由契约批登记
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v12'
-    assert RENDERER_VERSION == 'str06-render-v13'     # 身份引用与普通义声明贯通写手材料
+    # 协议 v13 按三类用法组织（六分区仍在）；版本常量由契约批登记
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v13'
+    assert RENDERER_VERSION == 'str06-render-v14'     # rc26：普通正文主链（无身份标记）
     for name in SECTIONS:
         assert name in WRITER_PROTOCOL
     # 同章包 ⇒ 同字节
@@ -702,14 +707,17 @@ def test_render_has_six_partitions_and_protocol_v5():
 
 def test_writer_view_carries_no_internal_ids_or_field_names():
     """写手视图清零：无 场景/拍 复合 ID、线程 id、established_by、字段名、
-    禁用字面、知情模式 slug；人物句柄只允许出现在正式身份协议目录。"""
+    禁用字面、知情模式 slug；rc26 起称谓许可是平链字面清单，无人物句柄。"""
     _body, _binding, _plan, ir = _rich_ir()
     for ordinal in (1, 2, 3):
         text = _render(ir, ordinal)
-        material, _marker, identity_catalog = text.partition('【合法身份引用】')
+        material, _marker, listed = text.partition('【可用称谓】')
         assert _marker
-        assert json.loads(identity_catalog.strip()) == {
-            row.char_id: list(row.surfaces) for row in ir.chapters[ordinal - 1].released_names}
+        # rc26：许可改为平链字面清单（无 char_id、无内部句柄、无拍级坐标）
+        entries = [x.strip() for x in listed.split(chr(10), 2)[2].split('、')
+                   if x.strip()]
+        assert entries == sorted({s for row in ir.chapters[ordinal - 1].released_names
+                                  for s in row.surfaces})
         for char_id in ('yun_niang', 'fu_jun'):
             assert char_id not in material
         for token in ('sc01', 'sc02', 'sc03', 'sc04', 'b01', 'b02', 'b03',
@@ -720,7 +728,8 @@ def test_writer_view_carries_no_internal_ids_or_field_names():
                       'contract_version', 'release_schedule'):
             assert token not in text, f'第{ordinal}章渲染泄漏 {token!r}'
         # 禁用面不送写手；陆家由现役家族构词释放规则授权，不再冒充禁用字面。
-        for literal in ir.chapters[0].withheld_literals:
+        watch = {l for row in ir.chapters[0].name_watch for l in row.literals}
+        for literal in watch:
             assert literal not in _render(ir, 1), literal
 
 
@@ -827,13 +836,18 @@ def _hook_pair():
                                'followup_refs': [{'scene': 'sc02', 'beat': 'b02'}]},
     }
     from tests.factories import hook_wire_v3
+    from novel.core.name_materials import target_face_table
+    from tests.test_str06_hook import _hook_map
+    faces, _face_errors = target_face_table(_chars().name_structure, _hook_map())
     hook, errors = assemble_hook_design(hook_wire_v3(wire), body=body,
                                         known_char_ids={'yun_niang', 'fu_jun'},
-                                        name_projection=_chars().name_projection())
+                                        name_projection=_chars().name_projection(),
+                                        faces=faces)
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _chars().name_projection(), total_budget=2000)
+        graph, _chars().name_projection(), _chars().name_structure,
+        total_budget=2000, name_map=name_map_of(_chars()))
     assert context is not None and not errors, errors
     return graph, context
 
@@ -863,14 +877,15 @@ def test_hook_forbidden_zone_merges_unreached_thread_closes():
 
 def test_hook_prompt_is_layered_without_json_dump():
     """Hook 请求分层渲染：材料必须写出、禁区、起笔事实（延续/背景）；
-    不再整份 JSON 倾倒（withheld_literals／beat_ref／contract_version 不进）。"""
+    不再整份 JSON 倾倒（可用称谓平链／beat_ref／contract_version 不进）。"""
     from novel.stages.stage5.hook_writer import build_hook_user_prompt
     _graph, context = _hook_pair()
     prompt = build_hook_user_prompt(context)
-    material, marker, identity_catalog = prompt.partition('【合法身份引用】')
+    material, marker, listed = prompt.partition('【可用称谓】')
     assert marker
-    assert json.loads(identity_catalog.strip()) == {
-        row.char_id: list(row.surfaces) for row in context.usable_surfaces}
+    listed_line = next(line for line in listed.splitlines() if line.startswith('- '))
+    entries = [x.strip() for x in listed_line[2:].split('、') if x.strip()]
+    assert entries == sorted({s for row in context.usable_surfaces for s in row.surfaces})
     assert 'yun_niang' not in material
     assert 'HookContext:' not in prompt and '```' not in prompt
     for token in ('contract_version', 'established_by', 'sc02', 'b01',

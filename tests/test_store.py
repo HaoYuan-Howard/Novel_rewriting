@@ -2792,7 +2792,7 @@ def test_execution_plan_formal_read_migrates_without_rewriting_sealed_bytes(tmp_
     assert repo.path(rel).read_bytes() == original
 
 
-@pytest.mark.parametrize('version', [None, 'str06-rc13', 'str06-rc14', 'str06-rc20', 'str06-rc26'])
+@pytest.mark.parametrize('version', [None, 'str06-rc13', 'str06-rc14', 'str06-rc20', 'str06-rc25'])
 def test_old_graph_hook_component_cannot_bypass_quality_version_refusal(tmp_path, version):
     from tests.str06_facilities import synthetic_ref
     from tests.test_str06_hook import _green_pair
@@ -2873,7 +2873,7 @@ def test_graph_body_consumption_keeps_body_version_and_ignores_hook_selection():
     project = projection_for('str06.stage5.body', 'stage4/design/presentation_graph.json')
     assert project is body_graph_payload
     assert project(raw) == body.model_dump(mode='json')
-    assert project(raw)['contract_version'] == 'str06-rc25'
+    assert project(raw)['contract_version'] == 'str06-rc26'
     changed_hook = copy.deepcopy(raw)
     changed_hook['hook']['local_focus'] = '以人物对答推进，落在荒唐计划提出的瞬间'
     assert project(changed_hook) == project(raw)

@@ -161,8 +161,8 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 >
 > `ApprovalWorkpack` v2、Stage5/7 紧凑终审包及配套 `review_token` 提交协议已随
 > 全自动单模式与 STR-06 关闭批删除：写面、模板、余额投影与 HTTP 路由都不存在，
-> schema 载体不再保留（历史形状见 Git 历史）。现役命名残留由 `naming_residual`
-> 机械验硬闸守卫，交付判定走 `str06` 候选只读面。
+> schema 载体不再保留（历史形状见 Git 历史）。rc26（命名前移批次 C）起疑似旧名残留由
+> `name_residue_report` 定位报告披露（不阻断），交付判定走 `str06` 候选只读面。
 
 > #### `Stage0Report` 是窄视图
 >

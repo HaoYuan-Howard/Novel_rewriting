@@ -2,15 +2,14 @@
 # -*- coding: utf-8 -*-
 """成书与源章的 20 字窗重合读数；不设阈值，不改变流水线判定。
 
-度量使用 Stage5 已接受的改名前纯正文，避免改名打断窗口造成假的低重合。
-采用前逐章核对当前 ChapterReceipt 的章序、状态、正文原始字节 hash、协议、
-机械检查项及人物/普通义两表，再经 Stage7 的身份绑定改名重放。只有重放结果
-与成书该章逐字节一致才度量。缺证据或存在表外改动时明确“量不了”。
+rc26（命名前移批 C）：度量使用 Stage5 已接受的最终正文——命名前移后正文
+直接以目标姓名成文，装配零改名。采用前逐章核对当前 ChapterReceipt 的章序、
+状态、正文原始字节 hash、协议与机械检查项；只有已接受正文与成书该章逐字节
+一致才度量。缺证据或存在表外改动时明确“量不了”。
 
-同一称谓可属于多人、分别改成不同名字；普通同形文字保持原样。因此不存在
-全局正反替换表，也不从最终姓名逆猜人物。检查只证明本次读数对应这份成书，
-不替代当前章包新鲜度、交付 manifest 或文学质量验收。重合采用 window_overlap，
-不扣逐字豁免，与旧链 overlap_excl_verbatim 不逐位可比。
+检查只证明本次读数对应这份成书，不替代当前章包新鲜度、交付 manifest 或
+文学质量验收。重合采用 window_overlap，不扣逐字豁免，与旧链
+overlap_excl_verbatim 不逐位可比。
 
 用法：python tools/book_overlap.py --base <outputs> --sid <书 sid> [--json-out <路径>]
 """
@@ -29,18 +28,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from contracts.artifacts import str06_body_receipt_rel, str06_body_rel  # noqa: E402
 from contracts.invariants import BOOK_BLOCK_SEP  # noqa: E402
 from contracts.schema import decode_artifact  # noqa: E402
-from contracts.schema.naming import NameMapV6  # noqa: E402
 from contracts.schema.receipt import (  # noqa: E402
     BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION, ChapterReceipt,
     RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
 )
-from contracts.schema.source import CharactersArtifactV6  # noqa: E402
 from contracts.schema.stage1 import MainText  # noqa: E402
-from novel.core.name_materials import name_candidate_literals  # noqa: E402
-from novel.core.name_text import validate_resolved_name_text  # noqa: E402
 from novel.core.text import window_overlap  # noqa: E402
 from novel.paths import artifact_path, book_txt_rel, resolve_novel_dir  # noqa: E402
-from novel.stages.stage4 import apply_bound_names, compile_bound_replacements  # noqa: E402
 
 
 def split_book(text: str) -> dict[int, str]:
@@ -73,9 +67,11 @@ def _read_payload(novel_dir: Path, rel: str):
 
 def _verified_original(
     novel_dir: Path, ordinal: int, delivered: str,
-    replacements: Mapping[str, Mapping[str, str]], candidates: tuple[str, ...],
-) -> tuple[str, int]:
-    """同一接受正文及两表正向重放；不做逆向姓名匹配或工具私有改名。"""
+) -> str:
+    """同一接受正文正向重放；不做逆向姓名匹配或工具私有改名。
+
+    rc26：零改名装配——已接受正文即最终成文，与成书该章逐字节比对。
+    """
     body_bytes = artifact_path(novel_dir, str06_body_rel(ordinal)).read_bytes()
     original = body_bytes.decode('utf-8')
     raw = _read_payload(novel_dir, str06_body_receipt_rel(ordinal))
@@ -88,23 +84,12 @@ def _verified_original(
             or receipt.renderer_version != RENDERER_VERSION
             or receipt.validator_version != BODY_VALIDATOR_VERSION
             or receipt.mechanical_checks != BODY_MECHANICAL_CHECKS):
-        raise ValueError('回执不是当前写手/渲染/机械校验协议，不能证明当前身份声明')
+        raise ValueError('回执不是当前写手/渲染/机械校验协议，不能证明当前接受身份')
     if hashlib.sha256(body_bytes).hexdigest() != receipt.prose_sha256:
         raise ValueError('Stage5 正文字节与回执 prose_sha256 脱钩')
-    problems = validate_resolved_name_text(
-        original, name_mentions=receipt.name_mentions, non_name_spans=receipt.non_name_spans,
-        surfaces={char_id: tuple(table) for char_id, table in replacements.items()},
-        candidate_literals=candidates)
-    if problems:
-        raise ValueError('回执身份声明不成立：' + '；'.join(str(problem) for problem in problems))
-    replayed, errors = apply_bound_names(original, receipt.name_mentions, replacements)
-    if errors:
-        raise ValueError('身份绑定改名重放失败：' + '；'.join(errors))
-    if replayed.encode('utf-8') != delivered.encode('utf-8'):
-        raise ValueError('身份绑定改名重放与成书该章不一致，存在表外改动或版本不匹配')
-    changed = sum(replacements[mention.char_id][mention.surface] != mention.surface
-                  for mention in receipt.name_mentions)
-    return original, changed
+    if original.encode('utf-8') != delivered.encode('utf-8'):
+        raise ValueError('已接受正文与成书该章不一致，存在表外改动或版本不匹配')
+    return original
 
 
 def measure(base: Path, sid: str) -> dict:
@@ -116,16 +101,9 @@ def measure(base: Path, sid: str) -> dict:
         if not chapters:
             raise ValueError('成书没有可识别的现役章节；旧格式不能冒充当前交付')
         source = MainText.model_validate(_read_payload(novel_dir, 'stage1/main_text.json'))
-        characters = CharactersArtifactV6.model_validate(
-            _read_payload(novel_dir, 'stage2/characters/characters.json'))
-        names = NameMapV6.model_validate(_read_payload(novel_dir, 'stage4/naming/name_map.json'))
-        replacements, errors = compile_bound_replacements(characters, names)
-        if errors:
-            raise ValueError('身份改名决定不闭合：' + '；'.join(errors))
     except (OSError, ValueError, TypeError) as exc:
-        raise SystemExit(f'无法度量：正式成书、源章或身份改名证据缺失/不合法：{exc}') from exc
+        raise SystemExit(f'无法度量：正式成书或源章证据缺失/不合法：{exc}') from exc
     source_text = {chapter.chapter_ordinal: chapter.text for chapter in source.root}
-    candidates = name_candidate_literals(characters.name_projection(), characters.name_structure)
     rows = []
     for ordinal in sorted(set(source_text) | set(chapters)):
         row = {'output_ordinal': ordinal, 'overlap': None}
@@ -135,13 +113,12 @@ def measure(base: Path, sid: str) -> dict:
             row['why'] = '成书缺少这一章'
         else:
             try:
-                original, changed = _verified_original(
-                    novel_dir, ordinal, chapters[ordinal], replacements, candidates)
+                original = _verified_original(novel_dir, ordinal, chapters[ordinal])
             except (OSError, ValueError, TypeError) as exc:
                 row['why'] = str(exc)
             else:
                 row.update(overlap=window_overlap(original, source_text[ordinal]),
-                           chars=len(original), name_changes_verified=changed)
+                           chars=len(original))
         rows.append(row)
     return {'sid': sid, 'novel_dir': str(novel_dir), 'book': str(book_path), 'chapters': rows}
 
@@ -155,7 +132,7 @@ def main() -> int:
     result = measure(Path(args.base), args.sid)
     rows = result['chapters']
     print(f"成书：{result['book']}")
-    print('口径：核对当前回执与身份改名重放，使用已接受的改名前 Stage5 正文。')
+    print('口径：核对当前回执与字节一致性，使用已接受的最终 Stage5 正文（零改名装配）。')
     print(f"{'ch':>4}{'重合':>9}{'字数':>8}  说明")
     for row in rows:
         value = row['overlap']

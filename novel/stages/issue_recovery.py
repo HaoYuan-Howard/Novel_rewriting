@@ -85,18 +85,20 @@ def preview_issue_correction(repository, owner: str, *, budget: int,
     rels = ('stage4/design/body_design.json', 'stage4/design/presentation_graph.json',
             'stage4/grounding/semantic_binding.json', 'stage4/grounding/reconstruction_brief.json',
             'stage2/characters/characters.json')
+    rels = (*rels, 'stage4/naming/name_map.json')
     models = [repository.read_model(rel) for rel in rels]
-    body, graph, binding, brief, chars = models
+    body, graph, binding, brief, chars, name_map = models
     if body.model_dump(mode='json') != body_graph_payload(graph.model_dump(mode='json')):
         raise ValueError('正文Design与PresentationGraph不同步，先恢复正式消费链')
     inspection = inspect_body_materials(graph, binding, brief, chars, budget=budget,
-        length_band=(STR06_RUNTIME_CONFIG.length_band_low, STR06_RUNTIME_CONFIG.length_band_high))
+        length_band=(STR06_RUNTIME_CONFIG.length_band_low, STR06_RUNTIME_CONFIG.length_band_high),
+        name_map=name_map)
     if inspection.errors:
         raise ValueError(f'非材料问题尚未闭合：{inspection.errors}')
     context, errors = compile_hook_context(graph, chars.name_projection(), chars.name_structure,
         {p.kp_id: p.statement for p in brief.propositions},
         {w.constraint_id: w.statement for w in brief.book_constraints},
-        characters=chars.core_view(), total_budget=budget)
+        characters=chars.core_view(), total_budget=budget, name_map=name_map)
     if errors:
         raise ValueError(f'Hook投影失败：{errors}')
     problems = (*inspection.materials, *hook_material_issues(

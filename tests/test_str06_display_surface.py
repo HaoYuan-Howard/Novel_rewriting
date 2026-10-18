@@ -20,7 +20,15 @@ from novel.core.name_materials import (
 from novel.stages.common import (
     ReleasePrefixes, project_withheld_names, render_chapter_packet,
 )
+from tests.str06_facilities import name_map_of
 from tests.test_str06_hook import _characters
+
+
+def _faces(chars) -> dict:
+    """给定 Characters 的目标字面表（全部保留替身：源字面与目标字面一致）。"""
+    from novel.core.name_materials import target_face_table
+    faces, _errors = target_face_table(chars.name_structure, name_map_of(chars))
+    return faces
 
 
 # ───────────────────────── 显示面解析函数（RC-60 四条规则） ─────────────────────────
@@ -126,7 +134,8 @@ def test_mentioned_but_absent_character_projects_in_the_chapter_packet():
         length_band=(0.6, 1.3), projection=chars.name_projection(),
         structure=chars.name_structure, fact_locks=brief.fact_locks,
         kp_statements={p.kp_id: p.statement for p in brief.propositions},
-        display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure))
+        display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure),
+        name_map=name_map_of(chars))
     packet = project_chapter_packet(ir, 2)
     view = render_chapter_packet(packet)
     assert '陆大哥' not in view, '被提及未出场人物的完整称谓按显示面投影'
@@ -165,7 +174,8 @@ def test_first_person_focalizer_uses_the_role_word_in_the_packet():
         length_band=(0.6, 1.3), projection=chars.name_projection(),
         structure=chars.name_structure, fact_locks=brief.fact_locks,
         kp_statements={p.kp_id: p.statement for p in brief.propositions},
-        display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure))
+        display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure),
+        name_map=name_map_of(chars))
     view = render_chapter_packet(project_chapter_packet(ir, 2))
     assert f'{FIRST_PERSON_ROLE_WORD}确知' in view, '知情条目的持有者按角色词呈现'
     assert '苏芸娘确知' not in view and '芸娘确知' not in view
@@ -237,11 +247,12 @@ def test_hook_concealed_characters_do_not_fall_back_but_others_do():
             hook_wire_v3(_hook_wire(concealed=concealed, surface_releases=[
                 {'char_id': 'yun_niang', 'surfaces': ['苏芸娘']}])),
             body=body, known_char_ids=known, name_projection=chars.name_projection(),
-            name_structure=chars.name_structure)
+            name_structure=chars.name_structure, faces=_faces(chars))
         assert hook is not None and not errors, errors
         context, errors = compile_hook_context(
             publish_graph(body, hook), chars.name_projection(),
-            chars.name_structure, {}, {}, characters=chars.core_view(), total_budget=2000)
+            chars.name_structure, {}, {}, characters=chars.core_view(),
+            total_budget=2000, name_map=name_map_of(chars))
         assert context is not None and not errors, errors
         return context
 
@@ -303,7 +314,8 @@ def test_bound_name_without_display_routes_design_with_a_wire_path():
     issues = validate_design_materials(
         body, projection=chars.name_projection(), known_char_ids=set(chars.characters),
         structure=chars.name_structure, resolve=resolve,
-        characters=chars.core_view())
+        characters=chars.core_view(), faces=_faces(chars),
+        name_map=name_map_of(chars))
     matches = [i for i in issues if i.code == 'design_unreleased_reference']
     assert matches, [str(i) for i in issues]
     issue = matches[0]
@@ -314,10 +326,11 @@ def test_bound_name_without_display_routes_design_with_a_wire_path():
     plain_issues = validate_design_materials(
         body, projection=plain.name_projection(), known_char_ids=set(plain.characters),
         structure=plain.name_structure, resolve=resolve,
-        characters=plain.core_view())
+        characters=plain.core_view(), faces=_faces(plain),
+        name_map=name_map_of(plain))
     assert not [i for i in plain_issues
                 if i.code in ('design_unreleased_reference', 'positive_material_leak')
-                and '陆大哥' in i.message], '回落显示面把残余消掉，不再报泄漏'
+                and '陆大哥' in str(i)], '回落显示面把残余消掉，不再报泄漏'
 
 
 def _chapter_boundary_body(*, release_scene: int, release_beat: int):
@@ -346,7 +359,8 @@ def _design_material_issues(body):
     chars = _no_fallback_characters()      # 无回落纯称谓：投影不会把问题掩掉
     return validate_design_materials(
         body, projection=chars.name_projection(), known_char_ids=set(chars.characters),
-        structure=chars.name_structure, characters=chars.core_view())
+        structure=chars.name_structure, characters=chars.core_view(),
+        faces=_faces(chars), name_map=name_map_of(chars))
 
 
 def test_design_gate_judges_released_names_per_chapter_not_per_beat():
@@ -405,7 +419,8 @@ def test_first_release_inside_the_chapter_beats_the_fallback_face():
         length_band=(0.6, 1.3), projection=chars.name_projection(),
         structure=chars.name_structure, fact_locks=brief.fact_locks,
         kp_statements={p.kp_id: p.statement for p in brief.propositions},
-        display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure))
+        display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure),
+        name_map=name_map_of(chars))
     view = render_chapter_packet(project_chapter_packet(ir, 1))
     line = next(row for row in view.splitlines() if '在巷口回头看了一眼' in row)
     assert '陆大哥在巷口回头看了一眼' in line, f'章内首个已释放称谓是显示面：{line}'
@@ -427,5 +442,6 @@ def test_family_collective_forms_follow_the_family_members_release_in_design_gat
     chars = _characters()
     issues = validate_design_materials(
         body, projection=chars.name_projection(), known_char_ids={'yun_niang', 'fu_jun'},
-        structure=chars.name_structure, characters=chars.core_view())
+        structure=chars.name_structure, characters=chars.core_view(),
+        faces=_faces(chars), name_map=name_map_of(chars))
     assert [i for i in issues if '陆家' in i.location] == [], [str(i) for i in issues]

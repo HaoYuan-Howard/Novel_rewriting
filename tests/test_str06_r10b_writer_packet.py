@@ -330,6 +330,7 @@ def _ir():
     from novel.stages.stage4.compile import compile_execution_plan
     from novel.stages.stage4.book_ir import compile_writer_book_ir
     from tests.test_str06_hook import _characters
+    from tests.str06_facilities import name_map_of
     body = _design()
     binding = _binding(body)
     plan, errors = compile_execution_plan(body, binding)
@@ -341,7 +342,8 @@ def _ir():
         length_band=(0.6, 1.3), book_title='合成样例',
         projection=chars.name_projection(), structure=chars.name_structure,
         fact_locks=brief.fact_locks,
-        kp_statements={p.kp_id: p.statement for p in brief.propositions})
+        kp_statements={p.kp_id: p.statement for p in brief.propositions},
+        name_map=name_map_of(chars))
     return body, binding, plan, ir
 
 
@@ -518,7 +520,7 @@ def test_consumption_closure_ignores_hook_selection():
                             'followup_refs': ['sc02#b02']},
         local_focus='通过观察与即时反应呈现疑心。')
     graph = PresentationGraph.model_validate({
-        **body.model_dump(mode='json'), 'contract_version': 'str06-rc25',
+        **body.model_dump(mode='json'), 'contract_version': 'str06-rc26',
         'hook': hook.model_dump(mode='json')})
     closure = consumption_closure(graph)
     assert closure == consumption_closure(body)

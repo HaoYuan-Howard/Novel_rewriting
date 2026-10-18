@@ -10,16 +10,12 @@
 """
 from __future__ import annotations
 
-import re
 from typing import Any, Mapping
 
 from pydantic import ValidationError
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.hook import HookDesignWire, HookDesignWireV3
-from contracts.schema.source import NameProjection
-from novel.core.name_materials import name_candidate_literals
-from novel.core.name_text import resolve_name_text
 from novel.core.repair import shape_repair_paths
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.hook_facts import hook_facts
@@ -44,28 +40,22 @@ def hook_catalog(body: BodyDesign) -> dict[str, dict]:
             for fact in hook_facts(body)}
 
 
-def hook_name_exposure(text: str | None, projection: NameProjection) -> dict[str, list[str]]:
-    """文本命中的各人物专名字面（与 presentation 泄漏判据同一字面宇宙）。
+def hook_name_exposure(text: str | None, *,
+                       faces: Mapping[str, Iterable[str]]) -> dict[str, list[str]]:
+    """文本命中的各人物目标字面（与 presentation 泄漏判据同一字面宇宙）。
 
     只做存在性报告，不做替换；按人物分组让模型对照自己的 surface_releases
-    决定「释放该人物」还是「换选条目」。短姓、家族构词等非登记字面不在内，
-    与 `hook_validation` 的隐藏人物字面判据同尺。
+    决定「释放该人物」还是「换选条目」。rc26（命名前移批 C）：`faces` 是每人
+    目标字面闭集（`name_materials.person_target_literals` 产物）——请求面与
+    泄漏判据同尺，源旧名不进请求标注。
     """
     exposure: dict[str, list[str]] = {}
     if not text:
         return exposure
-    resolved = resolve_name_text(text)
-    protected = (*resolved.mentions, *resolved.non_name_spans)
-    for entry in projection.by_person:
-        found = {mention.surface for mention in resolved.mentions
-                 if mention.char_id == entry.char_id}
-        for literal in entry.name_bearing_surfaces:
-            if literal and any(not any(span.start <= match.start() and match.end() <= span.end
-                                       for span in protected)
-                               for match in re.finditer(re.escape(literal), resolved.text)):
-                found.add(literal)
+    for char_id, literals in faces.items():
+        found = {literal for literal in literals if literal and literal in text}
         if found:
-            exposure[entry.char_id] = sorted(found, key=lambda value: (-len(value), value))
+            exposure[char_id] = sorted(found, key=lambda value: (-len(value), value))
     return exposure
 
 
@@ -82,18 +72,20 @@ def _statement_text(fact, kp_statements: Mapping[str, str],
     return fact.delta.value
 
 
-def annotated_hook_catalog(body: BodyDesign, *, projection: NameProjection | None = None,
+def annotated_hook_catalog(body: BodyDesign, *,
                            kp_statements: Mapping[str, str] = (),
-                           world_statements: Mapping[str, str] = ()) -> dict[str, dict]:
+                           world_statements: Mapping[str, str] = (),
+                           faces: Mapping[str, Iterable[str]] | None = None,
+                           ) -> dict[str, dict]:
     """hook_catalog + 请求面派生标注（later_writes／name_exposure）。
 
     · `later_writes`——同地址在本条建立位置之后的全部写入（含 unset，阅读序）。
       world/pov 起笔事实必须是冷开起点前该地址的**最后一次**写入；起点不早于
       任一后续写入时旧值已失效（`hook_opening_stale`）。scene 作用域的有效性
       由模型按 `scope`＋所在场核对，规则文本另有说明。
-    · `name_exposure`——本条命题/取值文本命中的专名字面（按人物）。这些文本会
+    · `name_exposure`——本条命题/取值文本命中的目标字面（按人物）。这些文本会
       原样进入写手视图；未释放且无显示面替换的人物字面即泄漏
-      （`positive_material_leak`）。
+      （`positive_material_leak`）。rc26：字面宇宙是目标字面表（`faces`）。
     """
     facts = hook_facts(body)
     catalog = hook_catalog(body)
@@ -108,9 +100,9 @@ def annotated_hook_catalog(body: BodyDesign, *, projection: NameProjection | Non
             row['later_writes'] = [
                 {'fact_ref': other.fact_ref, 'at': ref_parts(other.ref)}
                 for other in later]
-        if projection is not None:
+        if faces is not None:
             exposure = hook_name_exposure(
-                _statement_text(fact, kp_statements, world_statements), projection)
+                _statement_text(fact, kp_statements, world_statements), faces=faces)
             if exposure:
                 row['name_exposure'] = exposure
     return catalog
@@ -146,13 +138,16 @@ def opening_chapter_input(body: BodyDesign) -> dict:
                       for scene_ref in opening.scene_ids for beat in scenes[scene_ref].beats]}
 
 
-def project_hook_input(body: BodyDesign, *, projection: NameProjection | None = None,
+def project_hook_input(body: BodyDesign, *,
+                       faces: Mapping[str, Iterable[str]] | None = None,
                        kp_statements: Mapping[str, str] = (),
                        world_statements: Mapping[str, str] = ()) -> dict:
     """保留入口决策的完整故事语义，剥离预算、审计和重复状态地址。
 
-    `projection` 在场时目录与拍附派生标注（`annotated_hook_catalog`；拍上的
-    `name_exposure` 标注 `event` 文本——材料渲染会原样带上它）。
+    `faces`（每人目标字面闭集）在场时目录与拍附派生标注
+    （`annotated_hook_catalog`；拍上的 `name_exposure` 标注 `event` 文本——
+    材料渲染会原样带上它），`identity_surfaces` 同尺给目标字面。rc26：不再
+    携带 name_candidates（候选覆盖硬闸随 identity-text 协议退役）。
     """
     facts = hook_facts(body)
 
@@ -160,18 +155,18 @@ def project_hook_input(body: BodyDesign, *, projection: NameProjection | None = 
         row = {**beat.model_dump(mode='json', exclude={'target_delta'}),
                'fact_refs': [f.fact_ref for f in facts
                              if f.ref == f'{scene.scene_id}#{beat.beat_id}']}
-        if projection is not None:
-            exposure = hook_name_exposure(beat.event, projection)
+        if faces is not None:
+            exposure = hook_name_exposure(beat.event, faces=faces)
             if exposure:
                 row['name_exposure'] = exposure
         return row
 
     return {
         'input_version': 'stage4-hook-input-v4',
-        'name_candidates': list(name_candidate_literals(projection)) if projection is not None else [],
-        'identity_surfaces': {entry.char_id: sorted(set((*entry.name_bearing_surfaces, entry.display)) - {''})
-                              for entry in projection.by_person} if projection is not None else {},
-        'facts': annotated_hook_catalog(body, projection=projection,
+        'identity_surfaces': {char_id: sorted(set(literals) - {''})
+                              for char_id, literals in faces.items()}
+                             if faces is not None else {},
+        'facts': annotated_hook_catalog(body, faces=faces,
                                         kp_statements=kp_statements,
                                         world_statements=world_statements),
         'book_style': body.book_style, 'narration': body.narration.model_dump(mode='json'),

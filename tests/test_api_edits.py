@@ -6,7 +6,7 @@ test_api_edits.py —— 旧链人工写回路由族的退役守卫（F8b，STR-
 旧链的 review 改稿、stage2 关系/蓝图/characters/global 编辑与 stage7 残留
 采纳端点全部硬编码旧节点，随「上传即授权开跑、Stage 页只读监控」的全自动
 单模式退役。这里守的是退役事实：载体不再接受任何写回请求体，405/404 是
-合同的一部分；新链的命名残留由 `naming_residual` 机械验硬闸守卫。
+合同的一部分；rc26（命名前移批次 C）起疑似旧名残留改由 `name_residue_report` 定位披露（不阻断），`naming_residual` 随零改名装配注销。
 
 历史行为测试（成功/上游未运行/产物损坏/参数不合法四类）见 Git 历史；
 其有效职责已由新链 `--check-only` 复检与机械验接管（F7c 迁移反例）。

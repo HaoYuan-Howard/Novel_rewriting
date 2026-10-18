@@ -14,7 +14,6 @@ import pytest
 
 from novel.llm.ledger import CostLedger, ledger_path
 from novel.llm.paid_requests import digest
-from novel.core.name_text import resolve_name_text
 from novel.stages.chain import ChainContext, run_compile_stage4, run_workflow
 from novel.stages.common import (
     _build_writer_packet, build_writer_packet, material_identities,
@@ -37,14 +36,13 @@ UNSELECTED_DETAIL = '门外的脚步声从密到疏，终于归于安静'
 
 
 def _visible(text):
-    """可读语义仍按原纯文断言；canonical 中的身份声明另由正式判据验证。"""
-    resolved = resolve_name_text(text)
-    assert not resolved.errors, resolved.errors
-    return resolved.text
+    """rc26（命名前移批 C）：Stage4/Stage5 自有文本是普通目标文本，没有身份文本
+    标记可解——直通即可读语义。"""
+    return text
 
 
 def _shop_text(text):
-    return declared_stage4_text(text, owners={'陈禾': 'apprentice', '周澄': 'keeper'})
+    return declared_stage4_text(text)
 
 
 class _MaterialTransport(_RoutingTransport):
@@ -57,8 +55,21 @@ class _MaterialTransport(_RoutingTransport):
         return super().send(request)
 
 
-def _detail_wires():
+def _chain_wires():
+    """全链 fake wires；design 夹具的协议字面量按现役读面钉住。
+
+    `tests/test_str06_hook.py::_full_chain_wires` 的 design 仍声明
+    `stage4-design-v11`（已只读归档，不在 `DESIGN_READ_PROTOCOLS`）——这里只改
+    协议字面量，其余事实仍取自同一夹具。
+    """
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
     wires = _full_chain_wires()
+    wires['design']['protocol_version'] = STAGE4_DESIGN_WIRE_PROTOCOL
+    return wires
+
+
+def _detail_wires():
+    wires = _chain_wires()
     wires['preserve']['obligations'][0]['details'] = [
         {'anchor': 'b01_01.e1', 'text': UNSELECTED_DETAIL}]
     wires['preserve']['obligations'].append({
@@ -136,7 +147,7 @@ def test_real_details_flow_stays_source_blind_and_creative_only(tmp_path):
 
 def test_real_preserve_without_details_keeps_existing_tasks(tmp_path):
     """缺省细节仍首答绿灯；编译器和写手包没有追加可选材料或回顾任务。"""
-    ctx, transport = _prepare(tmp_path, _full_chain_wires())
+    ctx, transport = _prepare(tmp_path, _chain_wires())
     repo = ctx.repository
     checkpoint = repo.read_model('runtime/preserve_checkpoint.json')
     binding = repo.read_model('stage4/grounding/semantic_binding.json')
@@ -175,7 +186,7 @@ def test_event_only_details_reach_design_and_writer_with_source_kept_in_audit(tm
 
 
 def test_required_event_without_transfers_reaches_its_real_writer_position(tmp_path):
-    wires = _full_chain_wires()
+    wires = _chain_wires()
     # 命名前移批（policy 12）：义务文本直书目标姓名（芸娘→柳婉；夫君为保留称谓）。
     condition = '夫君离开后，柳婉须独自发现玉佩线索'
     wires['preserve']['obligations'].append({
@@ -229,8 +240,9 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
                 'cognition': [], 'loops': []}
 
     quantity_lock = _lock_id('kf_', 'b02_02.e1')
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
     design = {
-        'protocol_version': 'stage4-design-v11',
+        'protocol_version': STAGE4_DESIGN_WIRE_PROTOCOL,
         'book_style': '第三人称叙述商铺日常，先写条件，再写人物的选择与行动。',
         'initial_state': [{'domain': 'character', 'subjects': ['apprentice'],
                            'key': 'occupation', 'value': '商铺学徒'}],
@@ -243,11 +255,11 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
              'reads': [{'domain': 'character', 'subjects': ['apprentice'],
                         'key': 'occupation'}],
              'beats': [
-                 {'ev': '陈禾以商铺学徒的身份在柜台核账',
+                 {'ev': '柳明以商铺学徒的身份在柜台核账',
                   'who': ['apprentice'], 'real': ['ob01']},
-                 {'ev': '周澄提出账页齐全才能取货的条件',
+                 {'ev': '宋玉提出账页齐全才能取货的条件',
                   'who': ['keeper', 'apprentice'], 'real': ['ob02']},
-                 {'ev': '陈禾发现缺页，因取货条件未满足而决定先补账再出发；'
+                 {'ev': '柳明发现缺页，因取货条件未满足而决定先补账再出发；'
                         + DESIGN_COMMUNICATION_BRIDGE,
                   'who': ['apprentice', 'keeper'], 'real': ['ob02'],
                   'state': [{'at': 'apprentice', 'key': 'intent', 'val': '先补账再出发'}],
@@ -258,9 +270,9 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
              'reads': [{'domain': 'character', 'subjects': ['apprentice'],
                         'key': 'occupation'}],
              'beats': [
-                 {'ev': '次日账页补齐后，陈禾从柜台走到后院门口',
+                 {'ev': '次日账页补齐后，柳明从柜台走到后院门口',
                   'who': ['apprentice'], 'real': ['ob03']},
-                 {'ev': '木箱中的货量尚未查明，陈禾留在门外等周澄来开箱',
+                 {'ev': '木箱中的货量尚未查明，柳明留在门外等宋玉来开箱',
                   'who': ['apprentice'], 'real': ['ob04'],
                   'state': [{'at': 'world', 'key': 'possession', 'op': 'unknown',
                              'lock': quantity_lock[:11]}]}]},
@@ -356,12 +368,12 @@ class _CausalMaterialTransport(_MaterialTransport):
         from novel.llm.transport import ChatResponse
         owner = self._owner(request)
         prose = {
-            'hook_writer': '陈禾坐在柜台边，一页页翻着账册。',
-            'body_ch01': '陈禾是商铺学徒，正在柜台核账。周澄说账页齐全才能取货。'
-                         '陈禾发现缺页，便决定先补账再出发。'
+            'hook_writer': '柳明坐在柜台边，一页页翻着账册。',
+            'body_ch01': '柳明是商铺学徒，正在柜台核账。宋玉说账页齐全才能取货。'
+                         '柳明发现缺页，便决定先补账再出发。'
                          + DESIGN_COMMUNICATION_BRIDGE + '。',
-            'body_ch02': '次日账页补齐，陈禾从柜台走到后院门口。木箱中的货量尚未查明，'
-                         '他留在门外等周澄来开箱。',
+            'body_ch02': '次日账页补齐，柳明从柜台走到后院门口。木箱中的货量尚未查明，'
+                         '他留在门外等宋玉来开箱。',
         }
         if owner not in prose:
             return super().send(request)
@@ -505,7 +517,7 @@ def test_bridge_design_cannot_fill_an_unknown_fact_during_the_actual_acceptance_
 def test_preserve_preview_runs_without_checkpoint_and_keeps_conflicts_unpublishable(tmp_path):
     from novel.stages.review import dry_run_patch
     from tests.test_str06_preserve_gate import _prepared
-    wires = _detail_wires()
+    wires = _chain_wires()
     # 命名前移批：preserve 预览的正式输入含目标名称表，先跑 naming 节点。
     _ctx, repo, _chars, _blueprint = _prepared(
         tmp_path, wires, nodes=('str06.stage4.naming',))
@@ -528,7 +540,7 @@ def test_source_conflict_closure_keeps_preserve_request_replayable(tmp_path):
     from novel.stages.chain import _backfill_source_evidence_conflicts, _conflict_resolution_notes, run_preserve
     from novel.stages.owner_revision import OwnerRevisionRequired, read_owner_issue_file
     from tests.test_str06_preserve_gate import _prepared
-    wires = _detail_wires()
+    wires = _chain_wires()
     # 命名前移批：run_preserve 的正式输入含目标名称表，先跑 naming 节点。
     ctx, repo, _chars, _blueprint = _prepared(
         tmp_path, wires, nodes=('str06.stage4.naming',))
@@ -627,7 +639,7 @@ def test_real_summary_narrow_repair_sends_covered_unbound_instance_semantics(tmp
     from tests.test_str06_design_patch import PatchingTransport
     from tests.test_str06_preserve_gate import _prepared
 
-    wires = _full_chain_wires()
+    wires = _chain_wires()
     wires['preserve']['obligations'].extend([
         {'kind': 'event_core', 'statement': '柳婉在新婚夜立誓查清旧约',
          'anchors': ['b01_01.e1'], 'must_preserve': False,

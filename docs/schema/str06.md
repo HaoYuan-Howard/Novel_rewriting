@@ -148,7 +148,7 @@ RC-26～29，反例 `tests/test_stage2_evidence_addressing.py`、
 `tests/test_str06_chapter_slim.py`。
 
 **设计瘦 wire（CS-3 审阅修复，2026-10-03；事实锁引用升 v8，2026-10-04）**：LLM 输出为
-`stage4-design-v11`（`contracts/schema/design.py::DesignWireV11`）。`real` 保留
+`stage4-design-v12`（`contracts/schema/design.py::DesignWireV12`；rc26 命名前移批次 C 起自有自然语言一律普通目标文本＋v11 及更早已购候选只读存档）。`real` 保留
 义务接受拍/支撑拍；Brief 每条 requirement 的 `knowledge_changes` 从正式
 anchor 派生，完整保留每次变化的盲身份、holder、kp、mode。代码按盲身份排序
 派发 `obNN.kNN` 短引用，模型在对应义务 real 拍的 `know:[{ref}]` 声明实际
@@ -234,7 +234,7 @@ SourceTruth，不把猜测当原文事实，不新增重大前史、身份、人
 先组织目标故事，再附承载标注，原子条件仍不与自然叙事拍一一对应。
 
 现役 Preserve policy v11、正文 renderer v13、写手协议 v12；身份声明与 rc25 的
-版本边界见 [name_text.md](name_text.md)。自然概括、局部视角省略和藏身突现不自动视为事实错误，既有锁与知情边界仍
+rc26（命名前移批 C）起正文为普通目标文本：疑似旧名与提前揭名只形成定位报告（BACKEND_CONTRACT R-7.9）。自然概括、局部视角省略和藏身突现不自动视为事实错误，既有锁与知情边界仍
 不可越过。旧 checkpoint 仍绑定旧 policy，不静默套用新版交接判据；修订、采用和下游
 恢复沿现役身份、材料变化与完整预检闭合。首答完整可用率、设计阅读效果、正文质量
 与成本仍待真实验证；本批工程验证零付费，不新增语义 Judge 或节点。
@@ -472,10 +472,10 @@ ChapterWriterPacket
 证明**已声明依赖的引用闭合**；语义依赖是否遗漏归质量验收，机械检查不冒充证明。
 
 **历史称谓投影（CS-F2，RC-40～43，IR rc16／renderer v10）**：以下是旧字面投影机制；
-rc25 已改为按身份绑定，当前规则见 [name_text.md](name_text.md)，不以此历史段覆盖新契约。
+rc25 已改为按身份绑定；该协议随 rc26（命名前移批 C）退役，不以此历史段覆盖新契约。
 `ChapterIR.withheld_bindings`（当时的 `WithheldNameBinding`：
 字面＋人物＋包含它的更长称谓）是禁用字面中已证明唯一绑定人物的**完整登记称谓**子集——登记 surface、含姓名部件
-（构词非 null）、全书只属一个人物（归属统计包含纯称谓登记）、长度≥2、非姓／家族构词（`novel/core/name_materials.py::withheld_name_bindings`）。
+（构词非 null）、全书只属一个人物（归属统计包含纯谓谓登记）、长度≥2、非姓／家族构词（rc26 起为目标面同尺：`novel/core/name_materials.py::withheld_target_bindings`）。
 renderer 在正向材料行（含禁区行）把这类字面换成本场已释放称谓（`novel/stages/common.py::project_withheld_names`：绑定字面与其
 更长称谓一起长名优先认领，只替换绑定字面）；投影只依赖绑定表与本场称谓，不依赖禁用／许可字面，故二者仍是纯验证材料。
 原字段与来源文本不变（归因仍按原字段），六分区（含 `guard_only`）的替换留痕于 `name_projections`（候选预检报告、guard report、packet_metrics），
@@ -915,19 +915,22 @@ reader 可以使用材料视界（最大故事位置）以内的事实；视界�
 组织选择与期待依据，不能机械推断；旧升级入口退出，历史响应、首过记录和成本不改。
 当前恢复仍严格绑定现役契约、正式输入与请求身份，不从历史回答猜补新语义。
 
-### NameMap v5 与接受／交付文本分离（现役）
+### NameMap v6 与目标字面主链（现役，rc26 命名前移批 C）
 
-NameMap 是交付变换契约，不是第五类 semantic truth。源姓名构成、称谓归属及独立化名
-身份归 Stage2（Characters name_structure），目标名字归 Stage7；不在 NameMap 复制旧
-canonical。按源名称结构给出必要名称位（登记了姓必须给新姓，反之不得给）；compile 以
-应改名集合核对完整覆盖，合法保留必须带理由；共享姓氏按 surface_forms 模板逐人渲染，
-同 family_id 新姓一致、不同源姓不得合并同姓；独立化名由 Naming 对已登记 alias_id
-显式赋值。`compile_bound_replacements(Characters, NameMap)` 是纯函数；ApplyNames
-按回执的 char_id 与区间变换名称表达，普通义不改；diff proof 机械证明差异恰为
-这些提及的变换。Assembly 的 body_access 按 accepted/rejected/missing/unknown/stale
-五态判定；交付身份由（逐章 (chapter_ordinal, prose_sha256)、hook hash、身份映射、
-kept、两类声明表、`ASSEMBLY_FORMAT_VERSION`）派生，分章不同即不同交付（`R-10.10`）；换 NameMap 只变
-交付身份，不使 Stage5 回执失效。
+NameMap 是目标命名契约，不是第五类 semantic truth。源姓名构成、称谓归属及独立化名
+身份归 Stage2（Characters name_structure），目标名字归 `str06.stage4.naming`（置于
+Stage2 compile 之后、Preserve 之前）；不在 NameMap 复制旧 canonical。按源名称结构给出
+必要名称位（登记了姓必须给新姓，反之不得给）；compile 以应改名集合核对完整覆盖，
+合法保留必须带理由；共享姓氏按 surface_forms 模板逐人渲染，同 family_id 新姓一致、
+不同源姓不得合并同姓；独立化名由 Naming 对已登记 alias_id 显式赋值。
+`target_face_table(structure, NameMap)`（`novel/core/name_materials.py`）是纯函数：
+源登记字面 → 目标字面（含家族构词与化名渲染，保留人物恒等），供章包／HookContext
+称谓许可与姓名监视行派生；末端 ApplyNames／diff proof 随协议退役删除。Stage5 正文
+直接以目标姓名成文，Assembly 零改名装配。Assembly 的 body_access 按
+accepted/rejected/missing/unknown/stale 五态判定；交付身份由（逐章
+(chapter_ordinal, prose_sha256)、hook hash、`ASSEMBLY_FORMAT_VERSION`
+（`str06-assembly-v4`））派生，分章不同即不同交付（`R-10.10`）；疑似旧名残留与
+提前揭名只进定位报告（`R-7.9`）。
 
 ### 恢复与历史采用（现役）
 
@@ -1088,4 +1091,4 @@ Preserve 同时收到正式归一文本、原句及名称同一性依据，不�
 - Design的requires沿用顺序三分：同场允许接受拍交错，跨场逆序仍拒绝；事实读取与
   知情披露保留独立硬闸。修订权限由业务owner声明，通用接受循环只消费声明。
 
-2026-10-17 身份引用文本现役协议与旧源输入边界见 [name_text.md](name_text.md)。本批输出使用 rc25；身份选择的语义准确性保持未评。
+rc26（2026-10-18 命名前移批 C）：自有自然语言一律普通目标文本，identity-text-v1 协议已退役；本批输出使用 rc26。

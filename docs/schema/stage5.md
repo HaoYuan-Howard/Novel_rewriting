@@ -86,17 +86,18 @@ v4 保留有标题边界的包装识别，首句“尾声未尽”等自然措�
 
 | 判据 | sev | 要求 |
 |---|---|---|
-| `body_chapter_complete` | hard | 每章正文完整（非空、编码合法、无叙述外壳） |
-| `body_withheld_literals` | hard | 身份声明及授权闭合；未声明候选保持未决，无合法候选即停止 |
+| `body_chapter_complete` | hard | 每章正文完整（非空、编码合法、无叙述外壳、不含身份协议定界符；rc26） |
+| `body_name_watch` | hard | 写手材料不含旧名残留与未释放目标名（compile 派生监视行字面平铺）；正文里的同类命中只进定位报告（rc26） |
 | `body_required_literals` | hard | 必保揭名的承载章正文必现该称谓字面（缺字面即拒，段落级修句） |
 | `body_length_band` | hard | 章篇幅落在配置篇幅带内；超限只有篇幅带可披露 |
 | `chapter_receipt_binding` | hard | 章回执绑定章序、章包实际写手视图及验证输入摘要、正文 hash 与请求身份；Machine 摘要仅审计，不绑定全书 IR 或前文链 |
 | `body_semantics_unver` | unver | 正文文学质量未经语义评审（Judge 已取消） |
 | `body_length_reading` | metric | 逐章实际篇幅与预算偏差读数 |
+| `name_residue_report` | metric | 疑似旧名残留／提前揭名定位报告计数（不阻断、不购返修；rc26） |
 | `hook_mechanical` | hard | Hook 机械验通过 |
 | `hook_receipt_binding` | hard | Hook 回执绑定 Context 身份、正文 hash 与请求身份 |
 
-当前注册表共 **9 条**：**7 hard、1 metric、1 unver**。唯一注册表为
+当前注册表共 **10 条**：**7 hard、2 metric、1 unver**。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。
 
-2026-10-17 身份引用文本现役协议与旧源输入边界见 [name_text.md](name_text.md)。本批输出使用 rc25；身份选择的语义准确性保持未评。
+rc26（2026-10-18 命名前移批 C）：正文直接以目标姓名成文——identity-text-v1 协议退役，回执不再携带 name_mentions／non_name_spans 两类区间表，机械检查项 name_text 退出；疑似旧名/提前揭名只形成定位报告（R-7.9，runtime 审计面），必保揭名按纯文本判定。

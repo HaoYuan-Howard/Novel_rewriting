@@ -11,7 +11,7 @@ from contracts.schema.design import BodyDesign, DesignWireV9, STAGE4_DESIGN_WIRE
 from contracts.schema.grounding import OutputConstraints, SemanticBinding
 from contracts.schema.hook import HookDesignWire
 from novel.core.material_trace import MaterialIssue
-from novel.core.name_materials import appellation_fallbacks
+from novel.core.name_materials import appellation_fallbacks, target_face_table
 from novel.core.text import kp_statement
 from novel.core.validation import (
     ValidationIssue, ValidationMessage, validation_identity,
@@ -167,7 +167,7 @@ def _location_text(location: tuple) -> str:
     return ':'.join(str(part) for part in location) if location else '（无位置）'
 
 
-def hook_combination_errors(hook, *, body, binding, chars,
+def hook_combination_errors(hook, *, body, binding, chars, name_map,
                             kp_statements, world_statements,
                             total_budget) -> list[str]:
     """候选 Hook 与目标正文的组合检查（CS-H H2，RC-57「同法接入」）。
@@ -185,14 +185,15 @@ def hook_combination_errors(hook, *, body, binding, chars,
     context, errors = compile_hook_context(
         graph, chars.name_projection(), chars.name_structure,
         kp_statements, world_statements, characters=chars.core_view(),
-        total_budget=total_budget)
+        total_budget=total_budget, name_map=name_map)
     if context is None:
         return list(errors)
     return list(errors) + list(validate_hook_materials(
         context, internal_ids=material_identities(graph, binding, chars)))
 
 def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, chars,
-                                   binding, kp_statements: Mapping[str, str] = (),
+                                   name_map, binding,
+                                   kp_statements: Mapping[str, str] = (),
                                    world_statements: Mapping[str, str] = ()) -> list:
     """结构判据失败时的尽力而为材料预检（2026-10-10 裁决，方向二：一次性聚合）。
 
@@ -209,9 +210,11 @@ def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, ch
     该条——对应错误已由结构判据报告。
     """
     from novel.core.name_materials import (
-        FIRST_PERSON_ROLE_WORD, expand_surface_releases, withheld_name_bindings,
-        withheld_name_literals, material_name_permissions,
+        FIRST_PERSON_ROLE_WORD, expand_surface_releases, map_target_faces,
+        name_watch_rows, target_face_table, target_old_literals,
+        withheld_target_bindings,
     )
+    from novel.core.name_residue import watch_literals
     from novel.stages.common import (
         MaterialPart, MaterialSource, material_identities, positive_material_issues,
         project_withheld_names,
@@ -227,11 +230,14 @@ def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, ch
     projection = chars.name_projection()
     structure = chars.name_structure
     releases = {r.char_id: list(r.surfaces) for r in parsed.surface_releases}
-    expanded = expand_surface_releases(releases, structure)
-    released = {surface for faces in expanded.values() for surface in faces}
+    # rc26：目标字面表在場時全部目標面（与 compile_hook_context 同一把尺）。
+    faces, _face_errors = (target_face_table(structure, name_map)
+                           if structure is not None else ({}, []))
+    expanded = map_target_faces(faces, expand_surface_releases(releases, structure))
+    released = {surface for row in expanded.values() for surface in row}
     concealed = {c for c in parsed.concealed if isinstance(c, str)}
     _names, display_faces = hook_display_faces(
-        releases, structure, chars.core_view(), concealed)
+        releases, structure, chars.core_view(), concealed, faces=faces)
     faces_of = {row.char_id: row.surfaces[0] for row in display_faces}
     focalizers = set(parsed.pov.focalizers)
     first_person = parsed.pov.person == 'first'
@@ -244,8 +250,11 @@ def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, ch
     display_projection = projection.model_copy(update={'by_person': tuple(
         entry.model_copy(update={'display': display(entry.char_id)})
         for entry in projection.by_person)})
-    withheld = withheld_name_literals(projection, released, structure)
-    bindings = withheld_name_bindings(structure, expanded)
+    withheld = watch_literals(name_watch_rows(
+        structure=structure, faces=faces, released_names=expanded,
+        old_literals=(target_old_literals(structure, name_map)
+                      if structure is not None else {})))
+    bindings = withheld_target_bindings(structure, faces, expanded)
 
     def project(text: str) -> str:
         projected, _hits = project_withheld_names(
@@ -296,9 +305,7 @@ def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, ch
         return []
     issues = positive_material_issues(
         parts, released=released, withheld=withheld,
-        internal_ids=material_identities(body, binding, chars),
-        name_permissions=material_name_permissions(
-            expanded, {cid: display(cid) for cid in set(faces_of) | focalizers}))
+        internal_ids=material_identities(body, binding, chars))
     errors = []
     for issue in issues:
         path = where_path.get(issue.where)
@@ -320,13 +327,17 @@ def inspect_design_candidate(wire, *, checkpoint, brief, obligations, chars,
     Shape/引用无法构造时仅跳过依赖检查，保留原因；Hook尚未生成，不冒充已验。
     复用现役compiler，不读盘、不回派、不发布，也不判断事实语义是否正确。
     """
+    # rc26（命名前移批 C）：目标字面表——Design 材料闸与 IR/Hook 编译同源。
+    faces, _face_errors = (target_face_table(chars.name_structure, name_map)
+                           if chars.name_structure is not None else ({}, []))
     body, errors = inspect_body_design(
         wire, known_char_ids=set(chars.characters), constraints=constraints,
         name_projection=chars.name_projection(), name_structure=chars.name_structure,
         expression_requirements=brief.expression, source_narration=brief.source_narration,
         registered_surfaces={cid: {s.surface for s in c.surfaces}
                              for cid, c in chars.characters.items()},
-        brief=brief, obligations=obligations, characters=chars.core_view())
+        brief=brief, obligations=obligations, characters=chars.core_view(),
+        faces=faces, name_map=name_map)
     checks = [PreflightCheck('design', 'failed' if errors else 'passed')]
     preserve_errors = preserve_name_issues(checkpoint, chars, name_map)
     errors = list(preserve_errors) + errors
@@ -352,7 +363,8 @@ def inspect_design_candidate(wire, *, checkpoint, brief, obligations, chars,
     if body is not None and binding is not None:
         view = inspect_body_materials(body, binding, brief, chars,
                                       budget=constraints.total_length_budget,
-                                      length_band=length_band, book_title=book_title)
+                                      length_band=length_band, book_title=book_title,
+                                      name_map=name_map)
         errors.extend(view.errors)
         materials = view.materials
         projections = view.name_projections
@@ -419,8 +431,12 @@ def _design_wire_projections(wire, brief) -> tuple[dict | None, tuple, list[str]
 
 
 def inspect_body_materials(body, binding, brief, chars, *, budget, length_band,
-                           book_title='') -> BodyInspection:
-    """从相同canonical重建章包；不写盘，不选择修复，不依赖Hook产物。"""
+                           book_title='', name_map) -> BodyInspection:
+    """从相同canonical重建章包；不写盘，不选择修复，不依赖Hook产物。
+
+    rc26（命名前移批 C）：`name_map`（NameMapV6）是章包称谓材料的目标字面权威，
+    必填——缺它 compile 只能给出源侧旧口径，静默降级比显式失败更糟。
+    """
     plan, errors = compile_execution_plan(body, binding)
     # 可构造的Design可能仍有悬空命题。复用渲染器同一引用判据，先证明IR输入
     # 可解析；不把局部Design错误变成project_context的裸异常或派生连锁噪声。
@@ -455,17 +471,22 @@ def inspect_body_materials(body, binding, brief, chars, *, budget, length_band,
         display_fallback=appellation_fallbacks(chars.core_view(), chars.name_structure),
         required_releases=required_releases(brief),
         kp_statements=propositions,
-        world_statements={wc.constraint_id: wc.statement for wc in brief.book_constraints})
+        world_statements={wc.constraint_id: wc.statement for wc in brief.book_constraints},
+        name_map=name_map)
     identities = material_identities(body, binding, chars)
     materials = []
     projections: list[dict] = []
+    # rc26：M5 的释放期望与章包同一面——目标字面表在場时 guard 也按目标面比对。
+    faces, _face_errors = (target_face_table(chars.name_structure, name_map)
+                           if chars.name_structure is not None else ({}, []))
     for chapter in ir.chapters:
         packet = project_chapter_packet(ir, chapter.chapter_ordinal)
         materials.extend(writer_material_issues(packet, internal_ids=identities))
         projections.extend({'chapter_ordinal': chapter.chapter_ordinal, **row}
                            for row in writer_name_projections(packet))
         for context in chapter.scenes:
-            errors.extend(run_mechanical_guard(binding=binding, context=context, graph=body))
+            errors.extend(run_mechanical_guard(binding=binding, context=context,
+                                              graph=body, faces=faces))
     return BodyInspection(ir, tuple(errors), tuple(materials), (
         *checks,
         PreflightCheck('writer_materials', 'failed' if materials else 'passed'),

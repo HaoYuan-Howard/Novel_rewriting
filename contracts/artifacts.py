@@ -319,9 +319,11 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 确认必填事实地址（D4）。形状/判据变化，旧 Design／graph／WriterIR 拒读。
     # rc10（2026-09-28 R2 语义送达）：Design wire 升 stage4-design-v2——拍上线程
     # （threads）、书级 world_rules、章级 entry；四个静态跨章列表删除（AUD-04）。
-    'stage4/design/body_design.json': 'str06-rc25',
+    # rc26（2026-10-18 命名前移批 C）：identity-text 协议退役，canonical Design/Hook
+    # 自有自然语言为普通目标文本（无标记、无区间）；Design wire v12。
+    'stage4/design/body_design.json': 'str06-rc26',
     # rc23：Hook 组织与阅读期待改为正式选择，正文载荷仍是 rc22。
-    'stage4/design/presentation_graph.json': 'str06-rc25',
+    'stage4/design/presentation_graph.json': 'str06-rc26',
     # rc16（2026-10-05 CS-F2）：HookContext 增 withheld_bindings（按 Hook 自选
     # surface_releases 算好的唯一绑定称谓表，渲染期投影）；旧 rc12 楔子上下文
     # 拒读，免费重编译。正文与楔子投影同尺（RC-40/41）。
@@ -332,7 +334,9 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 区间随请求送达写手 + length_cap 机械硬上限由 validator 拒收）——rc18 全
     # 放开后写手按材料戏剧密度膨胀（选材收缩到 4 拍 1 develop 仍写满千字）；
     # 不回到 rc22 前对全书写死的 280/360。旧上下文免费重编译。
-    'stage4/context/hook/hook.json': 'str06-rc25',
+    # rc26（2026-10-18 命名前移批 C）：取消 name_candidates，禁用字面与监视行
+    # 合并为 name_watch；称谓材料切目标字面（compile 经 NameMap 映射）。
+    'stage4/context/hook/hook.json': 'str06-rc26',
     # rc7 同批：BookBrief 带整书风格与稳定人物声线；PendingConfirmation 带事实
     # 地址（D4），投影按地址精确到消费该地址的章包。
     # rc8（2026-09-27 B4，D2）：ChapterIR 增章级验证材料（称谓许可、禁用字面
@@ -347,9 +351,12 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc18（CS-S 1b 补升）：ChapterIR 经 VerificationIR.obligations 内嵌
     # ObligationAnchor，其 visibility 字段在 1b 已删，IR 形状随之变化；不升版则
     # 旧 rc17 IR 读入只得到无信息的 extra_forbidden（I-13）。免费重编译。
-    'stage4/ir/writer_book_ir.json': 'str06-rc25',
+    # rc26（2026-10-18 命名前移批次 C）：取消 name_candidates＋禁用字面合并为
+    # name_watch；称谓材料（released/withheld/bindings/display/requires_released）
+    # 切目标字面。免费重编译。
+    'stage4/ir/writer_book_ir.json': 'str06-rc26',
     'stage5/hook/hook.txt': 'str06-rc12',
-    'stage5/hook/receipt.json': 'str06-rc25',
+    'stage5/hook/receipt.json': 'str06-rc26',
     'stage5/body/ch{nn}.txt': 'str06-rc12',
     # rc5（rc8 同批）：回执改绑章包摘要＋请求身份＋验证版本＋改名前正文摘要，
     # 不再绑定全书 IR 与前文链（D2）；各章独立有效，支持集合恢复。
@@ -359,7 +366,9 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # （machine_view_sha256，仅审计不触发重购）。
     # rc17（2026-10-06 CS-H H3，RC-61）：BODY_VALIDATOR 升 v2——必保揭名必现
     # 字面与场景标记进章级机械校验，回执 validator_version 随行。
-    'stage5/acceptance/body/ch{nn}.json': 'str06-rc25',
+    # rc26（2026-10-18 命名前移批次 C）：identity-text 协议退役——回执取消
+    # 人物提及/普通义两类区间表与 name_text 检查项；prose_sha256 绑定最终正文。
+    'stage5/acceptance/body/ch{nn}.json': 'str06-rc26',
     # rc26（2026-10-18 命名前移批）：str06.stage4.naming 前移，NameMap v6 落
     # stage4/naming/name_map.json；旧 stage7 末端路径与 NameMapV5 字节拒读。
     'stage4/naming/name_map.json': 'str06-rc26',

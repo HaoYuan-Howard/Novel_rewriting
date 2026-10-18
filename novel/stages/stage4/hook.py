@@ -27,9 +27,8 @@ from contracts.schema.design import BodyDesign, PresentationGraph
 from contracts.schema.hook import HookDesign
 from contracts.schema.source import NameProjection, NameStructure
 from contracts.schema.workflow import STAGE4_HOOK_DESIGN_PROTOCOL
-from novel.core.name_materials import name_candidate_literals
 from novel.stages.stage4.design_paths import design_issue
-from novel.stages.stage4.hook_validation import hook_name_text_issues, validate_hook_payload
+from novel.stages.stage4.hook_validation import validate_hook_payload
 from novel.stages.stage4.hook_wire import (
     annotated_hook_catalog, expand_hook_wire, hook_catalog, hook_name_exposure,
     hook_wire_schema, opening_chapter_input,
@@ -40,6 +39,7 @@ def assemble_hook_design(
     wire: dict[str, Any], *, body: BodyDesign, known_char_ids: set[str],
     name_projection: NameProjection,
     name_structure: NameStructure | None = None,
+    faces: Mapping[str, Mapping[str, str]] | None = None,
 ) -> tuple[HookDesign | None, list[str]]:
     """Hook Design wire（stage4-hook-design-v4）→ HookDesign
     （canonical 候选，待 publish_graph 发布）。
@@ -54,15 +54,13 @@ def assemble_hook_design(
             code='hook_protocol_literal', location=('protocol_version',)))
     if errors:
         return None, errors
-    text_errors = hook_name_text_issues(
-        wire, projection=name_projection, structure=name_structure, require_classification=True)
     data, errors = expand_hook_wire(wire, body)
     if errors:
-        return None, text_errors + errors
+        return None, errors
     assert data is not None
-    errors = text_errors + validate_hook_payload(
+    errors = validate_hook_payload(
         data, body=body, known_char_ids=known_char_ids,
-        name_projection=name_projection, name_structure=name_structure)
+        name_projection=name_projection, name_structure=name_structure, faces=faces)
     if errors:
         return None, errors
     try:
@@ -112,7 +110,7 @@ def _hook_followup_directory(index: dict, order: list[tuple[str, str]], material
 
 
 def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple],
-                     *, projection: NameProjection | None = None,
+                     *, faces: Mapping[str, Iterable[str]] | None = None,
                      kp_statements: Mapping[str, str] = (),
                      world_statements: Mapping[str, str] = ()) -> dict:
     """Hook 窄返修的依赖切片：只带失败条目引用的拍与释放事实。
@@ -180,14 +178,13 @@ def hook_patch_slice(body: BodyDesign, wire: dict, targets: Sequence[tuple],
             'event': beat.event, 'participants': list(beat.participants),
             'target_delta': [d.model_dump(mode='json') for d in beat.target_delta],
             'release_prefix': releases})
-    if projection is not None:
+    if faces is not None:
         for row in beats:
-            exposure = hook_name_exposure(row['event'], projection)
+            exposure = hook_name_exposure(row['event'], faces=faces)
             if exposure:
                 row['name_exposure'] = exposure
     sliced = {'slice_version': 'stage4-hook-patch-slice-v4',
-            'name_candidates': list(name_candidate_literals(projection)) if projection is not None else [],
-            'facts': annotated_hook_catalog(body, projection=projection,
+            'facts': annotated_hook_catalog(body, faces=faces,
                                             kp_statements=kp_statements,
                                             world_statements=world_statements),
             'initial_surfaces': [s.model_dump(mode='json') for s in body.initial_surfaces],

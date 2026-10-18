@@ -1,6 +1,7 @@
 """同根登记升级、崩溃补尾与逐章真实消费者；全程 fake transport，零真实付费。"""
 from copy import deepcopy
 import json
+import re
 
 import pytest
 from pydantic import ValidationError
@@ -20,9 +21,162 @@ from novel.orchestrator.contract_upgrade import (
 )
 from novel.store import Str06Repository
 from tests.str06_facilities import candidate_epoch
-from tests.test_str06_body import _make_session, _run, _full_chain_wires
+from tests.test_str06_hook import _full_chain_wires as _chain_wires
 
 SOURCE = 'a' * 64
+
+# ───────────────────────── 本地夹具（不依赖 tests/test_str06_body.py） ─────────────────────────
+
+#: rc26：正文直接以目标姓名成文（无身份标记、无改名前中间态）。
+GOOD_CH1 = '拜堂之夜，柳婉望着夫君，旧约出口，烛火到天亮才熄，她记住了每一个字。'
+GOOD_CH2 = '夫君夜半离家，婉在他枕下发现玉佩，字迹陌生，她把玉佩藏回原处，坐到天明。'
+
+
+def _chapters():
+    return [
+        {'chapter_ordinal': 1, 'text': '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'},
+        {'chapter_ordinal': 2, 'text': '夫君夜半翻墙而出，苏芸娘发现玉佩刻着沈字。'}]
+
+
+class _RoutingTransport:
+    """按 owner 路由的假 transport：JSON owner 走 wires，文本 owner 出正文。
+
+    owner 路由与 `tests/test_str06_body.py::_RoutingTransport` 同一套内容嗅探
+    （ PaidRequestSession 以请求身份缓存，owner 只影响路由）；此处内联一份，
+    避免跨文件依赖其夹具（rc26 批次 C 后该文件自行迁移中）。
+    """
+
+    def __init__(self, wires, truncate=(), hook_text='柳婉望着空房。'):
+        self.wires = wires
+        self.truncate = tuple(truncate)
+        self.hook_text = hook_text
+        self.calls: list[str] = []
+
+    def send(self, request):
+        from novel.llm.transport import ChatResponse
+        import json as _json
+        import re
+        owner = self._owner(request)
+        self.calls.append(owner)
+        if owner == 'hook_writer':
+            return ChatResponse(content=self.hook_text, finish_reason='stop',
+                                usage={'prompt_tokens': 10, 'completion_tokens': 5},
+                                model='fake')
+        if owner.startswith('body_ch'):
+            if owner in self.truncate:
+                return ChatResponse(content='截断的开头。', finish_reason='length',
+                                    usage={'prompt_tokens': 100, 'completion_tokens': 40000},
+                                    model='fake')
+            text = GOOD_CH1 if owner.endswith('ch01') else GOOD_CH2
+            return ChatResponse(content=text, finish_reason='stop',
+                                usage={'prompt_tokens': 100, 'completion_tokens': 40},
+                                model='fake')
+        return ChatResponse(content=_json.dumps(self.wires[owner], ensure_ascii=False),
+                            finish_reason='stop',
+                            usage={'prompt_tokens': 10, 'completion_tokens': 10},
+                            model='fake')
+
+    @staticmethod
+    def _owner(request) -> str:
+        wires = _RoutingTransport._current_wires
+        user = request.user
+        if '楔子' in request.system:
+            return 'hook_writer'
+        if '【本章交付要求】' in user:
+            return 'body_ch01' if '本章目的（第1章）' in user else 'body_ch02'
+        if '人物账、初始状态、世界约束与书级命题词表' in user:
+            return 'book'
+        if '条目级关联判定' in user:
+            return 'associate'
+        if '跨章因果判定' in user:
+            return 'cross_cause'
+        if '拆成有序 beats' in user:
+            marks = re.findall(r'【第 (\d+) 章正文】', user)
+            return f'ch{int(marks[-1]):02d}' if marks else 'ch01'
+        for owner, marker in (
+                ('names', '登记全书源名称结构'), ('preserve', '最小语义义务'),
+                ('design', '设计目标书'),
+                ('hook_design', 'stage4-hook-design-v4'), ('naming', '表层姓名')):
+            if marker in user:
+                return owner
+        raise AssertionError(f'无法路由的请求：{user[:80]}')
+
+
+def _make_session(tmp_path, wires, ceiling=None, truncate=(), name='out', transport=None):
+    _RoutingTransport._current_wires = wires
+    if transport is None:
+        transport = _RoutingTransport(wires, truncate=truncate)
+    from novel.llm.ledger import CostLedger, ledger_path
+    from novel.llm.paid_requests import PaidRequestSession
+    from novel.store import Str06Repository
+    from tests.str06_facilities import make_context
+    base = tmp_path / name
+    base.mkdir(exist_ok=True)
+    repo = Str06Repository(base / 'run')
+    ledger = CostLedger(path=ledger_path(base))
+    repo.attach_context(make_context(base / 'run', ledger=ledger))
+    session = PaidRequestSession(repo, ledger, transport, yes=True,
+                                 allow_source_export=True, provider='fake',
+                                 book_call_ceiling=ceiling, sid='run')
+    return repo, session, transport
+
+
+def _run(repo, session, *, budget=2000, concurrency=4, node_concurrency=None,
+         node_filter=None, body_chapters=None, through='stage7'):
+    from novel.stages.chain import run_workflow
+    from tests.str06_facilities import body_ask, json_ask, text_ask
+    return run_workflow(repository=repo, chapters=_chapters(),
+                        ask=json_ask(session), ask_text=text_ask(session),
+                        ask_body=body_ask(session),
+                        budget=budget, through=through, book_title='报恩',
+                        length_band=(0.01, 0.05), concurrency=concurrency,
+                        node_concurrency=node_concurrency,
+                        node_filter=node_filter, body_chapters=body_chapters)
+
+
+def _full_chain_wires():
+    """现役协议（rc26 批次 C）的全链 fake wires。
+
+    `tests/test_str06_hook.py::_full_chain_wires` 的 design wire 仍是
+    identity-text 时代的 v11（带 `[[name:…]]` 标记、自由文本用源侧称谓）。
+    现役链只接受 v12 普通**目标**文本：此处按同一故事改写成 v12——剥掉标记，
+    自由文本（ev/state/driver/brief）改用 naming wire 给出的目标姓名
+    （fu_jun→顾、yun_niang→柳婉）；`initial_surfaces`／`release` 仍是 Design
+    对**登记面**的声明（源侧），由 compile 经目标字面表映射。
+    """
+    wires = _chain_wires()
+    design = wires['design']
+    design['protocol_version'] = 'stage4-design-v12'
+    wires['design'] = _plain_target_text(design, _TARGET_NAMES,
+                                         keep_source=('initial_surfaces', 'release'))
+    return wires
+
+
+#: 源登记称谓 → naming wire 给出的目标姓名（只改自由文本，不改登记面声明）。
+_TARGET_NAMES = {
+    '苏芸娘': '柳婉', '芸娘': '婉', '苏姑娘': '柳姑娘',
+    '陆大哥': '顾大哥', '陆兄': '顾兄', '陆家': '顾家',
+}
+
+
+def _plain_target_text(value, targets=None, keep_source=()):
+    """剥掉 identity-text 标记；rc26 后 Design 自有文本一律普通目标文本。
+
+    `targets` 给源称谓 → 目标姓名映射（写手材料只许出现目标字面）；
+    `keep_source` 列的键是登记面声明，保持源侧字面（compile 负责映射）。
+    """
+    if isinstance(value, str):
+        text = re.sub(r'\[\[(?:name:[^|]+\|)?([^\]]*)\]\]', r'\1', value)
+        for source, target in (targets or {}).items():
+            text = text.replace(source, target)
+        return text
+    if isinstance(value, dict):
+        return {key: (_plain_target_text(item) if key in keep_source
+                      else _plain_target_text(item, targets, keep_source))
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_plain_target_text(item, targets, keep_source) for item in value]
+    return value
 
 # 此边的真实历史执行版本。只改变版本声明，不改任何原轮、响应、采用或费用证据；
 # 不能把当前执行账仅换 workflow 标签后，期待同版本再次恢复额度。
@@ -353,14 +507,19 @@ def test_upgrade_rebuilds_registered_consumers_and_preserves_archived_body_bytes
     _assert_archived_bytes(repo, receipt, archived, current_absent=False)
     for ordinal in (1, 2):
         current = repo.read_model(f'stage5/acceptance/body/ch{ordinal:02d}.json')
-        assert current.name_mentions and isinstance(current.non_name_spans, tuple)
+        # rc26：正文即最终成文——回执绑定最终正文摘要与当前机械检查项，
+        # 不再有 name_mentions／non_name_spans 两类区间表。
+        from novel.stages.stage5 import sha256_text
+        from contracts.schema.receipt import BODY_MECHANICAL_CHECKS
+        assert current.prose_sha256 == sha256_text(
+            repo.read_text(f'stage5/body/ch{ordinal:02d}.txt'))
+        assert current.mechanical_checks == BODY_MECHANICAL_CHECKS
     assert repo.inspect('stage7/final/delivery_manifest.json')['chapters']
     assert repo.inspect('runtime/workflow_status.json')['status'] == 'delivered'
 
 
 def test_upgrade_from_rejected_body_design_candidate_runs_current_author_protocol(tmp_path):
     """当前用户根形态：Stage4 前置已在，只有未接受的旧 Design 答案，没有正式设计。"""
-    from novel.core.name_text import resolve_name_text
     from novel.llm.transport import ChatRequest
     from novel.stages.chain import NODE_ORDER
     from novel.stages.common import SYS
@@ -373,16 +532,9 @@ def test_upgrade_from_rejected_body_design_candidate_runs_current_author_protoco
     assert repo.path('stage4/grounding/reconstruction_brief.json').exists()
     assert not repo.path('stage4/design/body_design.json').exists()
 
-    def historical_text(value):
-        if isinstance(value, str):
-            return resolve_name_text(value).text
-        if isinstance(value, dict):
-            return {key: historical_text(item) for key, item in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [historical_text(item) for item in value]
-        return value
-
-    old_design = historical_text(wires['design'])
+    # rc26：夹具 wire 已是普通目标文本；历史候选只把协议字面量降到 v10
+    # （v10 与 v12 同形，只差协议声明），不再需要剥身份文本标记。
+    old_design = deepcopy(wires['design'])
     old_design['protocol_version'] = 'stage4-design-v10'
     transport.wires['design'] = old_design
     old_answer = session.send('design', ChatRequest(
@@ -478,8 +630,9 @@ def test_validation_only_change_rechecks_original_prose_and_preserves_adoption(t
     assert bundles[0].adoptions[0].request_sha256 == original['request_identity']
 
 
-@pytest.mark.parametrize('defect', ['withheld', 'ordinal', 'protocol', 'renderer'])
+@pytest.mark.parametrize('defect', ['writer_view', 'ordinal', 'protocol', 'renderer'])
 def test_validation_only_failure_does_not_sign_a_new_acceptance(tmp_path, defect):
+    """只改版本声明不能伪造新接受：章包/正文/协议任一不符即拒（不签新接受）。"""
     from contracts.schema.receipt import ChapterReceipt
     from novel.stages.stage5 import recheck_chapter
     from novel.stages.common import project_chapter_packet, chapter_identities
@@ -488,16 +641,20 @@ def test_validation_only_failure_does_not_sign_a_new_acceptance(tmp_path, defect
     packet = project_chapter_packet(repo.read_model('stage4/ir/writer_book_ir.json'), 1)
     receipt = ChapterReceipt.model_validate(repo.inspect('stage5/acceptance/body/ch01.json'))
     changed = packet
-    if defect == 'withheld':
+    if defect == 'writer_view':
+        # 章包写手视图变化（导演说明/驱动摘要进写手视图摘要）：旧回执不再绑定
+        scene = packet.chapter.scenes[0]
+        redone = scene.model_copy(update={'writer_brief': scene.writer_brief.model_copy(
+            update={'scene_driver_summary': '改过的驱动摘要'})})
         changed = packet.model_copy(update={'chapter': packet.chapter.model_copy(
-            update={'withheld_literals': (*packet.chapter.withheld_literals, '旧约')})})
+            update={'scenes': (redone, *packet.chapter.scenes[1:])})})
+        assert chapter_identities(changed).writer_view_sha256 != receipt.writer_view_sha256
     elif defect == 'ordinal':
         receipt = receipt.model_copy(update={'chapter_ordinal': 2})
     elif defect == 'protocol':
         receipt = receipt.model_copy(update={'protocol_version': 'unknown-protocol'})
     else:
         receipt = receipt.model_copy(update={'renderer_version': 'unknown-renderer'})
-    assert chapter_identities(changed).writer_view_sha256 == receipt.writer_view_sha256
     assert recheck_chapter(changed, repo.read_text('stage5/body/ch01.txt'), receipt) is None
 
 
@@ -672,9 +829,10 @@ def test_open_hook_design_issue_is_resolved_when_product_archived(tmp_path):
     _run(repo, session,
          node_filter=rebuild[:rebuild.index('str06.stage4.hook_design') + 1])
     graph = repo.inspect('stage4/design/presentation_graph.json')
-    # 命名前移批不换 Design/Graph 形状：产物契约版本标签保持 rc25，世代身份由
-    # epoch 与契约表承载（EDGE['target_version'] 是版式头，不是每个产物的标签）。
-    assert graph['contract_version'] == 'str06-rc25'
+    # rc26（命名前移批 C）：Design/Graph 形状同批升版（canonical 普通目标文本），
+    # 产物契约版本标签随自身形状轴走；世代身份由 epoch 与契约表承载
+    # （EDGE['target_version'] 是版式头，不是每个产物的标签）。
+    assert graph['contract_version'] == 'str06-rc26'
 
 
 def test_unknown_call_and_accumulated_budget_survive_upgrade(tmp_path):

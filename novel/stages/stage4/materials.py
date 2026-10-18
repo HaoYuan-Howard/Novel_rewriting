@@ -37,12 +37,12 @@ from contracts.schema.source import CharactersCore, NameProjection, NameStructur
 from novel.core.material_trace import MaterialPart
 from novel.core.name_materials import (
     appellation_fallbacks, display_surface, expand_surface_releases,
-    material_name_permissions, name_candidate_literals, withheld_name_bindings,
+    map_target_faces, name_watch_rows, target_old_literals,
+    withheld_target_bindings,
 )
-from novel.core.name_text import resolve_name_text
+from novel.core.name_residue import watch_literals
 from novel.stages.common import (
     ReleasePrefixes, positive_material_issues, project_withheld_names,
-    withheld_name_literals,
 )
 from novel.stages.stage4.book_ir import chapter_name_releases, chapter_surface_releases
 from novel.stages.stage4.design_paths import design_issue
@@ -101,33 +101,6 @@ def design_wire_text_fields(wire: Mapping[str, Any]):
                                     ('chapters', ci, 'entry'))
 
 
-def name_text_field_issues(text: str, *, path: tuple,
-                           surfaces: Mapping[str, Iterable[str]] | None,
-                           candidates: Iterable[str] = ()) -> list:
-    """语法/身份引用/词法候选未决分别报码，全部保留当前作者的可编辑路径。"""
-    resolved = resolve_name_text(text, surfaces, candidate_literals=candidates)
-    return [design_issue(
-        str(error), code=error.code, location=(*path, error.start, error.literal),
-        paths=(path,), context={'name_text_start': error.start,
-                                'name_text_end': error.end,
-                                'literal': error.literal}) for error in resolved.errors]
-
-
-def design_wire_name_text_issues(wire: Mapping[str, Any], *,
-                                 projection: NameProjection | None,
-                                 structure: NameStructure | None,
-                                 registered_surfaces: Mapping[str, Iterable[str]] | None,
-                                 require_classification: bool) -> list:
-    """自有文本先独立校验；know/real 或 canonical 构造失败不遮住本轮可修问题。"""
-    candidates = (name_candidate_literals(projection, structure)
-                  if require_classification and projection is not None else ())
-    surfaces = (expand_surface_releases(registered_surfaces, structure)
-                if registered_surfaces is not None else None)
-    return [issue for path, text in design_wire_text_fields(wire)
-            for issue in name_text_field_issues(
-                text, path=path, surfaces=surfaces, candidates=candidates)]
-
-
 def design_internal_ids(body: BodyDesign) -> set[str]:
     return {s.scene_id for s in body.scenes} | {
         b.beat_id for s in body.scenes for b in s.beats} | {
@@ -138,6 +111,8 @@ def validate_design_materials(
     body: BodyDesign, *, projection: NameProjection, known_char_ids: set[str],
     structure: NameStructure | None = None, resolve: SiteResolver | None = None,
     characters: CharactersCore | None = None,
+    faces: Mapping[str, Mapping[str, str]] | None = None,
+    name_map=None,
 ) -> list:
     """按章显示面投影后检查将送达的自然语言；avoid 等负向条目不纳入。
 
@@ -153,18 +128,26 @@ def validate_design_materials(
     fallbacks = appellation_fallbacks(characters, structure) if characters is not None else {}
     first_person = body.narration.person == 'first'
     focalizers = set(body.narration.focalizers)
+    # rc26\uff1a\u663e\u793a\u9762\u6620\u5c04\u8868\uff08\u4e0e ChapterIR \u540c\u4e00\u4efd target_face_table \u4ea7\u7269\uff09\u3002
+    faces_table = faces
 
     def display_at(faces: dict[str, tuple[str, ...]]) -> dict[str, str]:
         chars = set(faces) | {cid for cid, face in fallbacks.items() if face}
         if first_person:
             chars |= focalizers
-        return {
+        resolved = {
             char_id: display_surface(
                 char_id, faces.get(char_id, ()), structure=structure,
                 entry=(characters.characters.get(char_id)
                        if characters is not None else None),
                 first_person_focalizer=(first_person and char_id in focalizers))
             for char_id in chars}
+        if faces_table is not None:
+            # rc26\uff1a\u663e\u793a\u9762\u540c\u5c3a\u6620\u5c04\u5230\u76ee\u6807\u5b57\u9762\u2014\u2014\u6295\u5f71\u7ed9\u5199\u624b\u7684\u66ff\u6362\u503c\u5fc5\u987b\u4e0e
+            # \u76d1\u89c6\u884c\u540c\u9762\uff08\u5426\u5219\u6295\u5f71\u7ed3\u679c\u81ea\u5df1\u88ab\u5f53\u65e7\u540d\u6b8b\u7559\uff09\u3002
+            resolved = {cid: faces_table.get(cid, {}).get(face, face)
+                        for cid, face in resolved.items()}
+        return resolved
 
     for chapter in body.chapters:
         # 分区文本按**章**判已释放（见模块头）：一章一份显示面、一份字面检查面。
@@ -215,28 +198,30 @@ def validate_design_materials(
                                 ('thread', sid, beat.beat_id, i))
         # 字面检查面与绑定表同源：`released`（含登记家族构词，陆家＝{family}家）是
         # 正文章包的章级称谓许可，绑定表只收本章仍被扣留的完整登记称谓。
-        withheld = withheld_name_literals(projection, released, structure)
-        bindings = withheld_name_bindings(structure, released_names)
+        # rc26：faces 在场时全部目标面——released/bindings/withheld 同源映射。
+        source_released = chapter_surface_releases(body, chapter.chapter_ordinal, structure)
+        source_names = chapter_name_releases(body, chapter.chapter_ordinal, structure)
+        if faces is not None:
+            released = {s for row in map_target_faces(faces, source_names).values()
+                        for s in row}
+            released_names = map_target_faces(faces, source_names)
+            withheld = watch_literals(name_watch_rows(
+                structure=structure, faces=faces, released_names=released_names,
+                old_literals=(target_old_literals(structure, name_map)
+                              if name_map is not None and structure is not None else {})))
+            bindings = withheld_target_bindings(structure, faces, released_names)
+        else:
+            released, released_names = source_released, source_names
+            withheld, bindings = (), ()
         binding_of = {b.literal: b for b in bindings if b.unmarked_unique}
         prefix = f'ch{chapter.chapter_ordinal:02d}/'
         # 显示面取章末（RC-60 第 2～4 条的解析不变，只是取位按章）。
         display = display_at(prefixes.chapter_end_faces(chapter.chapter_ordinal))
         # 先投影再查：同一人物的各次提及分别投影，残余才进字面检查。
         projected: dict[str, MaterialPart] = {}
-        surfaces = (expand_surface_releases(
-                    {cid: tuple(person.surface_forms) for cid, person in structure.people.items()}, structure)
-                    if structure is not None else None)
         for key, text in parts.items():
-            if '[[' in text or ']]' in text:
-                for error in resolve_name_text(text, surfaces).errors:
-                    issues.append(_site_issue(
-                        error.message, code=error.code, literal=error.literal,
-                        chapter=chapter, where=prefix + key, prefix=prefix,
-                        sites=sites, resolve=resolve, inherited=set()))
             new_text, _hits = project_withheld_names(
                 text, bindings=bindings, display=display)
-            # 保留原来的独立 name/text 片段。提前解码会把相邻两人“白”“若”拼成
-            # 第三人的“白若”，也会把某一人的已释放面错误授予同形的另一人。
             projected[prefix + key] = MaterialPart(new_text)
         # keep 的文本由 Brief 回填，直接重写场景不会改变它；诊断指出 wire
         # 中显式改写表达的入口，不替模型改语义，不扩大/缩小原判据。
@@ -244,8 +229,7 @@ def validate_design_materials(
                      if item.action == 'keep'}
         material_issues = positive_material_issues(
             projected, released=released, withheld=withheld, internal_ids=internal,
-            chapter_ordinal=chapter.chapter_ordinal,
-            name_permissions=material_name_permissions(released_names, display))
+            chapter_ordinal=chapter.chapter_ordinal)
         for issue in material_issues:
             if issue.code != 'positive_material_leak':
                 issues.append(_site_issue(

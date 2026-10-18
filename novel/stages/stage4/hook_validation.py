@@ -4,6 +4,10 @@
 assembler先确定性展开wire目录引用，随后校验规范payload；恢复预览与正式Context
 compiler直接复验canonical Hook。判据不依赖producer、compiler、LLM或repository。
 
+rc26（命名前移批 C）：identity-text 协议退役——Hook 自有措辞（presentation、
+reader_expectation.focus、local_focus）一律普通目标文本，不再有标记语法与
+候选覆盖判据；隐藏人物泄漏判据改按目标字面表（`faces`）直接字面检查。
+
 CS-F1（Hook 接入局部修订）：错误在判定处带 wire 路径——wire 与 canonical
 payload 的条目容器同形同序（assembler 展开引用、不改列表序），路径两用：wire 面
 供条目返修定位（`locate_design_patches`），canonical 复验面留诊断。涉及两侧的
@@ -12,16 +16,14 @@ payload 的条目容器同形同序（assembler 展开引用、不改列表序�
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.hook import HookDesign
 from contracts.schema.source import NameProjection, NameStructure
-from novel.core.name_materials import expand_surface_releases, name_candidate_literals
-from novel.core.name_text import resolve_name_text
+from novel.core.name_materials import expand_surface_releases
 from novel.stages.stage4.design_paths import design_issue
 from novel.stages.stage4.hook_facts import established_fact, fact_is_current, hook_facts
-from novel.stages.stage4.materials import name_text_field_issues
 
 Init = 'init'
 
@@ -29,30 +31,6 @@ Init = 'init'
 def _issue(message: str, code: str, location: tuple, *paths: tuple):
     """带规则码与可编辑 wire 路径的判据问题；路径为空＝该问题不可条目定位。"""
     return design_issue(message, code=code, location=location, paths=paths)
-
-
-def hook_name_text_issues(wire: dict[str, Any], *, projection: NameProjection,
-                          structure: NameStructure | None,
-                          require_classification: bool) -> list[str]:
-    """只检查 Hook 自有措辞，不向目标设计或事实目录回写名称语义。"""
-    surfaces = ({cid: tuple(person.surface_forms) for cid, person in structure.people.items()}
-                if structure is not None else {
-                    entry.char_id: (*entry.name_bearing_surfaces, entry.display)
-                    for entry in projection.by_person})
-    surfaces = expand_surface_releases(surfaces, structure)
-    candidates = name_candidate_literals(projection, structure) if require_classification else ()
-    fields = []
-    materials = wire.get('materials')
-    for index, item in enumerate(materials if isinstance(materials, (list, tuple)) else ()):
-        if isinstance(item, dict) and isinstance(item.get('presentation'), str):
-            fields.append((('materials', index, 'presentation'), item['presentation']))
-    expectation = wire.get('reader_expectation')
-    if isinstance(expectation, dict) and isinstance(expectation.get('focus'), str):
-        fields.append((('reader_expectation', 'focus'), expectation['focus']))
-    if isinstance(wire.get('local_focus'), str):
-        fields.append((('local_focus',), wire['local_focus']))
-    return [issue for path, text in fields for issue in name_text_field_issues(
-        text, path=path, surfaces=surfaces, candidates=candidates)]
 
 
 def _address_key(raw: dict[str, Any] | None) -> tuple | None:
@@ -175,24 +153,27 @@ def _delta_subjects(body: BodyDesign, ref: str) -> set[str]:
 def validate_hook_design(
     hook: HookDesign, *, body: BodyDesign, known_char_ids: set[str],
     name_projection: NameProjection, name_structure: NameStructure | None = None,
+    faces: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[str]:
     """复验canonical Hook与当前正文的选择结构；不归一、修复或改写输入。
 
     正式恢复与编译读回的Hook已经通过schema，但正文候选可能改变了它依赖的
     状态、拍或称谓授权；与wire接受共用同一判据，不能只凭schema可读便采用。
+    rc26：`faces`（目标字面表）是隐藏人物泄漏判据的字面宇宙（普通正文，无声明
+    区间可排除——隐藏人物的目标字面出现即泄漏）。
     """
     return validate_hook_payload(
         hook.model_dump(mode='json'), body=body, known_char_ids=known_char_ids,
-        name_projection=name_projection, name_structure=name_structure)
+        name_projection=name_projection, name_structure=name_structure, faces=faces)
 
 
 def validate_hook_payload(
     wire: dict[str, Any], *, body: BodyDesign, known_char_ids: set[str],
     name_projection: NameProjection, name_structure: NameStructure | None = None,
+    faces: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[str]:
     """位置已确定性解析后的同一套结构判据；wire与canonical复验共用。"""
-    errors: list[str] = hook_name_text_issues(
-        wire, projection=name_projection, structure=name_structure, require_classification=False)
+    errors: list[str] = []
 
     positions = _position(body)
     facts = hook_facts(body)
@@ -243,19 +224,13 @@ def validate_hook_payload(
                 f'材料 {ref} 涉及隐藏人物 {sorted(hidden_here)}，必须给出 presentation',
                 'hook_hidden_presentation', ('materials', k), ('materials', k)))
         if item.get('presentation'):
-            resolved = resolve_name_text(item['presentation'])
+            # rc26：presentation 是普通目标文本——隐藏人物的目标字面（faces 表
+            # 全部渲染面）出现即泄漏；没有声明区间可排除，不做词法猜测。
+            text = item['presentation']
             for char_id in sorted(hidden_here):
-                entry = name_projection.person(char_id)
-                literals = (set(entry.name_bearing_surfaces)
-                            if entry else set())
-                declared = {mention.surface for mention in resolved.mentions
-                            if mention.char_id == char_id}
-                for literal in sorted(literals | declared):
-                    legacy = bool(literal) and any(
-                        not any(span.start <= match.start() and match.end() <= span.end
-                                for span in (*resolved.non_name_spans, *resolved.mentions))
-                        for match in re.finditer(re.escape(literal), resolved.text))
-                    if literal in declared or legacy:
+                literals = sorted(set((faces or {}).get(char_id, {}).values()) - {''})
+                for literal in literals:
+                    if literal in text:
                         errors.append(_issue(
                             f'材料 {ref} 的 presentation 泄漏隐藏人物 {char_id} 的字面 {literal!r}',
                             'hook_presentation_leak', ('materials', k, char_id),

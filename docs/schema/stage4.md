@@ -47,7 +47,7 @@ Preserve 现役保存策略为 v12，wire 为 `stage4-preserve-v7`。源盲交�
 
 | 路径 | 模型 | 生产节点 | 内容 |
 |---|---|---|---|
-| `stage4/naming/name_map.json` | `NameMapV6` | `str06.stage4.naming` | 名称位赋值（char_ref → 目标名／保留；命名前移批落本层） |
+| `stage4/naming/name_map.json` | `NameMapV6` | `str06.stage4.naming` | 名称位赋值（char_ref → 目标名／保留；命名前移批落本层）；rc26 起同时是下游称谓材料的目标字面权威（`novel/core/name_materials.py::target_face_table`） |
 | `runtime/preserve_checkpoint.json` | `PreserveCheckpoint` | `str06.stage4.preserve` | 保存策略义务（已购证据；checkpoint 存储不是下游读取接口） |
 | `stage4/grounding/reconstruction_brief.json` | `ReconstructionBrief` | `str06.stage4.preserve` | ReconstructionBrief 确定性投影 |
 | `stage4/design/body_design.json` | `BodyDesign` | `str06.stage4.body_design` | 目标故事与导演说明（正式派生产物；hook_design 的单节点输入） |
@@ -157,6 +157,7 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 | `length_budget_conserved` | hard | 章预算 largest-remainder 分配、总和守恒 |
 | `preserve_compile` | hard | Preserve checkpoint 编译闭合 |
 | `name_map_compile` | hard | NameMap v6 编译闭合（名称位一致、无姓氏冲突、保留项合法） |
+| `body_name_watch` | hard | 写手材料不含旧名残留与未释放目标名（compile 派生监视行字面平铺；rc26）；正文里的同类命中只进定位报告（R-7.9） |
 | `naming_quality_unver` | unver | 新名的阅读质量未经语义评审 |
 | `preserve_name_literal_gate` | hard | Preserve 自闸：statement／satisfaction／details[].text 的裸姓、未登记别名等无法唯一认领的字面带义务或细节条目路径窄修；唯一绑定的自然混称合法，不推断揭名 |
 | `binding_mechanical` | hard | CS-3：binding 派生错误并入 body_design 的 ask 同节点修订轮（≤2）；real 覆盖闸漏标即拦；耗尽/无进展 fail-fast |
@@ -189,4 +190,4 @@ M2/M3 共用 `check_entry_timing`），码集合与判据注册表的 `guard_m{n
 当前注册表共 **35 条**：**32 hard、1 metric、2 unver**（rc21 新增系列概括与细节引用闭集两条 hard；2026-10-18 命名前移批迁入 name_map_compile 与 naming_quality_unver 两条）。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。
 
-2026-10-17 身份引用文本现役协议与旧源输入边界见 [name_text.md](name_text.md)。本批输出使用 rc25；身份选择的语义准确性保持未评。
+rc26（2026-10-18 命名前移批 C）：自有自然语言一律普通目标文本，identity-text-v1 协议已退役（回执两类区间字段与候选覆盖硬闸随之删除）；本批输出使用 rc26；姓名使用的语义正确性保持未评。

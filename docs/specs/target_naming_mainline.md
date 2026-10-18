@@ -11,7 +11,7 @@
 末端改名链为 `str06.stage7.naming`（产物 `stage7/naming/name_map.json`，
 `contracts/schema/naming.py::NameMapV6`，wire 见 `novel/stages/chain.py::run_naming`＋
 `novel/stages/common.py::NAMING_RULES`）→ `str06.stage7.assemble`（单遍替换＋装配，
-`novel/stages/stage4/naming.py::apply_bound_names`／`diff_proof`／`compile_bound_replacements`；
+末端替换证明链（已随批次 C 删除；目标字面表改由 `novel/core/name_materials.py::target_face_table` 供 compile 消费）；
 模块已随节点前移迁入 stage4 包）。
 
 ## 1. 目标与已确定的取舍
@@ -54,7 +54,8 @@ Stage2 继续拥有源人物身份、名称结构、亲属关系、事实及原�
 零调用完成。
 
 旧 Stage7 naming 节点退出现役。`apply_bound_names`／`diff_proof`／`compile_bound_replacements`
-（末端替换证明链，`novel/stages/stage4/naming.py`）随装配切换删除（§3 批次 C）。
+（末端替换证明链）已随装配切换删除（批次 C，2026-10-18）；目标字面表改由
+`novel/core/name_materials.py::target_face_table` 供 compile 消费。
 
 ### 2.2 Preserve 与目标故事设计
 
@@ -94,10 +95,9 @@ Design（`str06.stage4.body_design`）和 Hook Design（`str06.stage4.hook_desig
 - 某个情节节点需要正式揭名。
 
 Stage5 正文（`str06.stage5.body`）和 Hook（`str06.stage5.hook`）直接输出普通文本，不再生成姓名
-标记、普通义标记或字符区间——identity-text-v1 协议（`contracts/schema/name_text.py::
-NAME_TEXT_PROTOCOL`）及其指令面、`NameMention`／`NameTextSpan` 消费链
-（`novel/core/name_text.py::validate_name_mentions`）、回执两类区间字段
-（`contracts/schema/receipt.py` 的 `name_mentions`／`non_name_spans`）随批次 C 退役。写手只接收
+标记、普通义标记或字符区间。批次 C（2026-10-18 完成）已退役 identity-text-v1 协议及其指令面、
+`NameMention`／`NameTextSpan` 消费链与回执两类区间字段；相关模块与字段已从仓内删除（历史形状见 Git）。
+疑似旧名残留与提前揭名只形成定位报告（`novel/core/name_residue.py`，不阻断、不购修）。写手只接收
 当前剧情范围内的目标材料；受限身份的未来答案不进入正向材料。
 
 纯正文是否真正遵守揭示语义保持未评，通过阅读验收确认（§5）。

@@ -11,7 +11,7 @@
 
 Hook 设计与唯一 graph publisher、HookContext 编译已按节点所属 Stage 归位
 Stage4 包（B3 后半：`novel/stages/stage4/hook.py`／`hook_context.py`）；
-章级验证材料的推导（`chapter_surface_releases`／`chapter_withheld_literals`）
+章级验证材料的推导（`chapter_surface_releases`与姓名监视行 `name_watch`）
 随 D2 归 Stage4 编译器（`novel/stages/stage4/book_ir.py`）。
 本包只保留 Stage5 的语言实现面。
 
@@ -23,7 +23,7 @@ Stage7 装配经本公开面消费 `count_body_chars`／`sha256_text`。
 from __future__ import annotations
 
 from novel.stages.stage5.body import (
-    AnsweredText, ChapterAttempt, ChapterOutcome, recheck_chapter, resolve_chapter_prose,
+    AnsweredText, ChapterAttempt, ChapterOutcome, chapter_name_residues, recheck_chapter,
     sha256_text, write_chapter,
 )
 from novel.stages.stage5.body_checks import (
@@ -33,7 +33,7 @@ from novel.stages.stage5.body_checks import (
 from novel.stages.stage5.hook_writer import (
     HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt, build_rewrite_user_prompt, context_sha256,
-    resolve_hook_prose, validate_hook_prose,
+    hook_name_residues, validate_hook_prose,
 )
 
 __all__ = [
@@ -42,6 +42,6 @@ __all__ = [
     'MAX_REWRITES', 'MECHANICAL_CHECKS',
     'build_hook_user_prompt', 'build_rewrite_user_prompt', 'chapter_prose_validator',
     'context_sha256', 'count_body_chars',
-    'recheck_chapter', 'resolve_chapter_prose', 'resolve_hook_prose', 'sha256_text', 'validate_chapter_prose',
+    'chapter_name_residues', 'hook_name_residues', 'recheck_chapter', 'sha256_text', 'validate_chapter_prose',
     'validate_hook_prose', 'write_chapter',
 ]

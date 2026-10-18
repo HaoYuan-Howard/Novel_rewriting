@@ -91,13 +91,12 @@ def apply_fault(wires: dict, fault: str | None) -> dict:
             for beat in scene['beats']:
                 beat.pop('real', None)
     elif fault == 'knowledge_release':
-        # 称谓释放与目标材料冲突：Design 自己的第1章事件文本用了**未登记别名**『陆郎』
-        # （无绑定、无显示面，不可投影）——Design 自有文本的名称问题由 Design 接受判据
-        # 拦下并走同节点修订（改写指称或登记）。CS-F2 后源侧文本里的完整登记称谓由
-        # 写手材料确定性投影；CS-H H3 起 Design 原文闸同样先投影再查（含回落纯称谓），
-        # 已绑定称谓（如陆大哥）不再触发修订，故障面换成不可投影字面才真实触发。
+        # 称谓释放与目标材料冲突：Design 自己的第1章事件文本用了**旧名字面**『陆大哥』
+        # （改名人物 fu_jun 的源登记面——目标字面表只映射目标侧绑定，旧名不进投影，
+        # 原样落在写手材料里即被 compile 派生的旧名残留监视行拦下）——Design 自有
+        # 文本的名称问题由 Design 接受判据拦下并走同节点修订（改写指称或补释放）。
         first = mutated['design']['scenes'][0]['beats'][0]
-        first['ev'] = '陆郎' + first['ev']
+        first['ev'] = '陆大哥' + first['ev']
     elif fault == 'duplicate_json_key':
         pass            # 该故障在 transport 层返回原始文本，见 FaultTransport
     else:
@@ -123,8 +122,11 @@ class FaultTransport:
 
         if fault == 'knowledge_release':
             wires = deepcopy(wires)
+            # rc26：认知命题经 Brief 进写手材料（kp 回填）——命题文本用目标姓名
+            # （源侧引文保持原样）；Design 同时声明释放（initial_surfaces 追认），
+            # 冲突面只剩 Design 自有事件文本里的旧名字面。
             wires['ch01']['beats'][0]['cognition'] = [{
-                'proposition': {'ref': 'p_name', 'statement': '陆大哥已经娶亲'},
+                'proposition': {'ref': 'p_name', 'statement': '顾大哥已经娶亲'},
                 'holder': 'yun_niang', 'mode': 'learns',
                 'basis': [{'segment': 'e01_01', 'quote': '苏芸娘嫁入陆家'}]}]
             wires['preserve']['obligations'][0]['anchors'].append('b01_01.c1')

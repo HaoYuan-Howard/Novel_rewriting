@@ -14,10 +14,11 @@ LLM、不修改输入、不从自然语言补语义；canonical `realization_bri
 ChapterIR 的业务内容：改变预算即改变全书 IR 身份。
 
 【章级验证材料（D2，B4）】
-称谓许可（第 k 章含之前已释放的称谓字面）与禁用字面（全部专名／带名 surface
-及家族级构词 − 已释放称谓）由 compiler 在 compile 时算好并写进 ChapterIR；
-Stage5 的 Writer／Validator 只收章包，不再现场推导（不读 Design／Characters）。
-`chapter_withheld_literals` 与 Hook 的 withheld 同一推导纪律：不写死人名。
+称谓许可（第 k 章含之前已释放的称谓字面）与姓名监视行由 compiler 在 compile
+时算好并写进 ChapterIR；Stage5 的 Writer／Validator 只收章包，不再现场推导
+（不读 Design／Characters）。rc26（命名前移批 C）：称谓材料一律**目标字面**
+——compile 经 NameMap 目标字面表把 Design 的源侧释放声明映射到目标姓名；
+监视行（`NameWatch`）平铺面是写手材料硬闸，归因面出正文定位报告，不写死人名。
 
 【线程折叠（R2.4，设计原则 4）】跨章语义不走状态叠加：`compile_writer_book_ir`
 用独立的 `ThreadFold` 按阅读序重放拍上的线程操作，逐场把 thread_ops（本场
@@ -37,13 +38,17 @@ from contracts.schema.book_ir import (
 from contracts.schema.design import BodyDesign, ChapterAssignment
 from contracts.schema.execution import ExecutionPlan
 from contracts.schema.grounding import BriefFactLock, SemanticBinding
+from contracts.schema.naming import NameMapV6
 from contracts.schema.source import NameProjection, NameStructure
 from contracts.schema.state import SurfaceRelease
 from novel.stages.stage4.fold import ThreadFold, fold_accepted_prefix
-from novel.core.name_materials import withheld_name_bindings, name_candidate_literals
+from novel.core.name_materials import (
+    map_target_faces, name_watch_rows, target_face_table, target_old_literals,
+    withheld_target_bindings,
+)
 from novel.stages.common import (
     ReleasePrefixes, consumption_closure, project_context, unanswered_guards,
-    withheld_name_literals, expand_surface_releases,
+    expand_surface_releases,
 )
 
 
@@ -92,15 +97,6 @@ def chapter_surface_releases(graph: BodyDesign, chapter_ordinal: int,
                              structure: NameStructure | None = None) -> set[str]:
     return {s for faces in chapter_name_releases(graph, chapter_ordinal, structure).values()
             for s in faces}
-
-
-def chapter_withheld_literals(
-    projection: NameProjection, graph: BodyDesign, chapter_ordinal: int,
-    structure: NameStructure | None = None,
-) -> tuple[str, ...]:
-    """章级释放表与共用专名／家族构词推导的差集。"""
-    return withheld_name_literals(projection, chapter_surface_releases(graph, chapter_ordinal, structure),
-                                  structure)
 
 
 def chapter_scene_weights(graph: BodyDesign) -> dict[int, float]:
@@ -213,6 +209,7 @@ def compile_writer_book_ir(
     world_statements: Mapping[str, str] = {},
     display_fallback: Mapping[str, str] | None = None,
     required_releases: Mapping[tuple[str, str, str], tuple[str, ...]] = None,
+    name_map: NameMapV6,
 ) -> WriterBookIR:
     """全书静态写作 IR 的唯一产地。纯函数：不落盘、不调 LLM、不修改输入。
 
@@ -226,7 +223,20 @@ def compile_writer_book_ir(
     全是「确知「true」」（R10b 锁以内容送达；2026-10-03 D6 渲染修复）。
     `world_statements`（Brief 世界约束的 wc_{nn}→statement 表）同尺回填
     world 规则键的 value（CS-3：布尔规则键渲染零信息的收口）。
+    rc26（命名前移批 C）：`name_map`（NameMapV6）是称谓材料的目标字面权威——
+    Design 的源侧释放声明经目标字面表映射后写进 ChapterIR（released_names／
+    released_surfaces／withheld_bindings／display_prefix／release_schedule），
+    监视行（`name_watch`）同批派生；必保揭名字面已由 Brief 侧按目标面派生
+    （`grounding._requires_released_surfaces`），本处只按章落位。
     """
+    if name_map.entries and structure is None:
+        raise ValueError('NameMap 非空而 Characters 未登记名称结构；先完成 Stage2 names')
+    faces, face_errors = target_face_table(structure, name_map) if structure is not None else ({}, [])
+
+
+    if face_errors:
+        raise ValueError(f'目标字面表编译失败：{face_errors}')
+    old_literals = target_old_literals(structure, name_map) if structure is not None else {}
     budgets = allocate_chapter_budgets(graph, total_budget)
     guards = unanswered_guards(graph, binding, fact_locks)
     consumers = consumption_closure(graph, binding.fact_bindings)
@@ -263,26 +273,32 @@ def compile_writer_book_ir(
                     plan.scenes[:scenes_before], initial=plan.initial_establishments),
                 thread_ops=thread_ops, open_threads=open_threads,
                 consumers=consumers, unanswered_guards=guards,
-                kp_statements=kp_statements, world_statements=world_statements)
+                kp_statements=kp_statements, world_statements=world_statements,
+                faces=faces)
             contexts.append(context)
             lines.append(_scene_line(graph, scene_id))
             scenes_before += 1
         ordinal = assignment.chapter_ordinal
-        withheld = chapter_withheld_literals(projection, graph, ordinal, structure)
-        released_here = tuple(sorted(chapter_surface_releases(graph, ordinal, structure)))
+        # rc26：源侧释放声明 → 目标字面（编译唯一映射点；Stage5 只见目标面）。
+        target_releases = map_target_faces(
+            faces, chapter_name_releases(graph, ordinal, structure))
+        released_here = tuple(sorted({s for row in target_releases.values() for s in row}))
         chapters.append(ChapterIR(
             chapter_ordinal=ordinal, purpose=assignment.purpose,
             length_budget=budgets[ordinal], scenes=tuple(contexts),
             continuity=_chapter_continuity(graph, previous_assignment, assignment),
             released_surfaces=released_here,
-            released_names=tuple(SurfaceRelease(char_id=cid, surfaces=faces)
-                                 for cid, faces in sorted(chapter_name_releases(
-                                     graph, ordinal, structure).items())),
-            name_candidates=name_candidate_literals(projection, structure),
-            withheld_literals=withheld,
-            withheld_bindings=withheld_name_bindings(
-                structure, chapter_name_releases(graph, ordinal, structure)),
-            display_prefix=chapter_display_prefix(graph, ordinal),
+            released_names=tuple(SurfaceRelease(char_id=cid, surfaces=faces_row)
+                                 for cid, faces_row in sorted(target_releases.items())),
+            name_watch=name_watch_rows(
+                structure=structure, faces=faces, released_names=target_releases,
+                old_literals=old_literals),
+            withheld_bindings=withheld_target_bindings(structure, faces, target_releases),
+            display_prefix=tuple(SurfaceRelease(
+                char_id=row.char_id,
+                surfaces=tuple(dict.fromkeys(
+                    faces.get(row.char_id, {}).get(s, s) for s in row.surfaces)))
+                for row in chapter_display_prefix(graph, ordinal)),
             display_fallback=chapter_display_fallback(display_fallback),
             requires_released=tuple(sorted(chapter_requires.get(ordinal, ())))))
         nav.append(ChapterNavEntry(
@@ -298,5 +314,8 @@ def compile_writer_book_ir(
         target_chapter_count=len(graph.chapters),
         total_length_budget=total_budget, length_band_low=length_band[0],
         length_band_high=length_band[1], chapters=tuple(nav),
-        release_schedule=_release_schedule(graph))
+        release_schedule=tuple(
+            entry.model_copy(update={'surfaces': tuple(dict.fromkeys(
+                faces.get(entry.char_id, {}).get(s, s) for s in entry.surfaces))})
+            for entry in _release_schedule(graph)))
     return WriterBookIR(book_brief=brief, chapters=tuple(chapters))

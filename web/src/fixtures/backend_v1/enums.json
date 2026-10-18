@@ -861,7 +861,7 @@
    }
   },
   "str06.stage7.assemble": {
-   "label": "Stage7 改名替换与成书装配（TXT 先落盘、manifest 最后提交）",
+   "label": "Stage7 成书装配（TXT 先落盘、manifest 最后提交；rc26 起零改名）",
    "paid": false,
    "stage": "stage7",
    "section": "R-10",
@@ -872,10 +872,10 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "NameMap v5、章回执链、Hook 回执与正文",
+    "input_workpack": "章回执链、Hook 回执与正文",
     "generation_mode": "deterministic",
     "review_mode": "none",
-    "review_scope": "章回执链核对＋单遍替换＋残留检查；交付可确定性重放",
+    "review_scope": "章回执链核对＋按阅读序装配；交付可确定性重放（rc26 起零改名）",
     "repair_actions": [
      "recompute",
      "stop"
@@ -1245,7 +1245,7 @@
   },
   {
    "kind": "str06.stage7.assemble",
-   "label": "Stage7 改名替换与成书装配（TXT 先落盘、manifest 最后提交）",
+   "label": "Stage7 成书装配（TXT 先落盘、manifest 最后提交；rc26 起零改名）",
    "extra": null,
    "paid": false,
    "free_flag": null,

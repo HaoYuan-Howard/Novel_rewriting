@@ -31,6 +31,10 @@ def _assemble(wire, **kw):
 
 def _prepare(tmp_path, *, bad_preserve=False):
     wires = _full_chain_wires()
+    # design 夹具的协议字面量按现役读面钉住：v11 已只读归档，不在
+    # DESIGN_READ_PROTOCOLS（夹具本身由 tests/test_str06_hook.py 维护）。
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
+    wires['design']['protocol_version'] = STAGE4_DESIGN_WIRE_PROTOCOL
     repo, session, transport = _make_session(tmp_path, wires)
 
     def no_body(*args):
@@ -68,15 +72,17 @@ name_map=name_map_of(chars.core_view()))
 
 
 def _bad_design(wire):
-    """坏稿：第1章自有文本里的**未登记别名**（陆郎——无绑定、无显示面，不可投影）。
+    """坏稿：第1章自有文本里的**未释放旧名字面**（陆大哥）。
 
-    CS-H H3（RC-60）起已绑定称谓（陆大哥）经显示面回落投影成『夫君』送达，不再
-    构成泄漏；坏稿的字面必须不可投影才能稳定触发 Design 自有文本判据。第2章才
-    释放陆大哥的对照保持不变。"""
-    wire['scenes'][0]['beats'][0]['ev'] = '陆郎拜堂成亲'
-    wire['scenes'][0]['beats'][1]['ev'] = '洞房夜陆郎立约'
+    rc26（命名前移批次 C）：identity-text 协议退役后没有未声明候选判据，
+    Design 自有文本硬阀改为监视行字面直查（旧名残留与未释放目标名）。
+    第2章才释放陆大哥的对照保持不变。"""
+    wire['scenes'][0]['beats'][0]['ev'] = '陆大哥拜堂成亲'
+    wire['scenes'][0]['beats'][1]['ev'] = '洞房夜陆大哥立约'
     wire['scenes'][1]['beats'][0]['release'] = [
         {'char_id': 'fu_jun', 'surfaces': ['陆大哥']}]
+
+
 
 
 def test_candidate_aggregates_direct_and_inherited_errors_without_mutation(tmp_path):
@@ -87,7 +93,7 @@ def test_candidate_aggregates_direct_and_inherited_errors_without_mutation(tmp_p
     before = deepcopy(wire)
     view = inspect_design_candidate(wire, **args)
     assert view.body is not None and view.binding is not None and not view.passed
-    assert sum(getattr(error, 'code', '') == 'name_text_unclassified' for error in view.errors) >= 2
+    assert sum(getattr(error, 'code', '') == 'positive_material_leak' for error in view.errors) >= 2
     assert any(getattr(error, 'owner', '') == 'preserve'
                and getattr(error, 'code', '') == 'preserve_old_name_literal' for error in view.errors)
     checks = {c.name: c.status for c in view.checks}
@@ -145,7 +151,7 @@ def test_self_revision_stop_keeps_check_status_and_free_replay(tmp_path):
     assert stopped.value.context['candidate_preflight']['checks']
     # 未声明的候选属于作者当前返修责任；未决不伪称已证明发生了姓名泄漏。
     assert 'design=failed' in str(stopped.value)
-    assert 'name_text_unclassified' in str(stopped.value)
+    assert 'positive_material_leak' in str(stopped.value)
     calls = len(transport.calls)
     with pytest.raises(ValidationStop):
         run_body_design(ctx)
@@ -297,7 +303,8 @@ def test_execution_plan_failure_does_not_claim_writer_checks_passed():
     body, binding, brief, chars = _conflict()
     binding = binding.model_copy(update={'entries': ()})
     view = inspect_body_materials(body, binding, brief, chars,
-                                  budget=4000, length_band=(0.6, 1.3))
+                                  budget=4000, length_band=(0.6, 1.3),
+                                  name_map=name_map_of(chars))
     assert view.ir is None and view.errors and not view.materials
     assert {c.name: c.status for c in view.checks} == {
         'execution_plan': 'failed', 'writer_inputs': 'passed',
@@ -313,7 +320,8 @@ def test_dangling_proposition_stops_projection_without_an_uncaught_exception():
     body = body.model_copy(update={'initial_state': (*body.initial_state,
         knowledge.model_copy(update={'key': 'kp_aaaaaaaaaaaaaaaa'}))})
     view = inspect_body_materials(body, binding, brief, chars,
-                                  budget=4000, length_band=(0.6, 1.3))
+                                  budget=4000, length_band=(0.6, 1.3),
+                                  name_map=name_map_of(chars))
     assert view.ir is None and any('悬空 kp' in e for e in view.errors)
     checks = {c.name: c.status for c in view.checks}
     assert checks['writer_inputs'] == 'failed'
@@ -384,6 +392,7 @@ def test_purchased_current_narrow_failure_accepts_current_full_fallback(tmp_path
     import json
     import re
 
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
     from novel.stages import candidates
     from novel.stages.chain import _record_design_candidates
     from novel.stages.common import design_rules, pack_prompt
@@ -393,10 +402,10 @@ def test_purchased_current_narrow_failure_accepts_current_full_fallback(tmp_path
     ctx, wires, transport, args = _prepare(tmp_path)
     repo = ctx.repository
     current = deepcopy(wires['design'])
-    wires['design']['protocol_version'] = 'stage4-design-v11'
-    prompt = pack_prompt(design_rules(protocol='stage4-design-v11'),
+    wires['design']['protocol_version'] = STAGE4_DESIGN_WIRE_PROTOCOL
+    prompt = pack_prompt(design_rules(protocol=STAGE4_DESIGN_WIRE_PROTOCOL),
                          brief=project_design_input(args['brief'], args['obligations'],
-                                                    protocol='stage4-design-v11'))
+                                                    protocol=STAGE4_DESIGN_WIRE_PROTOCOL))
     wire, _ref = ctx.ask('design', prompt, lambda w: list(inspect_design_candidate(w, **args).errors))
     inspection = inspect_design_candidate(wire, **args)
     assert inspection.passed
@@ -425,9 +434,9 @@ def test_purchased_current_narrow_failure_accepts_current_full_fallback(tmp_path
     assert result['reuse']['action'] == 'narrow_review'
     assert len(fallback.requests) == 2
     assert '【窄返修】' in fallback.requests[0]
-    assert re.search(r'"const"\s*:\s*"stage4-design-v11"', fallback.requests[0])
+    assert re.search(r'"const"\s*:\s*"stage4-design-v12"', fallback.requests[0])
     assert '【修订要求】' in fallback.requests[1]
-    assert re.search(r'"const"\s*:\s*"stage4-design-v11"', fallback.requests[1])
+    assert re.search(r'"const"\s*:\s*"stage4-design-v12"', fallback.requests[1])
     assert result['candidate_preflight']['passed'] is True
     assert repo.read_model('stage4/design/body_design.json').scenes
     assert repo.read_model('stage4/grounding/semantic_binding.json').entries

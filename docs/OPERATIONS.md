@@ -87,11 +87,11 @@ Stage5 body（逐章沿用／免费重验／局部恢复）和 Stage7 assemble�
 `--check-only` 核已购响应；新请求仍须原有的 `--yes` 与 `--allow-egress`
 授权，不在升级命令中购买。
 
-rc24→rc25 的 `identity-text-rc24-rc25` 升级用于身份引用文本协议。旧 Design、
-Hook Design、编译视图、正文及回执缺少逐次身份声明，不能靠重新扫描姓名或程序
-补标沿用；升级将这些产物归档，保留 Stage2 源材料、Preserve checkpoint、
-NameMap、已购回答和成本历史。随后从 `str06.stage4.body_design` 重建，当前协议
-的免费输入检查先于模型请求。旧候选可只读诊断，不能当作 v11 回答采用。
+rc24→rc25 的 `identity-text-rc24-rc25` 升级用于身份引用文本协议（历史升级边；存量根全部升级或只读归档后删除条件见
+REQUIREMENTS）。rc25→rc26 的 `naming-forward-rc25-rc26` 升级用于命名前移与普通正文主链：旧 Design、Hook
+Design、编译视图、正文及回执按协议字面量归档，保留 Stage2 源材料、Preserve
+checkpoint、NameMap、已购回答和成本历史；随后从 `str06.stage4.naming` 重建，当前协议
+的免费输入检查先于模型请求。旧候选可只读诊断，不能当作 v12 回答采用。
 在跑书页按原配置继续时会依次重建其余节点；本升级本身不发模型请求。
 若本次需要补充缺失称谓，应先从 Names owner 以源文证据登记到现有人物，
 再重建下游，不能让 Design 临时猜新称谓或身份。

@@ -41,7 +41,7 @@ from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
 from contracts.schema.context import WriterContext
 from contracts.schema.design import ChapterEntry, CharacterVoice
-from contracts.schema.state import SurfaceRelease, WithheldNameBinding
+from contracts.schema.state import NameWatch, SurfaceRelease, WithheldNameBinding
 
 __all__ = ['BookBrief', 'ChapterContinuity', 'ChapterIR', 'ChapterNavEntry',
            'ChapterWriterPacket', 'PacketBrief', 'PreviousChapterEnding',
@@ -138,7 +138,11 @@ class ChapterIR(StrictModel):
     rc10（R2）：`continuity` 必填——本章 entry＋上一章末场机械投影（章缝合
     契约的数据面；缺失即拒，不用空值冒充「已考虑承接」）。
     rc25：`withheld_bindings` 按本人释放面派生 (char_id, literal) 绑定；同形多人
-    可分别登记。显式引用按身份投影，旧裸文还须全书唯一归属证明；空表合法。
+    可分别登记。空表合法。
+    rc26（命名前移批次 C）：identity-text 协议退役——取消
+    `name_candidates`（候选覆盖硬闸），禁用字面与监视行合并为
+    `name_watch`（见 `contracts/schema/state.py::NameWatch`）；称谓材料
+    一律为目标字面（compile 经 NameMap 映射）。
     """
 
     chapter_ordinal: int = Field(ge=1)
@@ -151,11 +155,11 @@ class ChapterIR(StrictModel):
     released_surfaces: tuple[str, ...] = Field(default=(), min_length=0)
     #: 人物身份与已释放称谓同源；正文引用不能从扁平字面反猜 char_id。
     released_names: tuple[SurfaceRelease, ...]
-    #: 逐次语义声明的词法候选；命中只表示待解释，不表示泄漏。
-    name_candidates: tuple[str, ...]
-    #: 本章禁用字面（全部专名／带名 surface 与家族级构词 − 已释放称谓；
-    #: 机械 validator 的检查面，不渲染进 Writer 阅读面）。
-    withheld_literals: tuple[str, ...] = Field(default=(), min_length=0)
+    #: rc26（命名前移批 C）：姓名监视行——取代原 name_candidates 与
+    #: withheld_literals 两面。行内字面平铺是写手材料硬闸（旧名残留与未释放
+    #: 目标名不得进材料）；带归因的同一份字面在正文里只形成定位报告
+    #: （不阻断、不购返修）。
+    name_watch: tuple[NameWatch, ...] = Field(default=(), min_length=0)
     #: 本人未释放的个人姓名面及裸文唯一归属证明（不进阅读面）。
     withheld_bindings: tuple[WithheldNameBinding, ...] = Field(default=(), min_length=0)
     #: 显示面前缀（CS-H H3，RC-60；**章首**取位）：每人按**释放顺序**的已释放称谓，
@@ -194,7 +198,7 @@ class WriterBookIR(StrictModel):
     rc8（D2，B4）：ChapterIR 增章级验证材料；完整 IR 只作存储与审计面，
     运行时经 `ChapterWriterPacket` 按章投影。"""
 
-    contract_version: Literal['str06-rc25'] = 'str06-rc25'
+    contract_version: Literal['str06-rc26'] = 'str06-rc26'
     book_brief: BookBrief
     chapters: tuple[ChapterIR, ...] = Field(min_length=1)
     provenance: FreeProvenance | LlmProvenance | None = Field(

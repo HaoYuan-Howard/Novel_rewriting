@@ -28,14 +28,13 @@ from typing import Any, Iterable, Mapping, Sequence
 from pydantic import ValidationError
 
 from contracts.schema.design import (
-    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV9, DesignWireV10, DesignWireV11,
+    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV9, DesignWireV10, DesignWireV12,
 )
 from contracts.schema.grounding import ReconstructionBrief
 from contracts.schema.state import EffectDomain, StateAddress
-from novel.core.name_text import resolve_name_text
 
 
-# v10/v9 历史诊断解码集中在此（删除条件登记在 REQUIREMENTS）；新生成只走 v11。
+# v12/v10/v9 历史诊断解码集中在此（删除条件登记在 REQUIREMENTS）；新生成只走 v12。
 DESIGN_READ_PROTOCOLS = (STAGE4_DESIGN_WIRE_PROTOCOL, 'stage4-design-v10', 'stage4-design-v9')
 
 
@@ -58,7 +57,7 @@ class DesignReferenceError(ValueError):
         self.path = path
 
 
-def design_wire_model(wire: Any, brief: ReconstructionBrief | None = None) -> DesignWireV9 | DesignWireV10 | DesignWireV11:
+def design_wire_model(wire: Any, brief: ReconstructionBrief | None = None) -> DesignWireV9 | DesignWireV10 | DesignWireV12:
     """集中解码 v11 与历史 v10/v9；只展开引用字段，绝不替换自然语言文本。
 
     无 Brief 只验证传输形状（候选兼容性）；有 Brief 时返回使用 canonical
@@ -68,7 +67,7 @@ def design_wire_model(wire: Any, brief: ReconstructionBrief | None = None) -> De
     protocol = wire.get('protocol_version') if isinstance(wire, dict) else None
     if protocol == 'stage4-design-v9':
         return DesignWireV9.model_validate(wire)
-    model = (DesignWireV11 if protocol == STAGE4_DESIGN_WIRE_PROTOCOL
+    model = (DesignWireV12 if protocol == STAGE4_DESIGN_WIRE_PROTOCOL
              else DesignWireV10).model_validate(wire)
     if brief is None:
         return model
@@ -779,9 +778,6 @@ def design_patch_slice(
         elif isinstance(value, (list, tuple)):
             for child in value:
                 collect_addresses(child)
-        elif isinstance(value, str) and '[[name:' in value:
-            # 只消费作者已经声明的身份引用，不从自然语言、姓名候选或自由字段猜人。
-            involved.update(mention.char_id for mention in resolve_name_text(value).mentions)
 
     for scene_i, beat_i in sorted(selected_beats):
         beat = scene_beats(scene_i)[beat_i]
@@ -955,7 +951,6 @@ def design_patch_legal_values(
     *, known_char_ids: Iterable[str] = (), obligations: Mapping[str, Any] | None = None,
     knowledge_refs: Mapping[str, bool] | None = None, fact_lock_ids: Iterable[str] = (),
     expression_ids: Iterable[str] = (),
-    name_candidates: Iterable[str] = (),
     registered_surfaces: Mapping[str, set[str]] | None = None,
 ) -> dict[str, Any]:
     """窄返修请求的合法取值（RC-57）：可引用闭集，模型不得给出闭集外的字面。
@@ -972,7 +967,6 @@ def design_patch_legal_values(
                            in sorted((knowledge_refs or {}).items())},
         'detail_refs': sorted(detail_index(obligations)),
         'expression_ids': sorted(expression_ids),
-        'name_candidates': sorted(set(name_candidates)),
         'fact_lock_ids': sorted(fact_lock_ids),
         'surfaces': {char_id: sorted(faces)
                      for char_id, faces in sorted((registered_surfaces or {}).items())},

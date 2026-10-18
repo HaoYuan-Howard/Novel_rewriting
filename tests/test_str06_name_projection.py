@@ -8,6 +8,10 @@
 · 原字段、人物来源与内部身份不变；留痕可观测；同输入恒同输出；
 · Hook（rc16）：释放面由 Hook Design 自选（surface_releases，不是章释放表的投影），
   绑定表随 HookContext 携带、渲染期投影；条目返修的来源归因按原字段文本核对。
+
+rc26（命名前移批 C）：称谓材料一律目标字面——绑定表由
+`name_materials.withheld_target_bindings` 经目标字面表派生，普通正文无
+identity-text 标记，`[[` 残片由正文机械闸另拒（R-7.2）。
 """
 from copy import deepcopy
 
@@ -16,7 +20,7 @@ import pytest
 from contracts.schema.book_ir import ChapterIR
 from contracts.schema.source import NameStructure
 from contracts.schema.state import WithheldNameBinding
-from novel.core.name_materials import withheld_name_bindings
+from novel.core.name_materials import target_face_table, withheld_target_bindings
 from novel.stages.common import (
     hook_material_issues, hook_name_projections, project_withheld_names,
     render_hook_context,
@@ -24,7 +28,18 @@ from novel.stages.common import (
 from novel.stages.stage4.hook_context import compile_hook_context
 from novel.stages.stage5.hook_writer import build_hook_user_prompt
 from tests.factories import hook_wire_v3
+from tests.str06_facilities import name_map_of
 from tests.test_str06_hook import _characters
+
+
+def _faces(chars, structure=None) -> dict:
+    """给定 Characters（或改写后的名称结构）的目标字面表。
+
+    默认用全部保留替身（源字面与目标字面一致）；关心改名的测试自行给 name_map。
+    """
+    faces, _errors = target_face_table(
+        chars.name_structure if structure is None else structure, name_map_of(chars))
+    return faces
 
 
 def _structure() -> NameStructure:
@@ -34,9 +49,10 @@ def _structure() -> NameStructure:
 # ───────────────────────── 绑定表：只收已证明的完整登记称谓 ─────────────────────────
 
 def test_bindings_contain_only_registered_unique_name_bearing_surfaces():
-    structure = _structure()
+    chars = _characters()
+    faces = _faces(chars)
     bound = {b.literal: (b.char_id, b.enclosing)
-             for b in withheld_name_bindings(structure, {})}
+             for b in withheld_target_bindings(chars.name_structure, faces, {})}
     assert {k: v[0] for k, v in bound.items()} == {
         '陆大哥': 'fu_jun', '陆兄': 'fu_jun',
         '苏芸娘': 'yun_niang', '芸娘': 'yun_niang', '苏姑娘': 'yun_niang'}
@@ -45,26 +61,28 @@ def test_bindings_contain_only_registered_unique_name_bearing_surfaces():
     assert '陆郎' not in bound, '未登记表达（源文没有的称呼）不据相似性绑定'
     # 包含绑定字面的更长称谓预先算好：芸娘 ⊂ 苏芸娘；已释放的更长称谓同样计入。
     assert bound['芸娘'][1] == ('苏芸娘',)
-    longer = structure.model_copy(update={'people': {
-        **structure.people, 'fu_jun': structure.people['fu_jun'].model_copy(update={
-            'surface_forms': {**structure.people['fu_jun'].surface_forms, '陆大哥夫人': '{family}大哥夫人'}})}})
+    longer = chars.name_structure.model_copy(update={'people': {
+        **chars.name_structure.people, 'fu_jun': chars.name_structure.people['fu_jun'].model_copy(update={
+            'surface_forms': {**chars.name_structure.people['fu_jun'].surface_forms, '陆大哥夫人': '{family}大哥夫人'}})}})
     released_longer = {b.literal: b.enclosing for b in
-                       withheld_name_bindings(longer, {'fu_jun': ['陆大哥夫人']})}
+                       withheld_target_bindings(longer, _faces(chars, longer), {'fu_jun': ['陆大哥夫人']})}
     assert released_longer['陆大哥'] == ('陆大哥夫人',)
 
 
 def test_pure_appellations_are_excluded_and_ambiguous_names_require_explicit_identity():
     from contracts.schema.source import NameStructure
-    data = _structure().model_dump(mode='json')
+    chars = _characters()
+    data = chars.name_structure.model_dump(mode='json')
     # 多义：同一字面登记给两个人物（如两位沈公子）。
     data['people']['yun_niang']['surface_forms']['陆大哥'] = '{family}大哥'
     structure = NameStructure.model_validate(data)
-    bindings = withheld_name_bindings(structure, {})
+    faces = _faces(chars, structure)
+    bindings = withheld_target_bindings(structure, faces, {})
     shared = [b for b in bindings if b.literal == '陆大哥']
     assert {b.char_id for b in shared} == {'fu_jun', 'yun_niang'}
     assert all(not b.unmarked_unique for b in shared)
     assert all(b.literal != '夫君' for b in bindings), '纯称谓没有姓名部件，不进绑定'
-    assert withheld_name_bindings(None, {}) == (), '没有名称结构就没有可证明的绑定'
+    assert withheld_target_bindings(None, faces, {}) == (), '没有名称结构就没有可证明的绑定'
 
 
 def _ambiguous_appellation_characters():
@@ -84,17 +102,18 @@ def _ambiguous_appellation_characters():
 
 def test_name_bearing_surface_shared_with_a_pure_appellation_is_not_bound():
     chars = _ambiguous_appellation_characters()
-    bindings = withheld_name_bindings(chars.name_structure, {})
+    bindings = withheld_target_bindings(chars.name_structure, _faces(chars), {})
     bound = next(b for b in bindings if b.literal == '方丈')
     assert bound.char_id == 'fu_jun' and not bound.unmarked_unique
-    assert project_withheld_names('方丈', bindings=bindings, display={'fu_jun': '夫君'}) == ('方丈', ())
-    assert project_withheld_names('[[name:fu_jun|方丈]]', bindings=bindings,
-                                 display={'fu_jun': '夫君'})[0] == '[[name:fu_jun|夫君]]'
+    assert project_withheld_names('方丈', bindings=bindings,
+                                 display={'fu_jun': '夫君'}) == ('方丈', ())
+    assert project_withheld_names('方丈', bindings=bindings,
+                                  display={'fu_jun': '夫君'})[0] == '方丈'
 
 
 def test_chapter_ir_rejects_duplicate_binding_literals():
     with pytest.raises(ValueError, match='重复'):
-        _chapter(withheld=('陆大哥',), bindings=(WithheldNameBinding(
+        _chapter(watch=(), bindings=(WithheldNameBinding(
             literal='陆大哥', char_id='fu_jun', unmarked_unique=True),) * 2)
 
 
@@ -108,27 +127,51 @@ def test_binding_requires_strict_compiler_uniqueness_evidence(value):
 
 
 def test_identity_binding_keeps_other_owner_even_when_same_literal_is_released():
-    structure = _ambiguous_appellation_characters().name_structure
-    bindings = withheld_name_bindings(structure, {'yun_niang': ('方丈',)})
+    chars = _ambiguous_appellation_characters()
+    faces = _faces(chars)
+    bindings = withheld_target_bindings(chars.name_structure, faces, {'yun_niang': ('方丈',)})
     binding = next(b for b in bindings if b.literal == '方丈')
     assert binding.char_id == 'fu_jun' and not binding.unmarked_unique
-    original = '[[name:yun_niang|方丈]]与[[name:fu_jun|方丈]]，[[text|方丈]]。'
+    # rc26：普通正文没有身份声明区间——同形两人的字面不投影，交给字面检查如实报告。
+    original = '方丈与方丈，方丈。'
     projected, hits = project_withheld_names(
         original, bindings=bindings, display={'fu_jun': '夫君', 'yun_niang': '姑娘'})
-    assert projected == '[[name:yun_niang|方丈]]与[[name:fu_jun|夫君]]，[[text|方丈]]。'
-    assert [(h.char_id, h.literal) for h in hits] == [('fu_jun', '方丈')]
+    assert projected == original and hits == ()
     assert project_withheld_names('方丈', bindings=bindings, display={'fu_jun': '夫君'}) == ('方丈', ())
     # pair 唯一性：同形不同人物合法，同形同人物重复拒收。
     both = tuple(WithheldNameBinding(literal='同名', char_id=cid, unmarked_unique=False)
                  for cid in ('fu_jun', 'yun_niang'))
-    assert len(_chapter(withheld=('同名',), bindings=both).withheld_bindings) == 2
+    assert len(_chapter(watch=(), bindings=both).withheld_bindings) == 2
+
+
+def _green_graph():
+    """本文件自建的 body＋graph 夹具。
+
+    不依赖 `tests/test_str06_hook.py::_green_pair`——它的 `compile_hook_context`
+    调用尚未迁移到 rc26 的 `name_map` 必填参；这里按同一批事实就地装配。
+    """
+    from novel.stages.stage4.design import assemble_body_design
+    from novel.stages.stage4.hook import assemble_hook_design, publish_graph
+    from tests.str06_expression_inputs import sample_narration, sample_requirements
+    from tests.test_str06_hook import _body_wire, _hook_wire
+    chars = _characters()
+    known = set(chars.characters)
+    body, errors = assemble_body_design(
+        _body_wire(), known_char_ids=known, expression_requirements=sample_requirements(),
+        source_narration=sample_narration())
+    assert body is not None and not errors, errors
+    hook, errors = assemble_hook_design(
+        hook_wire_v3(_hook_wire()), body=body, known_char_ids=known,
+        name_projection=chars.name_projection(), name_structure=chars.name_structure,
+        faces=_faces(chars))
+    assert hook is not None and not errors, errors
+    return body, publish_graph(body, hook)
 
 
 def _identity_material_case(*, shared=True, fallback=False):
     """正式人物契约和 Design；甲面已释放，乙无面或只有纯称谓回落。"""
     from contracts.schema.source import CharactersArtifactV6
     from contracts.schema.state import SurfaceRelease
-    from tests.test_str06_hook import _green_pair
     names = {'yun_niang': '同名', 'fu_jun': '同名'} if shared else {
         'yun_niang': '白', 'fu_jun': '若', 'other': '白若'}
     people, chars = {}, {}
@@ -144,7 +187,7 @@ def _identity_material_case(*, shared=True, fallback=False):
         'characters': chars, 'initial_state': [],
         'name_structure': {'families': {'f_unused': {'literal': '郑', 'forms': []}},
                            'people': people}})
-    body, graph, _ = _green_pair()
+    body, graph = _green_graph()
     releases = (SurfaceRelease(char_id='yun_niang', surfaces=(names['yun_niang'],)),)
     if not shared:
         releases += (SurfaceRelease(char_id='fu_jun', surfaces=('若',)),)
@@ -160,120 +203,137 @@ def _identity_material_case(*, shared=True, fallback=False):
 
 
 @pytest.mark.parametrize('fallback', [False, True])
-def test_design_identity_permission_does_not_borrow_another_persons_same_surface(fallback):
+def test_design_material_gate_is_literal_based_and_watch_rows_stay_per_person(fallback):
+    """rc26（R-7.2）：写手材料硬闸按字面平铺判——同一字面已被任何人物释放即放行；
+    监视行仍按人物区分，未释放一方（含纯称谓回落面）留在自己的行里。"""
     from novel.stages.stage4.materials import validate_design_materials
     body, _graph, chars = _identity_material_case(fallback=fallback)
-    body = body.model_copy(update={'world_rules': ('[[name:fu_jun|同名]]出门。',)})
+    body = body.model_copy(update={'world_rules': ('同名出门。',)})
     issues = validate_design_materials(
         body, projection=chars.name_projection(), known_char_ids=set(chars.characters),
-        structure=chars.name_structure, characters=chars.core_view())
-    relevant = [i for i in issues if '同名' in str(i)]
-    assert bool(relevant) is not fallback, issues
-    if not fallback:
-        assert all(i.code == 'name_text_reference' for i in relevant)
+        structure=chars.name_structure, characters=chars.core_view(),
+        faces=_faces(chars), name_map=name_map_of(chars))
+    assert not [i for i in issues if i.location[-1] == '同名'], '同名已释放：字面判据放行'
+    if fallback:
+        assert [i.location[-1] for i in issues if i.location[-1] == '夫君'], (
+            'fu_jun 的纯称谓回落面本章未释放，同一把字面尺照样拦')
 
 
-def test_design_preserves_adjacent_identity_fragments_instead_of_inventing_third_person():
+def test_design_long_name_first_scan_does_not_invent_a_third_person():
+    """rc26：长名优先单遍扫描——相邻的两个已释放字面并置不衍生第三个人物，
+    更长的未释放字面也只报一次，不拆成短字面重复报告。"""
     from novel.stages.stage4.materials import validate_design_materials
     body, _graph, chars = _identity_material_case(shared=False)
-    original = '[[name:yun_niang|白]][[name:fu_jun|若]]同时举杯。'
-    for text, expected in ((original, False), ('[[name:other|白若]]同时举杯。', True)):
+    for text, expected in (('白若同时举杯。', {'白若'}), ('白与若同时举杯。', set())):
         candidate = body.model_copy(update={'world_rules': (text,)})
         issues = validate_design_materials(
             candidate, projection=chars.name_projection(), known_char_ids=set(chars.characters),
-            structure=chars.name_structure, characters=chars.core_view())
-        assert any('白若' in str(i) for i in issues) is expected, issues
-    assert body.world_rules != (original,), 'validator 不改作者原字段'
+            structure=chars.name_structure, characters=chars.core_view(),
+            faces=_faces(chars), name_map=name_map_of(chars))
+        assert {i.location[-1] for i in issues} == expected, issues
+    assert body.world_rules != ('白若同时举杯。',), 'validator 不改作者原字段'
 
 
 @pytest.mark.parametrize('fallback', [False, True])
 def test_hook_context_identity_permission_and_projection_follow_own_release(fallback):
+    """rc26：Hook 释放面自选；写手材料硬闸按字面平铺判（R-7.2），
+    有无纯称谓回落面决定未释放字面是否被投影。"""
     from contracts.schema.state import SurfaceRelease
     _body, graph, chars = _identity_material_case(fallback=fallback)
     hook = graph.hook.model_copy(update={
         'pov': graph.hook.pov.model_copy(update={'person': 'third'}), 'concealed': (),
         'surface_releases': (SurfaceRelease(char_id='yun_niang', surfaces=('同名',)),),
-        'local_focus': '[[name:yun_niang|同名]]留下，[[name:fu_jun|同名]]出门。'})
+        'local_focus': '同名留下，同名出门。'})
     graph = graph.model_copy(update={'hook': hook})
     context, errors = compile_hook_context(
         graph, chars.name_projection(), chars.name_structure,
-        characters=chars.core_view(), total_budget=2000)
+        characters=chars.core_view(), total_budget=2000,
+        name_map=name_map_of(chars))
     assert context is not None and not errors, errors
     issues = hook_material_issues(context, internal_ids=set())
-    relevant = [i for i in issues if i.literal == '同名']
-    assert bool(relevant) is not fallback, issues
+    assert not [i for i in issues if i.literal == '同名'], '同名已释放：字面判据放行'
+    assert any(b.literal == '同名' and b.char_id == 'fu_jun'
+               for b in context.withheld_bindings), '未释放一方的绑定仍在表内'
+    assert '同名留下，同名出门' in render_hook_context(context), '同形多人的字面不投影'
+    watched = {row.char_id: row.literals for row in context.name_watch}
     if fallback:
-        assert '同名留下，夫君出门' in render_hook_context(context)
-        assert any(b.literal == '同名' and b.char_id == 'fu_jun' and not b.unmarked_unique
-                   for b in context.withheld_bindings)
+        assert '夫君' in watched.get('fu_jun', ()), '纯称谓回落面未释放，同样进监视行'
     else:
-        assert all(i.code == 'name_text_reference' and i.char_id == 'fu_jun' for i in relevant)
+        assert '夫君' not in watched.get('fu_jun', ())
 
 
 def test_family_expression_never_projects_to_personal_fallback_without_permission():
+    from contracts.schema.state import NameWatch
     from novel.core.material_trace import MaterialPart
+    from novel.core.name_residue import watch_literals
     from novel.stages.common import positive_material_issues
     chars = _characters()
-    bindings = withheld_name_bindings(chars.name_structure, {})
-    original = '[[name:fu_jun|陆家]]旧事。'
+    bindings = withheld_target_bindings(chars.name_structure, _faces(chars), {})
+    original = '陆家旧事。'
     projected, hits = project_withheld_names(original, bindings=bindings, display={'fu_jun': '夫君'})
     assert projected == original and not hits
     denied = positive_material_issues(
-        {'family': MaterialPart(projected)}, released=(), withheld=('陆家',), internal_ids=(),
-        name_permissions={'fu_jun': ('夫君',)})
-    assert [i.code for i in denied] == ['name_text_reference']
+        {'family': MaterialPart(projected)}, released=(),
+        withheld=watch_literals((NameWatch(code='old_name_residue', char_id='fu_jun',
+                                          literals=('陆家',)),)),
+        internal_ids=())
+    assert [i.code for i in denied] == ['positive_material_leak']
     allowed = positive_material_issues(
-        {'family': MaterialPart(projected)}, released=('陆家',), withheld=(), internal_ids=(),
-        name_permissions={'fu_jun': ('夫君', '陆家')})
+        {'family': MaterialPart(projected)}, released=('陆家',), withheld=(), internal_ids=())
     assert allowed == ()
 
 
-def test_writer_renderer_uses_identity_bindings_and_keeps_released_and_ordinary_faces():
-    from contracts.schema.state import SurfaceRelease
-    from novel.stages.common import project_chapter_packet, render_chapter_packet, writer_material_issues
-    from tests.test_str06_r10b_writer_packet import _ir
-    _body, _binding, _plan, ir = _ir()
-    packet = project_chapter_packet(ir, 1)
-    _body, _graph, chars = _identity_material_case(fallback=True)
-    released = {'yun_niang': ('同名',)}
-    chapter = packet.chapter.model_copy(update={
-        'purpose': '[[name:yun_niang|同名]]留下，[[name:fu_jun|同名]]出门，[[text|同名]]为普通义。',
-        'released_names': (SurfaceRelease(char_id='yun_niang', surfaces=('同名',)),),
-        'released_surfaces': ('同名',), 'withheld_literals': (),
-        'withheld_bindings': withheld_name_bindings(chars.name_structure, released),
-        'display_prefix': (SurfaceRelease(char_id='yun_niang', surfaces=('同名',)),),
-        'display_fallback': (SurfaceRelease(char_id='fu_jun', surfaces=('夫君',)),)})
-    packet = packet.model_copy(update={'chapter': chapter})
+def test_writer_renderer_projects_only_withheld_literals_and_keeps_released_faces():
+    """rc26：渲染期只投影仍被扣留的完整登记称谓；已释放字面（含家族构词）
+    先认领保护，普通同形词不参与姓名推断。"""
+    from novel.stages.common import (
+        render_chapter_packet, project_chapter_packet, writer_material_issues,
+        writer_name_projections,
+    )
+    from novel.stages.stage4 import inspect_body_materials
+    from tests.test_str06_material_repair import _conflict
+    body, binding, brief, chars = _conflict(ch1_has_allowed_surface=True)
+    brief = brief.model_copy(update={'propositions': (
+        brief.propositions[0].model_copy(update={
+            'statement': '陆大哥在陆家查访旧案，路人甲围观'}),)})
+    view = inspect_body_materials(body, binding, brief, chars, budget=4000,
+                                  length_band=(0.6, 1.3), name_map=name_map_of(chars))
+    packet = project_chapter_packet(view.ir, 1)
     text = render_chapter_packet(packet)
-    assert '同名留下，夫君出门，同名为普通义' in text
-    assert not any(i.literal == '同名' for i in writer_material_issues(packet, internal_ids=()))
+    assert '夫君在陆家查访旧案，路人甲围观' in text
+    assert {(r['literal'], r['replacement']) for r in writer_name_projections(packet)} == {
+        ('陆大哥', '夫君')}, '已释放的家族构词与普通词不被投影'
+    assert writer_material_issues(packet, internal_ids=set()) == ()
 
 
 def test_hook_candidate_presentation_replaces_hidden_source_material_for_preflight():
     from novel.stages.stage4.preflight import hook_candidate_material_errors
-    from tests.test_str06_hook import _green_pair, _hook_wire
+    from tests.test_str06_hook import _hook_wire
     from tests.test_str06_r10b_writer_packet import _binding, _design
-    body, _graph, _context = _green_pair()
+    body, _graph = _green_graph()
     scenes = list(body.scenes)
     beats = list(scenes[1].beats)
-    beats[0] = beats[0].model_copy(update={'event': '[[name:fu_jun|陆大哥]]翻出后墙。'})
+    beats[0] = beats[0].model_copy(update={'event': '陆大哥翻出后墙。'})
     scenes[1] = scenes[1].model_copy(update={'beats': tuple(beats)})
     body = body.model_copy(update={'scenes': tuple(scenes)})
     wire = hook_wire_v3(_hook_wire())
     binding = _binding(_design())
-    visible = hook_candidate_material_errors(wire, body=body, chars=_characters(), binding=binding)
+    chars = _characters()
+    visible = hook_candidate_material_errors(
+        wire, body=body, chars=chars, binding=binding, name_map=name_map_of(chars))
     assert not any('陆大哥' in str(error) for error in visible), visible
     wire['materials'][0]['presentation'] = None
-    exposed = hook_candidate_material_errors(wire, body=body, chars=_characters(), binding=binding)
+    exposed = hook_candidate_material_errors(
+        wire, body=body, chars=chars, binding=binding, name_map=name_map_of(chars))
     assert any('陆大哥' in str(error) and error.code == 'hook_design_material_exposure'
                for error in exposed), exposed
 
 
-def _chapter(*, withheld, bindings):
+def _chapter(*, watch, bindings):
     from tests.test_str06_r10b_writer_packet import _ir
     _body, _binding, _plan, ir = _ir()
     base = ir.chapters[0].model_dump(mode='python')
-    base.update(withheld_literals=withheld, withheld_bindings=bindings)
+    base.update(name_watch=watch, withheld_bindings=bindings)
     return ChapterIR.model_validate(base)
 
 
@@ -375,6 +435,7 @@ def test_projection_is_pure_deterministic_and_idempotent():
 
 def test_compiler_keeps_ambiguous_appellations_for_material_validation():
     """RC-41：真实编译与材料判据不能把多义源命题静默改为另一人物的事实。"""
+    from novel.core.name_residue import watch_literals
     from novel.stages.common import (
         build_writer_packet, project_chapter_packet, writer_name_projections,
     )
@@ -386,10 +447,11 @@ def test_compiler_keeps_ambiguous_appellations_for_material_validation():
         brief.propositions[0].model_copy(update={'statement': '方丈在佛堂念经'}),)})
     before = [item.model_dump_json() for item in (body, binding, brief, chars)]
     view = inspect_body_materials(body, binding, brief, chars,
-                                 budget=4000, length_band=(0.6, 1.3))
+                                 budget=4000, length_band=(0.6, 1.3),
+                                 name_map=name_map_of(chars))
     assert not view.errors and view.ir is not None
     packet = project_chapter_packet(view.ir, 1)
-    assert '方丈' in packet.chapter.withheld_literals
+    assert '方丈' in watch_literals(packet.chapter.name_watch)
     assert all(not b.unmarked_unique for b in packet.chapter.withheld_bindings if b.literal == '方丈')
     assert any('方丈在佛堂念经' in line for line in build_writer_packet(packet).must_realize)
     assert not any(p['literal'] == '方丈' for p in writer_name_projections(packet))
@@ -398,8 +460,11 @@ def test_compiler_keeps_ambiguous_appellations_for_material_validation():
     assert [item.model_dump_json() for item in (body, binding, brief, chars)] == before
 
 
-def test_guard_only_projection_reaches_compile_report_and_survives_restart(tmp_path):
-    """RC-40/41：禁区投影经真实 compiler 发布、落报告并在重启读取；禁区仍不验词。"""
+def test_guard_only_reaches_compile_report_and_survives_restart(tmp_path):
+    """RC-40/41：原文未回答禁区经真实 compiler 发布、落报告并在重启读取；禁区仍不验词。
+
+    rc26：禁区行的悬念文本是 stage2 源证据（旧名按原样送达，不投影）——绑定表
+    只覆盖目标字面表的未释放面；旧名残留由正文定位报告负责（R-7.9）。"""
     from novel.stages.chain import run_workflow
     from novel.stages.common import (
         build_writer_packet, project_chapter_packet, writer_material_issues,
@@ -411,6 +476,7 @@ def test_guard_only_projection_reaches_compile_report_and_survives_restart(tmp_p
     from tests.test_str06_hook import _full_chain_wires
 
     wires = _full_chain_wires()
+    wires['design']['protocol_version'] = 'stage4-design-v12'
     question = '陆大哥当年去了哪里'
     wires['ch01']['beats'][0]['loops'] = [
         {'ref': 'q_where', 'op': 'open', 'question': question}]
@@ -432,18 +498,15 @@ def test_guard_only_projection_reaches_compile_report_and_survives_restart(tmp_p
     reopened = Str06Repository(repo.root)
     ir = reopened.read_model('stage4/ir/writer_book_ir.json')
     packet = project_chapter_packet(ir, 1)
-    assert any('夫君当年去了哪里' in line for line in build_writer_packet(packet).guard_only)
-    expected = {'partition': 'guard_only', 'literal': '陆大哥',
-                'char_id': 'fu_jun', 'replacement': '夫君'}
-    assert expected in writer_name_projections(packet), '禁区实际投影同样必须留痕'
+    assert any(question in line for line in build_writer_packet(packet).guard_only)
+    assert not [p for p in writer_name_projections(packet)
+                if p['partition'] == 'guard_only'], '禁区行不投影、无留痕'
     persisted = reopened.inspect('stage4/acceptance/guard/report.json')
     assert persisted == report
-    assert {'chapter_ordinal': 1, **expected} in persisted['name_projections']
-    # 禁区投影缺失与禁区验词是两个边界：即使保留完整未释放称谓，也不扩大扫描面。
-    no_binding = packet.model_copy(update={'chapter': packet.chapter.model_copy(
-        update={'withheld_bindings': ()})})
-    assert any(question in line for line in build_writer_packet(no_binding).guard_only)
-    assert writer_material_issues(no_binding, internal_ids=set()) == ()
+    assert not [p for p in persisted['name_projections']
+                if p.get('partition') == 'guard_only']
+    # 禁区验词边界：即使保留完整旧名，也不扩大扫描面（禁区不算正向材料）。
+    assert writer_material_issues(packet, internal_ids=set()) == ()
 
 
 def test_writer_packet_projects_scene_and_book_level_lines_and_keeps_sources_original():
@@ -458,7 +521,8 @@ def test_writer_packet_projects_scene_and_book_level_lines_and_keeps_sources_ori
     brief = brief.model_copy(update={'propositions': (
         brief.propositions[0].model_copy(update={'statement': statement}),
         *brief.propositions[1:])})
-    view = inspect_body_materials(body, binding, brief, chars, budget=4000, length_band=(0.6, 1.3))
+    view = inspect_body_materials(body, binding, brief, chars, budget=4000, length_band=(0.6, 1.3),
+                                  name_map=name_map_of(chars))
     packet = project_chapter_packet(view.ir, 1)
     assert [b.literal for b in packet.chapter.withheld_bindings] == sorted(
         b.literal for b in packet.chapter.withheld_bindings)
@@ -483,7 +547,8 @@ def test_chapter_identity_binds_projection_inputs_and_rendered_text():
     from tests.test_str06_material_repair import _conflict
     from novel.stages.stage4 import inspect_body_materials
     body, binding, brief, chars = _conflict(ch1_has_allowed_surface=True)
-    view = inspect_body_materials(body, binding, brief, chars, budget=4000, length_band=(0.6, 1.3))
+    view = inspect_body_materials(body, binding, brief, chars, budget=4000, length_band=(0.6, 1.3),
+                                  name_map=name_map_of(chars))
     packet = project_chapter_packet(view.ir, 1)
     base = chapter_identities(packet)
     no_binding = packet.model_copy(update={'chapter': packet.chapter.model_copy(
@@ -513,35 +578,45 @@ def test_unregistered_alias_is_refused_for_lacking_registration_not_for_zero_occ
 
 
 def test_compiler_never_releases_a_full_name_early_to_clear_a_conflict(tmp_path):
-    """RC-43＋CS-H H3：Design 自有文本在第1章使用尚未释放的『陆大哥』——靠**显示面
+    """RC-43＋CS-H H3：Design 自有文本在第1章使用尚未释放的完整姓名——靠**显示面
     投影**（回落纯称谓『夫君』）送达，不靠提前释放；compiler 不自动提前释放，
-    候选与已构造的释放表保持 Design 原声明。"""
+    候选与已构造的释放表保持 Design 原声明。
+
+    rc26：Design 自有文本是普通**目标**文本——字面取自目标字面表；释放声明仍是
+    源侧声明，由 compile 经 NameMap 映射（`book_ir.map_target_faces`）。
+    """
     from copy import deepcopy
+    from novel.core.name_materials import target_face_table
     from novel.stages.common import project_chapter_packet, render_chapter_packet
     from novel.stages.stage4 import (
         chapter_surface_releases, inspect_body_materials, inspect_design_candidate,
     )
     from tests.test_str06_candidate_preflight import _prepare
     _, wires, _, args = _prepare(tmp_path)
+    faces, _face_errors = target_face_table(
+        args['chars'].name_structure, args['name_map'])
+    big_brother, elder_brother = faces['fu_jun']['陆大哥'], faces['fu_jun']['陆兄']
     wire = wires['design']
     wire['scenes'][0]['beats'][0]['ev'] = (
-        '[[name:fu_jun|陆大哥]]拜堂成亲，[[name:fu_jun|陆兄]]向娘子许下归期')
+        f'{big_brother}拜堂成亲，{elder_brother}向娘子许下归期')
     wire['scenes'][1]['beats'][0]['release'] = [
         {'char_id': 'fu_jun', 'surfaces': ['陆大哥']}]
     before = deepcopy(wire)
     view = inspect_design_candidate(wire, **args)
-    assert not any('陆大哥' in e for e in view.errors), '第1章文本经投影送达，不再以泄漏报出'
+    assert not any(big_brother in e or elder_brother in e for e in view.errors), \
+        '第1章文本经投影送达，不再以泄漏报出'
     assert wire == before, '候选 wire 不被改写'
     assert view.body is not None
+    # 释放声明是源侧声明：compiler 不自动提前释放，也不把源字面搬进第1章。
     assert '陆大哥' not in chapter_surface_releases(view.body, 1, args['chars'].name_structure)
     assert '陆大哥' in chapter_surface_releases(view.body, 2, args['chars'].name_structure), \
         '释放位置保持 Design 原声明（第2章）'
     packet = project_chapter_packet(inspect_body_materials(
         view.body, view.binding, args['brief'], args['chars'],
         budget=args['constraints'].total_length_budget,
-        length_band=args['length_band']).ir, 1)
+        length_band=args['length_band'], name_map=args['name_map']).ir, 1)
     prose_view = render_chapter_packet(packet)
-    assert '陆大哥' not in prose_view, '第1章写手面经显示面投影（RC-60 回落）'
+    assert big_brother not in prose_view, '第1章写手面经显示面投影（RC-60 回落）'
     assert '夫君拜堂成亲，夫君向娘子许下归期' in prose_view, '两次提及与行动按显示面送达'
 
 
@@ -562,10 +637,12 @@ def _hook_context(**hook_over):
     assert body is not None and not errors, errors
     hook, errors = assemble_hook_design(
         hook_wire_v3(_hook_wire(**hook_over)), body=body, known_char_ids=known,
-        name_projection=chars.name_projection(), name_structure=chars.name_structure)
+        name_projection=chars.name_projection(), name_structure=chars.name_structure,
+        faces=_faces(chars))
     assert hook is not None and not errors, errors
     context, errors = compile_hook_context(
-        publish_graph(body, hook), chars.name_projection(), chars.name_structure, total_budget=2000)
+        publish_graph(body, hook), chars.name_projection(), chars.name_structure, total_budget=2000,
+        name_map=name_map_of(chars))
     assert context is not None and not errors, errors
     return context
 
@@ -630,12 +707,12 @@ def test_hook_unbound_literals_stay_for_the_leak_check_with_original_field_sourc
     # canonical 旧未标记材料的集中只读边界；当前作者协议的未登记/未声明词先被
     # 作者输入闸拒绝。此处保留针对历史裸面投影与来源归因的独立反例。
     context = context.model_copy(update={'local_focus': (
-        '陆郎与[[name:fu_jun|陆家]]的旧事不露，[[name:fu_jun|陆大哥]]身份存疑。')})
+        '陆郎与陆家的旧事不露，陆大哥身份存疑。')})
     prompt = render_hook_context(context)
     assert '陆郎' in prompt and '陆家' in prompt and '陆大哥' in prompt
     issues = hook_material_issues(context, internal_ids=set())
     assert {i.literal for i in issues} == {'陆家', '陆大哥'}, '不把未知陆郎里的姓氏子串伪报为泄漏'
-    assert all(i.code == 'name_text_reference' for i in issues)
+    assert all(i.code == 'positive_material_leak' for i in issues)
     issue = next(i for i in issues if i.literal == '陆家')
     assert any(s.kind == 'hook' and s.field == 'local_focus'
                and s.text == context.local_focus for s in issue.sources), \
@@ -672,10 +749,11 @@ def test_hook_forbidden_lines_project_but_never_join_the_leak_check():
         forbidden_reveals=[{'ref': {'scene': 'sc01', 'beat': 'b01'}}])
     hook, errors = assemble_hook_design(
         hook_wire_v3(wire), body=body, known_char_ids=known,
-        name_projection=chars.name_projection())
+        name_projection=chars.name_projection(), faces=_faces(chars))
     assert hook is not None and not errors, errors
     context, errors = compile_hook_context(
-        publish_graph(body, hook), chars.name_projection(), chars.name_structure, total_budget=2000)
+        publish_graph(body, hook), chars.name_projection(), chars.name_structure, total_budget=2000,
+        name_map=name_map_of(chars))
     assert context is not None and not errors, errors
     assert '事件不得提前揭示：夫君拜堂成亲' in render_hook_context(context)
     assert {'field': 'forbidden_reveals/0', 'literal': '陆大哥',
@@ -695,7 +773,7 @@ def test_hook_forbidden_lines_project_but_never_join_the_leak_check():
 def test_hook_projection_is_deterministic_and_keeps_the_context_untouched():
     context = _hook_context(
         concealed=[], surface_releases=_released_both(),
-        local_focus='从深夜冷开倒叙入新婚夜旧约，[[name:fu_jun|陆大哥]]的身份不露。')
+        local_focus='从深夜冷开倒叙入新婚夜旧约，陆大哥的身份不露。')
     before = context.model_dump_json()
     assert hook_name_projections(context) == hook_name_projections(context)
     assert render_hook_context(context) == render_hook_context(context)
@@ -735,9 +813,10 @@ def test_hook_projection_reaches_the_compile_guard_report(tmp_path):
     from tests.test_str06_hook import _full_chain_wires
 
     wires = _full_chain_wires()
+    wires['design']['protocol_version'] = 'stage4-design-v12'
     wires['hook_design'].update(
         concealed=[], surface_releases=_released_both(),
-        local_focus='从深夜冷开倒叙入新婚夜旧约，[[name:fu_jun|陆大哥]]的身份不露。')
+        local_focus='从深夜冷开倒叙入新婚夜旧约，顾大哥的身份不露。')
 
     def no_paid_call(*args, **kwargs):
         raise AssertionError('Stage4 验证不调用正文写手')
@@ -748,11 +827,11 @@ def test_hook_projection_reaches_the_compile_guard_report(tmp_path):
                  through='stage4')
     report = repo.inspect('stage4/acceptance/guard/report.json')
     assert not report['guard_errors']
-    expected = {'field': 'local_focus', 'literal': '陆大哥',
+    expected = {'field': 'local_focus', 'literal': '顾大哥',
                 'char_id': 'fu_jun', 'replacement': '夫君'}
     assert expected in report['hook_name_projections'], '楔子投影留痕可观测'
     reopened = Str06Repository(repo.root)
     assert reopened.inspect('stage4/acceptance/guard/report.json') == report
     context = reopened.read_model('stage4/context/hook/hook.json')
-    assert context.contract_version == 'str06-rc25'
-    assert '陆大哥' in context.local_focus and '陆大哥' not in build_hook_user_prompt(context)
+    assert context.contract_version == 'str06-rc26'
+    assert '顾大哥' in context.local_focus and '顾大哥' not in build_hook_user_prompt(context)

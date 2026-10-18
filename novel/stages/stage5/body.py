@@ -22,8 +22,9 @@ Machine 审计摘要（`machine_view_sha256`，仅审计不触发重购）；不
 与前文链（`R-7.4` 改写）。
 
 【边界】
-wire 以身份引用与普通义片段声明同形文本，compiler 解码为纯正文与两类坐标表，
-回执分别封存声明供免费重验和 Stage7 按身份改名；语义声明自身保持 unverified。
+rc26（命名前移批次 C）：普通正文主链——写手直接输出目标姓名成文，不再有身份文本标记、
+坐标表与末端改名；回执 prose_sha256 绑定最终正文字节。疑似旧名残留/提前揭名只形成定位报告
+（调用方落 runtime 审计面），不阻断、不购修。
 本模块不落盘（正文/回执/attempt 记录的写入归调用方的 repository 编排）；
 不从正文反抽 semantic delta；章包错误回 Stage4 重编译，付费状态未知保持阻断。
 """
@@ -34,8 +35,7 @@ import json
 from typing import Any, NamedTuple
 
 from contracts.schema.receipt import ChapterLengthDisclosure, ChapterReceipt
-from contracts.schema.name_text import NameMention, NameTextSpan
-from novel.core.name_text import ResolvedNameText, resolve_name_text
+from novel.core.name_residue import NameResidue, name_residues, residue_report
 from novel.stages.common import (
     BODY_PARAGRAPH_REPAIR_SYSTEM, RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
     ChapterWriterPacket, chapter_identities, render_chapter_packet,
@@ -85,17 +85,9 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
-def resolve_chapter_prose(text: str, packet: ChapterWriterPacket) -> ResolvedNameText:
-    """章级身份声明的唯一 compiler 入口，采用与只读干跑共同消费。"""
-    return resolve_name_text(
-        text, surfaces={row.char_id: row.surfaces for row in packet.chapter.released_names},
-        candidate_literals=(*packet.chapter.name_candidates, *packet.chapter.withheld_literals,
-                            *packet.chapter.released_surfaces))
-
-
 def _wire_chars(packet: ChapterWriterPacket, text: str) -> int:
-    """协议标记不计入篇幅，计数始终针对确定性解码后的纯正文。"""
-    return count_body_chars(resolve_chapter_prose(text, packet).text)
+    """篇幅计数（rc26：普通正文无协议标记，直接按非空白字符计）。"""
+    return count_body_chars(text)
 
 
 def _repair_identity(packet: ChapterWriterPacket, previous: str) -> str:
@@ -124,10 +116,9 @@ def _paragraph_repair_prompt(previous: str, errors: list[str], *,
             '\n当前稿按行编号列出；输出 JSON（不要围栏、不要解释）：'
             '{"paragraphs":[{"index":行号,"text":"该行替换后的全文"}]}——'
             '只输出需要替换的行，未列出的行保持原样。人物称谓仍须使用'
-            ' [[name:人物ID|本章已释放称谓]]，普通同形词使用 [[text|普通片段]]。'
-            '\n【合法身份引用】\n' + json.dumps(
-                {row.char_id: list(row.surfaces) for row in packet.chapter.released_names},
-                ensure_ascii=False, sort_keys=True)
+            '本章已释放的目标姓名字面（普通文本，不加任何标记）。'
+            '\n【可用称谓】\n' + '、'.join(sorted(
+                {s for row in packet.chapter.released_names for s in row.surfaces}))
             + '\n〔当前稿〕\n' + numbered)
 
 
@@ -291,19 +282,20 @@ def write_chapter(
                     disclosed=disclosed, ref=chosen_ref)
 
 
+def chapter_name_residues(packet: ChapterWriterPacket, prose: str) -> tuple[NameResidue, ...]:
+    """本章正文的疑似姓名残留定位（rc26 披露面；不阻断、不购返修）。
+
+    监视行由 compile 派生并随章包携带（`ChapterIR.name_watch`）：改名人物的
+    源旧字面与本章未释放的人物目标字面。命中只定位归因——普通同形词可能
+    出现，报告不宣称语义泄漏。
+    """
+    return name_residues(prose, watch=packet.chapter.name_watch)
+
+
 def _outcome(packet: ChapterWriterPacket, prose: str, identity: str,
              attempts: list[ChapterAttempt],
              low: int, high: int, target: int, *, disclosed: bool,
-             ref=None, name_mentions: tuple[NameMention, ...] | None = None,
-             non_name_spans: tuple[NameTextSpan, ...] | None = None) -> ChapterOutcome:
-    if name_mentions is None and non_name_spans is None:
-        resolved = resolve_chapter_prose(prose, packet)
-        if resolved.errors:
-            raise ValueError('通过校验的正文无法解码身份引用')
-        prose, name_mentions, non_name_spans = (
-            resolved.text, resolved.mentions, resolved.non_name_spans)
-    if name_mentions is None or non_name_spans is None:
-        raise ValueError('正式正文必须带人物提及及普通义声明')
+             ref=None) -> ChapterOutcome:
     count = count_body_chars(prose)
     identities = chapter_identities(packet)
     receipt = ChapterReceipt(
@@ -312,7 +304,6 @@ def _outcome(packet: ChapterWriterPacket, prose: str, identity: str,
         validation_sha256=identities.validation_sha256,
         machine_view_sha256=identities.machine_view_sha256,
         prose_sha256=sha256_text(prose),
-        name_mentions=name_mentions, non_name_spans=non_name_spans,
         request_identity=identity or 'unidentified',
         protocol_version=WRITER_PROTOCOL_VERSION,
         renderer_version=RENDERER_VERSION, validator_version=BODY_VALIDATOR_VERSION,
@@ -338,13 +329,10 @@ def recheck_chapter(packet: ChapterWriterPacket, prose: str,
             or receipt.writer_view_sha256 != identities.writer_view_sha256
             or receipt.prose_sha256 != sha256_text(prose)):
         return None
-    errors = chapter_prose_validator(
-        packet, name_mentions=receipt.name_mentions,
-        non_name_spans=receipt.non_name_spans)(prose)
+    errors = chapter_prose_validator(packet)(prose)
     if errors and not (receipt.length_disclosed and all(str(e).startswith('[length_band]') for e in errors)):
         return None
     contract = packet.realization_contract
     return _outcome(packet, prose, receipt.request_identity, [],
                     contract.band_low, contract.band_high, contract.target_chars,
-                    disclosed=bool(errors), name_mentions=receipt.name_mentions,
-                    non_name_spans=receipt.non_name_spans).receipt
+                    disclosed=bool(errors)).receipt

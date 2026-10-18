@@ -27,15 +27,16 @@ from novel.stages.stage4 import (
     hook_combination_errors,
 )
 from novel.stages.stage5 import (
-    chapter_prose_validator, context_sha256, resolve_chapter_prose, resolve_hook_prose,
+    chapter_prose_validator, context_sha256,
     validate_hook_prose, sha256_text,
 )
 from novel.stages.stage7 import (
     assemble_delivery, chapter_access, verify_chapter_receipts,
 )
 from novel.stages.stage4 import (
-    compile_name_map, compile_bound_replacements, name_map_content_sha256,
+    compile_name_map, name_map_content_sha256,
 )
+from novel.core.name_materials import target_face_table
 from novel.stages.common import (
     chapter_identities, project_chapter_packet, validate_writer_materials, validate_hook_materials,
     material_identities,
@@ -193,9 +194,12 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                                    length_band=length_band, book_title=book_title)
         binding = repository.read_model('stage4/grounding/semantic_binding.json')
         body = repository.read_model('stage4/design/body_design.json')
+        name_map = repository.read_model('stage4/naming/name_map.json')
+        faces, _face_errors = target_face_table(chars.name_structure, name_map)
         if owner == 'hook_design':
             hook, errors = assemble_hook_design(candidate, body=body, known_char_ids=set(chars.characters),
-                                                name_projection=projection, name_structure=chars.name_structure)
+                                                name_projection=projection,
+                                                name_structure=chars.name_structure, faces=faces)
             if hook is not None:
                 graph = publish_graph(body, hook)
         else:
@@ -209,11 +213,13 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                                                         chars.name_structure, kp_statements,
                                                         world_statements,
                                                         characters=chars.core_view(),
-                                                        total_budget=budget)
+                                                        total_budget=budget,
+                                                        name_map=name_map)
         errors.extend(hook_errors)
         if plan is not None and hook_context is not None:
             inspection = inspect_body_materials(graph, binding, brief, chars, budget=budget,
-                                               length_band=length_band, book_title=book_title)
+                                               length_band=length_band, book_title=book_title,
+                                               name_map=name_map)
             identities = material_identities(graph, binding, chars)
             errors.extend(validate_hook_materials(hook_context, internal_ids=identities))
             errors.extend(inspection.errors)
@@ -250,6 +256,7 @@ def _design_preview(repository, candidate, checkpoint, brief, chars, *, budget,
                 # 组合检查，内部句柄闭集取 material_identities 全集。
                 hook_errors = hook_combination_errors(
                     hook, body=inspection.body, binding=inspection.binding, chars=chars,
+                    name_map=repository.read_model('stage4/naming/name_map.json'),
                     kp_statements={p.kp_id: p.statement for p in brief.propositions},
                     world_statements={w.constraint_id: w.statement
                                       for w in brief.book_constraints},
@@ -283,21 +290,15 @@ def _delivery_preview(repository, owner, candidate, chars) -> dict:
     if owner == 'hook_writer':
         hook_prose = candidate['prose']
         errors = validate_hook_prose(hook_prose, hook)
-        resolved = resolve_hook_prose(hook_prose, hook)
-        hook_prose = resolved.text
         hook_receipt = {**hook_receipt, 'prose_sha256': sha256_text(hook_prose),
                         'validator_version': HOOK_VALIDATOR_VERSION,
                         'mechanical_checks': list(HOOK_MECHANICAL_CHECKS),
-                        'name_mentions': [row.model_dump() for row in resolved.mentions],
-                        'non_name_spans': [row.model_dump() for row in resolved.non_name_spans],
                         'hook_context_sha256': context_sha256(hook), 'status': 'accepted' if not errors else 'rejected'}
     elif owner.startswith('body_ch'):
         n = int(owner[7:])
         packet = project_chapter_packet(ir, n)
         prose[n] = candidate['prose']
         errors = chapter_prose_validator(packet)(prose[n])
-        resolved = resolve_chapter_prose(prose[n], packet)
-        prose[n] = resolved.text
         # 合成回执按**本次重验**的尺子记版本：沿盘上旧值会在下一次换版后
         # 把刚验证过的候选稿误报成「须先免费重验」（假红）。
         from contracts.schema.receipt import BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION
@@ -306,21 +307,15 @@ def _delivery_preview(repository, owner, candidate, chars) -> dict:
                        'validation_sha256': identities[n].validation_sha256,
                        'validator_version': BODY_VALIDATOR_VERSION,
                        'mechanical_checks': list(BODY_MECHANICAL_CHECKS),
-                       'name_mentions': [row.model_dump() for row in resolved.mentions],
-                       'non_name_spans': [row.model_dump() for row in resolved.non_name_spans],
                        'status': 'accepted' if not errors else 'rejected'}
     errors.extend(verify_chapter_receipts(receipts, prose, identities_by_ordinal=identities))
-    replacements, name_errors = compile_bound_replacements(chars, name_map)
-    errors.extend(name_errors)
     if errors:
         return {'node': 'str06.stage7.assemble', 'status': 'ran', 'errors': errors}
-    kept = tuple(sorted({surface for entry in name_map.entries if entry.name is None
-                         for surface, form in chars.name_structure.people[entry.char_ref].surface_forms.items()
-                         if form is not None}))
+    # rc26：零改名装配预览——不编译替换表、不预先改名。
     outcome = assemble_delivery(chapter_prose=prose,
         body=chapter_access(receipts, receipts, identities_by_ordinal=identities, chapter_prose=prose),
         hook_prose=hook_prose, hook_receipt=hook_receipt, hook_context_sha256=context_sha256(hook),
-        replacements=replacements, kept_literals=kept, chapter_receipts=receipts,
+        chapter_receipts=receipts,
         identities_by_ordinal=identities)
     return {'node': 'str06.stage7.assemble', 'status': 'ran',
             'errors': [] if outcome.status == 'ready' else [outcome.reason],

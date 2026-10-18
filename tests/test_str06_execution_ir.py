@@ -30,7 +30,7 @@ from tests.test_str06_hook import _characters as _name_source
 from tests.str06_expression_inputs import (
     sample_canonical_expression,
 )
-from tests.str06_facilities import anchor_stub
+from tests.str06_facilities import anchor_stub, name_map_of
 
 
 def _projection():
@@ -260,9 +260,10 @@ def test_pending_confirmations_render_into_the_writer_packet():
     book_ir = compile_writer_book_ir(
         graph=graph, plan=plan, binding=binding, total_budget=1000,
         length_band=(0.6, 1.3), book_title='t',
-        projection=_projection(), structure=None,
+        projection=_projection(), structure=_name_source().name_structure,
         kp_statements={'kp_1111111111111111': '床底有人',
-                       'kp_2222222222222222': '衣柜藏身'})
+                       'kp_2222222222222222': '衣柜藏身'},
+        name_map=name_map_of(_name_source()))
     packet = render_chapter_packet(project_chapter_packet(book_ir, 1))
     assert '【禁区】' in packet
     # 确认拍在本场内：自然拍序表述；不再带 world:key／拍 id 机械位

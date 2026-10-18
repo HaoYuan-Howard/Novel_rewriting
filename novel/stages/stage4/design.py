@@ -64,7 +64,7 @@ from novel.stages.stage4.fact_bindings import (
 )
 from novel.stages.common import design_wire_schema, expand_surface_releases
 from novel.stages.stage4.read_closure import confirmation_closure_errors, resolve_design_reads
-from novel.stages.stage4.materials import design_wire_name_text_issues, validate_design_materials
+from novel.stages.stage4.materials import validate_design_materials
 from novel.stages.stage4.slim import (
     FactLockMark, design_fact_marks, design_placements, expand_design_wire,
     design_wire_model, DESIGN_READ_PROTOCOLS,
@@ -773,6 +773,8 @@ def inspect_body_design(
     brief: ReconstructionBrief | None = None,
     obligations: Mapping[str, Any] | None = None,
     characters: 'CharactersCore | None' = None,
+    faces: Mapping[str, Mapping[str, str]] | None = None,
+    name_map=None,
 ) -> tuple[BodyDesign | None, list[str]]:
     """Design wire（stage4-design-v5／v9）→ canonical BodyDesign。
 
@@ -792,9 +794,7 @@ def inspect_body_design(
     必保义务的 real 标注覆盖闸（未标注的 must 需求当场拦下——承载位是
     v6 的新语义面，漏标即缺承载）。
     """
-    from contracts.schema.design import (
-        DesignWireV5, DesignWireV9, STAGE4_DESIGN_WIRE_PROTOCOL,
-    )
+    from contracts.schema.design import DesignWireV5, DesignWireV9
 
     errors: list[str] = []
     independent_errors: list[str] = []
@@ -806,10 +806,6 @@ def inspect_body_design(
     v9_wire = wire
     if locatable:
         independent_errors.extend(_check_wire_expression_refs(wire, expression_requirements))
-        independent_errors.extend(design_wire_name_text_issues(
-            wire, projection=name_projection, structure=name_structure,
-            registered_surfaces=registered_surfaces,
-            require_classification=wire.get('protocol_version') == STAGE4_DESIGN_WIRE_PROTOCOL))
         try:
             expanded, expand_issues = expand_design_wire(
                 wire, brief=brief, obligations=obligations)
@@ -1075,9 +1071,11 @@ def inspect_body_design(
         errors.append(issue(err.message, err.code,
                             (body.scenes[err.scene].scene_id, err.read),
                             ('scenes', err.scene, 'reads', err.read)))
-    if name_projection is not None:
+    if faces is not None:
+        # rc26（命名前移批 C）：写手材料一律目标字面——faces 缺席即显式跳过
+        # 材料闸（离线 v5 形状诊断面），不用源侧旧口径冒充现役判据。
         errors.extend(validate_design_materials(
             body, projection=name_projection, known_char_ids=known_char_ids,
             structure=name_structure, resolve=site_path if locatable else None,
-            characters=characters))
+            characters=characters, faces=faces, name_map=name_map))
     return body, errors

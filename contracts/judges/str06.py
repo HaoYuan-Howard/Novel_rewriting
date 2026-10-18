@@ -210,19 +210,21 @@ _hard('writer_packet_background_narrowing', 'stage4',
 
 # ── Stage5 按章成文与 Hook ───────────────────────────────────────────────────
 _hard('body_chapter_complete', 'stage5',
-      '每章正文完整（非空、编码合法、无章节标题/编号/任务术语外壳）', 'R-7.1')
-_hard('body_withheld_literals', 'stage5',
-      '身份文本声明、候选覆盖及称谓授权闭合；未决不当泄漏、硬失败不披露放行', 'R-7.2')
+      '每章正文完整（非空、编码合法、无章节标题/编号/任务术语外壳、'
+      '无身份协议定界符）', 'R-7.1')
+_hard('body_name_watch', 'stage5',
+      '写手材料不含旧名残留与未释放目标名（compile 派生字面平铺的材料硬闸）；'
+      '正文里的同类命中只进定位报告，不阻断、不披露放行例外', 'R-7.2')
 _hard('body_required_literals', 'stage5',
       '必保揭名的承载章正文必现该称谓字面（RC-61；缺字面即拒，走段落级修句，'
       '不披露放行）', 'R-7.8')
 _hard('body_length_band', 'stage5',
       '章篇幅落在配置篇幅带内；超限只有篇幅带可披露，硬失败不披露', 'R-7.3')
 _hard('chapter_receipt_binding', 'stage5',
-      '章回执绑定章序、章包摘要（写手视图/验证输入）、请求身份与改名前正文摘要',
+      '章回执绑定章序、章包摘要（写手视图/验证输入）、请求身份与最终正文摘要',
       'R-7.4')
 _hard('hook_mechanical', 'stage5',
-      'Hook 成文机械验通过（非空、编码、无包装外壳、withheld 字面）；'
+      'Hook 成文机械验通过（非空、编码、无包装外壳、无身份协议定界符）；'
       '篇幅仅统计，语义与文学质量保持未评', 'R-8.1')
 _hard('hook_receipt_binding', 'stage5',
       'Hook 回执绑定 HookContext 身份、正文 hash 与请求身份', 'R-8.2')
@@ -231,19 +233,25 @@ _unver('body_semantics_unver', 'stage5',
        disclosable_unver=True)
 _metric('body_length_reading', 'stage5',
         '逐章实际篇幅与预算偏差读数（披露面，不是门）', 'R-7.7')
+#: rc26（命名前移批 C）：疑似旧名／疑似提前揭名定位报告——普通正文主链的披露面。
+#: 只定位归因（字面＋位置＋人物），不阻断流水线、不自动触发付费返修；写手材料
+#: 侧的同类命中仍是 hard（body_name_watch），两面判据不互换。
+_metric('name_residue_report', 'stage5',
+        '正文与 Hook 的疑似旧名残留／疑似提前揭名定位报告（不阻断、不购返修；'
+        '读数为出现次数，不宣称语义泄漏）', 'R-7.9')
 
 # ── Stage4 目标命名与 Stage7 交付 ───────────────────────────────────────────
 _hard('name_map_compile', 'stage4',
       'NameMap v6 编译闭合（名称位一致、无姓氏冲突、保留项合法）', 'R-10.1')
-_hard('naming_residual', 'stage7',
-      '回执身份提及与映射闭合、按提及精确改名、零表外改动', 'R-10.2')
 _hard('assembly_chapter_chain', 'stage7',
-      '章回执链核对（逐章 IR 身份+前文链+正文 hash）', 'R-10.3', fix=_FIX_ASSEMBLE)
+      '章回执链核对（逐章 IR 身份+正文 hash；rc26 起正文即最终成文，无前文链核对）',
+      'R-10.3', fix=_FIX_ASSEMBLE)
 _hard('delivery_manifest', 'stage7',
       'TXT 先落盘、manifest 最后提交；manifest 与文件 hash 逐字一致', 'R-10.4',
       fix=_FIX_ASSEMBLE)
 _hard('delivery_replayable', 'stage7',
-      '同输入交付字节一致（确定性重放）', 'R-10.5', fix=_FIX_ASSEMBLE)
+      '同输入交付字节一致（确定性重放；rc26 起装配零改名，重放即已接受正文拼接）',
+      'R-10.5', fix=_FIX_ASSEMBLE)
 _hard('delivery_chapter_markers', 'stage7',
       '成书按阅读序逐章加「第N章」，交付身份对分章敏感', 'R-10.10',
       fix=_FIX_ASSEMBLE)
@@ -292,13 +300,10 @@ PATCH_ROUTES: Final[Mapping[str, PatchRoute]] = {
     'book_design_construct': 'whole_answer',     # canonical BodyDesign 组装失败（形状面）
     'hook_construct': 'whole_answer',            # canonical HookDesign 组装失败（形状面）
 
-    # ── Design wire 定位面（判据在判定处带 v9 wire 路径） ─────────────────────
+    # ── Design wire 定位面（判据在判定处带 wire 路径） ─────────────────────────
     'design_wire_shape': 'locate',              # schema 推导结构最小替换单位；非原始错误键
     'design_wire_expand': 'locate',
     'design_expression_ref': 'locate',
-    'name_text_syntax': 'locate',
-    'name_text_reference': 'locate',
-    'name_text_unclassified': 'locate',
     # 命名前移批（policy 12）：义务文本旧名面与身份文本标记残片，按义务/细节
     # 条目路径定位（进 preserve 同节点修订轮）。
     'preserve_old_name_literal': 'locate',

@@ -13,9 +13,6 @@ from novel.core.name_materials import expand_surface_releases
 from novel.stages.common import claim_spans, uncovered_occurrences
 
 
-_NAME_TEXT_CODES = frozenset({'name_text_syntax', 'name_text_reference', 'name_text_unclassified'})
-
-
 @dataclass(frozen=True)
 class MaterialRepair:
     action: str
@@ -176,7 +173,8 @@ def _no_display_anywhere(literal: str, body: BodyDesign,
 
     无释放且无回落：该人物全部登记称谓都含姓名部件（无纯称谓可回落）——
     唯一修复面是 Design 的释放声明（补一行释放或挪承载位），与文本来源无关。
-    归属证明与 `withheld_name_bindings` 同一把尺：字面唯一绑定某一人物。
+    归属证明与目标侧绑定表（`name_materials.withheld_target_bindings`）同一把尺：
+    字面唯一绑定某一人物。
     """
     if structure is None:
         return False
@@ -204,11 +202,6 @@ def plan_material_repairs(
     for problem in issues:
         explanations = [_source_owner(source, brief=brief, body=body, binding=binding, literal=problem.literal)
                         for source in problem.sources]
-        identity_error = problem.code in _NAME_TEXT_CODES
-        if identity_error:
-            explanations = [('', '只读源命题或派生投影的身份声明不闭合，目标owner无权改写；须核验原来源')
-                            if source.kind in {'knowledge', 'world', 'projection'} else explanation
-                            for source, explanation in zip(problem.sources, explanations)]
         # CS-H H3（RC-60 残余归属表第一行）：已绑定称谓但该人物全书无显示面
         # ——补释放／挪承载位归 Design，先于按文本来源的归因（唯一修复面是
         # Design 的释放声明，改义务或 Hook 文本都修不了「没有可指称的面」）。
@@ -252,7 +245,7 @@ def plan_material_repairs(
         if internal_id and any(source.kind == 'knowledge' for source in problem.sources):
             owner = ''
             explanations.append(('', '内部句柄出自源命题文本，目标设计无权改写；须核验上游观察'))
-        if problem.code not in {'positive_material_leak', 'internal_id_leak', *_NAME_TEXT_CODES}:
+        if problem.code not in {'positive_material_leak', 'internal_id_leak'}:
             owner = ''
         action, target = route_owner_issue('material_name_leak', material_owner=owner)
         positions = _release_positions(body, problem.literal, structure)
@@ -271,10 +264,7 @@ def plan_material_repairs(
         }
         # 反馈只含目标坐标／源盲句柄；来源诊断不把源拍证据送进Design prompt。
         label = f'目标第{problem.chapter_ordinal}章' if problem.chapter_ordinal else 'Hook'
-        if identity_error:
-            message = (f'{label}材料身份文本声明未闭合（{problem.code}）；'
-                       f'字段={fields or "未决"}。{problem.reason or problem.message}；{reasons}')
-        elif internal_id:
+        if internal_id:
             message = (f'{label}材料含内部句柄 {problem.literal!r}（代号不是可读文字，'
                        f'须改写为自然语言指称）；字段={fields or "未决"}。{reasons}')
         else:

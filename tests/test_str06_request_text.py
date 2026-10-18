@@ -44,7 +44,9 @@ def test_writer_request_carries_avoid_and_leaks_nothing_mechanical():
     request = render_chapter_packet(packet)
     # 场的 avoid 到达正文请求（夹具 sc01 声明 avoid=['倒叙']）。
     assert '倒叙' in request and '明确禁止' in request
-    problems = _request_text_issues(request, withheld=packet.chapter.withheld_literals,
+    from novel.core.name_residue import watch_literals
+    problems = _request_text_issues(request,
+                                    withheld=watch_literals(packet.chapter.name_watch),
                                     released=packet.chapter.released_surfaces)
     assert not problems, problems
 
@@ -73,19 +75,25 @@ def test_hook_request_carries_referenced_scene_avoid_and_leaks_nothing():
         concealed=[], surface_releases=[
             {'char_id': 'yun_niang', 'surfaces': ['苏芸娘', '芸娘']},
             {'char_id': 'fu_jun', 'surfaces': ['夫君']}])
+    from novel.core.name_materials import target_face_table
+    from tests.str06_facilities import name_map_of
+    faces, _face_errors = target_face_table(chars.name_structure, name_map_of(chars))
     hook, errors = assemble_hook_design(
         hook_wire_v3(hook_wire), body=body, known_char_ids=known,
-        name_projection=chars.name_projection(), name_structure=chars.name_structure)
+        name_projection=chars.name_projection(), name_structure=chars.name_structure,
+        faces=faces)
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
         graph, chars.name_projection(),
-        chars.name_structure, {}, {}, characters=chars.core_view(), total_budget=2000)
+        chars.name_structure, {}, {}, characters=chars.core_view(), total_budget=2000,
+        name_map=name_map_of(chars))
     assert context is not None and not errors, errors
     assert context.avoid_lines == ('倒叙开篇',)
     request = render_hook_context(context)
     assert '倒叙开篇' in request and '明确禁止' in request
     released = {s for r in context.usable_surfaces for s in r.surfaces}
-    problems = _request_text_issues(request, withheld=context.withheld_literals,
+    from novel.core.name_residue import watch_literals
+    problems = _request_text_issues(request, withheld=watch_literals(context.name_watch),
                                     released=sorted(released))
     assert not problems, problems

@@ -69,11 +69,18 @@
   "modules": {
     "tests/test_repair_plan.py": {
       "layer": "unit_contract",
-      "stages": ["stage2", "stage4", "stage7"]
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage7"
+      ]
     },
-    "tests/test_name_text.py": {
+    "tests/test_name_residue.py": {
       "layer": "unit_contract",
-      "stages": ["stage2", "stage4", "stage5", "stage7"]
+      "stages": [
+        "stage5",
+        "stage7"
+      ]
     },
     "tests/test_str06_candidate_preflight.py": {
       "layer": "stage",
@@ -105,7 +112,7 @@
         "stage5"
       ],
       "cases": {
-        "test_guard_only_projection_reaches_compile_report_and_survives_restart": "stage"
+        "test_guard_only_reaches_compile_report_and_survives_restart": "stage"
       }
     },
     "tests/test_str06_design_patch.py": {
@@ -348,7 +355,11 @@
     },
     "tests/test_book_overlap.py": {
       "layer": "unit_contract",
-      "stages": ["stage2", "stage5", "stage7"]
+      "stages": [
+        "stage2",
+        "stage5",
+        "stage7"
+      ]
     },
     "tests/test_c2b_import_gate.py": {
       "layer": "unit_contract",
@@ -670,14 +681,18 @@
     },
     "tests/test_contract_upgrade.py": {
       "layer": "unit_contract",
-      "stages": ["stage4", "stage5", "stage7"],
+      "stages": [
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
       "cases": {
         "test_upgrade_rebuilds_registered_consumers_and_preserves_archived_body_bytes": "stage",
         "test_upgrade_from_rejected_body_design_candidate_runs_current_author_protocol": "stage",
         "test_cli_subprocess_preview_and_apply_are_free_and_reachable": "stage",
         "test_recompile_changes_only_one_chapter_and_keeps_other_commit": "stage",
         "test_unknown_call_and_accumulated_budget_survive_upgrade": "stage",
-          "test_operator_and_agent_resume_same_root_to_delivery": "stage",
+        "test_operator_and_agent_resume_same_root_to_delivery": "stage",
         "test_validation_only_change_rechecks_original_prose_and_preserves_adoption": "stage",
         "test_ir_upstream_stale_keeps_overview_alive_and_points_to_compile": "stage",
         "test_open_hook_design_issue_is_resolved_when_product_archived": "stage"
@@ -813,7 +828,10 @@
     },
     "tests/test_str06_hook_facts.py": {
       "layer": "unit_contract",
-      "stages": ["stage4", "stage5"]
+      "stages": [
+        "stage4",
+        "stage5"
+      ]
     },
     "tests/test_str06_hook.py": {
       "layer": "unit_contract",
@@ -1364,7 +1382,7 @@
       ],
       "cases": {
         "test_missing_literal_gets_a_paragraph_level_repair_round": "stage",
-          "test_paragraph_repair_receives_authorized_identity_when_draft_has_no_name_markers": "stage",
+        "test_paragraph_repair_carries_the_released_name_directory_and_packet_identity": "stage",
         "test_unparseable_paragraph_patch_is_a_failed_attempt_not_a_candidate": "stage"
       }
     },

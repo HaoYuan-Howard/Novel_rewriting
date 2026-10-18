@@ -22,7 +22,13 @@
 正文绑定（`prose_sha256`）、被接受 attempt 的实际请求身份、协议、renderer
 与校验版本照旧。**不绑定全书 IR 与前文链（D2）**：写手只收当前章包，各章
 独立有效、可乱序提交与集合恢复。无有效回执的正文不能作为交付输入。
-换 NameMap 不使回执失效，只改变交付身份。
+
+【普通正文回执（rc26，2026-10-18 命名前移批 C）】
+identity-text-v1 协议退役：正文直接以目标姓名成文，回执不再携带人物提及／
+普通义两类区间表，机械检查项 `name_text` 随之退出。疑似旧名与疑似提前揭名
+只形成定位报告（`contracts/schema/state.py::NameWatch` 派生，runtime 审计面，
+不进回执）——不阻断、不购返修；确定的结构错误仍 fail fast。必保揭名
+（`required_literals`）改按纯正文字面判定。
 
 【语义边界】
 回执只记录机械结果；`semantic` 恒为 `unverified`——机械通过不升级为语义已验
@@ -37,7 +43,6 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.common import FreeProvenance, LlmProvenance
-from contracts.schema.name_text import NameMention, NameTextSpan
 
 __all__ = ['ChapterLengthDisclosure', 'ChapterReceipt',
            'BODY_VALIDATOR_VERSION', 'BODY_MECHANICAL_CHECKS',
@@ -47,17 +52,21 @@ __all__ = ['ChapterLengthDisclosure', 'ChapterReceipt',
 #: 机械规则的独立版本轴；规则变化必须换版，消费者先免费重验原章稿。
 #: v2（CS-H H3，RC-61）增加 required_literals：必保揭名承载章须出现称谓字面。
 #: v3：标题词须有标题边界，正文首句“尾声未尽”等自然用语不作包装标题。
-BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v4'
+#: v4（rc26，命名前移批 C）：identity-text 协议退役——去 `name_text` 检查项，
+#:    必保揭名改按纯正文字面判定，身份协议定界符并入 no_wrapper。
+BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v5'
 #: 写手材料与机械回执共用的正式版本轴；运行时提示、身份与预算从此取值。
-RENDERER_VERSION = 'str06-render-v13'
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v12'
-HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v5'
+#: v13（rc26，命名前移批 C）：正文协议切普通正文——不再生成姓名标记与区间。
+RENDERER_VERSION = 'str06-render-v14'
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v13'
+#: v5→v6（rc26，命名前移批 C）：同 body——去 `name_text`，定界符并入 no_wrapper。
+HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v6'
 #: 回执宣告通过的机械检查项闭集。
 BODY_MECHANICAL_CHECKS = (
-    'non_empty', 'encoding', 'no_wrapper', 'name_text', 'required_literals', 'length_band',
+    'non_empty', 'encoding', 'no_wrapper', 'required_literals', 'length_band',
 )
 HOOK_MECHANICAL_CHECKS = (
-    'non_empty', 'encoding', 'no_wrapper', 'name_text', 'length_cap',
+    'non_empty', 'encoding', 'no_wrapper', 'length_cap',
 )
 
 
@@ -80,9 +89,13 @@ class ChapterLengthDisclosure(StrictModel):
 
 
 class ChapterReceipt(StrictModel):
-    """章级接受回执（`stage5/acceptance/body/ch{nn}.json`）。"""
+    """章级接受回执（`stage5/acceptance/body/ch{nn}.json`）。
 
-    contract_version: Literal['str06-rc25'] = 'str06-rc25'
+    rc26（命名前移批 C）：正文直接以目标姓名成文——`prose_sha256` 绑定的
+    就是最终正文字节，不再有「改名前」中间态与末端替换。
+    """
+
+    contract_version: Literal['str06-rc26'] = 'str06-rc26'
     chapter_ordinal: int = Field(ge=1)
     writer_view_sha256: str = Field(
         min_length=64, max_length=64,
@@ -98,11 +111,7 @@ class ChapterReceipt(StrictModel):
         description='Machine 层摘要（仅审计，rc6）：只改 Machine 层字段不触发'
                     '重购；用于对账与漂移诊断，不进回执核对')
     prose_sha256: str = Field(min_length=64, max_length=64,
-                              description='绑定改名前本章正文')
-    name_mentions: tuple[NameMention, ...] = Field(
-        description='compiler 从 name_text 计算的纯正文人物提及；空表须显式给出')
-    non_name_spans: tuple[NameTextSpan, ...] = Field(
-        description='compiler 计算的普通义声明区间；语义声明本身保持 unverified')
+                              description='绑定本章最终正文（目标姓名成文）')
     request_identity: str = Field(min_length=1, description='被接受 attempt 的实际请求身份')
     protocol_version: str = Field(min_length=1)
     renderer_version: str = Field(min_length=1)

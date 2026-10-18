@@ -59,12 +59,8 @@ from contracts.schema.workflow import STR06_RC_VERSION
 from contracts.schema.receipt import RENDERER_VERSION, WRITER_PROTOCOL_VERSION
 from contracts.schema.source import CharactersCore, NameProjection, NameStructure, render_form
 from novel.core.name_materials import FIRST_PERSON_ROLE_WORD
-from novel.core.name_materials import (
-    expand_surface_releases, family_form_literals, material_name_permissions,
-    withheld_name_literals,
-)
-from contracts.schema.name_text import NAME_TEXT_INSTRUCTIONS
-from novel.core.name_text import resolve_name_text
+from novel.core.name_materials import expand_surface_releases
+from novel.core.name_residue import watch_literals
 from novel.core.text import count_non_whitespace_chars, kp_statement
 from novel.core.material_trace import (
     MaterialFragment, MaterialIssue, MaterialLines, MaterialPart, MaterialSource, NameProjectionHit,
@@ -170,9 +166,14 @@ def validate_positive_materials(
 def positive_material_issues(
     parts: Mapping[str, MaterialPart], *, released: Iterable[str], withheld: Iterable[str],
     internal_ids: Iterable[str], chapter_ordinal: int = 0,
-    name_permissions: Mapping[str, Iterable[str]] | None = None,
 ) -> tuple[MaterialIssue, ...]:
-    """字面判据的唯一结构化结果；来源只来自显式投影，不解析报错文字。"""
+    """字面判据的唯一结构化结果；来源只来自显式投影，不解析报错文字。
+
+    rc26（命名前移批 C）：parts 全部是普通目标文本（identity-text 协议退役，
+    无标记、无声明区间）——长名优先单遍扫描直接查未释放专名与内部句柄。
+    旧名残留与未释放目标名的字面集由调用方从章包/上下文的 `name_watch`
+    平铺给出（`novel.core.name_residue.watch_literals`），与正文定位报告同源。
+    """
     issues: list[MaterialIssue] = []
     identities = tuple(sorted(set(internal_ids) - {'', 'narrator'}))
     identity_pattern = re.compile(r'(?<![A-Za-z0-9_])(?:'
@@ -180,56 +181,20 @@ def positive_material_issues(
                                   + r')(?![A-Za-z0-9_])') if identities else None
     released, withheld = tuple(released), tuple(withheld)
     for where, part in parts.items():
-        decoded = resolve_name_text(part.text)
-        text = decoded.text
-        # 显式普通义与 compiler 拥有的固定模板不参与姓名推断；词法扫描不得
-        # 跨已声明片段拼出另一人名（如 name:白 + text:若非 被误认“白若”）。
-        declared = [(s.start, s.end) for s in (*decoded.mentions, *decoded.non_name_spans)]
-        declared.extend((i, i + 1) for i, (start, end) in enumerate(decoded.origin_spans)
-                        if any(low <= start and end <= high for low, high in part.ordinary_spans))
-        claimed_regions: list[tuple[int, int]] = []
-        for start, end in sorted(declared):
-            if claimed_regions and start <= claimed_regions[-1][1]:
-                claimed_regions[-1] = (claimed_regions[-1][0], max(claimed_regions[-1][1], end))
-            else:
-                claimed_regions.append((start, end))
-        candidates = []
-        for mention in decoded.mentions:
-            if name_permissions is not None:
-                if mention.surface not in name_permissions.get(mention.char_id, ()):
-                    origins = decoded.origin_spans[mention.start:mention.end]
-                    sources = (sources_for_span(part, min(p[0] for p in origins), max(p[1] for p in origins))
-                               if origins else ())
-                    issues.append(MaterialIssue(
-                        'name_text_reference', where, mention.start, mention.surface,
-                        sources, chapter_ordinal,
-                        reason=f'人物 {mention.char_id} 未获本人称谓许可且没有可用显示面',
-                        char_id=mention.char_id))
-            elif mention.surface in withheld and mention.surface not in released:
-                candidates.append(Claim(mention.surface, mention.start, mention.end))
-        cursor = 0
-        for start, end in (*claimed_regions, (len(text), len(text))):
-            plain = text[cursor:start]
-            candidates.extend(Claim(c.literal, cursor + c.start, cursor + c.end)
-                              for c in uncovered_occurrences(plain, withheld, claim_spans(plain, released)))
-            cursor = end
+        text = part.text
+        # 先认领已释放（含登记家族构词），再查残余：更长字面先认领的语义与
+        # 字面扫描一致（`common.claim_spans`）——已释放面内部的短 withheld
+        # 字面（如「沈知遥」里的「知遥」）不算泄漏。
+        candidates = list(uncovered_occurrences(text, withheld, claim_spans(text, released)))
         for claim in candidates:
-            origins = decoded.origin_spans[claim.start:claim.end]
-            sources = (sources_for_span(part, min(p[0] for p in origins), max(p[1] for p in origins))
-                       if origins else ())
+            sources = sources_for_span(part, claim.start, claim.end)
             issues.append(MaterialIssue('positive_material_leak', where, claim.start,
                                         claim.literal, sources, chapter_ordinal))
-        for error in decoded.errors:
-            sources = sources_for_span(part, error.start, error.end)
-            issues.append(MaterialIssue(error.code, where, error.start,
-                                        error.literal, sources, chapter_ordinal, reason=error.message))
         if identity_pattern is not None:
             for match in identity_pattern.finditer(text):
                 # 句柄原样出自某个正式字段（owner 把代号写进了自己的文本）才带来源；
                 # 来源文本里没有它＝渲染期引入，保持无来源，归因停在代码缺陷。
-                origins = decoded.origin_spans[match.start():match.end()]
-                sources = (sources_for_span(part, min(p[0] for p in origins), max(p[1] for p in origins))
-                           if origins else ())
+                sources = sources_for_span(part, match.start(), match.end())
                 issues.append(MaterialIssue('internal_id_leak', where, match.start(),
                                             match.group(), sources, chapter_ordinal))
     return tuple(issues)
@@ -238,38 +203,14 @@ def positive_material_issues(
 def project_withheld_names(
     text: str, *, bindings: Iterable['WithheldNameBinding'], display: Mapping[str, str],
 ) -> tuple[str, tuple[NameProjectionHit, ...]]:
-    """显式引用按人物身份投影；旧已登记完整称谓只走现役集中字面兼容面。
+    """完整登记称谓按人物身份投影到显示面（普通正文主链，rc26）。
 
-    普通义片段始终保持原文。标记保留到最终 renderer 解码，让材料 validator
-    能消费同一份语义声明；不会把普通片段中的“白/若”推断成人物。
+    identity-text 协议退役后写手材料不再带 [[name:…]]／[[text|…]] 标记，投影
+    只剩裸文一面（`_project_unmarked_names`）：已证明唯一绑定人物的完整登记
+    称谓换成本场显示面；普通义片段与模板不参与姓名推断。普通同形词不因包含
+    姓名部件而被替换。
     """
-    bindings = tuple(bindings)
-    if '[[' not in text:
-        return _project_unmarked_names(text, bindings=bindings, display=display)
-    token_pattern = re.compile(r'\[\[(?:name:([^|\[\]\r\n]+)|text)\|'
-                               r'((?:(?!\[\[|\]\]|\|).)+)\]\]', re.DOTALL)
-    table = {(b.char_id, b.literal): b for b in bindings}
-    out: list[str] = []
-    hits: list[NameProjectionHit] = []
-    cursor = 0
-    for match in token_pattern.finditer(text):
-        plain, plain_hits = _project_unmarked_names(text[cursor:match.start()],
-                                                    bindings=bindings, display=display)
-        out.append(plain)
-        hits.extend(plain_hits)
-        char_id, literal = match.groups()
-        binding = table.get((char_id, literal))
-        replacement = display.get(char_id, '') if char_id else ''
-        if binding is not None and binding.char_id == char_id and replacement:
-            out.append(f'[[name:{char_id}|{replacement}]]')
-            hits.append(NameProjectionHit(literal, char_id, replacement))
-        else:
-            out.append(match.group())
-        cursor = match.end()
-    plain, plain_hits = _project_unmarked_names(text[cursor:], bindings=bindings, display=display)
-    out.append(plain)
-    hits.extend(plain_hits)
-    return ''.join(out), tuple(hits)
+    return _project_unmarked_names(text, bindings=bindings, display=display)
 
 
 def _project_unmarked_names(
@@ -515,23 +456,14 @@ def render_hook_context(context: HookContext) -> str:
     """请求 user 段（R2 分层渲染）：只从 HookContext 构建，不掺源文或盘上材料。
 
     材料是必须写出；禁止揭示与受保护线程是禁区；起笔事实以延续/背景呈现；
-    withheld_literals 是 validator 材料，不进阅读面（与正文章包同一纪律）。
+    withheld 字面是 validator 材料，不进阅读面（与正文章包同一纪律）。
     CS-F2：正向材料行与禁区行在送达前按本场已释放称谓确定性投影（禁区不进
-    字面检查，投影只减少暴露）；上下文字段与来源文本不改写。
+    字面检查，投影只减少暴露）；上下文字段与来源文本不改写。rc26（命名前移
+    批 C）：材料一律普通目标文本——不再附身份文本协议说明与合法身份引用表，
+    可用称谓以【可用称谓】分区送达。
     """
     parts, _hits = _hook_render(context)
-    return (_visible_name_text('\n'.join(parts)) + '\n\n' + NAME_TEXT_INSTRUCTIONS
-            + '\n【合法身份引用】\n'
-            + json.dumps({r.char_id: list(r.surfaces) for r in context.usable_surfaces}, ensure_ascii=False)
-            + '\n')
-
-
-def _visible_name_text(text: str) -> str:
-    """只编译正式材料的文本片段；协议说明本身不能被当成小说片段解析。"""
-    result = resolve_name_text(text)
-    if result.errors:
-        raise ValueError(f'阅读材料身份文本语法不闭合：{result.errors}')
-    return result.text
+    return '\n'.join(parts) + '\n'
 
 
 def hook_name_projections(context: HookContext) -> tuple[dict, ...]:
@@ -558,12 +490,7 @@ def hook_material_issues(context: HookContext, *,
     return positive_material_issues(
         {f'hook/writer_view/{index}': part for index, part in enumerate(parts) if part.positive},
         released={s for r in context.usable_surfaces for s in r.surfaces},
-        withheld=context.withheld_literals, internal_ids=internal_ids,
-        name_permissions=material_name_permissions(
-            {r.char_id: r.surfaces for r in context.usable_surfaces},
-            {**{r.char_id: r.surfaces[0] for r in context.display_faces},
-             **({cid: FIRST_PERSON_ROLE_WORD for cid in context.pov.focalizers}
-                if context.pov.person == 'first' else {})}))
+        withheld=watch_literals(context.name_watch), internal_ids=internal_ids)
 
 def validate_writer_materials(packet: ChapterWriterPacket, *, internal_ids: Iterable[str]) -> list[str]:
     """检查实际 WriterPacket 六分区；禁区及明确禁止的条目不算正向材料。"""
@@ -581,13 +508,8 @@ def writer_material_issues(packet: ChapterWriterPacket, *,
                 parts[f'ch{view.chapter_ordinal:02d}/{partition}/{index}'] = part
     return positive_material_issues(
         parts, released=packet.chapter.released_surfaces,
-        withheld=packet.chapter.withheld_literals, internal_ids=internal_ids,
-        chapter_ordinal=packet.chapter.chapter_ordinal,
-        name_permissions=material_name_permissions(
-            {r.char_id: r.surfaces for r in packet.chapter.released_names},
-            {**{r.char_id: r.surfaces[0] for r in packet.chapter.display_fallback},
-             **({cid: FIRST_PERSON_ROLE_WORD for cid in packet.book_brief.narration.focalizers}
-                if packet.book_brief.narration.person == 'first' else {})}))
+        withheld=watch_literals(packet.chapter.name_watch), internal_ids=internal_ids,
+        chapter_ordinal=packet.chapter.chapter_ordinal)
 
 
 def writer_name_projections(packet: ChapterWriterPacket) -> tuple[dict, ...]:
@@ -1149,7 +1071,7 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/义务清单/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v11）。目标是使必保条件组成可演出的完整故事，而非按义务
+（wire 协议 stage4-design-v12）。目标是使必保条件组成可演出的完整故事，而非按义务
 逐条解释。你是整书一次调用的结构设计者：只表达**选择、
 结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一、默认值、
 知情增量的键与模式全部由 compiler 派生，你不输出任何 ID、编号或归一化数值
@@ -1331,7 +1253,7 @@ Schema、必保 real、know、释放与引用闭集；不另输出核对表或�
 返回一个 JSON object，不要围栏、不要解释。
 """
 
-from contracts.schema.design import DesignWireV5, DesignWireV9, DesignWireV10, DesignWireV11, STAGE4_DESIGN_WIRE_PROTOCOL
+from contracts.schema.design import DesignWireV5, DesignWireV9, DesignWireV10, DesignWireV12, STAGE4_DESIGN_WIRE_PROTOCOL
 _DESIGN_INSTRUCTIONS = DESIGN_RULES
 
 
@@ -1340,20 +1262,20 @@ def design_wire_schema(*, known_char_ids: set[str] | None = None,
                  knowledge_refs: Mapping[str, bool] | None = None,
                  detail_refs: Iterable[str] | None = None,
                  expression_ids: Iterable[str] | None = None,
-                 name_candidates: Iterable[str] = (),
                  fact_lock_ids: Iterable[str] | None = None,
                  protocol: str = STAGE4_DESIGN_WIRE_PROTOCOL) -> dict:
     """模型 Schema 是唯一形状源；动态闭集与接受函数使用同一输入。
 
-    CS-3（2026-10-03）：形状源换瘦模型（现为 DesignWireV11）；闭集注入面随
+    CS-3（2026-10-03）：形状源换瘦模型（现为 DesignWireV12）；闭集注入面随
     之换名（who／可选 pov 的 anyOf 分支），语义与 v5 面一致。CS-F2：
     `fact_lock_ids` 是可被 `lock` 引用的事实锁句柄闭集（Brief.fact_locks 去掉
-    unanswered 禁区）；空集合时 `lock` 只允许 null。
+    unanswered 禁区）；空集合时 `lock` 只允许 null。rc26（命名前移批 C）：
+    取消 name_candidates 参数（候选覆盖硬闸随 identity-text 协议退役）。
     """
     if protocol not in (STAGE4_DESIGN_WIRE_PROTOCOL, 'stage4-design-v10', 'stage4-design-v9'):
         raise ValueError(f'未登记 Design wire 协议 {protocol!r}')
     current = protocol != 'stage4-design-v9'
-    schema = (DesignWireV11 if protocol == STAGE4_DESIGN_WIRE_PROTOCOL
+    schema = (DesignWireV12 if protocol == STAGE4_DESIGN_WIRE_PROTOCOL
               else DesignWireV10 if current else DesignWireV9).model_json_schema()
     beat_def = 'SlimDesignBeatV10' if current else 'SlimDesignBeat'
     state_def = 'SlimDesignStateV10' if current else 'SlimDesignState'
@@ -1426,7 +1348,6 @@ def design_rules(*, known_char_ids: set[str] | None = None,
                  knowledge_refs: Mapping[str, bool] | None = None,
                  detail_refs: Iterable[str] | None = None,
                  expression_ids: Iterable[str] | None = None,
-                 name_candidates: Iterable[str] = (),
                  fact_lock_ids: Iterable[str] | None = None,
                  protocol: str = STAGE4_DESIGN_WIRE_PROTOCOL) -> str:
     """首次生成与返修共用动态 schema，指令不另造字段契约。"""
@@ -1436,15 +1357,6 @@ def design_rules(*, known_char_ids: set[str] | None = None,
         expression_ids=expression_ids, fact_lock_ids=fact_lock_ids, protocol=protocol)
     current = protocol != 'stage4-design-v9'
     instructions = _DESIGN_INSTRUCTIONS.replace(STAGE4_DESIGN_WIRE_PROTOCOL, protocol)
-    if protocol == STAGE4_DESIGN_WIRE_PROTOCOL:
-        instructions += '\n' + NAME_TEXT_INSTRUCTIONS + '''
-上述协议用于你写的自然语言：book_style、声线、表达例外说明/目标文本、initial_state.value、
-driver 的诉求/阻力/转折、brief、avoid、ev、state.val、线程 text/progress/resolution、
-chapter.purpose 与 entry.carryover。人物/状态/义务/表达等引用字段、键、路径、release
-中的登记称谓不用标记。输入继承文本保留其来源，不把普通原文整段包装成 text 来绕过判据。
-'''
-        instructions += '\n需逐次声明的姓名候选字面：' + json.dumps(
-            sorted(set(name_candidates)), ensure_ascii=False)
     if current:
         instructions += '''
 【请求投影 v2】
@@ -1613,9 +1525,10 @@ local_focus：只写表现重点，例如人物严肃措辞与荒唐行动的反
 {"protocol_version":"stage4-hook-design-v4","pov":{...},"opening_facts":[...],"materials":[...],"concealed":[...],
  "surface_releases":[...],"forbidden_reveals":[...],"reader_expectation":{...},"local_focus":"..."}"""
 
-HOOK_DESIGN_RULES += '\n' + NAME_TEXT_INSTRUCTIONS + '''
-身份引用文本用于你写的 materials[].presentation、reader_expectation.focus 和 local_focus；
-目录引用、人物句柄及 surface_releases 中的登记称谓原样书写，不加标记。
+HOOK_DESIGN_RULES += '''
+rc26（命名前移批 C）：你写的 presentation、reader_expectation.focus 和 local_focus
+一律普通目标文本——直接使用目标姓名，不加任何标记；目录引用、人物句柄及
+surface_releases 中的登记称谓原样书写。
 '''
 
 HOOK_WRITER_SYSTEM = """你是小说楔子写手。把已设计的冲突单元写成一段能让读者继续翻页的小说。
@@ -1741,23 +1654,38 @@ def _sha(value: object) -> str:
                                      separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
-def surface_engine_release(graph: BodyDesign, at_scene: str) -> tuple[SurfaceRelease, ...]:
-    """只释放 Design 显式声明的称谓；participants 出现不等于真名已揭示。"""
-    faces: dict[str, set[str]] = {}
+def surface_engine_release(graph: BodyDesign, at_scene: str,
+                           faces: Mapping[str, Mapping[str, str]] | None = None,
+                           ) -> tuple[SurfaceRelease, ...]:
+    """只释放 Design 显式声明的称谓；participants 出现不等于真名已揭示。
+
+    rc26（命名前移批次 C）：`faces`（目标字面表）在场时释放面映射到目标字面——写手材料
+    一律读目标姓名，与 `ChapterIR.name_watch` 同面（否则源面会被监视行当成旧名残留）。
+    """
+    faces_by_char: dict[str, set[str]] = {}
     for intro in graph.initial_surfaces:
-        faces.setdefault(intro.char_id, set()).update(intro.surfaces)
+        faces_by_char.setdefault(intro.char_id, set()).update(intro.surfaces)
     for scene in graph.scenes:
         for beat in scene.beats:
             for intro in beat.surface_introductions:
-                faces.setdefault(intro.char_id, set()).update(intro.surfaces)
+                faces_by_char.setdefault(intro.char_id, set()).update(intro.surfaces)
         if scene.scene_id == at_scene:
             relevant = {p for b in scene.beats for p in b.participants}
             relevant.update(intro.char_id for b in scene.beats for intro in b.surface_introductions)
             relevant.update(p for r in scene.state_reads for p in r.subjects)
             relevant.update(r.holder for r in scene.state_reads if r.holder)
-            return tuple(SurfaceRelease(char_id=cid, surfaces=tuple(sorted(faces[cid])))
-                         for cid in sorted(relevant & set(faces)))
+            return tuple(SurfaceRelease(
+                char_id=cid,
+                surfaces=tuple(sorted(_map_faces(faces_by_char[cid], cid, faces))))
+                for cid in sorted(relevant & set(faces_by_char)))
     raise ValueError(f'未知场景 {at_scene}')
+
+
+def _map_faces(literals, char_id: str,
+               faces: Mapping[str, Mapping[str, str]] | None) -> tuple[str, ...]:
+    """源登记字面 → 目标字面（表外恒等；无表恒等）。"""
+    table = (faces or {}).get(char_id, {})
+    return tuple(dict.fromkeys(table.get(literal, literal) for literal in literals))
 
 
 class ReleasePrefixes:
@@ -2226,8 +2154,12 @@ def project_context(*, scene_id: str, graph: BodyDesign,
                     unanswered_guards: tuple['UnansweredGuard', ...] = (),
                     kp_statements: Mapping[str, str] = {},
                     world_statements: Mapping[str, str] = {},
+                    faces: Mapping[str, Mapping[str, str]] | None = None,
                     ) -> tuple[WriterContext, ExecutionSlice]:
     """场景双视图与消费身份的确定性投影（纯函数，不落盘、不调 LLM）。
+
+    rc26（命名前移批次 C）：`faces`（目标字面表）在场时把释放面与拍级引入面映射到目标字面；
+    生产链（`book_ir.compile_writer_book_ir`）恒传入，缺省恒等仅供不持 NameMap 的离线调用。
 
     R2 引擎批起携带线程投影面（`thread_ops`／`open_threads`，由 Stage4 的
     ThreadFold 折叠后传入——本模块在 stage 包之下，不能反向依赖 fold）；
@@ -2362,7 +2294,7 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     prior_refs = [r for r in refs if positions[r][0] < current]
     continuity = tuple(SupportingBeatEvent(beat_ref=r, event=positions[r][2].event)
                        for r in prior_refs)
-    releases = surface_engine_release(graph, scene_id)
+    releases = surface_engine_release(graph, scene_id, faces)
     delta = tuple(_resolve_delta(d) for b in scene.beats for d in b.target_delta)
     pending = tuple(
         p.model_copy(update={'fact': statement}) if (
@@ -2372,6 +2304,17 @@ def project_context(*, scene_id: str, graph: BodyDesign,
         b.model_copy(update={'target_delta': tuple(
             _resolve_delta(d) for d in b.target_delta)})
         for b in scene.beats)
+    if faces is not None:
+        # 拍级引入面同尺映射：BeatIR.release_introductions 进写手视图
+        # （「第N拍起才可用称谓」），必须与监视行同面。
+        beats = tuple(
+            b.model_copy(update={'surface_introductions': tuple(
+                SurfaceIntroduction(
+                    char_id=intro.char_id,
+                    surfaces=tuple(dict.fromkeys(
+                        faces.get(intro.char_id, {}).get(s, s) for s in intro.surfaces)))
+                for intro in b.surface_introductions)})
+            for b in beats)
     ir = VerificationIR(scene_id=scene_id, obligations=owned,
                         beats=beats_ir(scene_id, beats,
                                        reads_by_beat=beat_reads,
@@ -2392,15 +2335,18 @@ def project_context(*, scene_id: str, graph: BodyDesign,
                         unanswered_guards=guards,
                         prior_series_events=prior_series)
     actor = surface_display(releases, scene.driver.focal_actor)
+    # 表达提示行与拍级引入面同尺：与映射后的 `beats` 一致（监视行
+    # 把源面当旧名残留，这里不能回到源面）。
+    hint_beats = beats if faces is not None else scene.beats
     brief = WriterBrief(
         scene_id=scene_id,
         realization_brief=scene.realization_brief,
         scene_driver_summary=(f'{actor} 想「{scene.driver.immediate_want}」，'
                               f'受阻于「{scene.driver.opposition}」，转折：{scene.driver.turn}'),
         pov=scene.delivery.pov, voice=scene.delivery.voice,
-        delivery_hints=tuple(b.delivery_hint for b in scene.beats if b.delivery_hint) + tuple(
+        delivery_hints=tuple(b.delivery_hint for b in hint_beats if b.delivery_hint) + tuple(
             f'第 {i} 拍起才可使用：' + '、'.join(intro.surfaces)
-            for i, b in enumerate(scene.beats, start=1)
+            for i, b in enumerate(hint_beats, start=1)
             for intro in b.surface_introductions),
         usable_surfaces=releases)
     # 内容身份不含全书 hash、请求 attempt、源坐标和观测元数据。
@@ -2977,15 +2923,15 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
 def project_chapter_materials(book_ir: WriterBookIR, chapter_ordinal: int) -> ChapterIR:
     """章 IR 的取用面：断言章存在且验证材料已由 compile 算好（D2）。
 
-    「称谓许可与禁用字面**双双为空**」只可能是 compile 未带名称数据——合法
-    空值分开（I-42）：有名字的书，禁用字面至少含未释放的专名；本仓产品面
+    「称谓许可与姓名监视行**双双为空**」只可能是 compile 未带名称数据——合法
+    空值分开（I-42）：有名字的书，监视行至少含未释放的专名或旧名面；本仓产品面
     （Stage2 book 观察）要求人物候选带称谓及证据，零名书不在产品面。缺材料
     关闭式失败，不让 validator 静默放行专名泄漏（I-34）。
     """
     chapter = book_ir.chapter(chapter_ordinal)
-    if not chapter.released_surfaces and not chapter.withheld_literals:
+    if not chapter.released_surfaces and not chapter.name_watch:
         raise ValueError(
-            f'第 {chapter_ordinal} 章验证材料缺失（称谓许可/禁用字面必须在 '
+            f'第 {chapter_ordinal} 章验证材料缺失（称谓许可/姓名监视行必须在 '
             'compile 时算好，D2）；请经 str06.stage4.compile 重建 WriterBookIR')
     return chapter
 
@@ -3063,9 +3009,8 @@ def chapter_identities(packet: ChapterWriterPacket) -> ChapterIdentities:
     }
     validation_material = {
         'released_names': [r.model_dump(mode='json') for r in packet.chapter.released_names],
-        'name_candidates': list(packet.chapter.name_candidates),
+        'name_watch': [row.model_dump(mode='json') for row in packet.chapter.name_watch],
         'released_surfaces': list(packet.chapter.released_surfaces),
-        'withheld_literals': list(packet.chapter.withheld_literals),
         'withheld_bindings': [[b.literal, b.char_id, list(b.enclosing), b.unmarked_unique]
                               for b in packet.chapter.withheld_bindings],
         'band_low': packet.realization_contract.band_low,
@@ -3084,6 +3029,9 @@ def render_chapter_packet(packet: ChapterWriterPacket) -> str:
     说明／背景／禁区，全部自然语言条目）→ 交付要求。纯函数：相同章包 ⇒ 相同
     字节；不含前文正文、其他章 IR、导航与称谓总表（D2）；禁用字面是 validator
     材料，不渲染。写手视图摘要（回执身份）以本函数的字节为材料。
+    rc26（命名前移批 C）：条目一律普通目标文本——不再附身份文本协议说明与
+    按 char_id 的合法身份引用表；可用称谓以扁平字面清单送达（与 Hook 同一
+    纪律）。疑似旧名/提前揭名只在写手材料侧硬闸，正文侧形成定位报告。
     """
     contract = packet.realization_contract
     wp = build_writer_packet(packet)
@@ -3098,7 +3046,7 @@ def render_chapter_packet(packet: ChapterWriterPacket) -> str:
     )
     for name, usage, entries in sections:
         block = [f'【{name}】{usage}']
-        block.extend(f'- {_visible_name_text(entry)}' for entry in entries)
+        block.extend(f'- {entry}' for entry in entries)
         parts.append('\n'.join(block))
     parts.append('【本章交付要求】')
     parts.append(
@@ -3109,10 +3057,9 @@ def render_chapter_packet(packet: ChapterWriterPacket) -> str:
                  '不要场景标记、任何解释、前言、后缀或 markdown 围栏。')
     parts.append('3. 整章是一段连续的小说正文：场景之间自然过渡，'
                  '不要输出「场景一」之类的标记或分隔线。')
-    parts.extend((NAME_TEXT_INSTRUCTIONS, '【合法身份引用】',
-                  json.dumps({r.char_id: list(r.surfaces) for r in packet.chapter.released_names},
-                             ensure_ascii=False),
-                  ))
+    surfaces = sorted({s for r in packet.chapter.released_names for s in r.surfaces})
+    parts.append('【可用称谓】只能使用这些已释放称谓字面：')
+    parts.append('、'.join(surfaces) if surfaces else '（无）')
     return '\n\n'.join(parts) + '\n'
 
 

@@ -24,8 +24,7 @@ import re
 
 from contracts.schema.hook import HookContext
 from contracts.schema.receipt import HOOK_MECHANICAL_CHECKS, HOOK_VALIDATOR_VERSION
-from contracts.schema.name_text import NameMention, NameTextSpan
-from novel.core.name_text import ResolvedNameText, resolve_name_text, validate_resolved_name_text
+from novel.core.name_residue import NameResidue, name_residues
 from novel.core.text import count_non_whitespace_chars
 from novel.stages.common import render_hook_context
 
@@ -58,43 +57,37 @@ def build_rewrite_user_prompt(context: HookContext, errors: list[str]) -> str:
             + '。请修正后重写，仍只依据同一 HookContext，不得新增或改换事实。')
 
 
-def resolve_hook_prose(prose: str, context: HookContext) -> ResolvedNameText:
-    """身份声明 → 纯楔子与提及表；只做协议与身份许可的确定性解析。"""
-    return resolve_name_text(
-        prose, surfaces={row.char_id: row.surfaces for row in context.usable_surfaces},
-        candidate_literals=context.name_candidates)
+#: 身份协譨定界符（rc26：identity-text 退役后正文不得再带标记）。
+_PROTOCOL_DELIMITERS = ('[[', ']]')
 
 
 def validate_hook_prose(
-    prose: str, context: HookContext, *,
-    name_mentions: tuple[NameMention, ...] | None = None,
-    non_name_spans: tuple[NameTextSpan, ...] | None = None,
+    prose: str, context: HookContext,
 ) -> list[str]:
-    """机械校验：只报告，不修改；错误信息带检查项名（I-36）。"""
+    """机械校验：只报告，不修改；错误信息带检查项名（I-36）。
+
+    rc26（命名前移批次 C）：普通楔子主链——不再解析身份文本标记、不再做候选覆盖硬闸。
+    疑似旧名残留与疑似提前揭名只进定位报告（`novel.core.name_residue`，不阻断、不购修）；
+    本函数只保留硬机械项：非空、编码、包装（含身份协议定界符）与篇幅硬上限。
+    """
     errors: list[str] = []
-    if name_mentions is None and non_name_spans is None:
-        resolved = resolve_hook_prose(prose or '', context)
-        raw, name_issues = resolved.text, resolved.errors
-    elif name_mentions is not None and non_name_spans is not None:
-        raw = prose or ''
-        name_issues = validate_resolved_name_text(
-            raw, name_mentions=name_mentions, non_name_spans=non_name_spans,
-            surfaces={row.char_id: row.surfaces for row in context.usable_surfaces},
-            candidate_literals=context.name_candidates)
-    else:
-        return ['[name_text] 人物提及与普通义声明须同时提供，缺失不是合法空表']
-    errors.extend(f'[{issue.code}] {issue.message}' for issue in name_issues)
-    text = raw.strip()
+    text = (prose or '').strip()
     if not text:
         return ['[non_empty] 楔子为空']
-    if '\ufffd' in text or _CONTROL.search(text):
+    if '�' in text or _CONTROL.search(text):
         errors.append('[encoding] 存在 U+FFFD 或控制字符')
-    if '```' in text or text.lstrip().startswith('#') or _TITLE_LINE.match(
-            text.splitlines()[0].strip()):
-        errors.append('[no_wrapper] 存在 markdown 围栏、标题或包装行')
+    if ('```' in text or text.lstrip().startswith('#') or _TITLE_LINE.match(
+            text.splitlines()[0].strip())
+            or any(delimiter in text for delimiter in _PROTOCOL_DELIMITERS)):
+        errors.append('[no_wrapper] 存在 markdown 围栏、标题、包装行或身份协议定界符')
     chars = count_non_whitespace_chars(text)
     if chars > context.length_cap:
         errors.append(
             f'[length_cap] 楔子 {chars} 字超过硬上限 {context.length_cap} 字'
             f'（目标区间 {context.length_low}–{context.length_high}，非空白字符）')
     return errors
+
+
+def hook_name_residues(context: HookContext, prose: str) -> tuple[NameResidue, ...]:
+    """楔子正文的疑似姓名残留定位（rc26 披露面；不阻断、不购修）。"""
+    return name_residues(prose, watch=context.name_watch)

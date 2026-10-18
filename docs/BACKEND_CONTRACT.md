@@ -286,8 +286,8 @@ Design 可以为目标故事补局部行动、沟通和决策，使场景转场�
 | R-5.18 | **series 实例分别承载**：design 义务清单带出 series 与按义务渲染的锁摘要；同一 series 的离散实例接受拍不同——两实例接受拍相同即 `series_collapsed`（body_design 同节点修订）。显式概括成员不作新增实例，不计入实例折叠闸，可与最后一个所覆盖实例同拍。复合义务前半用支撑拍表达；必保漏标由 real 覆盖闸拦、无标注的非必保义务进 unbound（义务不删）。 | `HARD`（`novel/stages/stage4/grounding.py::derive_semantic_binding`＋`design_obligation_index`；反例 `tests/test_str06_a5_positions.py`、`tests/hard_cases.py`） |
 | R-5.19 | **锁位置 Guard：信息披露顺序（R10a a5）**：kp 键知情升到某模式的位置、读者确认的位置不得早于**授权该模式的义务承载位置**（授权位＝必保义务 anchors 授权该 (holder, kp, mode) 的全部承载点最早者——支撑拍是承载的一部分，怀疑渐进到证实合法，P2）；initial_state 无披露时点不进判据；自由键不查（模式合法性归 R-5.17）；故事发生顺序不做机械 Guard（顺序三分，P5 合法倒叙不拦）。违例按 `epistemic_lock_order` 回派 `str06.stage4.body_design`（位置上下文＋源盲 core_id；披露顺序是 Design 的决定，承载位由 body_design 的 real 标注派生——CS-3 bind 退役后无独立承载节点）。 | `HARD`（`novel/stages/stage4/guard.py::lock_order_violations`＋`novel/stages/chain.py::_backfill_epistemic_lock_order`；反例 `tests/test_str06_a5_positions.py`、`tests/hard_cases.py`） |
 | R-5.20 | **已购回答复用四条件（R10a §二.4；CS-H H1b 改写第三条件，RC-50～53）**：实际模型输入未变且已购回答仍适用→复用（重启不重复购买）；验收条件变化、模型输入未变→免费机械复验，失败按既有恢复规则；实际写作材料变化→**先走候选集合的免费判定**：对已购候选做兼容性检查（wire 协议字面量相同、可按当前 schema 构造、章数与篇幅约束未变）→上游差异（对候选生成时的上游版本与当前上游版本的修订对照 wire 按（kind, anchors）对齐分未变/变化/新增/删除）→按当前输入完整编译与预检→择优（全绿优先、剩余根因最少次之、同分取最近）；无差异、或差异只有被证明等价的变化条目（位置不变、自由文本称谓规范形相等且保留每次人物提及、其余字段逐字相等；不能将相邻同人称谓折叠来证明免费沿用，无法机械证明的同位语删改走窄复核；新增／删除条目与编号漂移不算）且预检全绿→**零调用采用**（成本链 `ledger-row` 指向原 attempt，本根只记一行零 token cached 行，修订记录 kind `carried_forward`），变化不能证明等价→只复核引用这些条目的拍（一轮条目返修，允许原值不变；包含 real／know／所选 details，未 real 的细节归属也定位；series 的 members／mechanism／summaries 变化派生到相关成员差异，不作为审计变化忽略），删除条目→其承载拍进复核目标，新增条目→可选目标的条目返修（模型在给定拍闭集里选承载位）；**整份新购只限闭集原因**（没有候选／协议字面量不兼容／章数或篇幅约束变化／候选无法按当前 schema 构造／上游是全新回答无修订谱系）并留痕，局部称谓、单条义务、编译缺陷不得成为整份新购理由。仅审计或展示信息变化→不触发付费重写（时间戳等纯审计字段不进模型输入）。未受材料或验收条件影响的章节不重购；上游修订影响的章重新汇集正文与回执。 | `HARD`（`novel/stages/candidates.py` 候选集合与沿用判定＋`novel/llm/paid_requests.py::adopt_carried_forward`＋`novel/stages/chain.py::run_body_design`；反例 `tests/test_str06_candidate_preflight.py`、`tests/test_str06_candidates.py`、`tests/hard_cases.py`） |
-| R-5.21 | **必保揭名（CS-H H3，RC-61）**：`requires_released` 由三项类型化信号合取派生（identity／reveal 必保义务引用＋命题证据句段＝带名称谓首次出现句段＋命题文本含该称谓，不用文本共现）随 Brief 认知变化条目携带（句段号不进 Brief，保持源盲）；该 know 所在拍必须已释放所列称谓（同拍释放合法，拍前不可用），违例带 know 行路径可窄修；这类称谓不投影，承载章正文必现该字面（见 R-7.8）。漏检退化为普通投影，不比现状差。 | `HARD`（`novel/stages/stage4/grounding.py::project_brief`＋`novel/stages/stage4/design.py::_check_requires_released`；反例 `tests/test_str06_required_released.py`） |
-| R-5.22 | **Preserve 身份文本自闸（identity-text-v1）**：新 policy11 的 statement／satisfaction／details[].text 显式区分身份名称表达与普通文字；姓名部件的子串只召回候选，不证明指人。未分类为 unknown，引用必须在 Characters 登记闭集；普通义声明不触发姓名泄漏。Characters 是身份来源；已有源证据及 anchors／quotes 不改写、不标记。旧 policy checkpoint 只按原身份读取，不机械补出新语义。违例带原字段路径在当前 owner 修订，标注语义准确性保持未评。 | `HARD`（`novel/stages/stage4/grounding.py::preserve_name_issues`＋`novel/core/name_text.py::resolve_name_text`；反例 `tests/test_str06_preserve_gate.py`） |
+| R-5.21 | **必保揭名（CS-H H3，RC-61）**：`requires_released` 由三项类型化信号合取派生（identity／reveal 必保义务引用＋命题证据句段＝带名称谓首次出现句段＋命题文本含该称谓，不用文本共现）随 Brief 认知变化条目携带（句段号不进 Brief，保持源盲）；该 know 所在拍必须已释放所列称谓（同拍释放合法，拍前不可用），违例带 know 行路径可窄修；这类称谓不投影，承载章正文必现该字面（见 R-7.8）。rc26（命名前移批 C）起合取在目标面进行：命题文本已是目标姓名转述，带名源面经目标字面表映射后再匹配，必现字面与正文同面。漏检退化为普通投影，不比现状差。 | `HARD`（`novel/stages/stage4/grounding.py::project_brief`＋`novel/stages/stage4/design.py::_check_requires_released`；反例 `tests/test_str06_required_released.py`） |
+| R-5.22 | **Preserve 目标姓名转述闸（policy 12，命名前移批 rc26）**：statement／satisfaction／details[].text 一律用目标名称表的目标姓名（含化名）转述；改名人物的源旧字面（name-bearing 称谓面）落义务文本即源文抄回，按条目路径定位进 preserve 同节点修订环（compiler 不做全局替换，I-21）；文本携带 `[[`／`]]` 身份文本标记残片同闸拒收（identity-text-v1 已随普通正文主链退役）。anchors／source／evidence 引用及源句保持原字节，不替源句补声明。疑似旧名只在正文里形成定位报告（R-7.9），义务文本侧仍是硬闸。 | `HARD`（`novel/stages/stage4/grounding.py::preserve_name_issues`；反例 `tests/test_str06_preserve_gate.py`） |
 | R-5.23 | **显式系列概括的目标前情**：仅对已承载的概括义务检查 covers。所覆盖实例必须已承载且接受拍不晚于概括，最后实例与概括同拍合法；实例之间可重排，原文同场／顺序不作目标硬约束。Binding.series 从已采用 checkpoint 的唯一 series 原样派生；compiler 在概括拍送达目标实例事件与目标章号，不给写手补造旧事；该材料只进不可违背分区。早于实例的问题同时定位概括与实例两拍窄修；所覆盖实例未承载时提供现有拍闭集供 owner 放置或取消概括。正式免费重编译同验，候选入口去掉同码同位置的编译回声。 | `HARD`（`novel/stages/stage4/series.py`＋`novel/stages/stage4/design.py`＋`novel/stages/stage4/compile.py`＋`novel/stages/common.py::project_context`；反例 `tests/test_str06_a5_positions.py`、`tests/test_str06_body.py`、`tests/hard_cases.py`） |
 | R-5.24 | **选中细节的引用闭集与送达**：Design v9 只可用 obNN.dNN 引用正式 Brief 的可选细节，compiler 展开为 detail_refs，细节身份在完整义务集内唯一，同一拍不得重复引用；不选任何细节合法，不强制每章／每拍选择，不因细节选择把所属义务提升为必保。免费编译也拒绝重复细节身份或悬空引用并带 typed 位置，不以 KeyError 中断。选中文本只进该拍 creative_guidance，允许改写或省略；来源 detail_id／obligation_id／anchor 只供审计。错误在 Design 接受循环定位包含 details 的完整拍窄修，允许删除可选字段且替换目标不重叠，恢复采用同一闭集判据。 | `HARD`（`novel/stages/stage4/slim.py::expand_design_wire`＋`novel/stages/stage4/design.py`＋`novel/stages/stage4/compile.py`＋`novel/stages/common.py::project_context`；反例 `tests/test_str06_quality_materials.py`、`tests/test_str06_semantic_delivery.py`、`tests/hard_cases.py`） |
 
@@ -360,14 +360,15 @@ Stage5 只将 Stage4 已确定并送达章包的目标故事写成正文：可�
 
 | # | 要求 | 谁在查 |
 |---|---|---|
-| R-7.1 | 每章正文完整：非空、编码合法、无章节标题/编号/任务术语这类叙述外壳；标题词须有标题边界，不能把首句“尾声未尽”这类自然措辞当包装（机械 validator v3）。 | `HARD`（`novel/stages/stage5/body_checks.py::validate_chapter_prose`）；canonical 闭卷是唯一写作路径，旧开卷路径已闭环为 `legacy_incompatible`，见 `B-03`／`B-13` |
-| R-7.2 | 正文按身份文本协议生成；compiler 输出纯正文及 name_mentions／non_name_spans 两类显式声明区间。validator 检查语法、人物与称谓授权、区间、逐次候选覆盖；未声明候选是 unknown，不伪报姓名泄漏；普通词与姓名同形不触发身份错误。真实引用未登记或未释放则拒收。免费重验同时复验正文 hash 和两表，缺表不当合法空表；有限修订保持原额度，硬失败不得披露放行。 | `HARD`（`novel/stages/stage5/body_checks.py::validate_chapter_prose`＋`novel/core/name_text.py::validate_resolved_name_text`；反例 `tests/test_str06_body.py`、`tests/test_name_text.py`） |
+| R-7.1 | 每章正文完整：非空、编码合法、无章节标题/编号/任务术语这类叙述外壳，也不含身份协议定界符（`[[`／`]]`，rc26 起普通正文不得带标记）；标题词须有标题边界，不能把首句“尾声未尽”这类自然措辞当包装（机械 validator v5）。 | `HARD`（`novel/stages/stage5/body_checks.py::validate_chapter_prose`）；canonical 闭卷是唯一写作路径，旧开卷路径已闭环为 `legacy_incompatible`，见 `B-03`／`B-13` |
+| R-7.2 | 正文按普通目标文本生成（rc26，命名前移批 C：identity-text-v1 协议退役——不再有姓名标记、普通义标记、字符区间或候选覆盖硬闸）。写手材料（章包阅读面）由 compile 派生姓名监视行（`contracts/schema/state.py::NameWatch`：改名人物的源旧字面＋本章未释放的人物目标字面），其字面平铺是材料侧硬闸——旧名残留与未释放目标名不得进写手视野（`novel/stages/common.py::positive_material_issues`）。正文里的同类命中只形成定位报告（R-7.9），不阻断、不购返修；必保揭名字面按纯文本判定（R-7.8）。 | `HARD`（`novel/stages/stage5/body_checks.py::validate_chapter_prose`＋`novel/stages/common.py::writer_material_issues`；反例 `tests/test_str06_body.py`、`tests/test_str06_preserve_gate.py`） |
 | R-7.3 | 章篇幅落在配置篇幅带内；超限只有篇幅带可披露（`length_disclosed`），硬失败不披露。 | `HARD`（`novel/stages/stage5/body_checks.py::validate_chapter_prose`）；超限后只有篇幅带可披露，不恢复自动收缩臂，见 `B-11` |
-| R-7.4 | 章回执绑定章序、章包摘要、请求身份、验证版本与改名前正文摘要（D2，rc5）；不再绑定全书 IR 与前文链，各章独立有效。崩溃窗口（响应已存/正文已写回执未写）免费重放闭合。 | `HARD`（`novel/stages/common.py::check_chapter_receipt`） |
+| R-7.4 | 章回执绑定章序、章包摘要、请求身份、验证版本与最终正文摘要（D2，rc5；rc26 起正文即最终成文，无改名前中间态）；不再绑定全书 IR 与前文链，各章独立有效。崩溃窗口（响应已存/正文已写回执未写）免费重放闭合。 | `HARD`（`novel/stages/common.py::check_chapter_receipt`） |
 | R-7.5 | `ChapterReceipt` 的盘上形状由 `ARTIFACT_SPECS` 登记；回执只证明机械范围。 | `载体`（`contracts/schema/receipt.py::ChapterReceipt`） |
-| R-7.6 | 正文文学质量与身份／普通义标注的语义准确性未经语义评审（生产正文 Judge 已随 STR-06 取消），保持未评披露；章级机械检查不证明章内揭示位置与逐场义务兑现。 | `INFO`（`body_semantics_unver` 明示 `UNVER`，进交付披露）；发明越界见 `B-01`，「必须成立不必写在纸面上」见 `B-04`，潜台词与声音见 `B-10`／`B-09`，无表面探针的事实见 `B-23`，改写式泄底历史闭环见 `B-15` |
+| R-7.6 | 正文文学质量未经语义评审（生产正文 Judge 已随 STR-06 取消），保持未评披露；章级机械检查不证明章内揭示位置与逐场义务兑现；疑似旧名／提前揭名定位报告的命中不宣称语义泄漏（普通同形词可能出现）。 | `INFO`（`body_semantics_unver` 明示 `UNVER`，进交付披露）；发明越界见 `B-01`，「必须成立不必写在纸面上」见 `B-04`，潜台词与声音见 `B-10`／`B-09`，无表面探针的事实见 `B-23`，改写式泄底历史闭环见 `B-15` |
 | R-7.7 | 逐章实际篇幅与预算偏差无条件报出（度量，不是门）。 | `度量`（`novel/stages/stage5/body_checks.py::validate_chapter_prose`） |
-| R-7.8 | **必保揭名正文面**：承载章须有声明为身份提及且称谓字面等于所列名称的正文区间；普通义片段中的同形字面不代替揭名。缺失即拒，按现役段落修句合并后完整重验，不披露放行。 | `HARD`（`novel/stages/stage5/body_checks.py::validate_chapter_prose`＋`novel/stages/stage5/body.py`；反例 `tests/test_str06_required_released.py`） |
+| R-7.8 | **必保揭名正文面**：承载章正文须出现所列称谓字面（rc26 起按纯文本判定——普通目标正文无声明区间，同形普通词不代替揭名的语义核验保持未评）；缺失即拒，按现役段落修句合并后完整重验，不披露放行。 | `HARD`（`novel/stages/stage5/body_checks.py::validate_chapter_prose`＋`novel/stages/stage5/body.py`；反例 `tests/test_str06_required_released.py`） |
+| R-7.9 | **疑似姓名残留定位报告（rc26，命名前移批 C）**：正文与 Hook 成文里的疑似旧名残留（改名人物的源旧字面）与疑似提前揭名（本章未释放的人物目标字面）由 `novel/core/name_residue.py` 长名优先单遍定位，按（码、人物、字面、字符区间）归因落 runtime 审计面（`runtime/acceptance/name_report/chNN.json`／`runtime/hook_name_report.json`），计数聚合进交付 manifest 与监控页。报告只定位：不阻断流水线、不自动触发付费返修、不授予业务状态；写手材料侧同类命中仍是硬闸（R-7.2），两面判据不互换；命中的语义归属（真漏保、过保或提前暴露）保持未评。 | `度量`（`name_residue_report`；反例 `tests/test_name_residue.py`）；语义覆盖率限制见 `B-21` |
 
 ### R-8 · Hook 成文（stage5 · str06.stage5.hook）
 
@@ -379,7 +380,7 @@ HookContext（正式输入确定性重建），不读源 hook 文案——Stage1
 
 | # | 要求 | 谁在查 |
 |---|---|---|
-| R-8.1 | Hook 机械验通过：非空、编码合法、无包装行、withheld 专名字面不出现；字符数仅统计，不按固定篇幅拒稿。POV、起笔事实时序与披露边界在设计／Context 构建期校验；成文的遵守程度及阅读质量保持语义未评。 | `HARD`（`novel/stages/stage5/hook_writer.py::validate_hook_prose`）；不剧透与「只引用正文真实句子」没有确定性防线，见 `B-12` |
+| R-8.1 | Hook 机械验通过：非空、编码合法、无包装行、不含身份协议定界符（rc26）；字符数仅统计，不按固定篇幅拒稿。未释放专名不得进写手视野由 Context 材料闸负责（R-7.2 同尺），正文里的疑似残留只进定位报告（R-7.9）。POV、起笔事实时序与披露边界在设计／Context 构建期校验；成文的遵守程度及阅读质量保持语义未评。 | `HARD`（`novel/stages/stage5/hook_writer.py::validate_hook_prose`）；不剧透与「只引用正文真实句子」没有确定性防线，见 `B-12` |
 | R-8.2 | Hook 回执绑定 HookContext 身份、正文 hash 与请求身份；拒绝稿不落正式位。 | `HARD`（`novel/stages/stage5/hook_writer.py::validate_hook_prose` + `novel/stages/chain.py::run_hook`） |
 | R-8.3 | Hook 成文不扩大正文失效面：只改 Hook 不使无关正文接受失效（窄修改边界）。 | `结构`（`novel/stages/stage4/hook_context.py::compile_hook_context`） |
 | R-8.4 | `HookReceipt` 的盘上形状由 `ARTIFACT_SPECS` 登记；机械通过不证明不剧透、材料顺序遵守与吸引力。 | `载体`（`contracts/schema/hook.py::HookReceipt`） |
@@ -401,22 +402,24 @@ Hook 的必要选择进入 Stage4 正式 Design（`R-5.6`），经 HookContext �
 `str06.stage4.naming` 只做 NameMap v6 赋值（读名称结构与 Blueprint 的只读投影；
 命名前移批 2026-10-18 起置于 Stage2 compile 之后、Preserve 之前——目标姓名经
 `stage4/naming/name_map.json` 进入目标简报与设计链，旧 `str06.stage7.naming` 退役）；
-`str06.stage7.assemble` 是替换与装配的唯一应用者：章回执链核对 → 按身份提及确定性改名
-→ 残留检查 → TXT 先落盘 → manifest 最后提交。Stage7 不改写 Stage5 任何字节；
-交付可确定性重放，同输入同字节。
+`str06.stage7.assemble` 只核对与装配（rc26 命名前移批 C：零改名——Stage5 正文直接
+以目标姓名成文，末端替换链 `apply_bound_names`／`diff_proof`／`compile_bound_replacements`
+已退役）：章回执链核对 → 按阅读序拼接已接受正文 → TXT 先落盘 → manifest 最后提交。
+Stage7 不改写 Stage5 任何字节；交付可确定性重放，同输入同字节。疑似旧名／提前揭名
+只形成定位报告（R-7.9），不在 Stage7 设闸。
 
 | # | 要求 | 谁在查 |
 |---|---|---|
 | R-10.1 | NameMap v6 编译闭合：名称位一致、无姓氏冲突、保留项合法（带理由）。 | `HARD`（`novel/stages/stage4/naming.py::compile_name_map`） |
-| R-10.2 | 改名仅消费回执中绑定 char_id 的具体身份提及；同字面不同人物可有不同映射，普通义区间逐字保留。缺声明表、非法区间、正文不一致或无映射均拒绝；全部差异必须恰为已声明提及的确定性变换。此机械证明不代签提及标注的语义正确性。 | `HARD`（`novel/stages/stage4/naming.py::apply_bound_names`＋`novel/stages/stage4/naming.py::diff_proof`）+ `B-21` 披露面 |
-| R-10.3 | 章回执集合核对（D2，rc8；B4 后半补五态；rc6 身份拆分）：逐章回执状态、当前编译出的写手视图摘要（`writer_view_sha256`，材料含实际正文 system、renderer 与写手协议版本）、验证输入摘要（`validation_sha256`：禁用字面、称谓许可、篇幅带）与正文 hash 绑定；Machine 层摘要（`machine_view_sha256`）仅审计不参与核对——只改 Machine 层字段不触发重购。有效／缺失／拒绝／未知／失效（绑定不成立的接受态回执）五态分开按 item 报告（I-42），不静默跳过；集合齐备才装配就绪（not_ready 显式，不落新交付），某章失效不截断其他章有效性。 | `HARD`（`novel/stages/stage7/assembly.py::verify_chapter_receipts`／`chapter_access`，共用 `_binding_problems`） |
+| R-10.2 | 【已退役】末端姓名替换与 diff 证明随命名前移批 C（rc26，2026-10-18）退役：正文直接以目标姓名成文，不再有「改名前正文＋按提及改名」两段式交付；替换差异证明由装配零改名的字节一致性（R-10.3 正文 hash 绑定＋R-10.5 确定性重放）取代。疑似旧名残留只进定位报告（R-7.9）。 | `不适用`（退役条款，无可执行机械义务） |
+| R-10.3 | 章回执集合核对（D2，rc8；B4 后半补五态；rc6 身份拆分）：逐章回执状态、当前编译出的写手视图摘要（`writer_view_sha256`，材料含实际正文 system、renderer 与写手协议版本）、验证输入摘要（`validation_sha256`：姓名监视行、称谓许可、篇幅带）与最终正文 hash 绑定；Machine 层摘要（`machine_view_sha256`）仅审计不参与核对——只改 Machine 层字段不触发重购。有效／缺失／拒绝／未知／失效（绑定不成立的接受态回执）五态分开按 item 报告（I-42），不静默跳过；集合齐备才装配就绪（not_ready 显式，不落新交付），某章失效不截断其他章有效性。 | `HARD`（`novel/stages/stage7/assembly.py::verify_chapter_receipts`／`chapter_access`，共用 `_binding_problems`） |
 | R-10.4 | TXT 先落盘、manifest 最后提交；manifest 与文件 hash 逐字一致，消费者核对 manifest 才算就绪。 | `HARD`（`novel/stages/stage7/assembly.py::build_delivery_manifest`） |
-| R-10.5 | 同输入交付字节一致（确定性重放）；重放只允许缓存与登记的历史采用，零新购。 | `HARD`（`novel/stages/stage7/assembly.py::assemble_delivery`） |
+| R-10.5 | 同输入交付字节一致（确定性重放；rc26 起零改名，重放即已接受正文按阅读序拼接）；重放只允许缓存与登记的历史采用，零新购。 | `HARD`（`novel/stages/stage7/assembly.py::assemble_delivery`） |
 | R-10.6 | 新名的阅读质量未经语义评审，保持未评披露。 | `INFO`（`naming_quality_unver` 明示 `UNVER`，进交付披露）；新名质量没有确定性判据，见 `B-22` |
 | R-10.7 | 全书相对书级目标的偏差无条件报出（±10% 读数，度量不是门）；逐章篇幅披露与未评语义分开报告。 | `度量`（`novel/stages/stage7/assembly.py::build_delivery_manifest`） |
-| R-10.8 | `NameMapV6` 与交付 manifest 的盘上形状由 `ARTIFACT_SPECS`／唯一 writer 契约治理；NameMap 是交付变换契约，接受正文、回执与已购证据独立保护。 | `载体`（`contracts/schema/naming.py::NameMapV6`） |
-| R-10.9 | Stage7 不回写 Stage5：名称映射按稳定人物身份及登记构词编译，装配只变换已声明提及；换 NameMap 只影响交付，正文与语义声明保留。 | `结构`（`novel/stages/stage4/naming.py::compile_bound_replacements`） |
-| R-10.10 | **章标记与分章身份**：成书按阅读序逐章加「第N章」一行（章号由系统添加，写手协议据此约定不写章号），引子放最前、不加标题；交付身份由有序的 `(chapter_ordinal, prose_sha256)`、Hook 成文 hash、改名映射与保留字面、`ASSEMBLY_FORMAT_VERSION` 派生——拼接相同但分章不同 ⇒ 身份不同。章回执绑定不含章号的改名前正文摘要（rc5）。 | `HARD`（`novel/stages/stage7/assembly.py::assemble_delivery`／`delivery_identity`） |
+| R-10.8 | `NameMapV6` 与交付 manifest 的盘上形状由 `ARTIFACT_SPECS`／唯一 writer 契约治理；NameMap 是目标命名契约（rc26 起进入创作链的正式输入，不再是末端交付变换表），接受正文、回执与已购证据独立保护。 | `载体`（`contracts/schema/naming.py::NameMapV6`） |
+| R-10.9 | 【已退役】随 R-10.2 一并退役：零改名装配后不存在「按身份提及变换」的编译面；目标字面表改由 compile 期消费（`novel/core/name_materials.py::target_face_table`，供章包/HookContext 称谓许可映射），不再服务末端替换。 | `不适用`（退役条款，无可执行机械义务） |
+| R-10.10 | **章标记与分章身份**：成书按阅读序逐章加「第N章」一行（章号由系统添加，写手协议据此约定不写章号），引子放最前、不加标题；交付身份由有序的 `(chapter_ordinal, prose_sha256)`、Hook 成文 hash 与 `ASSEMBLY_FORMAT_VERSION`（rc26 起 `str06-assembly-v4`，零改名）派生——拼接相同但分章不同 ⇒ 身份不同。章回执绑定不含章号的最终正文摘要（rc5）。 | `HARD`（`novel/stages/stage7/assembly.py::assemble_delivery`／`delivery_identity`） |
 
 ### R-11 · 人工审阅、模型权限与确定性调度
 
@@ -718,7 +721,7 @@ reasoning 是 completion 的子口径，不再累加。统一解析顶层与 com
 |---|---|---|
 | **B-19** | Stage5 全书写作授权 | **【已退役 2026-09-15 全自动裁决（批次 B3）】** 是否付费不再逐书逐层由人授权：上传即授权本书全部付费节点（run 启动授权），整批付费确认由 R-13.3 的 `--yes`/`confirmed` 面一次性摊开。存量 `writing/writing_proof` 账只读保留 |
 | **B-20** | 非正文剔除的正确性 | **确定性验不了**——「这一段到底是不是番外」没有结构不变量可查，而正文体已按契约丢弃、盘上不留副本。判据已按 161 本语料标定（27 本命中 / 0 假阳），但那是「在这批语料上没抓错」，不是「对任何输入都不会抓错」。每本必须打印一条「剔除的正确性：本层验不了」 |
-| **B-21** | 改名的语义覆盖率 | **未评。** 身份引用须落在人物登记面内（`R-2.8`／`R-5.1`），每个已声明名称表达的变换由 `R-10.2` 机械证明。人物表是否漏收角色、称谓是否归错人，以及模型是否把真实人物误标为普通文字，不能靠字面扫描证明；机械通过不代表姓名语义完整。 |
+| **B-21** | 姓名使用的语义覆盖率 | **未评。** rc26（命名前移批次 C）起正文直接以目标姓名成文：疑似旧名残留与提前揭名由 `R-7.9` 定位报告机械命中（不阻断），但命中是否真的漏保、过保或提前暴露，以及人物表是否漏收角色、称谓是否归错人，不能靠字面扫描证明；机械通过不代表姓名语义完整。 |
 | **B-22** | 新名的质量 | 时代感与雅俗没有确定性判据。**现役闸门就是「人定稿」那一步**，这一点不会变。同理开篇文案的定稿 |
 | **B-23** | 提不出表面探针的事实 | 新链诚实地把这类事实语义留在未评披露（`R-7.6`），确定性层没有第二把语义尺子证明它是否落地。这不是“查过没事”。同场的 verbatim / keep_value / must_appear 只能守各自材料维度，不能替代事实语义；代词化又已实测会让专名探针假阳。⇒ 先用真书盲读标定，不凭手感开自动阈值 |
 
@@ -736,8 +739,8 @@ reasoning 是 completion 的子口径，不再累加。统一解析顶层与 com
 | 分章（`stage1`，**9 条现役**） | R-1 |
 | 源语义与名称结构（`stage2`，**18 条现役**；CS-S 1b 删 R-2.13／R-2.15） | R-2、R-3 |
 | 目标命名、目标故事与确定性编译（`stage4`，**35 条现役**） | R-5、R-6、R-10（命名） |
-| 按章正文与 Hook（`stage5`，**9 条现役**） | R-7、R-8 |
-| 命名与交付（`stage7`，**6 条现役**） | R-10（交付） |
+| 按章正文与 Hook（`stage5`，**10 条现役**；rc26 增 `name_residue_report`、`body_withheld_literals` 改名 `body_name_watch`） | R-7、R-8 |
+| 命名与交付（`stage7`，**5 条现役**；rc26 注销 `naming_residual`） | R-10（交付） |
 
 `tests/test_coverage.py` 校验双向关联、逐节精确条目数、逐层计数及无遗漏；structural/carrier 的
 实现归属仍由对应 R 行点名，不能因没有注册 Rule 就称它没有任何校验。人审和真正盲区分别明示，B 不冒充测试。

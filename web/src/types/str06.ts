@@ -173,6 +173,8 @@ export interface Str06DeliveryView {
   final_text_sha256: string | null
   chapters: Str06DeliveryChapter[]
   length_reading: Record<string, number> | null
+  /** rc26: 疑似旧名残留/提前揭名定位报告计数（不阻断、不购返修；明细在 runtime 审计面） */
+  name_residue: Record<string, Record<string, number>> | null
   disclosure: string | null
 }
 

@@ -14,7 +14,135 @@ from novel.stages.revisions import (
 )
 from tests.str06_facilities import name_map_of
 from tests.test_str06_r3_selfheal import _json_session, _ScriptedTransport, _request
-from tests.test_str06_body import _green_book_ir
+from tests.test_str06_hook import _characters, _full_chain_wires
+
+
+# ───────────────────────── 本地夹具（不依赖 tests/test_str06_body.py） ─────────────────────────
+
+GOOD_CH1 = '拜堂之夜，苏芸娘望着夫君，旧约出口，烛火到天亮才熄，她记住了每一个字。'
+GOOD_CH2 = '夫君夜半离家，芸娘在他枕下发现玉佩，字迹陌生，她把玉佩藏回原处，坐到天明。'
+
+
+def _green_book_ir(band=(0.6, 1.3), total=2000):
+    """两章设计 → Binding → Plan → WriterBookIR（rc26：NameMapV6 必填）。"""
+    from novel.stages.stage4.compile import compile_execution_plan
+    from novel.stages.stage4.design import assemble_body_design
+    from novel.stages.stage4.grounding import derive_semantic_binding
+    from novel.stages.stage4.book_ir import compile_writer_book_ir
+    from tests.str06_facilities import anchor_stub
+    from tests.str06_expression_inputs import sample_narration, sample_requirements
+    from tests.test_str06_hook import _body_wire
+    from contracts.schema.grounding import (
+        PreserveCheckpoint, SourceLineage, SourceObligation,
+    )
+    from contracts.schema.policy import PreserveKind
+
+    chars = _characters()
+    body, errors = assemble_body_design(
+        _body_wire(), known_char_ids={'fu_jun', 'yun_niang'},
+        expression_requirements=sample_requirements(), source_narration=sample_narration())
+    assert body is not None and not errors, errors
+    obligation = SourceObligation(
+        obligation_id='ob01', kind=PreserveKind.EVENT_CORE,
+        statement='苏芸娘嫁入陆家且夫君立下旧约',
+        anchors=anchor_stub(),
+        lineage=SourceLineage(blueprint_refs=('b01_01',), character_ids=('yun_niang', 'fu_jun')),
+        must_preserve=True, satisfaction='正文呈现婚约成立且夫君立下旧约')
+    checkpoint = PreserveCheckpoint(
+        checkpoint_id='cp', policy_id='p', policy_version=1,
+        characters_sha256='a' * 64, blueprints_sha256='a' * 64,
+        name_map_sha256='a' * 64, provider='x', model='y',
+        request_sha256='r' * 64, obligations=(obligation,), checkpoint_sha256='a' * 64)
+    binding, errors = derive_semantic_binding(
+        {'ob01': [(0, 0), (0, 1)]}, body, checkpoint)
+    assert binding is not None and not errors, errors
+    plan, errors = compile_execution_plan(body, binding)
+    assert not errors, errors
+    writer_ir = compile_writer_book_ir(
+        graph=body, plan=plan, binding=binding, total_budget=total,
+        length_band=band, book_title='报恩',
+        projection=chars.name_projection(), structure=chars.name_structure,
+        name_map=name_map_of(chars))
+    return body, binding, plan, writer_ir
+
+
+def _chapters():
+    return [
+        {'chapter_ordinal': 1, 'text': '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'},
+        {'chapter_ordinal': 2, 'text': '夫君夜半翻墙而出，苏芸娘发现玉佩刻着沈字。'}]
+
+
+def _make_session(tmp_path, wires, ceiling=None, truncate=(), name='out', transport=None):
+    """fake transport 会话（与 test_str06_body 同尺，但不跨文件依赖其夹具）。"""
+    from novel.llm.ledger import CostLedger, ledger_path
+    from novel.llm.paid_requests import PaidRequestSession
+    from novel.llm.transport import ChatRequest, ChatResponse
+    from novel.store import Str06Repository
+    from tests.str06_facilities import make_context
+    from tests.test_str06_hook import _declared_prose
+
+    class _RoutingTransport:
+        def __init__(self, wires, truncate=(), hook_text='苏芸娘望着空房。'):
+            self.wires = wires
+            self.truncate = tuple(truncate)
+            self.hook_text = hook_text
+            self.calls: list[str] = []
+
+        def send(self, request: ChatRequest) -> ChatResponse:
+            import json as _json
+            owner = self._owner(request)
+            self.calls.append(owner)
+            if owner == 'hook_writer':
+                return ChatResponse(content=_declared_prose(self.hook_text), finish_reason='stop',
+                                    usage={'prompt_tokens': 10, 'completion_tokens': 5},
+                                    model='fake')
+            if owner.startswith('body_ch'):
+                if owner in self.truncate:
+                    return ChatResponse(content='截断的开头。', finish_reason='length',
+                                        usage={'prompt_tokens': 100, 'completion_tokens': 40000},
+                                        model='fake')
+                text = GOOD_CH1 if owner.endswith('ch01') else GOOD_CH2
+                return ChatResponse(content=_declared_prose(text), finish_reason='stop',
+                                    usage={'prompt_tokens': 100, 'completion_tokens': 40},
+                                    model='fake')
+            return ChatResponse(content=_json.dumps(self.wires[owner], ensure_ascii=False),
+                                finish_reason='stop',
+                                usage={'prompt_tokens': 10, 'completion_tokens': 10},
+                                model='fake')
+
+        @staticmethod
+        def _owner(request: ChatRequest) -> str:
+            user = request.user
+            if '楔子' in request.system:
+                return 'hook_writer'
+            if user.startswith('章包：') or '章包' in user[:8]:
+                return 'body_' + ('ch01' if '第1章' in user[:40] else 'ch02')
+            return next((key for key in wires if key in user), 'unknown')
+
+    if transport is None:
+        transport = _RoutingTransport(wires, truncate=truncate)
+    base = tmp_path / name
+    base.mkdir(exist_ok=True)
+    repo = Str06Repository(base / 'run')
+    ledger = CostLedger(path=ledger_path(base))
+    repo.attach_context(make_context(base / 'run', ledger=ledger))
+    session = PaidRequestSession(repo, ledger, transport, yes=True,
+                                 allow_source_export=True, provider='fake',
+                                 book_call_ceiling=ceiling, sid='run')
+    return repo, session, transport
+
+
+def _run(repo, session, *, budget=2000, concurrency=4, node_concurrency=None,
+         node_filter=None, body_chapters=None, through='stage7'):
+    from novel.stages.chain import run_workflow
+    from tests.str06_facilities import body_ask, json_ask, text_ask
+    return run_workflow(repository=repo, chapters=_chapters(),
+                        ask=json_ask(session), ask_text=text_ask(session),
+                        ask_body=body_ask(session),
+                        budget=budget, through=through, book_title='报恩',
+                        length_band=(0.01, 0.05), concurrency=concurrency,
+                        node_concurrency=node_concurrency,
+                        node_filter=node_filter, body_chapters=body_chapters)
 
 
 def _assemble(wire, **kw):
@@ -550,7 +678,8 @@ def test_anchor_is_earlier_and_immediate_continuation_uses_previous_last_beat():
     from tests.test_str06_hook import _characters
     chars = _characters()
     ir = compile_writer_book_ir(graph=anchored('sc01#b01'), plan=plan, binding=binding,
-        total_budget=1000, length_band=(0.6, 1.3), projection=chars.name_projection(), structure=chars.name_structure)
+        total_budget=1000, length_band=(0.6, 1.3), projection=chars.name_projection(),
+        structure=chars.name_structure, name_map=name_map_of(chars))
     from novel.stages.common import render_chapter_packet
     rendered = render_chapter_packet(project_chapter_packet(ir, 2))
     assert body.beat('sc01', 'b01').event in rendered and '倒叙' in rendered
@@ -599,21 +728,22 @@ def test_generated_design_schema_rejects_the_same_local_branch_errors():
             DesignWireV5.model_validate(bad)
 
 
-def test_family_release_is_shared_and_stage7_replaces_actual_forms():
-    from tests.test_str06_hook import _characters
-    from novel.core.name_materials import expand_surface_releases, withheld_name_literals
-    from novel.stages.stage4 import compile_name_map, compile_bound_replacements, apply_bound_names
+def test_family_release_is_shared_and_target_faces_render_actual_forms():
+    """家族构词随成员释放共享；rc26 起同族称谓由目标字面表渲染成新姓形态。"""
+    from novel.core.name_materials import expand_surface_releases, target_face_table
+    from novel.stages.stage4 import compile_name_map
+    from tests.test_str06_hook import _full_chain_wires
     chars = _characters()
     releases = expand_surface_releases({'fu_jun': ('夫君',)}, chars.name_structure)
     assert '陆家' in releases['fu_jun']
-    assert '陆家' not in withheld_name_literals(chars.name_projection(), releases['fu_jun'], chars.name_structure)
-    from tests.test_str06_hook import _full_chain_wires
     names, errors = compile_name_map(_full_chain_wires()['naming'], chars)
     assert not errors
-    replacements, errors = compile_bound_replacements(chars, names)
-    from novel.core.name_text import resolve_name_text
-    text = resolve_name_text('[[name:fu_jun|陆家]]还有[[name:fu_jun|陆兄]]。')
-    assert not errors and apply_bound_names(text.text, text.mentions, replacements)[0] == '顾家还有顾兄。'
+    faces, errors = target_face_table(chars.name_structure, names)
+    assert not errors, errors
+    # 家族构词与个人称谓同表渲染：源登记字面 → 目标字面（末端替换链已退役）
+    assert faces['fu_jun']['陆家'] == '顾家'
+    assert faces['fu_jun']['陆兄'] == '顾兄'
+    assert faces['fu_jun']['夫君'] == '夫君', '纯称谓不改名'
 
 
 def test_narration_reaches_writer_and_rejects_scene_pov_drift():
@@ -634,33 +764,61 @@ def test_narration_reaches_writer_and_rejects_scene_pov_drift():
     plan, errors = compile_execution_plan(first, binding)
     assert not errors
     ir = compile_writer_book_ir(graph=first, plan=plan, binding=binding, total_budget=2000,
-        length_band=(0.6, 1.3), projection=chars.name_projection(), structure=chars.name_structure)
+        length_band=(0.6, 1.3), projection=chars.name_projection(),
+        structure=chars.name_structure, name_map=name_map_of(chars))
     for n in (1, 2):
         text = render_chapter_packet(project_chapter_packet(ir, n))
         assert '第一人称' in text and '对白中的自称不改变正文叙述人称' in text
     # 不以对白中的“我”机械判断第三人称违约；自由文本人称由 canary 核读。
     from novel.stages.stage5 import validate_chapter_prose
-    assert not validate_chapter_prose('她说：“我去。”', target_chars=8, band_low=5, band_high=10,
-                                      withheld_literals=(), released_surfaces=())
+    assert not validate_chapter_prose('她说：“我去。”', target_chars=8, band_low=5, band_high=10)
 
 
 def test_inherited_expression_leak_points_to_explicit_wire_override():
+    """继承表达（默认 keep 回填）夹带未释放目标专名：指出 expression_overrides 入口。
+
+    rc26（命名前移批 C）：材料检查面一律目标字面——未释放目标名经
+    `validate_design_materials(faces=, name_map=)` 报出，投影只换成显示面
+    （同位语折叠），不可投影的残余才判泄漏。
+    """
     from contracts.schema.expression import ExpressionDecision
-    from contracts.schema.source import NameProjection
     from novel.stages.stage4.materials import validate_design_materials
     from copy import deepcopy
 
+    from tests.test_str06_hook import _characters
+    from tests.str06_facilities import hook_naming_map
+    from novel.core.name_materials import target_face_table
+
     body, _binding, _plan, _ir = _green_book_ir()
-    leaking = ExpressionDecision(ex_id='ex_04', action='keep', reason=None,
-                                  statement='沈鹤汀表面黏人，内心克制，形成反差。')
-    body = body.model_copy(update={'expression_decisions': (leaking,)})
-    before = deepcopy(body.model_dump())
-    projection = NameProjection(proper_literals=('沈鹤汀',), family_literals=(), by_person=())
-    errors = validate_design_materials(body, projection=projection, known_char_ids={'fu_jun', 'yun_niang'})
-    assert errors and all('expression_overrides' in e for e in errors)
-    assert all(e.startswith('positive_material_leak[') for e in errors)
-    assert body.model_dump() == before
-    repaired = body.model_copy(update={'expression_decisions': (
-        ExpressionDecision(ex_id='ex_04', action='change', reason='按当前释放范围表达反差。',
-                           statement='表面黏人，内心克制，形成反差。'),)})
-    assert not validate_design_materials(repaired, projection=projection, known_char_ids={'fu_jun', 'yun_niang'})
+    chars = _characters()
+    # 真实改名表（fu_jun→顾、yun_niang→柳婉）：源旧名是旧名残留监视行，
+    # 全部保留替身没有旧名可拦（见 str06_facilities.hook_naming_map 注释）。
+    faces, face_errors = target_face_table(chars.name_structure, hook_naming_map())
+    assert not face_errors, face_errors
+
+    def check(statement, action='keep', reason=None):
+        decision = ExpressionDecision(ex_id='ex_04', action=action, reason=reason,
+                                      statement=statement)
+        candidate = body.model_copy(update={'expression_decisions': (decision,)})
+        before = deepcopy(candidate.model_dump())
+        errors = validate_design_materials(
+            candidate, projection=chars.name_projection(),
+            known_char_ids={'fu_jun', 'yun_niang'}, structure=chars.name_structure,
+            faces=faces, name_map=hook_naming_map())
+        assert candidate.model_dump() == before, 'validator 不得修改输入'
+        return errors
+
+    leaking = '陆大哥表面黏人，内心克制，形成反差。'
+    errors = check(leaking)
+    # 继承表达（默认 keep 回填）的旧名残留带 expression_overrides 入口提示。
+    expression_errors = [e for e in errors if 'expression/ex_04' in e]
+    assert expression_errors and all('expression_overrides' in e for e in expression_errors)
+    assert all(e.startswith('positive_material_leak[') for e in expression_errors)
+    assert any('陆兄' in e for e in check('陆兄表面黏人。'))
+    # 反例：已释放的目标姓名（柳婉）不报——监视行只收旧名与未释放目标名。
+    # （具件场景事件文本尚本转目标面，其残留由共享具件负责，不归本判据）
+    assert not [e for e in check('柳婉表面黏人。') if 'expression' in e]
+    # 修法：显式改写这项表达并说明理由，泄漏清零
+    assert not [e for e in check('表面黏人，内心刻克，形成反差。', action='change',
+                                 reason='按当前释放范围表达反差。')
+                 if 'expression' in e]

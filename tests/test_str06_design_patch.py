@@ -31,7 +31,7 @@ from tests.test_str06_candidate_preflight import _bad_design, _prepare
 # ───────────────────────── 定位策略（纯函数） ─────────────────────────
 
 WIRE = {
-    'protocol_version': 'stage4-design-v11',
+    'protocol_version': 'stage4-design-v12',
     'book_style': '风格', 'character_voices': [{'char_id': 'a', 'voice': 'v'}],
     'scenes': [
         {'driver': {'focal_actor': 'a'}, 'brief': '场景简报',
@@ -46,6 +46,20 @@ WIRE = {
 def issue(message, *paths):
     return design_issue(message, code='design_wire_expand',
                         location=paths[0] if paths else (), paths=paths)
+
+
+def _chain_wires():
+    """全链 fake wires；design wire 的协议字面量按现役读面钉住。
+
+    `tests/test_str06_hook.py::_full_chain_wires` 的 design 夹具仍声明
+    `stage4-design-v11`（已只读归档，不在 `DESIGN_READ_PROTOCOLS`）——这里只改
+    协议字面量，Brief／names／naming 等其余事实仍取自同一夹具。
+    """
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
+    from tests.test_str06_hook import _full_chain_wires
+    wires = _full_chain_wires()
+    wires['design']['protocol_version'] = STAGE4_DESIGN_WIRE_PROTOCOL
+    return wires
 
 
 def targets(*errors):
@@ -272,9 +286,8 @@ def test_book_expression_is_excluded_from_full_and_narrow_design_requests(tmp_pa
     from novel.stages.chain import ChainContext, run_preserve, run_workflow
     from tests.str06_facilities import name_map_of, json_ask, text_ask
     from tests.test_str06_body import _chapters, _make_session
-    from tests.test_str06_hook import _full_chain_wires
 
-    wires = _full_chain_wires()
+    wires = _chain_wires()
     wires['design']['scenes'][0]['beats'][0]['ex'] = []
     bad = deepcopy(wires['design'])
     bad['scenes'][0]['beats'][0]['ex'] = ['ex_01']
@@ -314,10 +327,9 @@ def test_item_patch_round_resends_only_the_failing_beats_and_merges_to_a_full_gr
     from tests.str06_facilities import json_ask, text_ask
     from novel.llm.paid_requests import digest
     from novel.stages.chain import ChainContext, run_preserve, run_workflow
-    from tests.test_str06_hook import _full_chain_wires
     from tests.test_str06_body import _chapters
 
-    wires = _full_chain_wires()
+    wires = _chain_wires()
     bad = deepcopy(wires['design'])
     _bad_design(bad)                  # 第1场两拍的事件文本提前使用未释放的『陆大哥』
     transport = PatchingTransport(wires, bad)
@@ -365,9 +377,8 @@ def test_illegal_beat_read_is_repaired_as_a_whole_scene_and_replays_without_purc
     from novel.stages.chain import ChainContext, run_preserve, run_workflow
     from tests.str06_facilities import json_ask, text_ask
     from tests.test_str06_body import _chapters, _make_session
-    from tests.test_str06_hook import _full_chain_wires
 
-    wires = _full_chain_wires()
+    wires = _chain_wires()
     good = deepcopy(wires['design'])
     bad = deepcopy(good)
     original_reads = bad['scenes'][0].pop('reads')
@@ -439,9 +450,8 @@ def test_patch_that_does_not_fix_the_leak_is_stopped_by_the_existing_no_progress
     from tests.str06_facilities import json_ask, text_ask
     from novel.llm.paid_requests import digest
     from novel.stages.chain import ChainContext, run_preserve, run_workflow
-    from tests.test_str06_hook import _full_chain_wires
 
-    wires = _full_chain_wires()
+    wires = _chain_wires()
     bad = deepcopy(wires['design'])
     _bad_design(bad)
     # 粘性：patch 回来的值仍带着同一个泄漏。
@@ -475,9 +485,8 @@ def test_carrier_missing_gets_one_optional_closed_set_round_instead_of_full_rewr
     from tests.str06_facilities import json_ask, text_ask
     from novel.llm.paid_requests import digest
     from novel.stages.chain import ChainContext, run_preserve, run_workflow
-    from tests.test_str06_hook import _full_chain_wires
 
-    wires = _full_chain_wires()
+    wires = _chain_wires()
     bad = deepcopy(wires['design'])
     _bad_design(bad)
     for scene in bad['scenes']:
@@ -529,9 +538,8 @@ def test_optional_round_adopts_a_subset_of_the_closed_set_and_keeps_other_beats_
     from novel.stages.stage4 import (
         design_obligation_index, inspect_design_candidate, project_brief,
     )
-    from tests.test_str06_hook import _full_chain_wires
 
-    wires = _full_chain_wires()
+    wires = _chain_wires()
     bad = deepcopy(wires['design'])
     for scene in bad['scenes']:
         for beat in scene['beats']:
@@ -577,9 +585,8 @@ def test_a_globally_unlocatable_problem_sends_the_whole_design_back(tmp_path):
     from tests.str06_facilities import json_ask, text_ask
     from novel.llm.paid_requests import digest
     from novel.stages.chain import ChainContext, run_preserve, run_workflow
-    from tests.test_str06_hook import _full_chain_wires
 
-    wires = _full_chain_wires()
+    wires = _chain_wires()
     bad = deepcopy(wires['design'])
     bad['protocol_version'] = 'stage4-design-v7'   # 协议字面量不符（I-13 无隐式迁移）
     transport = PatchingTransport(wires, bad)
@@ -718,9 +725,8 @@ def test_unestablished_read_gets_an_item_patch_round_and_publishes(tmp_path):
     from tests.str06_facilities import json_ask, text_ask
     from novel.llm.paid_requests import digest
     from novel.stages.chain import ChainContext, run_preserve, run_workflow
-    from tests.test_str06_hook import _full_chain_wires
 
-    wires = _full_chain_wires()
+    wires = _chain_wires()
     bad = deepcopy(wires['design'])
     bad['scenes'][1]['reads'] = [{'domain': 'character', 'subjects': ['yun_niang'],
                                   'holder': None, 'key': 'marital_status_typo'}]
@@ -765,9 +771,8 @@ def test_hook_design_item_patch_round_fixes_only_the_failing_material(tmp_path):
     from tests.str06_facilities import json_ask, text_ask
     from novel.llm.paid_requests import digest
     from novel.stages.chain import ChainContext, run_hook_design, run_preserve, run_workflow
-    from tests.test_str06_hook import _full_chain_wires
 
-    wires = _full_chain_wires()
+    wires = _chain_wires()
     bad = deepcopy(wires['hook_design'])
     from novel.stages.stage4.hook_facts import fact_ref_of
     bad['materials'][0]['withheld'] = [fact_ref_of(

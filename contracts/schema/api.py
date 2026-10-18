@@ -1276,6 +1276,9 @@ class Str06DeliveryView(StrictModel):
     final_text_sha256: str | None = None
     chapters: tuple[Str06DeliveryChapterView, ...] = ()
     length_reading: dict[str, Any] | None = None
+    #: rc26（命名前移批次 C）：疑似旧名残留/提前揭名定位报告计数
+    #: （不阻旪d、不购修；明细在 runtime 审计面）。
+    name_residue: dict[str, Any] | None = None
     disclosure: str | None = None
 
 

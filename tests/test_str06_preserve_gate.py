@@ -17,8 +17,13 @@ from tests.factories import declared_stage4_text
 
 
 def _wires():
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
     from tests.test_str06_hook import _full_chain_wires
-    return _full_chain_wires()
+    wires = _full_chain_wires()
+    # design 夹具的协议字面量按现役读面钉住：v11 已只读归档，不在
+    # DESIGN_READ_PROTOCOLS（夹具本身由 tests/test_str06_hook.py 维护）。
+    wires['design']['protocol_version'] = STAGE4_DESIGN_WIRE_PROTOCOL
+    return wires
 
 
 def _prepared(tmp_path, wires, transport=None, nodes=None):
@@ -306,15 +311,16 @@ def test_natural_mixed_names_reach_the_writer_packet_without_preserve_repair(tmp
     ir = repo.read_model('stage4/ir/writer_book_ir.json')
     packet = project_chapter_packet(ir, 1)
     prompt = render_chapter_packet(packet)
-    # 批次 B 中间态：Brief 用目标姓名直书，写手包原样带出；源旧面不出现。
-    assert '顾大哥向娘子坦白，顾兄确有难言之隐' in prompt
-    assert '陆大哥向娘子坦白' not in prompt and '陆兄确有难言之隐' not in prompt
+    # rc26（命名前移批次 C）：Brief 目标姓名直书；未释放目标名
+    # （顾大哥／顾兄）在写手包投影为显示面（夫君），源旧面不出现。
+    assert '向娘子坦白' in prompt and '确有难言之隐' in prompt
+    assert '顾大哥' not in prompt and '顾兄' not in prompt
+    assert '陆大哥' not in prompt and '陆兄' not in prompt
     assert writer_material_issues(packet, internal_ids=set()) == ()
-    # 批次 B 中间态：Brief 目标姓名是直书文本，不产生投影行；源登记面的投影
-    # 仍按 Design 显式释放发生（切目标面是批次 C）。
-    assert not [(row['literal'], row['replacement'])
-                for row in writer_name_projections(packet)
-                if row['literal'] in ('顾大哥', '顾兄')]
+    projected = {(row['literal'], row['replacement'])
+                 for row in writer_name_projections(packet)}
+    assert ('顾大哥', '夫君') in projected, projected
+    assert ('顾兄', '夫君') in projected, projected
     rows, _partial = read_cost_snapshot(repo.root.parent)
     assert sum(not row['cached'] and row['purpose'] == 'preserve' for row in rows) == 1
 
@@ -325,7 +331,7 @@ def test_normal_name_reveal_is_not_rewritten_by_preserve_portability_gate(tmp_pa
     from novel.stages.stage4 import assemble_preserve, preserve_name_issues, project_brief
     wires = _wires()
     wires['ch01']['beats'][0]['cognition'] = [{
-        'proposition': {'ref': 'p_name', 'statement': '陆大哥正是被称作陆兄的人'},
+        'proposition': {'ref': 'p_name', 'statement': '顾大哥正是被称作顾兄的人'},
         'holder': 'yun_niang', 'mode': 'learns',
         'basis': [{'segment': 'e01_01', 'quote': '唤夫君为陆大哥'}]}]
     _ctx, _repo, chars, blueprint = _prepared(
@@ -341,6 +347,6 @@ def test_normal_name_reveal_is_not_rewritten_by_preserve_portability_gate(tmp_pa
         name_map_sha256='n' * 64, provider='x', model='y', request_sha256='r' * 64)
     assert checkpoint is not None and not errors, errors
     brief, _ = project_brief(checkpoint, chars.core_view(), blueprint, structure=chars.name_structure, name_map=name_map)
-    assert set(brief.requirements[0].knowledge_changes[0].requires_released) == {'陆大哥', '陆兄'}
+    assert set(brief.requirements[0].knowledge_changes[0].requires_released) == {'顾大哥', '顾兄'}
     assert preserve_name_issues(checkpoint, chars, name_map) == []
     assert checkpoint.obligations[0].anchors[0].quotes

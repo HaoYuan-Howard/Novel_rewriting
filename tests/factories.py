@@ -39,14 +39,13 @@ def stage0_machine_revise(book, new_clean: str):
 
 
 def declared_stage4_text(text: str, *, owners: dict[str, str] | None = None) -> str:
-    """测试作者按显式人物映射逐次声明；未知别名继续作为反例。"""
-    import re
-    if owners is None:
-        owners = {'苏芸娘': 'yun_niang', '芸娘': 'yun_niang', '苏姑娘': 'yun_niang',
-                  '夫君': 'fu_jun', '陆大哥': 'fu_jun', '陆兄': 'fu_jun', '陆家': 'fu_jun'}
-    pattern = re.compile(r'\[\[.*?\]\]|' + '|'.join(sorted(owners, key=len, reverse=True)))
-    return pattern.sub(lambda match: match.group() if match.group().startswith('[[') else
-                       f'[[name:{owners[match.group()]}|{match.group()}]]', text)
+    """rc26（命名前移批次 C）：identity-text 协议退役后 Stage4 自有文本一律普通目标文本。
+
+    本助手保留为直通：旧参数与旧行为不再有语义（没有标记可声明），呼叫方不改。
+    旧协议反例（未知别名、未声明候选）已随协议退役；普通文本侧的新反例见
+    `tests/test_name_residue.py` 与各章节的材料硬阀用例。
+    """
+    return text
 
 
 def current_hook_wire(coordinates: dict) -> dict:

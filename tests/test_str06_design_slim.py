@@ -21,47 +21,51 @@ PV9 = 'stage4-design-v9'
 PV5 = 'stage4-design-v5'
 
 
-def _identity_projection():
-    from contracts.schema.source import NameProjection, NameProjectionEntry
-    return NameProjection(
-        proper_literals=('白姑娘',), family_literals=('白',), by_person=(NameProjectionEntry(
-            char_id='bai', display='白姑娘', family_literal='白', given=None,
-            proper_literals=('白',), name_bearing_surfaces=('白姑娘',)),))
-
-
-def test_v11_identity_text_validates_author_fields_without_guessing_keys_or_references():
+def test_v12_plain_author_text_is_accepted_and_never_rewritten():
+    """rc26（命名前移批 C）：identity-text-v1 退役后 Design 自有自然语言一律
+    普通目标文本——无 [[name:…]]／[[text|…]] 标记的 wire 经真实组装入口接受，
+    assembler 不改写作者字段、不替普通词补姓名标记。"""
     from copy import deepcopy
-    from novel.stages.stage4.materials import design_wire_name_text_issues
-    wire = {'book_style': '[[text|明白]]之后再叙述', 'scenes': [{
-        'driver': {'focal_actor': '白', 'immediate_want': '等[[name:bai|白姑娘]]回来'},
-        'beats': [{'ev': '[[text|白天]]进门', 'state': [{'key': '白', 'val': '[[text|坦白]]'}],
-                   'real': ['白'], 'release': [{'char_id': 'bai', 'surfaces': ['白姑娘']}]}]}]}
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
+    brief = _brief()
+    wire = _v9_wire()
+    wire['protocol_version'] = STAGE4_DESIGN_WIRE_PROTOCOL
     before = deepcopy(wire)
-    kwargs = dict(projection=_identity_projection(), structure=None,
-                  registered_surfaces={'bai': ('白姑娘',)}, require_classification=True)
-    assert design_wire_name_text_issues(wire, **kwargs) == []
-    assert wire == before, 'validator不把普通词替换成姓名，也不改引用字段'
-    wire['book_style'] = '我心里明白'
-    issues = design_wire_name_text_issues(wire, **kwargs)
-    assert {issue.code for issue in issues} == {'name_text_unclassified'}
-    assert all(issue.context['wire_paths'] == [['book_style']] for issue in issues)
-    wire['book_style'] = '[[name:other|白姑娘]]'
-    assert {issue.code for issue in design_wire_name_text_issues(wire, **kwargs)} == {'name_text_reference'}
+    body, errors = assemble_body_design(
+        wire, known_char_ids={'lu_fujun', 'yun_niang', 'pei_shuyuan'},
+        expression_requirements=brief.expression,
+        source_narration=brief.source_narration, brief=brief,
+        obligations=_obligations(brief))
+    assert errors == [], errors
+    assert wire == before, '普通目标文本不经标记协议，assembler 不改写作者字段'
+    assert body.scenes[0].beats[0].event == '夫君坦白不能生育。'
+    assert body.scenes[0].realization_brief == '新婚夜坦白，重心在荒诞与错愕的对照。'
+    assert body.scenes[0].beats[0].target_delta[0].value == '幼时落水伤了根本'
 
 
-def test_v11_schema_and_v10_compatibility_preserve_explicit_candidate_identity():
+def test_v12_schema_carries_current_protocol_and_retired_literals_stay_archived():
+    """现役 wire 协议是 stage4-design-v12；v11 及更早已购候选只读归档，
+    不再作为读面接收（I-13 无隐式迁移）；指令面不再要求逐次声明候选字面。"""
     import json
+    import pytest
+    from pydantic import ValidationError
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
     from novel.stages.common import design_rules
     from novel.stages.stage4.slim import design_wire_model
-    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
-    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v11'
-    rules = design_rules(name_candidates=('白',), registered_surfaces={'bai': {'白姑娘'}})
-    assert 'identity-text-v1' in rules and '需逐次声明的姓名候选字面：["白"]' in rules
+    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v12'
+    rules = design_rules(known_char_ids={'yun_niang'})
     schema = json.loads(rules.rsplit('\n', 1)[1])
+    assert schema['title'] == 'DesignWireV12'
     assert schema['properties']['protocol_version']['const'] == STAGE4_DESIGN_WIRE_PROTOCOL
+    assert '需逐次声明的姓名候选字面' not in rules, '候选覆盖硬闸随协议退役'
     wire = _v9_wire()
-    wire['protocol_version'] = 'stage4-design-v10'
-    assert design_wire_model(wire).protocol_version == 'stage4-design-v10'
+    wire['protocol_version'] = STAGE4_DESIGN_WIRE_PROTOCOL
+    # 带 Brief 的解码把短引用展开回 canonical，并归一成内部 v9 模型。
+    assert design_wire_model(wire, _brief()).protocol_version == 'stage4-design-v9'
+    archived = _v9_wire()
+    archived['protocol_version'] = 'stage4-design-v11'
+    with pytest.raises(ValidationError):
+        design_wire_model(archived, _brief())
 
 
 def test_model_design_schema_keeps_dynamic_knowledge_branches_valid():
@@ -320,11 +324,12 @@ def test_assemble_routes_v7_and_enforces_coverage():
     assert body5.scenes[0].beats[0].target_delta[1].domain.value == 'knowledge'
 
 
-def test_design_rules_prompt_carries_v7_and_obligation_table():
+def test_design_rules_prompt_carries_current_protocol_and_obligation_table():
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
     from novel.stages.common import design_rules
     from novel.stages.stage4.slim import project_design_input
     rules = design_rules(known_char_ids={'yun_niang'})
-    assert 'stage4-design-v11' in rules and 'SlimDesignBeatV10' in rules
+    assert STAGE4_DESIGN_WIRE_PROTOCOL in rules and 'SlimDesignBeatV10' in rules
     assert 'real' in rules and 'obNN' in rules
     brief = _brief()
     table = project_design_input(brief, _obligations(brief))['requirements']
@@ -769,12 +774,16 @@ def test_writer_packet_rejects_detail_identity_in_every_reading_partition():
 
 
 def test_summary_narrow_slice_includes_only_explicit_covered_missing_instance():
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
     from novel.stages.stage4 import locate_design_patches
     from novel.stages.stage4.slim import design_patch_slice
     from tests.test_str06_a5_positions import _summary_design_fixture
 
     wire, brief, index = _summary_design_fixture(
         {'ob01': [(0, 0)], 'ob03': [(1, 0)]}, optional_instance=True)
+    # 夹具 wire 由 tests/test_str06_hook.py 提供；此处只取 Brief 与结构，协议
+    # 字面量按现役读面钉住（v11 已只读归档，不进 DESIGN_READ_PROTOCOLS）。
+    wire['protocol_version'] = STAGE4_DESIGN_WIRE_PROTOCOL
     accepted, errors = assemble_body_design(
         wire, known_char_ids={'fu_jun', 'yun_niang'},
         expression_requirements=brief.expression,
@@ -844,7 +853,7 @@ def _scene_repair_slice_fixture(protocol):
               'who': ['who_actor'],
               'state': [{'at': 'state_left+state_right', 'key': 'local', 'val': '事实'}],
               'release': [{'char_id': 'first_release', 'surfaces': ['第一拍称谓']}]},
-             {'ev': '第二拍问[[name:mentioned_actor|称谓]]', 'real': ['ob02'], 'know': [{'ref': 'ob02.k01'}],
+             {'ev': '第二拍问称谓', 'real': ['ob02'], 'know': [{'ref': 'ob02.k01'}],
               'details': ['ob02.d01'],
               'state': [{'at': 'state_actor', 'key': 'intent', 'val': '仍在计划',
                          'modality': 'planned', 'lock': ref(KF)}],
@@ -872,9 +881,10 @@ def _scene_repair_slice_fixture(protocol):
 
 def test_scene_and_chapter_patch_slices_close_every_editable_beat_dependency():
     from copy import deepcopy
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
     from novel.stages.stage4.slim import design_patch_slice
 
-    for protocol in (PV9, 'stage4-design-v10', 'stage4-design-v11'):
+    for protocol in (PV9, 'stage4-design-v10', STAGE4_DESIGN_WIRE_PROTOCOL):
         wire, brief, obligations, identities = _scene_repair_slice_fixture(protocol)
         before = deepcopy(wire)
         for target in (('scenes', 1), ('scenes', 1, 'beats'), ('chapters', 1)):
@@ -907,7 +917,7 @@ def test_scene_and_chapter_patch_slices_close_every_editable_beat_dependency():
                     'read_left', 'read_right', 'who_actor', 'state_left', 'state_right',
                     'first_release', 'last_release', 'state_actor', 'knowledge_holder',
                     'requirement_actor', 'lock_subject', 'illegal_holder', 'extra_holder',
-                    'mentioned_actor'} <= included
+                    } <= included
             assert not {'unrelated_actor', 'future_actor'} & included
             assert '未涉及场的细节全文' not in str(payload) and '无关命题' not in str(payload)
 
@@ -926,6 +936,8 @@ def test_beat_patch_keeps_dependencies_narrow_while_scene_array_expands_all_beat
         'initial_actor', 'prefix_actor', 'first_release']
     assert 'last_release' not in {row['char_id'] for row in narrow['identities']}
     assert 'mentioned_actor' not in {row['char_id'] for row in narrow['identities']}
+    # rc26：ev 里的普通文本不再派生身份依赖（identity-text 标记协议退役）——
+    # 只在自然语言里出现的人物不进窄返修身份面。
     wide = design_patch_slice(wire, brief, obligations, targets=[('scenes',)], identities=identities)
     assert wide['scenes'] == wire['scenes']
     assert set(wide['requirements']) == {'ob01', 'ob02', 'ob03'}

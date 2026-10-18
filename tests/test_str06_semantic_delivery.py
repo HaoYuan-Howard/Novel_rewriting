@@ -56,7 +56,7 @@ from contracts.schema.context import (
 from contracts.schema.grounding import EventEvidence, ObligationAnchor, SourceDetail
 from contracts.schema.hook import HookContext, HookOpeningFact, HookPov
 from contracts.schema.naming import NameMapV6
-from contracts.schema.state import EffectDomain, StateAddress
+from contracts.schema.state import EffectDomain, NameWatch, StateAddress
 from novel.stages.common import (
     build_writer_packet, packet_sha256, project_chapter_packet, render_chapter_packet,
 )
@@ -64,7 +64,7 @@ from tests.str06_faults import (
     FAULT_ENV, FAULTS, REPO_ENV, fault_sitecustomize_source,
 )
 from tests.test_str06_body import _green_book_ir
-from tests.test_str06_hook import _green_pair
+from tests.test_str06_hook import _characters
 
 
 # ═══════════════════════════ 一、检查 1：canonical 字段未登记即红 ═══════════════════════════
@@ -246,10 +246,17 @@ def test_released_name_order_and_request_identity_are_stable_across_hashseeds():
             BODY_WRITER_SYSTEM, HOOK_WRITER_SYSTEM, chapter_identities,
             project_chapter_packet, render_chapter_packet,
         )
+        from novel.core.name_materials import target_face_table
+        from novel.stages.stage4.design import assemble_body_design
+        from novel.stages.stage4.hook import assemble_hook_design, publish_graph
         from novel.stages.stage4.hook_context import compile_hook_context
         from novel.stages.stage5 import build_hook_user_prompt, context_sha256
+        from tests.factories import hook_wire_v3
+        from tests.str06_facilities import name_map_of
+        from tests.str06_expression_inputs import (
+            sample_narration, sample_requirements)
         from tests.test_str06_body import _green_book_ir
-        from tests.test_str06_hook import _characters, _green_pair
+        from tests.test_str06_hook import _body_wire, _characters, _hook_wire
 
         profile = ExecutionProfile(cfg=Config(), reasoning_effort='high')
         def request_identity(owner, prompt, system):
@@ -271,11 +278,24 @@ def test_released_name_order_and_request_identity_are_stable_across_hashseeds():
                 'request_identity': request_identity(
                     f'body_ch{chapter.chapter_ordinal:02d}', prompt, BODY_WRITER_SYSTEM),
             })
-        _body, graph, _context = _green_pair()
         chars = _characters()
+        known = set(chars.characters)
+        faces, _face_errors = target_face_table(
+            chars.name_structure, name_map_of(chars))
+        body, errors = assemble_body_design(
+            _body_wire(), known_char_ids=known,
+            expression_requirements=sample_requirements(),
+            source_narration=sample_narration())
+        assert body is not None and not errors, errors
+        hook, errors = assemble_hook_design(
+            hook_wire_v3(_hook_wire()), body=body, known_char_ids=known,
+            name_projection=chars.name_projection(),
+            name_structure=chars.name_structure, faces=faces)
+        assert hook is not None and not errors, errors
         context, errors = compile_hook_context(
-            graph, chars.name_projection(), chars.name_structure,
-            characters=chars.core_view(), total_budget=2000)
+            publish_graph(body, hook), chars.name_projection(), chars.name_structure,
+            characters=chars.core_view(), total_budget=2000,
+            name_map=name_map_of(chars))
         assert context is not None and not errors, errors
         print(json.dumps({
             'chapters': chapters,
@@ -502,8 +522,10 @@ def _body_mutations() -> list[_BodyMutation]:
 
     def withheld(ir):
         chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
-        return _patch_chapter(ir, 2, withheld_literals=chapter.withheld_literals +
-                              ('禁露字面九九',))
+        rows = list(chapter.name_watch)
+        rows[0] = rows[0].model_copy(
+            update={'literals': rows[0].literals + ('禁露字面九九',)})
+        return _patch_chapter(ir, 2, name_watch=tuple(rows))
 
     def surfaces(ir):
         chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
@@ -933,7 +955,7 @@ def _body_mutations() -> list[_BodyMutation]:
                       chapter_purpose),
         _BodyMutation('writer_book_ir.chapters[].length_budget', 2, None,
                       chapter_budget),
-        _BodyMutation('writer_book_ir.chapters[].withheld_literals', 2,
+        _BodyMutation('writer_book_ir.chapters[].name_watch[].literals', 2,
                       '禁露字面九九', withheld),
         _BodyMutation('writer_book_ir.chapters[].released_surfaces', 2,
                       '变异面九九', surfaces),
@@ -1190,7 +1212,7 @@ def test_writer_view_contains_no_audit_only_material(green_ir):
     #    validator 检查面）。语义文本（义务陈述等）中出现的源侧字面属 R2
     #    renderer 的目标名解析问题，不是本检查的对象。
     stripped = green_ir.model_copy(update={'chapters': tuple(
-        c.model_copy(update={'withheld_literals': ()}) for c in green_ir.chapters)})
+        c.model_copy(update={'name_watch': ()}) for c in green_ir.chapters)})
     assert _renders(stripped) == renders
     # ② 来源账、导航与称谓总表（审计面）不进阅读面。书名不用裸子串断言——
     #    短书名可能撞上语义文本的正常用词（如「报恩之约」），它的阅读面隔离
@@ -1215,7 +1237,37 @@ def test_projection_families_name_live_nodes_only():
 
 @pytest.fixture(scope='module')
 def green_hook() -> HookContext:
-    return _green_pair()[2]
+    """本文件自建的 HookContext 夹具。
+
+    不依赖 `tests/test_str06_hook.py::_green_pair`——它的 `compile_hook_context`
+    调用尚未迁移到 rc26 的 `name_map` 必填参；这里按同一批事实就地装配。
+    """
+    from novel.core.name_materials import target_face_table
+    from novel.stages.stage4.design import assemble_body_design
+    from novel.stages.stage4.hook import assemble_hook_design, publish_graph
+    from novel.stages.stage4.hook_context import compile_hook_context
+    from tests.factories import hook_wire_v3
+    from tests.str06_expression_inputs import sample_narration, sample_requirements
+    from tests.str06_facilities import name_map_of
+    from tests.test_str06_hook import _body_wire, _characters, _hook_wire
+    chars = _characters()
+    known = set(chars.characters)
+    faces, _face_errors = target_face_table(chars.name_structure, name_map_of(chars))
+    body, errors = assemble_body_design(
+        _body_wire(), known_char_ids=known,
+        expression_requirements=sample_requirements(),
+        source_narration=sample_narration())
+    assert body is not None and not errors, errors
+    hook, errors = assemble_hook_design(
+        hook_wire_v3(_hook_wire()), body=body, known_char_ids=known,
+        name_projection=chars.name_projection(),
+        name_structure=chars.name_structure, faces=faces)
+    assert hook is not None and not errors, errors
+    context, errors = compile_hook_context(
+        publish_graph(body, hook), chars.name_projection(), chars.name_structure,
+        characters=chars.core_view(), total_budget=2000, name_map=name_map_of(chars))
+    assert context is not None and not errors, errors
+    return context
 
 
 def _hook_prompt(context: HookContext) -> str:
@@ -1346,15 +1398,15 @@ def test_hook_mutations_reach_only_hook_face(green_hook, green_ir, path, update,
 def test_hook_audit_only_material_stays_out_of_body_face(green_hook, green_ir):
     """Hook 的 audit_only 面：provenance 与禁用字面都不进 Hook 阅读面。
 
-    R2 分层渲染落地：withheld_literals 是 validator 检查材料，整列清零后
+    R2 分层渲染落地：name_watch 是 validator 检查材料，整列清零后
     Hook prompt 逐字节不变（此前随 JSON 倾倒可见，已收口）。"""
     prompt = _hook_prompt(green_hook)
     assert '_provenance' not in prompt
-    spec = STR06_FIELD_DELIVERY['hook_context.withheld_literals']
+    spec = STR06_FIELD_DELIVERY['hook_context.name_watch[].literals']
     assert spec.delivery_mode is DeliveryMode.AUDIT_ONLY
     assert _hook_prompt(green_hook.model_copy(
-        update={'withheld_literals': ('钩禁字面九九',)})) == prompt, (
-        '禁用字面是 validator 材料，不得进入 Hook 阅读面')
+        update={'name_watch': ()})) == prompt, (
+        '姓名监视行是 validator 材料，不得进入 Hook 阅读面')
 
 
 # ═══════════════ 六、故障注入 fake 底座（R3 复用；本批只验证注入有效） ═══════════════

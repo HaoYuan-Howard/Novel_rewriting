@@ -152,9 +152,9 @@ def test_replay_reads_purchased_design_rounds_against_current_inputs(tmp_path):
     design = report['owners']['design']
     assert design['status'] == 'ran' and design['node'] == 'str06.stage4.body_design'
     first, second = design['rounds']
-    # 首轮：整份回答，候选指称未声明被当前验收拒绝；未知不冒充确定泄漏。
+    # 首轮：整份回答，候选带未释放旧名被当前验收拒绝；未知不冒充确定泄漏。
     assert (first['shape'], first['replay']['passed'], first['replay']['reuse']) == ('full', False, 'failed')
-    assert first['replay']['codes'].get('name_text_unclassified', 0) >= 2
+    assert first['replay']['codes'].get('positive_material_leak', 0) >= 2
     assert first['recorded'] == {'accepted': False, 'parse': 'failed', 'errors': first['recorded']['errors']}
     # CS-H H2 起接受记录里的错误按根因聚合成任务（同一规则码的多处命中＝一个任务，附受
     # 影响位置）：重放按条数计的两处泄漏，在记录里是一条任务——记录数＝根因数。

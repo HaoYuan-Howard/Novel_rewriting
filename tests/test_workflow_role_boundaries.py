@@ -407,9 +407,11 @@ def test_rc24_successive_states_reach_their_own_beats():
     plan, errors = compile_execution_plan(body, binding)
     assert not errors
     chars = _characters()
+    from tests.str06_facilities import name_map_of
     ir = compile_writer_book_ir(graph=body, plan=plan, binding=binding,
         total_budget=2000, length_band=(0.6, 1.3), book_title='测试',
-        projection=chars.name_projection(), structure=chars.name_structure)
+        projection=chars.name_projection(), structure=chars.name_structure,
+        name_map=name_map_of(chars))
     prompt = render_chapter_packet(project_chapter_packet(ir, 1))
     assert any('第1拍' in line and '屋内' in line for line in prompt.splitlines())
     assert any('第2拍' in line and '院内' in line for line in prompt.splitlines())

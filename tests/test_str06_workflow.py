@@ -10,7 +10,6 @@ import pytest
 
 from contracts.artifacts import STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT
 from novel.llm.ledger import CostLedger
-from novel.core.name_text import resolve_name_text
 from novel.store import Str06Repository
 from novel.stages.chain import run_workflow
 from tests.str06_facilities import make_context, synthetic_ref
@@ -52,7 +51,7 @@ def _design_wire_v7():
     """stage4-design-v8（CS-3）：real 承载标注替 bind；义务 ob01–ob03 的接受拍
     都是首拍（与原 bind wire 等价）；kp 知情行经 ob02 的锁派生，不写在 wire。"""
     return {
-        'protocol_version': 'stage4-design-v11',
+        'protocol_version': 'stage4-design-v12',
         'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],
@@ -136,7 +135,7 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
             'pov': {'person': 'first', 'focalizers': ['yun']},
             'materials': [{'beat_ref': {'scene': 'sc01', 'beat': 'b01'}, 'withheld': [],
                            'emphasis': 'develop', 'transition': 'start'}],
-            'surface_releases': [],
+            'surface_releases': [{'char_id': 'fu_jun', 'surfaces': ['夫君']}],
             'forbidden_reveals': [],
             'local_focus': '通过人物即时反应突出约定的反差。',
             'reader_expectation': {'kind': 'action', 'focus': '两人怎样实行约定',
@@ -182,9 +181,9 @@ def test_stage2_stage4_repository_replay_and_writer_consumer(tmp_path):
     assert context['writer_brief']['pov'] == 'narrator'   # v6：narration←源叙述
     assert len(repo.inspect('stage4/grounding/reconstruction_brief.json')['requirements']) == 3
     design_prompt = next(prompt for owner, prompt in requests if owner == 'design')
-    readable_input = resolve_name_text(design_prompt.split('输入：\n', 1)[1])
-    assert not readable_input.errors
-    assert '知晓时刻与反应' in readable_input.text and '夫君身份约束' in readable_input.text
+    # rc26：输入是普通目标文本（无身份文本标记可解）。
+    readable_input = design_prompt.split('输入：\n', 1)[1]
+    assert '知晓时刻与反应' in readable_input and '夫君身份约束' in readable_input
     assert 'b01_01' not in design_prompt
     import json
     design_input = json.loads(design_prompt.split('输入：\n', 1)[1])
@@ -386,10 +385,12 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
                               'basis': [{'segment': 'e01_01',
                                          'quote': '夫君与云娘一处住着'}]}])]}
     design = {
-        'protocol_version': 'stage4-design-v11',
+        'protocol_version': 'stage4-design-v12',
         'book_style': '冷峻克制的第三人称叙事。',
         'character_voices': [{'char_id': 'yun', 'voice': '冷峻'}],
         'initial_state': [],
+        'initial_surfaces': [{'char_id': 'yun', 'surfaces': ['云娘']},
+                             {'char_id': 'fu_jun', 'surfaces': ['夫君']}],
         'scenes': [
             {'driver': {'focal_actor': 'yun', 'immediate_want': '确认声响来源',
                         'opposition': '无人可问', 'turn': '决意亲自去看'},
@@ -442,7 +443,8 @@ def test_concealed_fact_reaches_writer_as_pending_reader_confirmation(tmp_path):
             'pov': {'person': 'first', 'focalizers': ['yun']},
             'materials': [{'beat_ref': {'scene': 'sc01', 'beat': 'b01'}, 'withheld': [],
                            'emphasis': 'develop', 'transition': 'start'}],
-            'surface_releases': [], 'forbidden_reveals': [],
+            'surface_releases': [{'char_id': 'fu_jun', 'surfaces': ['夫君']}],
+            'forbidden_reveals': [],
             'local_focus': '以限知视角即时反应保留声响疑问。',
             'reader_expectation': {'kind': 'action', 'focus': '她怎样查清声响来源',
                                    'followup_refs': [{'scene': 'sc02', 'beat': 'b01'}]}},

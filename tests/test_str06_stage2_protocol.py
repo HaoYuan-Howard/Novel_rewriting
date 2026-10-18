@@ -121,10 +121,10 @@ def test_observation_artifacts_are_registered_with_independent_versions():
         assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc26'
     for rel in ('stage4/design/body_design.json', 'stage4/ir/writer_book_ir.json',
                 'stage4/design/presentation_graph.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc25'
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc26'
     # rc16 续（CS-F2 Hook 称谓投影）：楔子上下文随绑定表换身份，旧 rc12 拒读。
     # rc17 续（CS-H H3）：hook 上下文增 display_faces/avoid_lines。
-    assert STR06_ARTIFACT_RC_VERSIONS['stage4/context/hook/hook.json'] == 'str06-rc25'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/context/hook/hook.json'] == 'str06-rc26'
     for label in ('str06-rc6', 'str06-rc9', 'str06-rc10', 'str06-rc11'):
         assert label in STR06_RC_LABELS
     assert str06_chapter_observation_rel(3) == 'stage2/observations/ch03.json'

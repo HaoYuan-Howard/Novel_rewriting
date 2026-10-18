@@ -41,8 +41,8 @@ def test_only_unique_style_repairs_may_enter_paid_revision():
     # 新链 stage5 现役判据只有章级机械验、Hook 机械验、回执绑定与披露位。
     stage5_rules = {row.rule for row in REGISTRY.of_stage('stage5')}
     assert stage5_rules == {
-        'body_chapter_complete', 'body_withheld_literals', 'body_required_literals',
+        'body_chapter_complete', 'body_name_watch', 'body_required_literals',
         'body_length_band',
-        'body_semantics_unver', 'body_length_reading',
+        'body_semantics_unver', 'body_length_reading', 'name_residue_report',
         'hook_mechanical', 'chapter_receipt_binding', 'hook_receipt_binding',
     }

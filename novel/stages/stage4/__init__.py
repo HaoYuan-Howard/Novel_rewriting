@@ -3,7 +3,7 @@
 """novel.stages.stage4 —— STR-06 新链 Stage4：目标命名、目标故事设计与确定性编译。
 
 【本地块】
-  · `naming.py`   NameMap v6 赋值与末端替换纯函数（`str06.stage4.naming`；
+  · `naming.py`   NameMap v6 赋值与目标字面表纯函数（`str06.stage4.naming`；
                    命名前移批 2026-10-18 自 stage7 包迁入——目标姓名是
                    Preserve 与设计链的正式输入）。
   · `design.py`    BodyDesign 组装与派生面生成（`str06.stage4.body_design`；
@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from novel.stages.stage4.book_ir import (
     allocate_chapter_budgets, chapter_scene_weights, chapter_surface_releases,
-    chapter_withheld_literals, chapters_with_budget_change, compile_writer_book_ir,
+    chapters_with_budget_change, compile_writer_book_ir,
 )
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.design import assemble_body_design
@@ -81,9 +81,10 @@ from novel.stages.stage4.hook_wire import (
     hook_catalog, hook_wire_schema, project_hook_input,
 )
 from novel.stages.stage4.hook_context import compile_hook_context
+from novel.core.name_materials import target_face_table, target_old_literals
 from novel.stages.stage4.naming import (
-    NAMING_VALIDATOR_VERSION, apply_bound_names, compile_bound_replacements,
-    compile_name_map, diff_proof, naming_patch_locate, naming_projection,
+    NAMING_VALIDATOR_VERSION, compile_name_map, naming_patch_locate,
+    naming_projection,
 )
 from novel.stages.stage4.slim import design_fact_marks, design_placements
 from novel.stages.stage4.design_paths import design_issue, locate_design_patches, wire_paths_of
@@ -93,7 +94,7 @@ __all__ = [
     'FoldedState', 'ThreadFold', 'allocate_chapter_budgets', 'appeared_chars',
     'assemble_body_design', 'assemble_hook_design',
     'assemble_preserve', 'chapter_scene_weights', 'chapter_surface_releases',
-    'chapter_withheld_literals', 'chapters_with_budget_change',
+    'chapters_with_budget_change',
     'check_binding_beat_refs',
     'check_cast_legality', 'check_entry_timing', 'check_epistemic_lock_order',
     'check_obligation_coverage',
@@ -113,6 +114,6 @@ __all__ = [
     'hook_combination_errors', 'hook_patch_legal_values', 'hook_patch_slice',
     'hook_catalog', 'hook_wire_schema', 'project_hook_input',
     'publish_graph', 'run_mechanical_guard', 'scene_order', 'validate_hook_design',
-    'NAMING_VALIDATOR_VERSION', 'apply_bound_names', 'compile_bound_replacements',
-    'compile_name_map', 'diff_proof', 'naming_patch_locate', 'naming_projection',
+    'NAMING_VALIDATOR_VERSION', 'compile_name_map', 'naming_patch_locate',
+    'naming_projection', 'target_face_table', 'target_old_literals',
 ]

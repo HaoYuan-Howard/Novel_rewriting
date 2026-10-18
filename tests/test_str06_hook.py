@@ -47,17 +47,16 @@ from tests.str06_expression_inputs import (
 )
 
 H64 = 'a' * 64
-SRC = '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'
+SRC = '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎取。'
 
 
 def _declared_prose(text: str) -> str:
-    """本文件固定故事的明确人物声明；不推断普通义，不把未知文字包入 text。"""
-    import re
-    owners = {'苏芸娘': 'yun_niang', '芸娘': 'yun_niang', '苏姑娘': 'yun_niang',
-              '夫君': 'fu_jun', '陆大哥': 'fu_jun', '陆兄': 'fu_jun', '陆家': 'fu_jun'}
-    pattern = re.compile(r'\[\[.*?\]\]|' + '|'.join(sorted(owners, key=len, reverse=True)))
-    return pattern.sub(lambda match: match.group() if match.group().startswith('[[') else
-                       f'[[name:{owners[match.group()]}|{match.group()}]]', text)
+    """rc26（命名前移批次 C）：identity-text 协议退役后成文一律普通文本。
+
+    本助手保留为直通：旧声明行为（呗名标记）不再有语义；疑似旧名残留与提前揭名改由
+    `novel/core/name_residue.py` 定位报告（不阻断），机械面只查协议l定界符残片。
+    """
+    return text
 
 
 # ───────────────────────── fixture 构造器 ─────────────────────────
@@ -203,7 +202,7 @@ def _design_wire_v7() -> dict:
     以 character 域事实断言承载同一信息。义务 ob01 的接受拍＝末次标注拍
     （sc01#b02），sc01#b01 是支撑位——与旧 bind wire 的 entries/supporting 等价。"""
     wire = {
-        'protocol_version': 'stage4-design-v11',
+        'protocol_version': 'stage4-design-v12',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'character_voices': [{'char_id': 'yun_niang', 'voice': '冷峻'}],
         'initial_state': [
@@ -241,16 +240,7 @@ def _design_wire_v7() -> dict:
                      {'purpose': '玉佩之谜浮出水面', 'scenes': 1,
                       'entry': {'transition': 'time_skip'}}],
     }
-    # 当前作者协议明确声明身份名称表达，含已登记的家族构词。
-    declare = _declared_prose
-    for scene in wire['scenes']:
-        scene['driver'] = {key: value if key == 'focal_actor' else declare(value)
-                           for key, value in scene['driver'].items()}
-        scene['brief'] = declare(scene['brief'])
-        for beat in scene['beats']:
-            beat['ev'] = declare(beat['ev'])
-            for state in beat.get('state', ()):
-                state['val'] = declare(state['val'])
+    # rc26：v12 自有自然语言一律普通目标文本——无标讴可声明＋无候选覆盖硬闸。
     return wire
 
 
@@ -281,6 +271,12 @@ def _projection():
     return _characters().name_projection()
 
 
+def _hook_map():
+    """hook 侦件的全部保留 NameMapV6 替身（关注改名的用例自己构造 entries）。"""
+    from tests.str06_facilities import name_map_of
+    return name_map_of(_characters())
+
+
 def _green_pair():
     body, errors = assemble_body_design(_body_wire(),
                                         known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())
@@ -291,7 +287,7 @@ def _green_pair():
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection(), total_budget=2000)
+        graph, _projection(), _characters().name_structure, total_budget=2000, name_map=_hook_map())
     assert context is not None and not errors, errors
     return body, graph, context
 
@@ -304,7 +300,7 @@ def test_context_rebuild_is_byte_identical_after_delete(tmp_path):
     repo.attach_context(make_context(tmp_path, ledger=CostLedger(path=None)))
     def build():
         context, errors = compile_hook_context(
-            graph, _projection(), total_budget=2000)
+            graph, _projection(), _characters().name_structure, total_budget=2000, name_map=_hook_map())
         assert context is not None and not errors, errors
         return repo.write('stage4/context/hook/hook.json', context).read_bytes()
     first = build()
@@ -329,7 +325,7 @@ def test_pov_comes_from_design_not_body_majority():
     assert hook is not None and not errors, errors
     graph = publish_graph(body2, hook)
     context, errors = compile_hook_context(
-        graph, _projection(), total_budget=2000)
+        graph, _projection(), _characters().name_structure, total_budget=2000, name_map=_hook_map())
     assert context is not None and not errors, errors
     assert context.pov.person == 'first'
     assert context.pov.focalizers == ('yun_niang',)
@@ -371,7 +367,7 @@ def test_partial_disclosure_single_beat():
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection(), total_budget=2000)
+        graph, _projection(), _characters().name_structure, total_budget=2000, name_map=_hook_map())
     assert context is not None and not errors, errors
     material = context.materials[0]
     assert material.event == '洞房夜夫君立约'
@@ -424,7 +420,8 @@ def test_same_beat_forbidden_fact_mask_reaches_hook_writer(mask):
     graph = publish_graph(body, hook)
     # 正式 canonical 读回复验与初答共用守卫，免费重编不能再误拒该遮罩。
     graph = type(graph).model_validate_json(graph.model_dump_json())
-    context, errors = compile_hook_context(graph, _projection(), total_budget=2000)
+    context, errors = compile_hook_context(graph, _projection(), _characters().name_structure, total_budget=2000,
+                            name_map=_hook_map())
     assert context is not None and not errors, errors
     material = context.materials[0]
     if mask == 'withheld':
@@ -491,7 +488,7 @@ def test_canonical_hook_recheck_rejects_removed_fact_mask():
     hook = hook.model_copy(update={'materials': (
         hook.materials[0].model_copy(update={'withheld': ()}),)})
     context, errors = compile_hook_context(
-        publish_graph(body, hook), _projection(), total_budget=2000)
+        publish_graph(body, hook), _projection(), _characters().name_structure, total_budget=2000, name_map=_hook_map())
     assert context is None
     assert any(error.code == 'hook_forbidden_leak' for error in errors), errors
 
@@ -533,7 +530,7 @@ def _rendered_deltas(*, knowledge_mode: str, holder: str):
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
     context, errors = compile_hook_context(
-        graph, _projection(), total_budget=2000)
+        graph, _projection(), _characters().name_structure, total_budget=2000, name_map=_hook_map())
     assert context is not None and not errors, errors
     return context.materials[0].deltas
 
@@ -560,9 +557,12 @@ def test_fact_rendering_keeps_holder_and_knowledge_mode():
 def _assemble(wire, body=None):
     body = body if body is not None else assemble_body_design(
         _body_wire(), known_char_ids={'fu_jun', 'yun_niang'}, expression_requirements=sample_requirements(), source_narration=sample_narration())[0]
+    # rc26：隐藏人物泄露判据的字面宇宙是目标字面表。
+    from novel.core.name_materials import target_face_table
+    faces, _face_errors = target_face_table(_characters().name_structure, _hook_map())
     return _assemble_coordinate_fixture(wire, body=body,
                                 known_char_ids={'fu_jun', 'yun_niang'},
-                                name_projection=_projection())
+                                name_projection=_projection(), faces=faces)
 
 
 def test_dangling_refs_rejected():
@@ -670,14 +670,17 @@ def test_concealed_identity_three_layers():
     wire['surface_releases'].append({'char_id': 'fu_jun', 'surfaces': ['陆大哥']})
     _, errors = _assemble(wire, body)
     assert any('隐藏人物' in e for e in errors)
-    # 第四层：未释放完整称谓仍不能引用；裸姓名部件只召回为待声明候选。
+    # 第四层：rc26 普通正文主链——未释放完整称谓进监视行（写手材料硬闸），
+    # 正文量的同类出现只形成定位报告（R-7.9，不阻断）；裸姓部件不单独成候选。
+    from novel.core.name_residue import name_residues
     _, _, context = _green_pair()
-    assert {'陆大哥', '陆兄', '苏姑娘'} <= set(context.withheld_literals)
-    assert {'陆', '苏'} <= set(context.name_candidates)
-    assert not {'陆', '苏'} & set(context.withheld_literals)
+    watched = {literal for row in context.name_watch for literal in row.literals}
+    assert {'陆大哥', '陆兄', '苏姑娘'} <= watched
+    assert not ({'陆', '苏'} & watched), '裸姓部件不进监视行'
     prose = '苏芸娘望着空房，想起陆大哥。'
-    errors = validate_hook_prose(prose, context)
-    assert any('name_text_unclassified' in e and '陆大哥' in e for e in errors)
+    assert validate_hook_prose(prose, context) == []
+    residues = name_residues(prose, watch=context.name_watch)
+    assert any(row.literal == '陆大哥' for row in residues)
 
 
 def test_release_must_be_declared_surface():
@@ -734,7 +737,7 @@ def test_non_material_beat_change_keeps_context():
     body2 = BodyDesign.model_validate(body_dump)
     graph2 = publish_graph(body2, graph.hook)
     context2, errors = compile_hook_context(
-        graph2, _projection(), total_budget=2000)
+        graph2, _projection(), _characters().name_structure, total_budget=2000, name_map=_hook_map())
     assert errors == [], errors
     assert context2.model_dump(mode='json') == context.model_dump(mode='json')
 
@@ -821,8 +824,9 @@ def test_hook_writer_rejects_wrappers_and_leaks():
             ('```json\\n{}\\n```', 'no_wrapper'),
             ('# 楔子', 'no_wrapper'),
             ('楔子', 'no_wrapper'),
-            (_declared_prose('苏芸娘想起陆大哥。'), 'name_text_reference'),
-            (_declared_prose('苏芸娘看着陆家大门。'), 'name_text_reference')):
+            # rc26：身份协议定界符残片仍拒收；未释放专名只进定位报告（R-7.9）
+            ('[[name:yun_niang|苏芸娘]]想起陆大哥。', 'no_wrapper'),
+            ('苏芸娘想起[[text|陆大哥]]。', 'no_wrapper')):
         errors = validate_hook_prose(prose, context)
         assert any(code in e for e in errors), (prose, errors)
 
@@ -834,7 +838,6 @@ def test_mechanical_pass_never_claims_semantic_verification():
     receipt = HookReceipt(
         hook_context_sha256=H64, prose_sha256=H64, request_identity='r1',
         validator_version='v1', status='accepted',
-        name_mentions=(), non_name_spans=(),
         mechanical_checks=('non_empty', 'encoding'))
     assert receipt.semantic == 'unverified'
     with pytest.raises(ValidationError):
@@ -862,8 +865,7 @@ def test_receipt_hash_charset():
     with pytest.raises(ValidationError, match='十六进制'):
         HookReceipt(hook_context_sha256='A' * 64, prose_sha256=H64,
                     request_identity='r', validator_version='v', status='accepted',
-                    name_mentions=(), non_name_spans=(),
-                    mechanical_checks=('non_empty',))
+                                mechanical_checks=('non_empty',))
 
 
 # ───────────────────────── 迁移包依赖规则：AST 真实执行 ─────────────────────────
@@ -947,6 +949,42 @@ def test_new_families_admitted_and_rest_refused():
 
 # ───────────────────────── 工作流（stage 层，fake ask） ─────────────────────────
 
+#: rc26：全链瞧件的目标姓名投影（naming wire：yun_niang→柳婉、fu_jun→顾）。
+#: 进入创作链的自然语言（design 自有文本）一律用目标姓名；夫君是纯语义谓
+#: （构词 None），不改名。
+_TARGET_TEXT = {
+    '苏芸娘': '柳婉', '芸娘': '婉',
+    '陆大哥': '顾大哥', '陆兄': '顾兄',
+    '陆家': '顾家', '苏姑娘': '柳姑娘',
+}
+
+
+def _to_target(text: str) -> str:
+    """长名优先单遍替换（与字面扫描同尺）。"""
+    import re
+    if not text:
+        return text
+    pattern = re.compile('|'.join(sorted(_TARGET_TEXT, key=len, reverse=True)))
+    return pattern.sub(lambda match: _TARGET_TEXT[match.group()], text)
+
+
+def _target_design_wire() -> dict:
+    """全链瞧件的 design wire：自有自然语言投影到目标姓名（rc26）。
+
+    释放声明（initial_surfaces/release）保持源登记面——compile 经目标字面表映射。
+    """
+    wire = _design_wire_v7()
+    for scene in wire['scenes']:
+        scene['driver'] = {key: (_to_target(value) if key != 'focal_actor' else value)
+                           for key, value in scene['driver'].items()}
+        scene['brief'] = _to_target(scene['brief'])
+        for beat in scene['beats']:
+            beat['ev'] = _to_target(beat['ev'])
+            for state in beat.get('state', ()):
+                state['val'] = _to_target(state['val'])
+    return wire
+
+
 def _full_chain_wires():
     """B2 五节点观察协议下的全链 fake wires（book/chNN/associate 新形状）。"""
     chars = _characters()
@@ -1009,7 +1047,7 @@ def _full_chain_wires():
              'anchors': ['b01_01.e1'],
              'must_preserve': True,
              'satisfaction': '正文呈现婚约成立且夫君立下旧约', 'requires': []}]},
-        'design': _design_wire_v7(),
+        'design': _target_design_wire(),
         'hook_design': hook_wire,
         'naming': naming_wire,
     }
@@ -1018,8 +1056,9 @@ def _full_chain_wires():
 def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monkeypatch):
     from novel.stages.chain import PurchaseRequired, run_workflow
     wires = _full_chain_wires()
+    # chapters 是**源章**文本（stage1 证据），保持源面；Stage5 正文由写手直接以目标姓名成文（本用例被 stub，无正文调用）。
     chapters = [
-        {'chapter_ordinal': 1, 'text': '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎娶。'},
+        {'chapter_ordinal': 1, 'text': '苏芸娘嫁入陆家，唤夫君为陆大哥，苏姑娘陪嫁，陆兄迎取。'},
         {'chapter_ordinal': 2, 'text': '夫君夜半翻墙而出，苏芸娘发现玉佩刻着沈字。'}]
 
     def make_ask(wires, counter, repo):
@@ -1033,7 +1072,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monke
 
     def make_text(repo):
         def ask_text(owner, prompt, validate=None):
-            return (_declared_prose('苏芸娘望着空房。'), [],
+            return (_declared_prose('柳婉望着空房。'), [],
                     synthetic_ref(owner, prompt))
         return ask_text
 
@@ -1057,8 +1096,8 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monke
     assert repo.read('runtime/workflow_status.json')['status'] == 'assembly_not_ready'
     # stage7/final/ 不落任何产物；改名 Hook 只进 runtime/delivery/
     assert not (tmp_path / 'run/stage7/final').exists()
-    assert repo.read_text('runtime/delivery/hook_renamed.txt') == '柳婉望着空房。'
-    assert repo.read_text('stage5/hook/hook.txt') == '苏芸娘望着空房。'
+    # rc26：零改名装配——hook 成文即最终文本，无 hook_renamed 派生。
+    assert repo.read_text('stage5/hook/hook.txt') == '柳婉望着空房。'
     assert repo.inspect('stage5/hook/receipt.json')['semantic'] == 'unverified'
 
     # 重跑：零新调用（wire 全命中），字节一致
@@ -1066,7 +1105,7 @@ def test_through_stage7_full_chain_replay_and_authorization_gate(tmp_path, monke
         'stage4/design/presentation_graph.json', 'stage4/context/hook/hook.json',
         'stage4/ir/writer_book_ir.json',
         'stage5/hook/hook.txt', 'stage4/naming/name_map.json',
-        'runtime/delivery/hook_renamed.txt')}
+            'stage5/hook/hook.txt', 'stage4/naming/name_map.json')}
     counter.clear()
     run_workflow(repository=repo, chapters=chapters,
                  ask=make_ask(wires, counter, repo), ask_text=make_text(repo),
@@ -1130,9 +1169,14 @@ def test_request_catalog_annotates_supersede_writes():
 def test_request_catalog_annotates_name_exposure_by_person():
     from novel.stages.stage4.hook_facts import fact_ref_of
     from novel.stages.stage4.hook_wire import annotated_hook_catalog
+    from novel.core.name_materials import person_name_bearing_targets, target_face_table
     body = _superseded_body(leaky_agreement=True)
-    catalog = annotated_hook_catalog(body, projection=_projection())
+    faces = person_name_bearing_targets(
+        _characters().name_structure,
+        target_face_table(_characters().name_structure, _hook_map())[0])
+    catalog = annotated_hook_catalog(body, faces=faces)
     agreement = fact_ref_of('sc01#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'agreement'))
+    # 暴露只报本条文本里实际出现的带名目标字面（全部保留替身下目标面＝源面）。
     assert catalog[agreement]['name_exposure'] == {
         'fu_jun': ['陆大哥'],
         'yun_niang': ['苏芸娘', '芸娘']}
@@ -1165,7 +1209,8 @@ def test_structural_failure_still_aggregates_material_exposure():
     assert hook is None and any('已变化、解除或失效' in str(e) for e in errors), errors
     binding = SimpleNamespace(obligations=(), fact_bindings=())
     diag = hook_candidate_material_errors(
-        hook_wire_v3(wire), body=body, chars=_characters(), binding=binding)
+        hook_wire_v3(wire), body=body, chars=_characters(), binding=binding,
+        name_map=_hook_map())
     exposed = [e for e in diag if e.code == 'hook_design_material_exposure']
     assert exposed and exposed[0].location == ('opening_facts', 1), [str(e) for e in diag]
     assert '陆大哥' in str(exposed[0]) and '（材料预检）' in str(exposed[0])
@@ -1191,4 +1236,5 @@ def test_green_wire_material_preview_reports_no_exposure():
     assert hook is not None and not errors, errors
     binding = SimpleNamespace(obligations=(), fact_bindings=())
     assert hook_candidate_material_errors(
-        hook_wire_v3(wire), body=body, chars=_characters(), binding=binding) == []
+        hook_wire_v3(wire), body=body, chars=_characters(), binding=binding,
+        name_map=_hook_map()) == []

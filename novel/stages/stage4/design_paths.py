@@ -31,7 +31,7 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from contracts.judges.str06 import PATCH_ROUTES
-from contracts.schema.design import DesignWireV9, DesignWireV10, DesignWireV11
+from contracts.schema.design import DesignWireV9, DesignWireV10, DesignWireV12
 from contracts.schema.hook import HookDesignWire, HookDesignWireV3
 from novel.core.repair import schema_at_path
 from novel.core.validation import ValidationIssue
@@ -82,7 +82,7 @@ def _wire_schema(wire: dict) -> dict | None:
     model = {
         'stage4-design-v9': DesignWireV9,
         'stage4-design-v10': DesignWireV10,
-        'stage4-design-v11': DesignWireV11,
+        'stage4-design-v12': DesignWireV12,
         'stage4-hook-design-v3': HookDesignWireV3,
         'stage4-hook-design-v4': HookDesignWire,
     }.get(wire.get('protocol_version'))

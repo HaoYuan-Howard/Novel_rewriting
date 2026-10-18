@@ -42,8 +42,9 @@ from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.common import CharacterVoice, FreeProvenance, LlmProvenance
-from contracts.schema.name_text import NameMention, NameTextSpan
-from contracts.schema.state import StateAddress, SurfaceRelease, WithheldNameBinding
+from contracts.schema.state import (
+    NameWatch, StateAddress, SurfaceRelease, WithheldNameBinding,
+)
 
 OpeningRef = str  # 'init' 或 '<scene_id>#<beat_id>'；存在性归跨引用校验
 HookEmphasis = Literal['develop', 'brief']
@@ -267,15 +268,15 @@ class HookExpressionView(StrictModel):
 class HookContext(StrictModel):
     """Hook Writer 的唯一输入（Derived，`stage4/context/hook/hook.json`）。
 
-    只解析引用、投影与格式化，不解释 brief；不含义务字段。`withheld_literals`
-    是未在 Hook 中释放的专名字面（名称结构 ∩ Design 称谓推导），供机械
-    validator 检查成文泄漏，不写死任何人名。rc16（CS-F2）：`withheld_bindings`
-    按 Hook 自选 `surface_releases` 逐人物派生 (char_id, literal) 绑定，同形多人
-    分别登记。显式身份引用按本人显示面投影，旧裸文另须全书唯一归属证明；空表合法，
-    上下文字段本身不被投影改写。
+    只解析引用、投影与格式化，不解释 brief；不含义务字段。rc26（命名前移批
+    C）：`name_watch`（姓名监视行）供写手材料硬闸与正文定位报告两面消费——
+    字面平铺查材料泄漏，归因行出疑似旧名／提前揭名报告，不写死任何人名。
+    rc16（CS-F2）：`withheld_bindings` 按 Hook 自选 `surface_releases` 逐人物
+    派生 (char_id, literal) 绑定，同形多人分别登记；空表合法，上下文字段本身
+    不被投影改写。
     """
 
-    contract_version: Literal['str06-rc25'] = 'str06-rc25'
+    contract_version: Literal['str06-rc26'] = 'str06-rc26'
     pov: HookPov
     opening_facts: tuple[HookOpeningFact, ...] = ()
     materials: tuple[HookMaterialView, ...] = Field(min_length=1)
@@ -289,9 +290,9 @@ class HookContext(StrictModel):
     character_voices: tuple[CharacterVoice, ...] = ()
     scene_voices: tuple[HookSceneVoice, ...] = ()
     usable_surfaces: tuple[SurfaceRelease, ...] = ()
-    withheld_literals: tuple[str, ...] = Field(default=(), min_length=0)
-    name_candidates: tuple[str, ...] = Field(
-        description='需逐次作人物或普通文本声明的名称候选，不证明候选具有指人语义')
+    #: rc26（命名前移批次 C）：姓名监视行取代原 withheld_literals＋ name_candidates
+    #: 两面——写手材料硬闸取行内字面平铺，正文定位报告取归因（见 NameWatch）。
+    name_watch: tuple[NameWatch, ...] = Field(default=(), min_length=0)
     #: 本人未释放的个人姓名面及裸文唯一归属证明（不进阅读面）。
     withheld_bindings: tuple[WithheldNameBinding, ...] = Field(default=(), min_length=0)
     #: 显示面前缀（CS-H H3，RC-60）：每人按释放顺序的 Hook 自选释放面；尚无释放
@@ -326,16 +327,13 @@ class HookContext(StrictModel):
 class HookReceipt(StrictModel):
     """Hook 的机械回执（`stage5/hook/receipt.json`）。
 
-    prose_sha256 绑定**改名前**的具体成文——换 NameMap 不使本回执失效。
-    `semantic` 固定 unverified：机械通过不升级为语义已验（I-42 的如实披露）。
+    rc26（命名前移批 C）：prose_sha256 绑定最终成文（目标姓名成文，无末端
+    改名）。`semantic` 固定 unverified：机械通过不升级为语义已验（I-42 的
+    如实披露）。
     """
 
     hook_context_sha256: str = Field(min_length=64, max_length=64)
     prose_sha256: str = Field(min_length=64, max_length=64)
-    name_mentions: tuple[NameMention, ...] = Field(
-        description='compiler 计算的纯正文人物提及；不得用缺字段冒充合法空表')
-    non_name_spans: tuple[NameTextSpan, ...] = Field(
-        description='compiler 计算的普通义声明区间；空表须显式给出')
     request_identity: str = Field(min_length=1, description='被接受 attempt 的请求身份')
     validator_version: str = Field(min_length=1)
     status: Literal['accepted', 'rejected']

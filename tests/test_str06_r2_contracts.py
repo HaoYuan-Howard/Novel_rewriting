@@ -37,7 +37,7 @@ from contracts.schema.design import (
     SceneDriver, TargetBeat, TargetDelta, TargetScene, ThreadAction,
 )
 from contracts.schema.receipt import ChapterLengthDisclosure, ChapterReceipt
-from contracts.schema.state import EffectDomain, StateRead
+from contracts.schema.state import EffectDomain, NameWatch, StateRead
 from tests.str06_expression_inputs import (
     sample_narration, sample_requirements, sample_design_expression, sample_canonical_expression,
 )
@@ -403,10 +403,12 @@ def test_chapter_ir_continuity_composes_entry_and_previous_ending():
     binding = _binding()
     plan, errors = compile_execution_plan(graph, binding)
     assert not errors, errors
+    from tests.str06_facilities import name_map_of
     ir = compile_writer_book_ir(graph=graph, plan=plan, binding=binding,
                                 total_budget=1000, length_band=(0.6, 1.3),
                                 projection=_characters().name_projection(),
-                                structure=None)
+                                structure=_characters().name_structure,
+                                name_map=name_map_of(_characters()))
     first, second = ir.chapters
     # 第 1 章：entry 固定开篇，无上一章末场
     assert first.continuity.entry == ChapterEntry.opening()
@@ -430,8 +432,7 @@ def _green_ir():
 def test_chapter_receipt_version_and_split_fields():
     """回执升 rc6：packet_sha256 单摘要拆成写手视图／验证输入／Machine 审计。"""
     receipt = ChapterReceipt(
-        name_mentions=(), non_name_spans=(),
-        contract_version='str06-rc25', chapter_ordinal=1,
+        contract_version='str06-rc26', chapter_ordinal=1,
         writer_view_sha256=H64, validation_sha256='b' * 64,
         machine_view_sha256='c' * 64,
         prose_sha256='d' * 64, request_identity='r1',
@@ -440,11 +441,11 @@ def test_chapter_receipt_version_and_split_fields():
         length=ChapterLengthDisclosure(char_count=900, target_chars=1000,
                                        band_low=600, band_high=1300,
                                        within_band=True, deviation_ratio=-0.1))
-    assert receipt.contract_version == 'str06-rc25'
+    assert receipt.contract_version == 'str06-rc26'
     with pytest.raises(ValidationError):
         ChapterReceipt(
         name_mentions=(), non_name_spans=(),
-            contract_version='str06-rc25', chapter_ordinal=1,
+            contract_version='str06-rc26', chapter_ordinal=1,
             writer_view_sha256=H64, validation_sha256='b' * 64,
             machine_view_sha256='c' * 64,
             packet_sha256=H64,                        # 旧单摘要形状关闭式拒读
@@ -456,7 +457,7 @@ def test_chapter_receipt_version_and_split_fields():
                                            within_band=True, deviation_ratio=-0.1))
     with pytest.raises(ValidationError):
         ChapterReceipt(                               # 缺验证输入摘要即拒
-            contract_version='str06-rc25', chapter_ordinal=1,
+            contract_version='str06-rc26', chapter_ordinal=1,
             writer_view_sha256=H64, machine_view_sha256='c' * 64,
             prose_sha256='d' * 64, request_identity='r1',
             protocol_version='p1', renderer_version='r1', validator_version='v1',
@@ -490,7 +491,7 @@ def test_receipt_binds_writer_view_and_validation_separately():
                 identities.machine_view_sha256}) == 3
 
     def receipt(**over):
-        base = dict(contract_version='str06-rc25', chapter_ordinal=1, name_mentions=(), non_name_spans=(),
+        base = dict(contract_version='str06-rc26', chapter_ordinal=1,
                     writer_view_sha256=identities.writer_view_sha256,
                     validation_sha256=identities.validation_sha256,
                     machine_view_sha256=identities.machine_view_sha256,
@@ -516,8 +517,9 @@ def test_receipt_binds_writer_view_and_validation_separately():
     # 验证输入变化（禁用字面）→ 重购；但不改写手视图摘要
     from tests.test_str06_semantic_delivery import _patch_chapter
     chapter = next(c for c in ir.chapters if c.chapter_ordinal == 2)
-    withheld_ir = _patch_chapter(ir, 2, withheld_literals=chapter.withheld_literals +
-                                 ('禁露字面九九',))
+    from novel.core.name_residue import watch_literals
+    withheld_ir = _patch_chapter(ir, 2, name_watch=chapter.name_watch + (
+        NameWatch(code='unreleased_name', char_id='ch1', literals=('禁露字面九九',)),))
     withheld = chapter_identities(project_chapter_packet(withheld_ir, 2))
     base2 = chapter_identities(project_chapter_packet(ir, 2))
     assert withheld.validation_sha256 != base2.validation_sha256
@@ -543,8 +545,7 @@ def test_machine_only_change_does_not_invalidate_receipt():
     assert mutated.writer_view_sha256 == identities.writer_view_sha256
     assert mutated.validation_sha256 == identities.validation_sha256
     receipt = ChapterReceipt(
-        name_mentions=(), non_name_spans=(),
-        contract_version='str06-rc25', chapter_ordinal=1,
+        contract_version='str06-rc26', chapter_ordinal=1,
         writer_view_sha256=identities.writer_view_sha256,
         validation_sha256=identities.validation_sha256,
         machine_view_sha256=identities.machine_view_sha256,
@@ -659,20 +660,20 @@ def test_r2_version_constants():
     assert STAGE4_DESIGN_PROTOCOL == 'stage4-design-v5'
     assert STR06_RC_VERSION == 'str06-rc26'          # 命名前移批升版式头；Design 形状本批不变。
     assert 'str06-rc10' in STR06_RC_LABELS
-    assert RENDERER_VERSION == 'str06-render-v13'
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v12'
-    assert STR06_ARTIFACT_RC_VERSIONS['stage4/design/body_design.json'] == 'str06-rc25'
-    assert STR06_ARTIFACT_RC_VERSIONS['stage4/design/presentation_graph.json'] == 'str06-rc25'
+    assert RENDERER_VERSION == 'str06-render-v14'
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v13'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/design/body_design.json'] == 'str06-rc26'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/design/presentation_graph.json'] == 'str06-rc26'
     # rc17（CS-H H3）：IR 因显示面分表（display_fallback）、必保揭名
     # （requires_released）与拍级释放（release_introductions）再升版。
     # rc18（CS-S 1b 补升）：IR 经 VerificationIR.obligations 内嵌 ObligationAnchor，
     # visibility 删除使 IR 形状变化——模型字面量与产物表同批钉 rc18（I-13）。
-    assert STR06_ARTIFACT_RC_VERSIONS['stage4/ir/writer_book_ir.json'] == 'str06-rc25'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/ir/writer_book_ir.json'] == 'str06-rc26'
     from contracts.schema.book_ir import WriterBookIR
-    assert WriterBookIR.model_fields['contract_version'].default == 'str06-rc25'
+    assert WriterBookIR.model_fields['contract_version'].default == 'str06-rc26'
     # rc17（CS-H H3，RC-61）：BODY_VALIDATOR v2——必保揭名必现字面进章级机械校验。
     assert STR06_ARTIFACT_RC_VERSIONS['stage5/acceptance/body/ch{nn}.json'] \
-        == 'str06-rc25'
+        == 'str06-rc26'
     # rc16（CS-F2）：Binding 增 fact_bindings 而升版；LLM 面 Design wire 升 v8
     # （kf 句柄不再是状态键）。旧 rc12 Binding 按字面量拒读，不迁移（I-13）。
     # rc17（CS-H H3，RC-63）：BriefFactLock 增 subjects 再升版；
@@ -681,7 +682,7 @@ def test_r2_version_constants():
     from contracts.schema.grounding import SemanticBinding
     assert STR06_ARTIFACT_RC_VERSIONS['stage4/grounding/semantic_binding.json'] \
         == 'str06-rc26'
-    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v11'
+    assert STAGE4_DESIGN_WIRE_PROTOCOL == 'stage4-design-v12'
     assert SemanticBinding.model_fields['contract_version'].default == 'str06-rc26'
 
 

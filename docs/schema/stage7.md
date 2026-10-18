@@ -28,7 +28,7 @@ prose_sha256)`、Hook 成文 hash、改名映射与保留字面、两类身份�
 | 路径 | 模型 | 生产节点 | 内容 |
 |---|---|---|---|
 | `stage7/final/{title}_rewriting.txt` | 成书（text） | `str06.stage7.assemble` | 最终成书（按书名命名；TXT 先落盘） |
-| `stage7/final/delivery_manifest.json` | 自由形态派生记录 | `str06.stage7.assemble` | 交付 manifest（逐章篇幅读数、全书 ±10% 偏差、hash 账；最后提交） |
+| `stage7/final/delivery_manifest.json` | 自由形态派生记录 | `str06.stage7.assemble` | 交付 manifest（逐章篇幅读数、全书 ±10% 偏差、hash 账、疑似姓名残留定位计数；最后提交） |
 
 `runtime/delivery/` 下的改名 Hook 与 assembly 报告是审计记录，由唯一 writer 治理，
 不进版本表。
@@ -45,15 +45,15 @@ Naming（现住 Stage4）只消费名称结构与稳定身份的只读投影；A
 
 | 判据 | sev | 要求 |
 |---|---|---|
-| `naming_residual` | hard | 身份提及、区间与映射闭合；零表外改动 |
+| `naming_residual` | 已注销 | 随命名前移批次 C（rc26）退役：零改名装配，疑似旧名残留改由 `name_residue_report` 定位披露（不阻断） |
 | `assembly_chapter_chain` | hard | 章回执链核对（逐章写手视图／验证输入摘要＋正文 hash；Machine 层摘要仅审计不参与） |
 | `delivery_manifest` | hard | TXT 先落盘、manifest 最后提交、hash 逐字一致 |
 | `delivery_replayable` | hard | 同输入交付字节一致（零新购重放） |
 | `delivery_chapter_markers` | hard | 成书按阅读序加「第N章」、交付身份对分章敏感 |
 | `book_length_deviation` | metric | 全书相对书级目标的偏差读数（±10%） |
 
-当前注册表共 **6 条**：**5 hard、1 metric**。唯一注册表为
+当前注册表共 **5 条**：**4 hard、1 metric**（`naming_residual` 已注销，不计入）。唯一注册表为
 `contracts/judges/str06.py`（F8c 起分流至本层判据模块）。
 
-身份文本协议、回执两类区间及旧稿重建边界见 [name_text.md](name_text.md)。交付身份同时绑定两类声明表。
+rc26（2026-10-18 命名前移批 C）：零改名装配——Stage5 正文即最终成文，交付身份不再绑定身份声明表（组成见 BACKEND_CONTRACT R-10.10）。
 命名判据（`name_map_compile`／`naming_quality_unver`）随节点迁至 [stage4.md](stage4.md)。

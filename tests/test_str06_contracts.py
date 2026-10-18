@@ -52,8 +52,8 @@ from contracts.schema.policy import (
     PreserveKind,
 )
 from contracts.schema.receipt import (
-    ChapterLengthDisclosure,
-    ChapterReceipt,
+    BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION, ChapterLengthDisclosure,
+    ChapterReceipt, RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
 )
 from contracts.schema.grounding import BriefRequirement
 from tests.str06_expression_inputs import sample_brief_expression, sample_canonical_expression
@@ -402,12 +402,12 @@ def _length(**over) -> dict:
 
 def _chapter_receipt(**over) -> dict:
     base = dict(
-        name_mentions=(), non_name_spans=(), chapter_ordinal=1, writer_view_sha256=H64, validation_sha256='b' * 64,
+        chapter_ordinal=1, writer_view_sha256=H64, validation_sha256='b' * 64,
         machine_view_sha256='c' * 64,
         prose_sha256=H64, request_identity='req-1',
-        protocol_version='str06-body-protocol-v5', renderer_version='str06-render-v5',
-        validator_version='str06-body-mechanical-v1', status='accepted',
-        mechanical_checks=('non_empty', 'length_band'), length=_length())
+        protocol_version=WRITER_PROTOCOL_VERSION, renderer_version=RENDERER_VERSION,
+        validator_version=BODY_VALIDATOR_VERSION, status='accepted',
+        mechanical_checks=BODY_MECHANICAL_CHECKS, length=_length())
     base.update(over)
     return base
 

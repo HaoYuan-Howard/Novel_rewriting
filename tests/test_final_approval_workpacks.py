@@ -9,10 +9,10 @@ Stage2/4/5/6/7 链随 STR-06 切换整层删除，`stage7.rename` 节点移入
 关闭式拒识（STR-06 关闭批：RETIRED_NODES 名册已随存量解码面删除）。
 
 **接管者**：新链命名职责是 `str06.stage4.naming`
-（`novel/stages/stage4/naming.py::compile_name_map`／`diff_proof`），其反例
-由 ``tests/test_str06_naming.py`` 持有——改名表编译、残留扫描与交付重放
-稳定都在那里。本文件只守退役面：producer 不复活、旧节点不可调度、终审
-工作包写入口不可达。
+（`novel/stages/stage4/naming.py::compile_name_map`／`target_face_table`），其
+反例由 ``tests/test_str06_naming.py`` 持有——NameMap 编译闭合、目标字面表
+与零改名交付重放都在那里（rc26 命名前移批 C：末端替换链已退役）。本文件只守
+退役面：producer 不复活、旧节点不可调度、终审工作包写入口不可达。
 """
 from __future__ import annotations
 
@@ -93,13 +93,21 @@ def test_stage7_rename_node_is_retired_and_not_schedulable():
 
 
 def test_new_chain_naming_is_the_takeover():
-    """新链命名职责在场，且其反例由 tests/test_str06_naming.py 持有。"""
+    """新链命名职责在场，且其反例由 tests/test_str06_naming.py 持有。
+
+    rc26（命名前移批 C）：末端替换链（`compile_bound_replacements`／
+    `apply_bound_names`／`diff_proof`）已退役——Stage5 正文直接以目标姓名
+    成文，Stage7 零改名装配。接管面是 NameMap 编译闭合＋目标字面表
+    （`target_face_table`），不得回退到「按提及改名」。
+    """
+    from novel.core import name_materials
     from novel.stages.stage4 import naming
 
-    for entry in ('compile_name_map', 'compile_bound_replacements',
-                  'apply_bound_names', 'diff_proof',
-                  'naming_projection'):
+    for entry in ('compile_name_map', 'naming_projection'):
         assert hasattr(naming, entry), f'新链命名职责缺失：{entry}'
+    for gone in ('apply_bound_names', 'diff_proof', 'compile_bound_replacements'):
+        assert not hasattr(naming, gone), f'末端替换链符号复活：{gone}'
+    assert hasattr(name_materials, 'target_face_table'), '目标字面表缺失'
     from pathlib import Path
 
     takeover = Path(__file__).with_name('test_str06_naming.py')

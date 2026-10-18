@@ -82,10 +82,15 @@ def _supplement_case():
     return chapters, wires
 
 
-def test_source_surface_supplement_reaches_characters_and_bound_stage7(tmp_path):
-    """Names→Stage2真实发布→Stage7真实改名：遗漏简称进入同一Characters真源。"""
-    from novel.core.name_text import resolve_name_text
-    from novel.stages.stage4.naming import apply_bound_names, compile_bound_replacements, compile_name_map
+def test_source_surface_supplement_reaches_characters_and_target_faces(tmp_path):
+    """Names→Stage2真实发布→目标字面表：遗漏简称进入同一Characters真源。
+
+    rc26（命名前移批 C）：Stage5 正文直接以目标姓名成文——源补充面经
+    `target_face_table` 映射到目标字面（源登记字面 → 目标字面），不再有
+    末端替换表与按提及改名。
+    """
+    from novel.core.name_materials import target_face_table
+    from novel.stages.stage4.naming import compile_name_map
     chapters, wires = _supplement_case()
     before = deepcopy(wires['book'])
     repo = _run(tmp_path, chapters, wires, _AcceptingAsk(wires))
@@ -110,14 +115,14 @@ def test_source_surface_supplement_reaches_characters_and_bound_stage7(tmp_path)
         'char_ref': 'fu_jun', 'name': {'family': '岑', 'given': '时舟'},
         'aliases': {}, 'keep_reason': None}]}, characters)
     assert name_map is not None and not errors, errors
-    replacements, errors = compile_bound_replacements(characters, name_map)
+    faces, errors = target_face_table(characters.name_structure, name_map)
     assert not errors, errors
-    resolved = resolve_name_text('[[name:fu_jun|远松]]回头，门房称他[[name:fu_jun|陆公子]]。',
-        {cid: tuple(surface.surface for surface in entry.surfaces)
-         for cid, entry in characters.characters.items()})
-    assert not resolved.errors
-    renamed, errors = apply_bound_names(resolved.text, resolved.mentions, replacements)
-    assert not errors and renamed == '时舟回头，门房称他岑公子。'
+    # 家族构词按同 family_id 新姓一致展开；简称由名字位渲染，不靠部件猜
+    assert faces['fu_jun']['远松'] == '时舟'
+    assert faces['fu_jun']['陆公子'] == '岑公子'
+    assert faces['fu_jun']['陆远松'] == '岑时舟'
+    # 纯称谓不改名：源字面即目标字面
+    assert faces['fu_jun']['夫君'] == '夫君'
 
 
 @pytest.mark.parametrize('fault', ['missing_field', 'unknown_segment', 'missing_literal', 'duplicate', 'existing'])

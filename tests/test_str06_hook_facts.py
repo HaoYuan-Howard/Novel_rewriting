@@ -14,45 +14,41 @@ from novel.stages.stage4.hook_wire import (
 )
 from tests.factories import hook_wire_v3
 from tests.test_str06_hook import _characters, _green_pair, _hook_wire, _projection
+from tests.str06_facilities import name_map_of
 
 
 ADDRESS = ('character', ('yun_niang',), '', 'marital_status')
 
 
-def test_hook_author_text_reports_unclassified_candidates_without_claiming_leakage():
-    from novel.stages.stage4.hook_validation import hook_name_text_issues
+def test_hook_author_text_reports_target_literal_exposure():
+    """rc26：Hook 自有措辞是普通目标文本——只做目标字面存在性报告（无声明协议）。"""
     from novel.stages.stage4.hook_wire import hook_name_exposure
-    from tests.test_str06_design_slim import _identity_projection
-    kwargs = dict(projection=_identity_projection(), structure=None, require_classification=True)
-    wire = {'local_focus': '白天只写行动', 'materials': [],
-            'reader_expectation': {'focus': '动静从何而来？'}}
-    errors = hook_name_text_issues(wire, **kwargs)
-    assert {error.code for error in errors} == {'name_text_unclassified'}
-    assert all(error.context['wire_paths'] == [['local_focus']] for error in errors)
-    wire['local_focus'] = '[[text|白天]]只写行动'
-    assert hook_name_text_issues(wire, **kwargs) == []
-    wire['local_focus'] = '[[name:other|白姑娘]]走过'
-    assert {error.code for error in hook_name_text_issues(wire, **kwargs)} == {'name_text_reference'}
-    assert hook_name_exposure('我明白了', _identity_projection()) == {}
-    assert hook_name_exposure('[[text|白天]]有脚步', _identity_projection()) == {}
-    assert hook_name_exposure('[[name:bai|白姑娘]]走过', _identity_projection()) == {'bai': ['白姑娘']}
+    from novel.core.name_materials import target_face_table
+    faces, _face_errors = target_face_table(_characters().name_structure,
+                                            name_map_of(_characters()))
+    assert hook_name_exposure('我明白了', faces=faces) == {}
+    assert hook_name_exposure('夫君翻出后墙', faces=faces) == {'fu_jun': ['夫君']}
+    assert hook_name_exposure('苏姑娘走过', faces=faces) == {'yun_niang': ['苏姑娘']}
 
 
 def test_explicit_hidden_identity_cannot_escape_through_a_pure_appellation():
     body, _, _ = _green_pair()
     wire = hook_wire_v3(_hook_wire())
-    wire['materials'][0]['presentation'] = '[[name:fu_jun|夫君]]翻出后墙'
+    wire['materials'][0]['presentation'] = '夫君翻出后墙'
     hook, errors = _accept(body, wire)
     assert hook is None
     assert any(getattr(error, 'code', '') == 'hook_presentation_leak' for error in errors)
-    wire['materials'][0]['presentation'] = '[[text|陆续]]传来几声脚步'
+    wire['materials'][0]['presentation'] = '陆续传来几声脚步'
     hook, errors = _accept(body, wire)
     assert hook is not None and not errors, errors
 
 
 def _accept(body, wire):
+    from novel.core.name_materials import target_face_table
+    faces, _face_errors = target_face_table(_characters().name_structure,
+                                            name_map_of(_characters()))
     return assemble_hook_design(wire, body=body, known_char_ids={'yun_niang', 'fu_jun'},
-                                name_projection=_projection())
+                                name_projection=_projection(), faces=faces)
 
 
 def _append_delta(body, si, bi, delta):
@@ -141,7 +137,10 @@ def test_plans_are_not_world_facts_and_writer_keeps_their_modality(modality):
     wire['opening_facts'][0]['audience'] = 'pov'
     hook, errors = _accept(body, wire)
     assert hook is not None and not errors, errors
-    context, errors = compile_hook_context(publish_graph(body, hook), _projection(), total_budget=2000)
+    context, errors = compile_hook_context(publish_graph(body, hook), _projection(),
+                                            _characters().name_structure,
+                                            total_budget=2000,
+                                            name_map=name_map_of(_characters()))
     assert context is not None and not errors, errors
     text = json.dumps(context.model_dump(mode='json'), ensure_ascii=False)
     assert ('尚未发生' if modality != 'conditional' else '条件成立时才发生') in text
@@ -159,7 +158,10 @@ def test_pov_knowledge_requires_correct_holder_and_keeps_knowledge_mode():
     wire['pov']['focalizers'] = ['fu_jun']
     hook, errors = _accept(body, wire)
     assert hook is not None and not errors, errors
-    context, errors = compile_hook_context(publish_graph(body, hook), _projection(), total_budget=2000)
+    context, errors = compile_hook_context(publish_graph(body, hook), _projection(),
+                                            _characters().name_structure,
+                                            total_budget=2000,
+                                            name_map=name_map_of(_characters()))
     assert context is not None and not errors, errors
     assert '怀疑' in json.dumps(context.model_dump(mode='json'), ensure_ascii=False)
 
@@ -317,7 +319,10 @@ def test_return_after_flashback_and_reader_development_use_real_later_beats():
     hook, errors = _accept(body, wire)
     assert hook is not None and not errors, errors
     assert hook.reader_expectation.followup_refs == ('sc02#b03',)
-    context, errors = compile_hook_context(publish_graph(body, hook), _projection(), total_budget=2000)
+    context, errors = compile_hook_context(publish_graph(body, hook), _projection(),
+                                            _characters().name_structure,
+                                            total_budget=2000,
+                                            name_map=name_map_of(_characters()))
     assert context is not None and not errors, errors
     assert context.reader_expectation.model_dump() == {
         'kind': 'action', 'focus': '她接下来会怎样追查？'}
@@ -509,8 +514,11 @@ def test_context_projects_authoritative_voice_and_never_copies_future_answer():
     hook, errors = _accept(body, wire)
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
-    assert body.contract_version == 'str06-rc25' and graph.contract_version == 'str06-rc25'
-    context, errors = compile_hook_context(graph, _projection(), total_budget=2000)
+    assert body.contract_version == 'str06-rc26' and graph.contract_version == 'str06-rc26'
+    context, errors = compile_hook_context(graph, _projection(),
+                                            _characters().name_structure,
+                                            total_budget=2000,
+                                            name_map=name_map_of(_characters()))
     assert context is not None and not errors, errors
     assert context.book_style == body.book_style
     assert [m.model_dump() for m in context.expression_mechanisms] == [

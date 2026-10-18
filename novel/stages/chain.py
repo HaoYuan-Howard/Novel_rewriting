@@ -78,7 +78,10 @@ from novel.llm.transport import ChatRequest, DeepSeekTransport
 from novel.llm.budget import count_text_tokens
 from novel import paths, prov
 from novel.core.text import count_non_whitespace_chars
-from novel.core.name_materials import name_candidate_literals
+from novel.core.name_materials import (
+    person_name_bearing_targets, person_target_literals, target_face_table,
+)
+from novel.core.name_residue import residue_counts as residue_counts_of, residue_report
 from novel.model_slots import pipeline_model_slot
 from novel.stages.common import (
     NAMES_RULES, PRESERVE_RULES, DESIGN_RULES, design_rules, design_wire_schema, expand_surface_releases,
@@ -124,7 +127,7 @@ from novel.stages.stage4 import (
     project_design_input, project_preserve_view, project_target_names,
     preserve_revision_wire,
     publish_graph,
-    apply_bound_names, compile_name_map, compile_bound_replacements,
+    compile_name_map,
     naming_patch_locate, naming_projection,
 )
 from contracts.schema.orchestration import LegacyLlmProfile
@@ -141,8 +144,8 @@ from novel.stages.stage5 import (
     AnsweredText, HOOK_VALIDATOR_VERSION, MAX_REWRITES, MECHANICAL_CHECKS,
     build_hook_user_prompt,
     build_rewrite_user_prompt, context_sha256,
-    chapter_prose_validator, recheck_chapter, sha256_text, validate_hook_prose, write_chapter,
-    resolve_hook_prose,
+    chapter_name_residues, chapter_prose_validator, hook_name_residues,
+    recheck_chapter, sha256_text, validate_hook_prose, write_chapter,
 )
 from novel.stages.stage7 import (
     assemble_delivery, build_delivery_manifest, chapter_access,
@@ -1305,7 +1308,6 @@ def run_body_design(ctx: ChainContext) -> dict:
     # 同一把尺——窄请求只裁掉整份输入材料，不另造一套协议（I-11）。
     rules_context = dict(
         known_char_ids=set(chars.characters),
-        name_candidates=name_candidate_literals(chars.name_projection(), chars.name_structure),
         detail_refs=detail_index(obligation_index),
         expression_ids=tuple(item.ex_id for item in brief.expression
                              if item.kind != 'narration'),
@@ -1658,6 +1660,9 @@ def run_hook_design(ctx: ChainContext) -> dict:
     _, identities = project_brief(checkpoint, chars.core_view(), blueprint,
                                   structure=chars.name_structure, name_map=name_map)
     projection = chars.name_projection()
+    # rc26（命名前移批次 C）：目标字面表——hook 输入标注、组合检查与汇编判据
+    # 全部经它切目标面（源旧名不进请求标注）。
+    faces, _face_errors = target_face_table(chars.name_structure, name_map)
     kp_statements = {p.kp_id: p.statement for p in brief.propositions}
     world_statements = {wc.constraint_id: wc.statement for wc in brief.book_constraints}
     from novel.stages.stage4 import project_hook_semantics, project_hook_input, hook_wire_schema
@@ -1669,7 +1674,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
                                    issues=(str(exc),)) from exc
     hook_design_prompt = pack_prompt(
         HOOK_DESIGN_RULES, book_title=ctx.book_title,
-        story=project_hook_input(body, projection=projection,
+        story=project_hook_input(body, faces=person_name_bearing_targets(
+            chars.name_structure, faces),
                                  kp_statements=kp_statements,
                                  world_statements=world_statements),
         wire_schema=hook_wire_schema(body),
@@ -1686,13 +1692,14 @@ def run_hook_design(ctx: ChainContext) -> dict:
         只用 `chars.characters`，预览抓得到的内部 id 泄漏在这里会漏网。
         """
         return hook_combination_errors(
-            w, body=body, binding=binding, chars=chars,
+            w, body=body, binding=binding, chars=chars, name_map=name_map,
             kp_statements=kp_statements, world_statements=world_statements,
             total_budget=ctx.budget)
 
     def hook_design_compile(w):
         hook, errors = assemble_hook_design(w, body=body, known_char_ids=set(chars.characters),
-                                           name_projection=projection, name_structure=chars.name_structure)
+                                           name_projection=projection,
+                                           name_structure=chars.name_structure, faces=faces)
         if hook is not None:
             errors.extend(hook_combination(hook))
         elif errors:
@@ -1700,7 +1707,7 @@ def run_hook_design(ctx: ChainContext) -> dict:
             # 材料层机械错误，一轮反馈暴露全部机械缺陷，不逐层付费排雷。
             from novel.stages.stage4 import hook_candidate_material_errors
             errors.extend(hook_candidate_material_errors(
-                w, body=body, chars=chars, binding=binding,
+                w, body=body, chars=chars, name_map=name_map, binding=binding,
                 kp_statements=kp_statements, world_statements=world_statements))
         return (None, errors) if errors else (hook, [])
 
@@ -1713,7 +1720,8 @@ def run_hook_design(ctx: ChainContext) -> dict:
         return NarrowPatchRequest(
             rules=HOOK_DESIGN_RULES,
             dependency=json.dumps({**hook_patch_slice(
-                body, base_wire, [t.path for t in targets], projection=projection,
+                body, base_wire, [t.path for t in targets],
+                faces=person_name_bearing_targets(chars.name_structure, faces),
                 kp_statements=kp_statements, world_statements=world_statements),
                 'semantics': semantics},
                                   ensure_ascii=False, separators=(',', ':')),
@@ -1775,6 +1783,7 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
     _backfill_epistemic_lock_order(repository, graph, binding)
     projection = chars.name_projection()
     brief = repository.read_model('stage4/grounding/reconstruction_brief.json')
+    name_map = repository.read_model('stage4/naming/name_map.json')
     kp_statements = {p.kp_id: p.statement for p in brief.propositions}
     world_statements = {wc.constraint_id: wc.statement
                         for wc in brief.book_constraints}
@@ -1782,14 +1791,16 @@ def run_compile_stage4(ctx: ChainContext) -> dict:
                                                 chars.name_structure, kp_statements,
                                                 world_statements,
                                                 characters=chars.core_view(),
-                                                total_budget=ctx.budget)
+                                                total_budget=ctx.budget,
+                                                name_map=name_map)
     if errors:
         raise MechanicalDefectStop(
             f'stage4 hook 上下文机械缺陷：{errors}',
             node='str06.stage4.compile', issues=tuple(str(e) for e in errors))
     inspection = inspect_body_materials(
         graph, binding, brief, chars, budget=ctx.budget,
-        length_band=ctx.length_band, book_title=ctx.book_title)
+        length_band=ctx.length_band, book_title=ctx.book_title,
+        name_map=name_map)
     writer_ir = inspection.ir
     assert writer_ir is not None  # 同输入的plan已在上方验证
     problems = list(inspection.errors)
@@ -2013,7 +2024,7 @@ def _write_hook(hook_context, ask_text) -> tuple[str | None, list[dict], Any]:
         prose_seen = True
         errors = validate(prose)
         attempts.append({'attempt': attempt + 1,
-                         'chars': count_non_whitespace_chars(resolve_hook_prose(prose, hook_context).text),
+                         'chars': count_non_whitespace_chars(prose),
                          'errors': errors})
         if not errors:
             return prose, attempts, ref
@@ -2024,11 +2035,6 @@ def run_hook(ctx: ChainContext) -> dict:
     repository = ctx.repository
     hook_context = repository.read_model('stage4/context/hook/hook.json')
     prose, attempts_log, hook_ref = _write_hook(hook_context, ctx.ask_text)
-    resolved = resolve_hook_prose(prose, hook_context) if prose is not None else None
-    if resolved is not None:
-        if resolved.errors:
-            raise ValueError(f'已接受Hook身份引用复编译失败：{resolved.errors}')
-        prose = resolved.text
     status = 'hook_accepted_mechanical' if prose is not None else 'hook_rejected'
     receipt = HookReceipt(
         hook_context_sha256=context_sha256(hook_context),
@@ -2037,9 +2043,12 @@ def run_hook(ctx: ChainContext) -> dict:
                           else 'unidentified'),
         validator_version=HOOK_VALIDATOR_VERSION,
         status='accepted' if prose is not None else 'rejected',
-        name_mentions=resolved.mentions if resolved is not None else (),
-        non_name_spans=resolved.non_name_spans if resolved is not None else (),
         mechanical_checks=MECHANICAL_CHECKS)
+    # rc26：疑似旧名残留/提前揭名定位报告（不阻断、不购修；落 runtime 审计面）。
+    residues = hook_name_residues(hook_context, prose) if prose is not None else ()
+    if residues:
+        repository.write('runtime/hook_name_report.json',
+                         residue_report(residues, scope='hook'))
     items: list[PublishItem] = []
     if prose is not None:
         items.append(PublishItem(rel='stage5/hook/hook.txt', text=prose))
@@ -2184,6 +2193,12 @@ def _write_and_commit_chapter(ctx: ChainContext, packet, ordinal: int):
                     owners=(f'body_{_chapter_ordinal(ordinal)}',),
                     refs=(outcome.ref,) if outcome.ref is not None else ()),
     ))
+    # rc26：疑似旧名残留／提前揭名定位报告（不阻断、不购返修；runtime 审计面，
+    # 与 hook 的报告同格式）。命中为零不写文件——缺席与合法空报告分开（I-42）。
+    residues = chapter_name_residues(packet, outcome.prose)
+    if residues:
+        repository.write(f'runtime/acceptance/name_report/ch{ordinal:02d}.json',
+                         residue_report(residues, scope=f'ch{ordinal:02d}'))
     return outcome
 
 
@@ -2278,17 +2293,10 @@ def run_naming(ctx: ChainContext) -> dict:
 
 # ─── stage7 assemble ─────────────────────────────────────────────────────────
 
-def _kept_surfaces(chars, char_ref: str) -> set[str]:
-    person = chars.name_structure.people[char_ref]
-    return {s for s, form in person.surface_forms.items() if form is not None}
-
-
 def run_assemble(ctx: ChainContext) -> dict:
     repository = ctx.repository
     writer_ir = repository.read_model('stage4/ir/writer_book_ir.json')
     graph = repository.read_model('stage4/design/presentation_graph.json')
-    chars = repository.read_model('stage2/characters/characters.json')
-    name_map = repository.read_model('stage4/naming/name_map.json')
     hook_context = repository.read_model('stage4/context/hook/hook.json')
     binding = repository.read_model('stage4/grounding/semantic_binding.json')
     receipt = repository.read_model('stage5/hook/receipt.json')
@@ -2319,33 +2327,33 @@ def run_assemble(ctx: ChainContext) -> dict:
     chapter_prose = {ordinal: raw_prose[ordinal] for ordinal in access.accepted}
     chain_problems = verify_chapter_receipts(
         raw_receipts, raw_prose, identities_by_ordinal=identities)
-    replacements, errors = compile_bound_replacements(chars, name_map)
-    if errors:
-        raise ValueError(errors)
-    kept_literals = tuple(sorted({
-        surface for entry in name_map.entries if entry.name is None
-        for surface in _kept_surfaces(chars, entry.char_ref)}))
-    renamed_hook, rename_errors = apply_bound_names(prose, receipt.name_mentions, replacements)
-    if rename_errors:
-        raise ValueError(f'Hook 身份改名失败：{rename_errors}')
-    repository.write_text('runtime/delivery/hook_renamed.txt', renamed_hook)
     hook_sha = sha256_text(prose)
+    # rc26：零改名装配——正文即最终成文，不编译替换表、不写 hook_renamed。
+    # 疑似旧名残留/提前揭名定位报告计数（披露面；与 body/hook 节点同一纯函数、同一监视行）。
+    residue_counts: dict[str, dict[str, int]] = {}
+    for ordinal in sorted(chapter_prose):
+        counts = residue_counts_of(chapter_name_residues(
+            project_chapter_packet(writer_ir, ordinal), chapter_prose[ordinal]))
+        if counts:
+            residue_counts[f'ch{ordinal:02d}'] = counts
+    hook_counts = residue_counts_of(hook_name_residues(hook_context, prose))
+    if hook_counts:
+        residue_counts['hook'] = hook_counts
     outcome = assemble_delivery(
         chapter_prose=chapter_prose, body=access, hook_prose=prose,
         chapter_receipts=raw_receipts,
         identities_by_ordinal=identities,
         hook_receipt=receipt.model_dump(mode='json'),
-        hook_context_sha256=context_sha256(hook_context),
-        replacements=replacements, kept_literals=kept_literals)
-    report = {'mode': 'body+hook+naming', 'accepted_body': access.ready and not chain_problems,
+        hook_context_sha256=context_sha256(hook_context))
+    report = {'mode': 'body+hook', 'accepted_body': access.ready and not chain_problems,
               'chapters': len(writer_ir.chapters),
               'committed_chapters': sorted(access.accepted),
               'body_access': {k: list(v) for k, v in access._asdict().items()},
               'scenes': len(graph.scenes), 'obligations': len(binding.obligations),
               'chain_problems': chain_problems,
-              'hook': {'chars': count_non_whitespace_chars(prose), 'renamed_chars': count_non_whitespace_chars(renamed_hook),
-                       'materials': len(hook_context.materials),
-                       'replacements': len(replacements), 'kept': len(kept_literals)},
+              'hook': {'chars': count_non_whitespace_chars(prose),
+                       'materials': len(hook_context.materials)},
+              'name_residue': residue_counts,
               'assembly': {'status': outcome.status, 'reason': outcome.reason,
                            'delivery_identity': outcome.delivery_identity}}
     if outcome.status == 'ready':
@@ -2360,8 +2368,7 @@ def run_assemble(ctx: ChainContext) -> dict:
             receipts={ordinal: raw_receipts[ordinal] for ordinal in access.accepted},
             chapter_prose=chapter_prose,
             hook_prose_sha256=hook_sha,
-            name_map_sha256=repository.file_sha256(
-                repository.path('stage4/naming/name_map.json')),
+            name_residue=residue_counts,
             total_length_budget=ctx.budget)
         repository.publish((
             PublishItem(rel=final_rel, text=final_bytes.decode('utf-8')),

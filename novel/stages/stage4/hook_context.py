@@ -37,6 +37,7 @@ from typing import Final, Iterable, Mapping, Sequence
 
 from contracts.schema.context import SurfaceRelease
 from contracts.schema.design import PresentationGraph
+from contracts.schema.naming import NameMapV6
 from contracts.schema.state import EffectDomain
 from contracts.schema.hook import (
     HookContext, HookExpressionView, HookMaterialView, HookOpeningFact,
@@ -46,8 +47,9 @@ from contracts.schema.source import (
     CharactersCore, NameProjection, NameStructure,
 )
 from novel.core.name_materials import (
-    appellation_fallbacks, withheld_name_bindings, withheld_name_literals,
-    expand_surface_releases, name_candidate_literals,
+    appellation_fallbacks, expand_surface_releases, map_target_faces,
+    name_watch_rows, target_face_table, target_old_literals,
+    withheld_target_bindings,
 )
 from novel.core.text import kp_statement
 from novel.stages.stage4.hook_validation import validate_hook_design
@@ -74,7 +76,9 @@ _DOMAIN_LABELS = {'character': '人物', 'relation': '关系', 'knowledge': '知
 def hook_display_faces(releases: Mapping[str, Sequence[str]],
                        structure: NameStructure | None,
                        characters: CharactersCore | None,
-                       concealed: Iterable[str]) -> tuple[dict, tuple]:
+                       concealed: Iterable[str],
+                       faces: Mapping[str, Mapping[str, str]] | None = None,
+                       ) -> tuple[dict, tuple]:
     """Hook 自选释放面 + 非隐藏人物回落纯称谓的显示面表（compile 期一次算好）。
 
     显示面前缀（CS-H H3，RC-60）：每人按 Hook 自选释放顺序的面；尚无释放且非
@@ -84,11 +88,15 @@ def hook_display_faces(releases: Mapping[str, Sequence[str]],
     （wire 或 canonical 两侧各自转好）。compile_hook_context 与结构失败时的材料
     预检（hook_candidate_material_errors）共用同一张表：预检必须按**同一把尺**
     推演写手视图会看到什么，两处各算一套会把「预检说安全、验收判泄漏」变成常态。
-    返回（expand 后的释放面表，显示面行元组）。
+    rc26（命名前移批 C）：`faces`（目标字面表）在场时释放面与显示面一律目标
+    字面——写手直接以目标姓名成文。返回（expand 后的释放面表，显示面行元组）。
     """
     concealed_ids = set(concealed)
-    display_names = expand_surface_releases(releases, structure)
-    display_rows = {char_id: list(surfaces) for char_id, surfaces in releases.items()}
+    source_names = expand_surface_releases(releases, structure)
+    display_names = map_target_faces(faces, source_names) if faces is not None else source_names
+    # 显示面行仍只收自选释放面（不含家族构词展开）；展开面走 display_names。
+    raw = map_target_faces(faces, releases) if faces is not None else dict(releases)
+    display_rows = {char_id: list(surfaces) for char_id, surfaces in raw.items()}
     fallbacks = appellation_fallbacks(characters, structure) if characters is not None else {}
     for char_id, fallback in sorted(fallbacks.items()):
         if fallback and char_id not in display_rows and char_id not in concealed_ids:
@@ -212,24 +220,33 @@ def compile_hook_context(
     kp_statements: Mapping[str, str] = (),
     world_statements: Mapping[str, str] = (),
     characters: CharactersCore | None = None,
-    *, total_budget: int,
+    *, total_budget: int, name_map: NameMapV6,
 ) -> tuple[HookContext | None, list[str]]:
     """（完整 graph, 名称投影, 书级预算）→ HookContext。纯函数，不落盘。
 
     `characters`（CS-H H3）只用于显示面回落表的 compile 期计算（RC-60 第 3 步）；
     缺席时无回落——未释放人物没有显示面，投影保持原文、由字面检查如实报告。
     `total_budget`（rc24）只用于篇幅包络派生：进 Context 字节即进请求身份——
-    换预算的请求不是同一请求，不沿用旧结论。"""
+    换预算的请求不是同一请求，不沿用旧结论。rc26（命名前移批 C）：`name_map`
+    是称谓材料的目标字面权威——可用称谓、显示面、监视行与绑定表一律目标字面
+    （写手直接以目标姓名成文；identity-text 协议与 name_candidates 退役）。
+    """
     hook = graph.hook
+    if name_map.entries and structure is None:
+        return None, ['NameMap 非空而 Characters 未登记名称结构；先完成 Stage2 names']
+    faces, face_errors = (target_face_table(structure, name_map)
+                          if structure is not None else ({}, []))
+    if face_errors:
+        return None, [f'目标字面表编译失败：{error}' for error in face_errors]
     # schema只保引用存在；恢复/重编同样先复验时序、隐藏与称谓释放授权。
     errors = validate_hook_design(
         hook, body=graph, known_char_ids={entry.char_id for entry in projection.by_person},
-        name_projection=projection, name_structure=structure)
+        name_projection=projection, name_structure=structure, faces=faces)
     if errors:
         return None, errors
     display_names, display_faces = hook_display_faces(
         {r.char_id: r.surfaces for r in hook.surface_releases},
-        structure, characters, set(hook.concealed))
+        structure, characters, set(hook.concealed), faces=faces)
     faces_of = {row.char_id: row.surfaces[0] for row in display_faces}
     display_projection = projection.model_copy(update={'by_person': tuple(
         entry.model_copy(update={'display': faces_of.get(entry.char_id, '')})
@@ -323,13 +340,16 @@ def compile_hook_context(
             else:
                 forbidden.append(f'事件不得提前揭示：{beat.event}')
 
-    # 可用称谓与 withheld 专名字面；绑定表按 Hook 自选的释放面同尺推导（CS-F2）。
+    # 可用称谓与姓名监视行；绑定表按 Hook 自选的释放面同尺推导（CS-F2）。
+    # rc26：display_names 已是目标字面——监视行/绑定表与可用称谓同源。
     usable = tuple(sorted(
         (SurfaceRelease(char_id=r.char_id, surfaces=display_names[r.char_id])
          for r in hook.surface_releases), key=lambda r: r.char_id))
-    released = {s for r in usable for s in r.surfaces}
-    withheld = withheld_name_literals(projection, released, structure)
-    bindings = withheld_name_bindings(structure, display_names)
+    watch = name_watch_rows(
+        structure=structure, faces=faces, released_names=display_names,
+        old_literals=(target_old_literals(structure, name_map)
+                      if structure is not None else {}))
+    bindings = withheld_target_bindings(structure, faces, display_names)
 
     # 线程收束并入禁区（R2.7）：视界＝材料引用拍的最大（场序, 拍序）；
     # 楔子人物＝focalizers∪材料拍参与者∪起笔事实主语/持有者∪释放与隐藏人物。
@@ -379,8 +399,7 @@ def compile_hook_context(
         character_voices=tuple(v for v in graph.character_voices
                                if v.char_id in cast and v.char_id not in set(hook.concealed)),
         scene_voices=scene_voices, usable_surfaces=usable,
-        name_candidates=name_candidate_literals(projection, structure),
-        withheld_literals=tuple(sorted(withheld)),
+        name_watch=watch,
         withheld_bindings=bindings, display_faces=display_faces,
         avoid_lines=tuple(avoid_lines),
         length_low=length_low, length_high=length_high, length_cap=length_cap), []

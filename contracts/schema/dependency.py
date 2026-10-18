@@ -38,8 +38,7 @@ STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
                  'novel.stages.stage5', 'novel.stages.stage5.*')),
     DependencyRule(
         module='novel.stages.stage4.naming',
-        allows=('contracts.schema.*', 'novel.stages.common', 'novel.core.text',
-                'novel.core.name_text'),
+        allows=('contracts.schema.*', 'novel.stages.common', 'novel.core.text'),
         forbids=('novel.llm', 'novel.llm.*')),
     DependencyRule(
         module='novel.stages.stage4.design',
@@ -141,7 +140,6 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage4.hook_validation',
         allows=('contracts.schema.*', 'novel.core.name_materials',
-                'novel.core.name_text',
                 'novel.stages.stage4.materials',
                 'novel.stages.stage4.hook_facts',
                 'novel.stages.stage4.design_paths'),
@@ -160,7 +158,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage4.hook_wire',
         allows=('contracts.schema.*', 'novel.stages.stage4.hook_facts',
-                'novel.stages.stage4.design_paths', 'novel.core.text', 'novel.core.name_text',
+                'novel.stages.stage4.design_paths', 'novel.core.text',
                 'novel.core.name_materials', 'novel.core.repair'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
                  'novel.stages.stage4.hook_validation') + _STAGE457),
@@ -174,7 +172,8 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
         allows=('contracts.schema.hook', 'contracts.schema.receipt',
                 'contracts.schema.context', 'contracts.schema.state',
                 'contracts.schema.base', 'novel.stages.common', 'novel.core.text',
-                'novel.core.name_text'),
+                # rc26：模子正文的疑似姓名残留定位报告（纯函数）。
+                'novel.core.name_residue'),
         forbids=('novel.llm', 'novel.llm.*')
         + tuple(m for m in _STAGE457 if m != 'novel.stages.stage5.hook_writer')),
     # naming（2026-10-18 命名前移批起住 stage4 包）／assembly 禁止 import
@@ -183,7 +182,7 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     # body_checks（篇幅口径）与 body（前文拼接/文本 SHA）。
     DependencyRule(
         module='novel.stages.stage4.naming',
-        allows=('contracts.schema.*', 'novel.stages.common', 'novel.core.text', 'novel.core.name_text'),
+        allows=('contracts.schema.*', 'novel.stages.common', 'novel.core.text'),
         forbids=('novel.llm', 'novel.llm.*',
                  'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
                  'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
@@ -191,7 +190,6 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage7.assembly',
         allows=('contracts.schema.*', 'novel.stages.common',
-                'novel.core.name_text',
                 'novel.stages.stage4', 'novel.stages.stage5',
                 'novel.stages.stage5.body_checks', 'novel.stages.stage5.body'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.stage5.hook_writer',

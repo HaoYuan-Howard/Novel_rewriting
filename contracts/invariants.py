@@ -559,8 +559,9 @@ LEGACY_STAGE5_MODES: Final = ('deep', 'shallow')
 #   （RESIDUAL_* / MIN_SURFACE / DERIVED_ALIAS_SUFFIXES）、旧链成书分隔
 #   （BOOK_CHAPTER_SEP＝裸数字行）与恒等基线（IDENTITY_*）常量随旧链
 #   consumer（core/bands.py、stage7/subs.py、旧 schema/stage7.py）删除；
-#   现役成书章标记是 `assembly.py::_chapter_marker` 的「第N章」行，残留由
-#   `naming.py::apply_bound_names` 机械验证身份提及与改名映射。
+#   现役成书章标记是 `assembly.py::_chapter_marker` 的「第N章」行。rc26（命名前移批次
+#   C）末端改名退役（正文直接以目标姓名成文），疑似旧名残留只进定位报告
+#   （`novel/core/name_residue.py`，不阻断）。
 
 #: 一条待办此刻是否还等人动作。`reviewed_retained` 表示 typed 决策已存在，
 #: 记录因审计/披露而保留；它与“是否阻塞交付”是正交轴。
@@ -1011,13 +1012,13 @@ NODES: Final[dict[str, NodeSpec]] = {
             ('committed_set_recovery', 'saved_response', 'historical_adoption',
              'owner_patch'), 4)),
     'str06.stage7.assemble': NodeSpec(
-        'stage7', 'R-10', False, 'Stage7 改名替换与成书装配（TXT 先落盘、manifest 最后提交）',
+        'stage7', 'R-10', False, 'Stage7 成书装配（TXT 先落盘、manifest 最后提交；rc26 起零改名）',
         produces=('stage7/final/{title}_rewriting.txt',
                   'stage7/final/delivery_manifest.json'),
         operator_redo='canonical',
         lifecycle=NodeLifecycleSpec(
-            'book', 'NameMap v5、章回执链、Hook 回执与正文', 'deterministic', 'none',
-            '章回执链核对＋单遍替换＋残留检查；交付可确定性重放',
+            'book', '章回执链、Hook 回执与正文', 'deterministic', 'none',
+            '章回执链核对＋按阅读序装配；交付可确定性重放（rc26 起零改名）',
             ('recompute', 'stop'), ('str06.stage7.assemble',), 'none',
             ('deterministic_replay',), 0)),
 }

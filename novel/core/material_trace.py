@@ -55,7 +55,6 @@ class MaterialPart:
     positive: bool = True
     projected: tuple[NameProjectionHit, ...] = ()
     spans: tuple[MaterialSpan, ...] = ()
-    ordinary_spans: tuple[tuple[int, int], ...] = ()
 
 
 def sources_for_span(part: MaterialPart, start: int, end: int) -> tuple[MaterialSource, ...]:
@@ -103,12 +102,6 @@ class MaterialIssue:
             detail = f'未释放专名字面 {self.literal!r}'
         elif self.code == 'internal_id_leak':
             detail = f'内部句柄 {self.literal!r} 不得进入写作材料'
-        elif self.code == 'name_text_syntax':
-            detail = '身份文本协议语法不闭合'
-        elif self.code == 'name_text_reference':
-            detail = f'人物身份引用未登记或未获授权 {self.literal!r}'
-        elif self.code == 'name_text_unclassified':
-            detail = f'姓名候选 {self.literal!r} 的本次出现尚未声明人物或普通义'
         else:
             detail = f'未识别的材料问题码 {self.code!r}，保持未决'
         if self.reason:
@@ -141,6 +134,8 @@ class MaterialLines:
         姓名投影改写。MaterialFragment 才是语义字段：各字段单独投影，保留其
         内部同位语折叠；不能把模板或另一个字段当成本字段的同位语证据。
         """
+        # rc26（命名前移批次 C）：identity-text 退役后不再有「声明过的普通义
+        # 区间」（ordinary_spans）；模板（str）与字段片段（MaterialFragment）的分界不变。
         ordinary = tuple(isinstance(value, str) for value in fragments)
         values = tuple(MaterialFragment(value) if is_ordinary else value
                        for value, is_ordinary in zip(fragments, ordinary))
@@ -152,15 +147,12 @@ class MaterialLines:
         hits = tuple(hit for _output, found in outputs for hit in found)
         text = ''.join(projected)
         spans: list[MaterialSpan] = []
-        ordinary_spans: list[tuple[int, int]] = []
         cursor = 0
         for value, output, is_ordinary in zip(values, projected, ordinary):
             if output and value.sources:
                 spans.append(MaterialSpan(cursor, cursor + len(output), value.sources))
-            if output and is_ordinary:
-                ordinary_spans.append((cursor, cursor + len(output)))
             cursor += len(output)
-        self._parts.append(MaterialPart(text, sources, positive, hits, tuple(spans), tuple(ordinary_spans)))
+        self._parts.append(MaterialPart(text, sources, positive, hits, tuple(spans)))
 
     def extend(self, texts: Iterable[str]) -> None:
         for text in texts:
@@ -193,16 +185,9 @@ class MaterialLines:
                         source for sources in origins for source in sources))))
             return tuple(result)
 
-        def ordinary_spans(text: str) -> tuple[tuple[int, int], ...]:
-            parts = grouped[text]
-            edges = sorted({edge for part in parts for span in part.ordinary_spans for edge in span})
-            return tuple((start, end) for start, end in zip(edges, edges[1:])
-                         if all(any(left <= start and end <= right for left, right in part.ordinary_spans)
-                                for part in parts))
-
         return tuple(MaterialPart(text, tuple(dict.fromkeys(sources)), positive[text],
                                   tuple(dict.fromkeys(projected[text])),
-                                  proven_spans(text), ordinary_spans(text))
+                                  proven_spans(text))
                      for text, sources in by_text.items())
 
     def __iter__(self):

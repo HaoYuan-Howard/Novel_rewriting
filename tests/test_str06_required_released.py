@@ -26,9 +26,34 @@ from novel.stages.common import BODY_PARAGRAPH_REPAIR_SYSTEM
 from novel.stages.stage4.grounding import project_brief, required_releases
 from tests.str06_facilities import name_map_of
 from tests.test_str06_a4_design_locks import _blueprint
-from tests.test_str06_hook import _declared_prose
 
 H64 = 'a' * 64
+
+
+class _FakeAnswers:
+    """rc26：正文回答是普通目标文本（identity-text 协议退役）——不做标记包装。
+
+    与 `tests/test_str06_body.py::_FakeAnswers` 同形；那里仍经 `_declared_prose`
+    注入身份文本标记，普通正文主链下会踩 `no_wrapper`，故本文件自持一份。
+    """
+
+    def __init__(self, answers):
+        self.answers = list(answers)
+        self.prompts = []
+        self.validators = []
+        self.systems = []
+
+    def __call__(self, prompt, validate, system=None):
+        self.prompts.append(prompt)
+        self.validators.append(validate)
+        self.systems.append(system)
+        return self.answers.pop(0)
+
+
+def _answered(text, finish_reason=None, identity='id'):
+    from novel.stages.stage5.body import AnsweredText
+    return AnsweredText(text=text, finish_reason=finish_reason, identity=identity,
+                        cached=False)
 
 
 def _ident_setup(*, kind=PreserveKind.IDENTITY, must=True, first_segment='e01_01',
@@ -159,20 +184,21 @@ def test_chapter_ir_carries_requires_released_for_the_carrier_chapter():
         length_band=(plain_ir.book_brief.length_band_low,
                      plain_ir.book_brief.length_band_high),
         projection=chars.name_projection(), structure=chars.name_structure,
-        required_releases={('yun_niang', 'intent', 'known'): ('苏芸娘',)})
+        required_releases={('yun_niang', 'intent', 'known'): ('苏芸娘',)},
+        name_map=name_map_of(chars))
     assert ir.chapters[0].requires_released == ('苏芸娘',)
     packet = project_chapter_packet(ir, 1)
     assert '必保揭名：本章正文必须出现称谓字面「苏芸娘」' in render_chapter_packet(packet)
+    # rc26：正文是普通目标文本——机械验只按纯文本判定必现字面，无 withheld/
+    # released/name_surfaces 参（R-7.8）。
     assert '[required_literals]' in '；'.join(validate_chapter_prose(
-        _declared_prose('夫君立下旧约便走了。'), withheld_literals=packet.chapter.withheld_literals,
-        released_surfaces=packet.chapter.released_surfaces, target_chars=100,
+        '夫君立下旧约便走了。', target_chars=100,
         band_low=1, band_high=1000, required_literals=('苏芸娘',),
-        name_surfaces={r.char_id: r.surfaces for r in packet.chapter.released_names}))
+        scene_markers=(packet.chapter.scenes[0].scene_id,)))
     assert '[required_literals]' not in '；'.join(validate_chapter_prose(
-        _declared_prose('苏芸娘听夫君立下旧约。'), withheld_literals=packet.chapter.withheld_literals,
-        released_surfaces=packet.chapter.released_surfaces, target_chars=100,
+        '苏芸娘听夫君立下旧约。', target_chars=100,
         band_low=1, band_high=1000, required_literals=('苏芸娘',),
-        name_surfaces={r.char_id: r.surfaces for r in packet.chapter.released_names}))
+        scene_markers=(packet.chapter.scenes[0].scene_id,)))
 
 
 def test_missing_literal_gets_a_paragraph_level_repair_round(tmp_path):
@@ -180,7 +206,7 @@ def test_missing_literal_gets_a_paragraph_level_repair_round(tmp_path):
     按行编号窄修；合并稿重跑同一套机械检查后通过。"""
     from novel.stages.stage5.body import write_chapter
     from novel.stages.common import project_chapter_packet
-    from tests.test_str06_body import _FakeAnswers, _green_book_ir, _answered
+    from tests.test_str06_body import _green_book_ir
     _body, _binding, _plan, ir = _green_book_ir()
     packet = project_chapter_packet(ir, 1).model_copy(update={'chapter': (
         project_chapter_packet(ir, 1).chapter.model_copy(
@@ -189,7 +215,7 @@ def test_missing_literal_gets_a_paragraph_level_repair_round(tmp_path):
     draft = '洞房花烛，夫君立下旧约，句句克制。' * 36
     assert '苏芸娘' not in draft
     repaired = '洞房花烛，苏芸娘听夫君立下旧约，句句克制。' * 33
-    patch = ('{"paragraphs": [{"index": 0, "text": "' + _declared_prose(repaired) + '"}]}')
+    patch = ('{"paragraphs": [{"index": 0, "text": "' + repaired + '"}]}')
     fake = _FakeAnswers([_answered(draft), _answered(patch, identity='id-2')])
     outcome = write_chapter(packet=packet, ask=fake)
     assert outcome.prose == repaired and outcome.receipt.status == 'accepted'
@@ -218,7 +244,7 @@ def test_unparseable_paragraph_patch_is_a_failed_attempt_not_a_candidate():
     解析失败稿都不进候选、不放行。"""
     from novel.stages.stage5.body import write_chapter
     from novel.stages.common import project_chapter_packet
-    from tests.test_str06_body import _FakeAnswers, _green_book_ir, _answered
+    from tests.test_str06_body import _green_book_ir
     _body, _binding, _plan, ir = _green_book_ir()
     packet = project_chapter_packet(ir, 1).model_copy(update={'chapter': (
         project_chapter_packet(ir, 1).chapter.model_copy(
@@ -238,25 +264,24 @@ def test_unparseable_paragraph_patch_is_a_failed_attempt_not_a_candidate():
     assert fake.systems == [None, BODY_PARAGRAPH_REPAIR_SYSTEM, None]
 
 
-def test_paragraph_repair_receives_authorized_identity_when_draft_has_no_name_markers():
-    """首次补揭名也能从窄请求取得身份；不依赖上一稿已有 name 片段反猜 ID。"""
+def test_paragraph_repair_carries_the_released_name_directory_and_packet_identity():
+    """rc26：段落修句窄请求带本章已释放的目标姓名字面目录与章包身份——
+    首次补揭名不依赖上一稿的标记片段；未释放候选与整份章包都不进窄请求。"""
     import hashlib
     import json
 
     from novel.stages.common import chapter_identities, project_chapter_packet
-    from novel.stages.stage5.body import AnsweredText, write_chapter
+    from novel.stages.stage5.body import write_chapter
     from tests.test_str06_body import _green_book_ir
 
     _body, _binding, _plan, ir = _green_book_ir()
     packet = project_chapter_packet(ir, 1)
-    hidden_candidate = '尚未放行的未来姓名'
     packet = packet.model_copy(update={'chapter': packet.chapter.model_copy(update={
-        'requires_released': ('苏芸娘',),
-        'name_candidates': (*packet.chapter.name_candidates, hidden_candidate)})})
+        'requires_released': ('苏芸娘',)})})
     expected_directory = {row.char_id: list(row.surfaces) for row in packet.chapter.released_names}
     draft_plain = '她在窗前守着旧约，烛火摇了三摇。' * 40
-    draft = '[[text|' + draft_plain + ']]'
-    assert '[[name:' not in draft
+    draft = draft_plain
+    assert '苏芸娘' not in draft and '[[' not in draft
     prompts = []
 
     def ask(prompt, validate, *, system=None):
@@ -265,12 +290,13 @@ def test_paragraph_repair_receives_authorized_identity_when_draft_has_no_name_ma
             assert system is None
             errors = validate(draft)
             assert errors and all(error.startswith('[required_literals]') for error in errors)
-            return AnsweredText(draft, 'stop', 'draft', False)
+            return _answered(draft, identity='draft')
         assert len(prompts) == 2 and system == BODY_PARAGRAPH_REPAIR_SYSTEM
-        assert '【必须写出】' not in prompt and hidden_candidate not in prompt
-        directory_json = prompt.split('【合法身份引用】\n', 1)[1].split('\n〔当前稿〕\n', 1)[0]
-        assert directory_json == json.dumps(expected_directory, ensure_ascii=False, sort_keys=True)
-        directory = json.loads(directory_json)
+        assert '【必须写出】' not in prompt
+        directory_json = prompt.split('【可用称谓】\n', 1)[1].split('\n〔当前稿〕\n', 1)[0]
+        assert directory_json == '、'.join(sorted(
+            {s for row in packet.chapter.released_names for s in row.surfaces}))
+        directory = json.loads(json.dumps(expected_directory, ensure_ascii=False))
         identities = chapter_identities(packet)
         repair_identity = json.loads(prompt.split('【段落修句身份】', 1)[1].split('\n【段落修句】', 1)[0])
         assert repair_identity == {
@@ -280,19 +306,15 @@ def test_paragraph_repair_receives_authorized_identity_when_draft_has_no_name_ma
             'validation_sha256': identities.validation_sha256}
         owners = [cid for cid, faces in directory.items() if '苏芸娘' in faces]
         assert len(owners) == 1
-        fixed = f'[[name:{owners[0]}|苏芸娘]][[text|{draft_plain[1:]}]]'
+        fixed = '苏芸娘' + draft_plain[1:]
         patch = json.dumps({'paragraphs': [{'index': 0, 'text': fixed}]}, ensure_ascii=False)
         assert validate(patch) == [], '付费边界仍按合并稿校验'
-        wrong_identity = patch.replace(f'name:{owners[0]}|', 'name:unknown_person|')
-        assert any(error.startswith('[name_text_reference]') for error in validate(wrong_identity))
-        return AnsweredText(patch, 'stop', 'repair', False)
+        return _answered(patch, identity='repair')
 
     outcome = write_chapter(packet=packet, ask=ask)
     assert outcome.prose == '苏芸娘' + draft_plain[1:] and '[[' not in outcome.prose
     assert outcome.receipt.status == 'accepted' and len(outcome.attempts) == 2
     assert outcome.attempts[1].errors == ()
-    assert [(m.char_id, m.surface, m.start, m.end) for m in outcome.receipt.name_mentions] == [
-        ('yun_niang', '苏芸娘', 0, 3)]
 
 
 def test_one_chapter_validator_serves_every_consumer_of_the_mechanical_gate():
@@ -308,11 +330,13 @@ def test_one_chapter_validator_serves_every_consumer_of_the_mechanical_gate():
     packet = packet.model_copy(update={'chapter': packet.chapter.model_copy(
         update={'requires_released': ('苏芸娘',)})})
     validate = chapter_prose_validator(packet)
-    body = _declared_prose('洞房花烛，夫君立下旧约，句句克制。' * 36)
+    body = '洞房花烛，夫君立下旧约，句句克制。' * 36
     assert '[required_literals]' in '；'.join(validate(body)), '缺必保揭名字面被拒'
-    marker = packet.chapter.scenes[0].scene_id
-    assert '[no_wrapper]' in '；'.join(validate('[[name:yun_niang|苏芸娘]]：' + marker + body)), '场景标记被拒'
-    assert all('[required_literals]' not in e for e in validate('[[name:yun_niang|苏芸娘]]' + body)), '有授权人物揭名即过该项'
+    # rc26：普通目标正文无协议标记；`[[` 残片由 no_wrapper 拦（R-7.2）。
+    assert '[no_wrapper]' in '；'.join(validate('[[name:yun_niang|苏芸娘]]' + body)), \
+        '身份文本标记残片被拒'
+    assert all('[required_literals]' not in e for e in validate('苏芸娘' + body)), \
+        '必现字面已在正文即过该项'
     # 静态守卫：stage5 之外不再直接拼 `validate_chapter_prose` 参数。
     root = pathlib.Path(__file__).resolve().parent.parent
     offenders = [str(path.relative_to(root)) for base in ('novel', 'tools')

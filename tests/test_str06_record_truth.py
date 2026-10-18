@@ -244,12 +244,14 @@ def test_paragraph_patch_round_is_recorded_by_the_merged_prose_not_the_patch_jso
 
 
 def test_identity_rewrite_runs_through_body_commit_and_free_missing_receipt_recovery(tmp_path):
-    """真实 Stage5 runner：未授权身份首稿拒收，完整返修提交；缺回执免费重放两轮。"""
+    """真实 Stage5 runner：首稿带身份协议定界符残片被机械闸拒收，完整返修提交；
+    缺回执免费重放两轮。"""
     from novel.stages.common import BODY_PARAGRAPH_REPAIR_SYSTEM
 
-    draft = '\n'.join(('苏芸娘坐到天明。', '烛火未熄。', '陆大哥低声答应旧约。',
+    # rc26：正文直接以目标姓名成文；硬失败面是协议定界符残片（旧名残留只进定位报告）。
+    draft = '\n'.join(('柳婉坐到天明。', '烛火未熄。', '[[name:fu_jun|夫君]]低声答应旧约。',
                        '她没有追问。', '窗外天色渐亮。'))
-    repaired = draft.replace('陆大哥', '夫君')
+    repaired = draft.replace('[[name:fu_jun|夫君]]', '夫君')
 
     class NarrowNameTransport(_RoutingTransport):
         def __init__(self, wires):
@@ -278,11 +280,11 @@ def test_identity_rewrite_runs_through_body_commit_and_free_missing_receipt_reco
     assert len(transport.rewrite_requests) == 1
     rewrite = transport.rewrite_requests[0]
     assert '【重写要求】' in rewrite and '【必须写出】' in rewrite
-    assert '[name_text_reference]' in rewrite and '[[name:fu_jun|陆大哥]]' in rewrite
-    assert '[[' not in repo.read_text('stage5/body/ch01.txt'), '正式正文仅存确定性解码后的纯文'
+    assert '[no_wrapper]' in rewrite and '[[name:fu_jun|夫君]]' in rewrite
+    assert '[[' not in repo.read_text('stage5/body/ch01.txt'), '正式正文仅存纯文（无协议定界符）'
     rows = _records(repo.root.parent, 'run', 'str06.stage5.body', 'chapter:1')
     assert [(turn, accepted) for turn, accepted, _parse, _errors in rows] == [(1, False), (2, True)]
-    assert all(e.startswith('[name_text_reference]') for e in rows[0][3])
+    assert all(e.startswith('[no_wrapper]') for e in rows[0][3])
     assert rows[1][2:] == ('ok', ())
     attempts = repo.inspect('runtime/body_attempts_ch01.json')['attempts']
     assert len(attempts) == 2 and attempts[-1]['errors'] == []
