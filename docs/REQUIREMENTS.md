@@ -232,7 +232,7 @@ Stage0～Stage2 源 schema 与正式字节不变；`str06.stage4.naming` 前移�
 | A 冻结新契约 | 命名节点前移登记（str06.stage4.naming＋stage4/naming/name_map.json＋NameMap v6）、模块迁 stage4 包、版式头升 rc26、登记 naming-forward-rc25-rc26 同根升级边（含升级器 preserve checkpoint 归档缺口修复）、判据/计数/冻结基线重钉 | **已完成**（2026-10-18） |
 | B 打通目标材料 | 命名前移；Preserve 生成目标表述；关闭源自由文本直接流入 Design、Binding、正文及 Hook 的入口 | **已完成**（2026-10-18） |
 | C 切换正文与装配 | 删 identity-text 协议、候选覆盖硬闸、两类区间回执及末端替换；修订普通正文回执与交付身份 | 未开始 |
-| D 恢复与公开读面 | 闭合存量升级、历史账读取、预算、CLI、API 和监控页 | 未开始 |
+| D 恢复与公开读面 | 闭合存量升级、历史账读取、预算、CLI、API 和监控页 | **已完成**（2026-10-18） |
 | E 验收与删除旧路径 | 完成工程验证及真实正文验收，删除失去消费者的代码和测试 | 未开始 |
 
 批次 B 工程验证（2026-10-18，fake transport、零付费）：Preserve 正式读取
@@ -245,6 +245,15 @@ run_body_design 读取序与 Preserve 一致（来源账边顺序稳定，同身
 契约五文件与默认非 corpus 回归 **4446 passed，0 failed/error/skipped**。
 中间态说明：写手材料（IR 释放面／合法身份引用）仍按源登记面，目标姓名以 Brief
 直书文本到达写手包——切目标面属批次 C。
+
+批次 D 工程验证（2026-10-18，fake transport、零付费）：rc25→rc26 同根升级边
+（naming-forward-rc25-rc26，随 B 重钉 target）可用；新增
+`novel/work_units.py::historical_unit_ledger` 集中历史账只读入口——退役的旧
+`str06.stage7.naming` 工作单元照读、禁执行/授权/改历史身份，升级返还范围按
+节点过滤不再被退役单元卡死；监控页「目标人物命名」面板前移到故事设计之前；
+CLI through 映射与 API 命名路由读新产物（批次 A 已闭合）。默认非 corpus
+回归 **4447 passed，0 failed/error/skipped**；前端 typecheck／124 测试／
+seams／build 全绿。
 
 批次 A 工程验证（2026-10-18，fake transport、零付费）：契约五文件（docs_references／
 coverage／rules_registry／hard_counterexamples／ingest_fixtures）与 naming／store／
