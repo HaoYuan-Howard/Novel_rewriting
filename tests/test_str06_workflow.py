@@ -13,7 +13,6 @@ from novel.llm.ledger import CostLedger
 from novel.store import Str06Repository
 from novel.stages.chain import run_workflow
 from tests.str06_facilities import make_context, synthetic_ref
-from tests.factories import declared_stage4_text
 from tests.test_str06_target import _preserve_wire, _design_wire
 
 

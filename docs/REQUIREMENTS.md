@@ -282,6 +282,23 @@ seams／build 全绿。
   `tests/test_str06_f7e_freeze.py::FROZEN_CONTRACT_IDENTITY` 改为
   `fc59cab7521487810d5e5b7bfa33f61ce42213867fd6581e4dede040f3c5726f`）。
 
+批次 E 工程验证（2026-10-18，fake transport、零付费；回归分母见交付说明）：
+
+- 测试层收尾：契约层／生产层切换后遗留的测试面全部按 rc26 迁移——调用点补
+  `name_map`／`faces` 必填参（writer_book_ir／hook_context／assemble_hook_design／
+  inspect_body_materials），回执构造去 name_mentions／non_name_spans，版本字面
+  钉 v13／v14／rc26，identity-text 解码与「未声明候选」反例改普通文本主链
+  （定界符残片进 no_wrapper、旧名残留只进 R-7.9 定位报告）；`suite_catalog.json`
+  的用例 override 随改名同步。
+- 随测试闭合发现并修复的生产缺陷：① `novel/core/name_materials.py::withheld_target_bindings`
+  的唯一归属证明漏统计他人纯称谓（与旧 `withheld_name_bindings` 不同尺）——同形
+  多人字面被误判可投影，已按全部登记面重钉；② `contracts/schema/consumption.py`
+  登记表与送达面模型对齐（name_watch 父路径不出现在叶子面、
+  `released_names[].char_id` 改 audit_only——阅读面只送平链字面）。
+- 删旧路径：临时协调文档（批次 C 迁移简报与本交接件）与 `declared_stage4_text`
+  直通助手（无调用方后）删除；`tests/str06_faults.py` 的 knowledge_release 故障面
+  从「未登记别名」改为旧名字面（未登记别名在 rc26 不触发任何判据）。
+
 批次 A 工程验证（2026-10-18，fake transport、零付费）：契约五文件（docs_references／
 coverage／rules_registry／hard_counterexamples／ingest_fixtures）与 naming／store／
 views／api／cli／orchestrator／corpus／work_units／beacon／product_entry／f7e_freeze
@@ -300,7 +317,8 @@ Stage7 腿只剩 assemble）；旧 `stage7/naming/name_map.json` 进
 生成目标命名、目标设计、Hook 和全部正文 → Stage5 实际文本阅读记录（人物混淆、旧名残留、提前
 揭示、因果断裂、重复、文风）→ Stage7 装配核对成书与正文一致 → 分列报告工程正确性、阅读质量、
 首答接受、返修原因、调用量与成本，失败与未知用量均保留。未过时区分真实内容问题、结构错误和
-工程缺口，不以加额度、过滤失败记录或新增未经验证硬闸代替诊断。
+工程缺口，不以加额度、过滤失败记录或新增未经验证硬闸代替诊断。批次 A～E 的工程验证均未跑
+真实正文（fake transport、零付费）；真实跑书需用户授权，不主动发起。
 
 | 兼容面 | 删除条件 |
 |---|---|

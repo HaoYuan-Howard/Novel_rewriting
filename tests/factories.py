@@ -38,16 +38,6 @@ def stage0_machine_revise(book, new_clean: str):
     return rev.commit(store, transform, clean_text=new_clean)
 
 
-def declared_stage4_text(text: str, *, owners: dict[str, str] | None = None) -> str:
-    """rc26（命名前移批次 C）：identity-text 协议退役后 Stage4 自有文本一律普通目标文本。
-
-    本助手保留为直通：旧参数与旧行为不再有语义（没有标记可声明），呼叫方不改。
-    旧协议反例（未知别名、未声明候选）已随协议退役；普通文本侧的新反例见
-    `tests/test_name_residue.py` 与各章节的材料硬阀用例。
-    """
-    return text
-
-
 def current_hook_wire(coordinates: dict) -> dict:
     """测试用坐标式构造器：只换算引用，不替设计填入组织或阅读期待。
 
@@ -80,11 +70,11 @@ def current_hook_wire(coordinates: dict) -> dict:
     result['protocol_version'] = 'stage4-hook-design-v4'
     for row in result['materials']:
         if isinstance(row.get('presentation'), str):
-            row['presentation'] = declared_stage4_text(row['presentation'])
+            row['presentation'] = row['presentation']
     if isinstance(expectation, dict) and isinstance(expectation.get('focus'), str):
-        expectation['focus'] = declared_stage4_text(expectation['focus'])
+        expectation['focus'] = expectation['focus']
     if isinstance(result.get('local_focus'), str):
-        result['local_focus'] = declared_stage4_text(result['local_focus'])
+        result['local_focus'] = result['local_focus']
     return result
 
 

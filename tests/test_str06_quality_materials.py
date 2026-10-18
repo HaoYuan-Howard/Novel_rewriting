@@ -24,7 +24,6 @@ from novel.stages.stage4 import publish_graph
 from novel.stages.stage4.compile import compile_execution_plan
 from novel.store import PublishItem, Str06Repository
 from tests.str06_facilities import make_context, synthetic_ref
-from tests.factories import declared_stage4_text
 from tests.test_str06_body import (
     _RoutingTransport, _chapters, _fake_ask, _fake_body, _fake_text, _make_session, _run,
 )
@@ -42,7 +41,7 @@ def _visible(text):
 
 
 def _shop_text(text):
-    return declared_stage4_text(text)
+    return text
 
 
 class _MaterialTransport(_RoutingTransport):

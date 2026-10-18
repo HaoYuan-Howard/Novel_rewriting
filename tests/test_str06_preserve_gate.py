@@ -13,7 +13,6 @@ policy11 自闸按作者声明区分人物与普通义；未声明候选是未�
 from __future__ import annotations
 
 from copy import deepcopy
-from tests.factories import declared_stage4_text
 
 
 def _wires():
