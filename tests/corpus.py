@@ -123,7 +123,7 @@ def freshness_of(novel_dir: Path, rel: str) -> 'FreshnessReport':
 
     ⚠⚠ **这里一行投影比对都不写。** 落点是 `ArtifactStore.freshness(rel)`，只读上下文由
     `novel/orchestrator/state.py::readonly_ctx` 造。自己照 `CONSUMED_PROJECTIONS` 重拼一遍
-    是 `docs/LESSONS.md` 第 21 条的第一形状，而这里的分家方向是具体的：
+    会让守卫与生产实现分家，而这里的分家方向是具体的：
     **「测试说新鲜、真跑说过期」⇒ 前提永远成立、跳过永远不发生**，
     于是它看起来和「查过没事」一模一样。
 
@@ -207,7 +207,7 @@ def requires_current(book_dir: str, *rels: str, produced_by: str, cost: str) -> 
       ③ 前提为真时断言真的执行了一遍（扫描面 > 0，且在同一条用例里断言它）。
     一句话：**前提只覆盖「输入是哪一版」，不覆盖「这一版有没有问题」。**
 
-    ⚠ 三态分开说（`docs/LESSONS.md` 第 4 条）：「盘上没有这一份」「相对上游过期」
+    ⚠ 三态分开说：「盘上没有这一份」「相对上游过期」
     「算不出来（幽灵边）」是三件事，跳过消息里逐条带上现判读数与过期边，
     **那串读数是复算出来的，不是手写的断言**。
     """
@@ -227,7 +227,7 @@ def is_current(book_dir: str, *rels: str) -> bool:
     ⚠ 给「一条用例横扫多本书」的对账用：那种用例不能整条跳过（还有别的书可查），
     但把过期的书混进去量出来的差值**不是尺子漂了，是它量的不是同一份输入**。
     ⇒ 过滤之后**必须留分母断言**（查了几份、非零），否则「都当前的书一本都没有」
-    与「查过、都对得上」在报告上长得一模一样（`docs/LESSONS.md` 第 2 条）。
+    与「查过、都对得上」在报告上长得一模一样，不能据此报告验证通过。
     """
     return not _not_current(book_dir, *rels)
 

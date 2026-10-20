@@ -391,7 +391,7 @@ STAGE0_WARNINGS: Final = ('early_cut', 'drop_ratio', 'long_marker')
 #: 【为什么它是取值域而不是一句注释】它同时被三处消费：产地写它、`BlueprintContext` 的
 #: `Literal` 拿它当取值面、判据 `context_scope` 拿它比对。此前产地与判据**各写一份
 #: `'bounded-fidelity-v2'` 字面**，改一处忘一处就得到一条「产物明明是新架构、判据说不符合
-#: 约定」的假红（`docs/LESSONS.md` 第 21 条那一族）。
+#: 约定」的假红，所以取值必须从同一声明消费。
 #:
 #: ⚠⚠ **收窄或改名取值就是破坏产物形状**：`Literal` 收窄之后存量蓝图经 `store.read_own`
 #: 当场拒读。按仓规（`CLAUDE.md`）必须同批把 `ARTIFACT_SPECS` 里

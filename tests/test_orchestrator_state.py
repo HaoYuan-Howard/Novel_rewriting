@@ -48,7 +48,7 @@ def test_required_artifacts_come_from_the_nodes_that_produce_them(tmp_path):
 
     ⚠ 交付物按书名命名 ⇒ 这张表是**每本书各自的答案**。期望值里「哪几条是书级」
     取自声明表（`BOOK_SCOPED_PATHS`，不靠字面猜）、「它叫什么」取自生产那一个落点
-    （`paths.book_txt_rel`）——`docs/LESSONS.md` 第 21 条：守卫调用生产落点，不重拼一份。
+    （`paths.book_txt_rel`）；守卫调用生产入口，避免重拼一份而与实际路径分家。
     """
     novel_dir = tmp_path / 'FQ_测试书_42'
     book_scoped = {ARTIFACT_PATHS[key] for key in BOOK_SCOPED_PATHS}
@@ -85,7 +85,7 @@ def test_the_delivery_stays_in_stage7s_completion_surface_with_the_book_name(tmp
 
 
 def test_every_placeholder_in_the_path_registry_is_claimed_by_exactly_one_classifier():
-    """⚠ **参数化守卫的分类器自己也要有一条守卫**（`docs/LESSONS.md` 第 23 条）。
+    """⚠ **参数化守卫的分类器自己也要有一条守卫**。
 
     带 `{}` 的路径分三类：轮次编号 / 逐章 / 书级。分类错了的后果**不是红，是静默**
     ——被误分的那一条会从它该在的那本账里消失。⇒ 每条模板必须**恰好**归一类。

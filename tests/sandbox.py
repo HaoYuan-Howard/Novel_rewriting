@@ -95,7 +95,7 @@ def source_resolves_in_a_sandbox(book: str) -> bool:
     被它盖住的东西是实打实的：
     同一天改的「默认全书闭卷」既没被验证，`test_default_depth_is_...one_two_three`
     里 `[1, 2, 3]` 那个陈旧断言也没被推翻。
-    ⇒ 教训是 `docs/LESSONS.md` 第 21 条的第三形状：**守卫漂了不一定假红，
+    ⇒ **守卫漂了不一定假红，
     也可能假绿**——而静默 skip 与「查过、没事」在报告上长得一模一样。
     ⇒ 定位符**从注册模型的属性取**，不手抄 JSON key、也不在这里展开
     `SourceRef` 那个联合（`contracts/schema/stage0.py` 明说读取端只有一个入口）。

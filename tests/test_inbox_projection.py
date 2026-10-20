@@ -233,8 +233,7 @@ def test_the_fallback_how_only_names_commands_that_can_actually_be_built():
     于是 `present_continuity` 的处置行指了一个 blueprint 根本没有的入口，
     而本条一声没吭——直到 2026-08-21 跑《四人成行》时由人撞出来。
     ⇒ 改成**调用生产落点**：文案里点名的每条 `node --flag` 交给 `build_argv`
-    真拼一遍，拼不出来就红。这正是 `docs/LESSONS.md` 第 21 条那句
-    「守卫要调用生产那一个落点，不要重拼一份」。
+    真拼一遍，拼不出来就红。守卫调用生产入口，避免重拼一份而遗漏真实故障。
 
     ⚠ 带值 flag 的占位值是**调用协议**，不是被测逻辑：`build_argv`
     要形状完整才肯往下走，而本条断言的是「这个节点到底有没有这个 flag」。

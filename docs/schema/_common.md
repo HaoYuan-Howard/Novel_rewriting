@@ -60,7 +60,7 @@ session/ledger 继续保留 `null` / `unknown`，不能拿 adopted identity 倒�
 
 ⚠ 而 `null` 与「键不在」也不是一回事（`Q-2` 的三态）：
 `null` 是「跑过，没有模型」，键不在是「这份产物太老，没记过这件事」。
-**Pydantic 的默认值会把这两者混掉**——这是 `docs/LESSONS.md` 第 4 条的典型形状。
+**Pydantic 的默认值会把这两者混掉**，读取端必须区分显式空值与从未记录。
 
 ### 1.3 `code` —— 完整提交 SHA + 工作树内容摘要，全链一个实现
 

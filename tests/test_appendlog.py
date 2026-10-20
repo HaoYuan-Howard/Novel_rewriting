@@ -7,7 +7,7 @@ test_appendlog.py —— append-only 事件流那一个追加口。
 `jobs.read_events` / `queue.read_events`）只容忍**最后一行**被截断，中间有坏行一律
 `raise`。那条容忍要靠写侧的跨进程锁才成立——没有锁时，A 进程写出的半截行会被
 B 进程紧接着写的完整行顶到中间，于是读侧对一次**正常的**并行跑开火，
-而且是所有书的视图一起失效（`docs/LESSONS.md` 第 21 条那个形状：产品正常工作时变红）。
+而且是所有书的视图一起失效，把正常并发误报为坏账。
 
 ⚠ 反向用例不在这里：「人为造一条中间坏行仍必须 `raise`」由
 `tests/test_beacon.py::test_a_bad_line_in_the_middle_is_not_silent` 守着。
@@ -121,7 +121,7 @@ def test_threads_in_one_process_never_tear_a_line(tmp_path):
 def test_concurrent_processes_never_lose_a_line(tmp_path):
     """**这是本文件存在的理由。** `mark` 是 CLI 子命令，N 个 agent = N 个进程。
 
-    ⚠⚠ **见过的红灯（`docs/LESSONS.md` 第 2 条要求的那一次）。** 把追加换成裸
+    ⚠⚠ **已复现的故障。** 把追加换成裸
     `with open(path, 'ab')`（production 加锁之前的形状）并同步起跑，实测三组全红：
 
         4 进程 × 15 行 × 64KB   → 34 / 60 行

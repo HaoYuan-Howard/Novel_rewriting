@@ -78,7 +78,7 @@ def _build(reg: Registry, outcomes=(), *, accounting=None, spec=(), monkeypatch=
 # 定义、`web/src/types/common.ts` 也有类型，而**全仓没有任何渲染面、view 或前端组件
 # 读过它们**。于是「这一条被本章源文的同一现象混淆了」与「写手真的漂了」
 # 在终端上完全同形——而两者的处置相反（前者要修上游或不修，后者才该付钱重写）。
-# 形状同 `wontfix` 那个记号，理由也同（`docs/LESSONS.md` 第 4 条）。
+# 与 `wontfix` 一样，内部记录的处置状态必须由展示面实际消费。
 
 def _finding(**kw):
     # ⚠ 用一条**真注册**的判据 id：`contracts/schema/report.py::finding` 会去
@@ -114,7 +114,7 @@ def test_identity_dead_none_means_not_computed_not_false():
     """⚠ `identity_dead: bool | None`，`None` = **没算过**，不是「否」。
 
     只有 stage5 的书级闸会给它赋值，别的层的 finding 这一格恒 `None`
-    ——写成真值判断就会把「没算过」渲染成「算过、是否」（`docs/LESSONS.md` 第 4 条）。
+    ——写成真值判断就会把「没算过」渲染成「算过、是否」。
     """
     from novel.report.render import _identity_mark
     assert _identity_mark(_finding(identity_dead=None)) == ''

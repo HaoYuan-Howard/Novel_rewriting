@@ -22,7 +22,7 @@ paths.py —— 「这本书在哪」「这份产物在哪」的**唯一落点**
   读写一律经 `novel/store.py`——那是唯一会记账的那条路。
 
 【为什么这几个函数从原型逐字搬过来】它们是**确定性核心**：注释里写的是
-「为什么不能用那个更直观的写法」。重写等于把踩坑的证据丢掉（见 `docs/LESSONS.md` 第 7、22 条）。
+「为什么不能用那个更直观的写法」。重写时须保留这些设计原因，并用相关路径测试核对行为。
 """
 from __future__ import annotations
 
@@ -404,7 +404,7 @@ def artifact_path(novel_dir: str | os.PathLike[str], rel: str) -> Path:
     （逐章 · 轮次编号 · 书级参数化），而真实文件名不可能含 `{` ⇒ 这一条不误伤。
     不拦的后果**全是静默的**：`store.exists()` 对一个字面叫 `{title}_rewriting.txt`
     的路径老实答 `False`（读起来就像「还没跑」），`store.write_text()` 则真的把那个
-    文件建出来——两侧都不报错。这就是 `docs/LESSONS.md` 第 23 条那个形状。
+    文件建出来——两侧都不报错，缺少校验便会把无效路径伪装成正常状态。
     JSON 那一侧的同款闸在 `contracts/schema/__init__.py::_refuse_unfilled_template`，
     但它长在 `decode/encode_artifact` 上，**字节形态产物（成书）够不着它**
     ⇒ 闸要装在这个漏斗上，而不是要求每个调用点各自记得先填占位符。

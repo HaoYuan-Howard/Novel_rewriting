@@ -289,7 +289,7 @@ def artifact_spec(rel: str) -> ArtifactSpec | None:
 def _refuse_unfilled_template(rel: str) -> None:
     """带未填占位符的**模板**不是路径，一律当场拒绝。
 
-    ⚠⚠ 这是 `docs/LESSONS.md` 第 23 条那个形状的**根治点**：`artifact_regex` 把 `{n}`
+    ⚠⚠ **必须在统一入口拒绝模板**：`artifact_regex` 把 `{n}`
     编译成 `\\d+` ⇒ 模板自己匹配不上任何路由 ⇒ `artifact_spec()` 返回 `None`
     ⇒ 下面那句「未注册原样返回」把它**静默放过，一个异常都不抛**。
     于是任何一条拿模板写的「拒读」守卫都会全程绿着，却一次闸都没查到。

@@ -992,7 +992,7 @@ def _cmd_inbox(a: argparse.Namespace) -> int:
     check 报告那一个判官（`R-13.6`）。
     ⚠ 机读口在 HTTP（`GET /api/novels/{sid}/inbox`，`InboxView`）；
     这里只出人读文本。**再开一个机读口就是同一事实的第二落点。**
-    ⚠ 空清单也打首行——「共 0 项」是查过的 0，不打印是没查（LESSONS 第 2 条）。
+    ⚠ 空清单也打首行——「共 0 项」是查过的 0，不打印则无法区分是否执行过检查。
     """
     from novel.orchestrator.inbox_projection import inbox_view
     _print_inbox(inbox_view(a.base, a.sid))

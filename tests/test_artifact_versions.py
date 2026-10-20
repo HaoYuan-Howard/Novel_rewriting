@@ -176,7 +176,7 @@ def test_the_placeholder_helper_actually_produces_registered_paths():
 def test_a_template_path_is_refused_instead_of_silently_passing_through(rel: str):
     """⭐⭐ 拿**模板**去 decode/encode 必须当场抛，而不是走「未注册」原样返回。
 
-    ⚠ 这是 `docs/LESSONS.md` 第 23 条那个形状的根治点的守卫：占位符匹配不上任何路由
+    ⚠ 这一条保护统一入口的模板拒绝：占位符匹配不上任何路由
     ⇒ 曾经**一个异常都不抛** ⇒ 用模板写的「拒读」用例会全程绿着、却一次闸都没查到。
     ⇒ 闸下沉到 `contracts/schema` 之后，这一条钉住它：**下一条忘了替占位符的守卫
     会当场红**，而不是安静地变成空验证。

@@ -678,7 +678,7 @@ def test_paid_nodes_follow_the_global_default_model_without_pins():
 def test_inbox_prints_all_eight_kind_counts_with_a_denominator(box, capsys):
     """`inbox` 的首行是**带分母的汇总**——八键全出，0 也要出。
 
-    空清单不打印首行就是「没查」冒充「没事」（LESSONS 第 2 条）；
+    空清单不打印首行就无法区分「没查」与「查过、没事」；
     退出码恒 0：「有待办」不是「失败」，判定语义只归 check 报告（`R-13.6`）。
     """
     rc = _run('inbox', box.sid, '--base', str(box.root))

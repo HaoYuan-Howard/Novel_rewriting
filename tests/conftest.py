@@ -133,7 +133,7 @@ def _windows_basetemp_problem(
     `long_paths` 同构。这条预检算的是**绝对路径长度**，而一个相对 basetemp 的绝对
     形态取决于仓库自己住在哪儿：`Novel_rewriting_stage01` 这个 worktree 名比主仓
     长 8 个字符，同一个 `.test_runtime` 于是从 252 变成 260。**把仓库路径长度当成
-    被测对象，等于让断言随 clone 的位置改变**——`docs/LESSONS.md` §21 的形状。
+    被测对象，等于让断言随 clone 的位置改变**，造成与目标行为无关的假红。
     ⇒ 测试必须传一个固定的假仓根；只有真跑（`pytest_configure`）才用真 cwd。
     """
     if os_name != 'nt' or configured is None:
@@ -141,8 +141,8 @@ def _windows_basetemp_problem(
     if long_paths is None:
         long_paths = _long_paths_usable()
     if long_paths:
-        # ⚠ 限制已解除 ⇒ 这一格**不许再拦**。继续按 260 判就是 LESSONS 第 21 条那个
-        # 形状：守卫自己漂了，把一个实际能跑的 basetemp 判成假红。
+        # ⚠ 限制已解除 ⇒ 这一格**不许再拦**。继续按 260 判会让守卫偏离实际约束，
+        # 把一个实际能跑的 basetemp 判成假红。
         return None
     base = Path(configured).expanduser()
     if root is None:

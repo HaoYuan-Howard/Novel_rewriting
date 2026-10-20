@@ -267,8 +267,8 @@ def test_manifest_pins_the_real_run_dispatch_topology_and_required_flags():
         CorpusManifest.model_validate(raw)
 
     # ⚠ 这里曾断言「`stage6.semantic` 的命令缺 `--advisory` 必须被拒」。那个 flag 随
-    #   自动放行门一并删除后，这条断的就是**一道产品明说不存在的闸**（`docs/LESSONS.md`
-    #   第 21 条第二形状）——删掉它，而不是给冻结命令把 flag 补回去让它变绿。
+    #   自动放行门一并删除后，这条断的就是**一道产品明说不存在的闸**，应删掉它，
+    #   而不是给冻结命令把 flag 补回去让它变绿。
     #   反向由下面那条「多一个 flag 就拒」覆盖：production 命令只许带 `--base --yes`。
     raw = _manifest_raw()
     index = next(i for i, command in enumerate(raw['commands'])
@@ -618,7 +618,7 @@ def test_windows_basetemp_preflight_rejects_deep_paths_before_stage0_runs():
 def test_windows_basetemp_preflight_stands_down_once_the_limit_is_lifted():
     """限制解除之后，同一个深 basetemp 必须放行。
 
-    这是 `docs/LESSONS.md` 第 21 条那一格：守卫在问题已经消失之后继续拦，就是假红。
+    守卫在问题已经消失之后继续拦，就是假红。
     先前这里硬编码 260、不问机器状态，于是开启系统长路径也换不来一次能跑的深 basetemp。
     """
     from tests import conftest as hooks
