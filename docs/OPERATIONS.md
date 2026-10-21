@@ -43,7 +43,21 @@ blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可�
 
 ## AgentRun 与流水线恢复
 
-输出根只接受当前 story-v1。破坏性契约变化后，原根和成本账只读归档，在独立新根重新生成；不提供同根升级、旧 wire 转换或跨根候选采用。
+输出根只接受当前 story-v3。破坏性契约变化后，原根和成本账只读归档，在独立新根重新生成；不提供同根升级、旧 wire 转换或跨根候选采用。
+
+若默认 `outputs/` 已含旧协议，本次运行必须显式指定独立的 clean base，例如
+`--base E:\practice_group\Novel_rewriting\outputs_story_v3`；启动审校台时将同一路径传给
+`scripts\start.cmd -Base <新根>`。不要只在旧base下面换书目录，根manifest与成本账也属于原根。
+
+章节整数协议使用当前源索引的整书阅读序地址，含引子；补料不重新编号，正式章观察仍由compiler生成字符串证据ID。
+升级时在空的新根免费重建Stage0/1，不复制旧manifest或旧Stage2响应：
+
+```powershell
+conda run -n novel_refactor python -m novel.cli run stage0.remove --base <新Output目录> --source <源小说.txt>
+conda run -n novel_refactor python -m novel.cli run stage1.partition <sid> --base <新Output目录>
+```
+
+v1/v2的已购回答只作历史证据保留；v3的章节任务需要新购授权。以下免费重放仅适用于当前版本、同根、相同请求身份。
 
 免费重验通过现役节点的 `--check-only` 执行：
 
@@ -247,6 +261,15 @@ conda run -n novel_refactor python -m tools.story_metrics --base <新Output目�
 成本与内容轮只读核对仍使用 `tools/repair_rounds.py`；它不修改账、不调用模型。缓存行单列，未知用量不作零；回放接受率不能充当新模型首答通过率。
 
 ## 请求配置与逐节点对照
+
+当前 DeepSeek 传输使用 Chat Completions 的 `response_format={"type":"json_object"}`。
+它不是供应端 JSON Schema 强制校验；本地仍须执行严格 JSON、生成 schema 和 compiler 检查。
+官方 [Chat Completions](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion/)
+只列出 text/json_object；[Responses](https://api-docs.deepseek.com/zh-cn/api/create-response/)
+另列 text.format.json_schema；[strict 工具调用](https://api-docs.deepseek.com/zh-cn/guides/tool_calls/)
+使用 Beta 地址和受限 schema，且思考模式不能强制选择工具。不能把后两者直接塞进现有
+Chat 参数或为此静默关闭 thinking。接口切换须显式设计请求身份、用量与恢复后再验证，
+本轮仅核实文档，不发付费能力探针，也不宣称已获得供应端 schema 保证。
 
 现役语义节点的`run`／`preview`接受`--request-profile <LegacyLlmProfile JSON>`，字段为
 provider、model、reasoning_effort和thinking_mode。编排器从冻结profiles生成该值，免费复检

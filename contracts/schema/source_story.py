@@ -1,4 +1,4 @@
-"""story-v1 源故事：局部观察、整书综合与唯一正式事实契约。
+"""story-v3 源故事：局部观察、整书综合与唯一正式事实契约。
 
 命题的世界地位、人物认识、读者披露是正交关系。实体内部标签不授予揭名；
 阅读序不充当故事时间；状态分类不充当具体状态槽。观察中的语义标签由模型选择，
@@ -6,15 +6,14 @@
 """
 from __future__ import annotations
 
-import re
 from typing import Annotated, Any, Literal
 
 from pydantic import Field, model_validator
 
 from contracts.schema.base import StrictModel
 
-STORY_VERSION = 'story-v1'
-StoryVersion = Literal['story-v1']
+STORY_VERSION = 'story-v3'
+StoryVersion = Literal['story-v3']
 EntityKind = Literal['person', 'place', 'object']
 WorldStatus = Literal['established', 'refuted', 'undetermined']
 KnowledgeMode = Literal[
@@ -24,6 +23,8 @@ KnowledgeMode = Literal[
 Polarity = Literal['affirmative', 'negative', 'undetermined']
 TemporalFrame = Literal['current', 'past', 'future', 'summary', 'unknown']
 EvidenceRefs = Annotated[tuple[str, ...], Field(min_length=1)]
+ChapterEvidenceNumber = Annotated[int, Field(strict=True, gt=0)]
+ChapterEvidenceRefs = Annotated[tuple[ChapterEvidenceNumber, ...], Field(min_length=1)]
 
 
 class SourceEvidence(StrictModel):
@@ -47,8 +48,56 @@ class StoryTemporal(StrictModel):
 
 
 class StorySurface(StrictModel):
-    literal: str = Field(min_length=1)
+    literal: str = Field(min_length=1, description=(
+        '一个原文中连续出现的称呼，必须逐字出现在自身至少一个 evidence_refs 段内；'
+        '多个称呼分别登记为多条 surface，不用斜线、分号等拼接。'))
     evidence_refs: EvidenceRefs
+
+
+class StoryNameTextPart(StrictModel):
+    kind: Literal['text']
+    literal: str = Field(min_length=1)
+
+
+class StoryNamePrimaryPart(StrictModel):
+    kind: Literal['family', 'given']
+
+
+class StoryNameAliasPart(StrictModel):
+    kind: Literal['alias']
+    alias_ref: str = Field(min_length=1)
+
+
+class PersonNameAliasPart(StrictModel):
+    kind: Literal['alias']
+    literal: str = Field(min_length=1)
+
+
+StoryNamePart = Annotated[StoryNameTextPart | StoryNamePrimaryPart | StoryNameAliasPart,
+                          Field(discriminator='kind')]
+PersonNamePart = Annotated[StoryNameTextPart | StoryNamePrimaryPart | PersonNameAliasPart,
+                           Field(discriminator='kind')]
+StoryNameForm = Annotated[tuple[StoryNamePart, ...], Field(min_length=1)]
+PersonNameForm = Annotated[tuple[PersonNamePart, ...], Field(min_length=1)]
+
+
+def render_story_name_form(form: tuple[StoryNamePart, ...], *, family: str | None,
+                           given: str | None, aliases: dict[str, str]) -> str:
+    """只按已声明的语义分段渲染，不扫描姓名字面或解释普通文本。"""
+    parts = []
+    for part in form:
+        if part.kind == 'text':
+            parts.append(part.literal)
+        elif part.kind in ('family', 'given'):
+            value = family if part.kind == 'family' else given
+            if value is None:
+                raise ValueError(f'姓名分段引用未声明部件 {part.kind!r}')
+            parts.append(value)
+        elif part.alias_ref in aliases:
+            parts.append(aliases[part.alias_ref])
+        else:
+            raise ValueError(f'姓名分段引用未知化名 {part.alias_ref!r}')
+    return ''.join(parts)
 
 
 class StoryNameStructure(StrictModel):
@@ -56,24 +105,26 @@ class StoryNameStructure(StrictModel):
     family: str | None
     given: str | None
     aliases: dict[str, str]
-    surface_forms: dict[str, str | None]
+    surface_forms: dict[str, StoryNameForm]
 
     @model_validator(mode='after')
     def _forms_render(self):
-        def replace(match):
-            token = match.group(1)
-            if token == 'family' and self.family:
-                return self.family
-            if token == 'given' and self.given:
-                return self.given
-            if token.startswith('alias:') and token[6:] in self.aliases:
-                return self.aliases[token[6:]]
-            raise ValueError(f'姓名模板引用未知部件 {token!r}')
-        if any(not literal for literal in self.aliases.values()):
-            raise ValueError('化名字面不得为空')
+        if any(value is not None and not value.strip() for value in (self.family, self.given)):
+            raise ValueError('姓名部件不得为空白；未知使用null')
+        if any(not literal.strip() for literal in self.aliases.values()):
+            raise ValueError('化名字面不得为空白')
+        if len(set(self.aliases.values())) != len(self.aliases):
+            raise ValueError('化名字面不得重复')
+        used_primary, used_aliases = set(), set()
         for surface, form in self.surface_forms.items():
-            if form is not None and re.sub(r'\{([^{}]+)\}', replace, form) != surface:
-                raise ValueError(f'姓名模板未逐字还原称谓 {surface!r}')
+            if render_story_name_form(form, family=self.family, given=self.given, aliases=self.aliases) != surface:
+                raise ValueError(f'姓名分段未逐字还原称谓 {surface!r}')
+            used_primary.update(part.kind for part in form if part.kind in ('family', 'given'))
+            used_aliases.update(part.alias_ref for part in form if part.kind == 'alias')
+        if used_primary != {kind for kind in ('family', 'given') if getattr(self, kind) is not None}:
+            raise ValueError('非null姓名部件必须实际用于称谓分段；纯称谓人物保持null')
+        if used_aliases != set(self.aliases):
+            raise ValueError('化名声明与实际称谓分段引用必须闭合')
         return self
 
 
@@ -351,8 +402,10 @@ class SourceStory(SourceStoryDraft):
 # 局部观察不假装知道全书身份。label 是语义描述，不是模型生成的机械 ID。
 class LocalReferent(StrictModel):
     kind: EntityKind
-    label: str = Field(min_length=1)
-    surface: str = Field(min_length=1)
+    label: str = Field(min_length=1, description='本章局部主体的语义描述，不是原文称呼列表。')
+    surface: str = Field(min_length=1, description=(
+        '选择一个原文中连续出现的称呼作为代表字面，须逐字出现在自身至少一个 evidence_refs 证据段内；'
+        '这是单个字符串，不是别名清单，不用斜线、分号或括号串联多个称呼。'))
     evidence_refs: EvidenceRefs
 
 
@@ -367,7 +420,7 @@ class LocalClaim(StrictModel):
     world_status: WorldStatus
     knowledge: tuple[LocalKnowledgeHint, ...]
     reader_mode: Literal['confirmed', 'claimed', 'suggested', 'none']
-    evidence_refs: EvidenceRefs
+    evidence_refs: EvidenceRefs = Field(description='只能引用所属事件 evidence_refs 已列出的证据段。')
 
 
 class LocalThreadHint(StrictModel):
@@ -376,7 +429,7 @@ class LocalThreadHint(StrictModel):
     evidence_refs: EvidenceRefs
 
 
-class ChapterEventWire(StrictModel):
+class ChapterObservationEvent(StrictModel):
     summary: str = Field(min_length=1)
     participants: tuple[str, ...]
     temporal: StoryTemporal
@@ -393,11 +446,52 @@ class ContextNeed(StrictModel):
     source_refs: tuple[str, ...]
 
 
+class ChapterReferentWire(StrictModel):
+    """章模型只选择稳定整数证据地址；正式局部指称继续使用字符串证据ID。"""
+    kind: EntityKind
+    label: str = Field(min_length=1, description='本章局部主体的语义描述，不是原文称呼列表。')
+    surface: str = Field(min_length=1, description=(
+        '选择一个原文中连续出现的称呼作为代表字面，须逐字出现在自身至少一个 evidence_refs 证据段内；'
+        '这是单个字符串，不是别名清单，不用斜线、分号或括号串联多个称呼。'))
+    evidence_refs: ChapterEvidenceRefs
+
+
+class ChapterClaimWire(StrictModel):
+    statement: str = Field(min_length=1)
+    world_status: WorldStatus
+    knowledge: tuple[LocalKnowledgeHint, ...]
+    reader_mode: Literal['confirmed', 'claimed', 'suggested', 'none']
+    evidence_refs: ChapterEvidenceRefs = Field(description='只能引用所属事件 evidence_refs 已列出的整数证据地址。')
+
+
+class ChapterThreadHintWire(StrictModel):
+    question_or_resolution: str = Field(min_length=1)
+    op: Literal['open', 'progress', 'resolve', 'abandon']
+    evidence_refs: ChapterEvidenceRefs
+
+
+class ChapterEventWire(StrictModel):
+    summary: str = Field(min_length=1)
+    participants: tuple[str, ...]
+    temporal: StoryTemporal
+    scene_boundary: Literal['new', 'continue', 'unknown']
+    evidence_refs: ChapterEvidenceRefs
+    claims: tuple[ChapterClaimWire, ...]
+    causal_hints: tuple[str, ...]
+    thread_hints: tuple[ChapterThreadHintWire, ...]
+
+
+class ChapterContextNeedWire(StrictModel):
+    item: str
+    question: str = Field(min_length=1)
+    source_refs: tuple[ChapterEvidenceNumber, ...]
+
+
 class ChapterWire(StrictModel):
     contract_version: StoryVersion
-    referents: dict[str, LocalReferent]
+    referents: dict[str, ChapterReferentWire]
     events: dict[Annotated[str, Field(min_length=1)], ChapterEventWire] = Field(min_length=1)
-    context_needs: tuple[ContextNeed, ...]
+    context_needs: tuple[ChapterContextNeedWire, ...]
 
 
 class ChapterObservation(StrictModel):
@@ -405,7 +499,7 @@ class ChapterObservation(StrictModel):
     source_identity: str
     chapter_ordinal: int = Field(ge=1, strict=True)
     referents: dict[str, LocalReferent]
-    events: dict[str, ChapterEventWire] = Field(min_length=1)
+    events: dict[str, ChapterObservationEvent] = Field(min_length=1)
     context_needs: tuple[ContextNeed, ...]
 
 
@@ -506,8 +600,18 @@ def source_revision_owner(source: SourceStory, source_ref: str,
     elif domain == 'entities' and path and path[0] == 'name':
         if len(path) < 2:
             fail('source_revision_scope', '姓名正式结构含派生字段；须明确原姓名语义部件')
-        if path[1] not in ('family_group', 'family', 'given', 'aliases'):
-            fail('source_revision_derived', '姓名构词模板由compiler派生，须定位真实姓名部件')
+        if path[1] == 'surface_forms':
+            if len(path) == 3 and operation in ('replace', 'append'):
+                pass
+            elif len(path) == 3:
+                fail('source_revision_scope', '只能原子替换或显式append既有称谓分段，不得删除分段列表')
+            elif len(path) >= 4 and path[4:] == ('kind',):
+                fail('source_revision_scope', '分段kind改型必须定位整个既有segment，不能仅改kind留下原分支字段')
+            elif (len(path) < 4 or type(path[3]) is not int
+                    or path[4:] not in ((), ('literal',))):
+                fail('source_revision_derived', '姓名分段只支持定位既有语义段或文字字段，不修改整表或编译化名ID')
+        elif path[1] not in ('family_group', 'family', 'given', 'aliases'):
+            fail('source_revision_derived', '须定位真实姓名部件或既有称谓语义段')
         owner = 'names'
     elif domain == 'entities' and not path and operation == 'replace':
         fail('source_revision_scope', '实体整记录含names生成的姓名结构；须明确book字段')
@@ -601,8 +705,8 @@ class PersonNameWire(StrictModel):
     family: str | None
     given: str | None
     aliases: tuple[str, ...]
-    # 哪些字面只是称谓属于语义；构词模板由 compiler 根据已判定的部件派生。
-    pure_titles: tuple[str, ...]
+    # 每处姓名/称谓字面的角色由模型显式分段；compiler仅验证拼接并派发化名ID。
+    surfaces: dict[str, PersonNameForm]
 
 
 class NamesWire(StrictModel):
@@ -649,10 +753,23 @@ class TemporalAnchorVerdict(StrictModel):
         return self
 
 
-class AssociateObservation(StrictModel):
+class AssociateWire(StrictModel):
     contract_version: StoryVersion
     verdicts: tuple[Annotated[AssociationVerdict | TemporalAnchorVerdict,
                               Field(discriminator='kind')], ...]
+
+
+class AssociationEvidence(StrictModel):
+    """代码从该候选实际收到的补充材料中编译出的正式证据。"""
+    candidate_key: str = Field(min_length=1)
+    candidate_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    evidence: dict[str, SourceEvidence]
+
+
+class AssociateObservation(AssociateWire):
+    source_identity: str = Field(min_length=1)
+    book_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    supplemental_evidence: tuple[AssociationEvidence, ...]
 
 
 __all__ = [name for name in globals() if name.startswith(('Story', 'Source', 'Chapter', 'Book',

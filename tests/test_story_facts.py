@@ -10,7 +10,7 @@ import sys
 import pytest
 
 from novel.stages.stage2 import story as source_engine
-from tests.story_facilities import _inputs, _book_wire
+from tests.story_facilities import _inputs, _book_wire, chapter_wire_numbers
 from tools import story_facts as F
 
 
@@ -22,8 +22,9 @@ def _case():
         literals = [surface.literal for surface in entity.surfaces]
         people[key] = {'family_group': None, 'family': None, 'given': None,
             'aliases': ['盛儿'] if '盛儿' in literals else [],
-            'pure_titles': [literal for literal in literals if literal != '盛儿']}
-    names = source_engine.compile_names({'contract_version': 'story-v1', 'people': people}, book=book)
+            'surfaces': {literal: [{'kind': 'alias' if literal == '盛儿' else 'text', 'literal': literal}]
+                         for literal in literals}}
+    names = source_engine.compile_names({'contract_version': 'story-v3', 'people': people}, book=book)
     story = source_engine.compile_source_story(index=index, chapters=chapters, book=book, names=names)
     pack = F.freeze(index, sample='baby', split='dev', sid='42', source_relative='样书_42.txt',
                     source_raw_sha256='a' * 64, evidence_refs=list(index.evidence))
@@ -177,7 +178,7 @@ def test_entirely_omitted_source_segment_remains_in_gold_recall_denominator():
 def test_cli_prepares_annotations_then_compares_real_sealed_source_story(tmp_path, monkeypatch):
     from novel.config import Config
     from novel.core.source_index import build_source_index
-    from novel.llm.story_requests import request_json
+    from novel.llm.story_requests import material_rules, request_json
     from novel.llm.transport import ChatResponse, FakeTransport
     from novel.stages.chain import SYSTEM, assemble_paid_boundary, freeze_execution_profile, load_stage1_chapters, run_workflow
     from novel.stages.stage0.removal import run_source, _context
@@ -203,14 +204,14 @@ def test_cli_prepares_annotations_then_compares_real_sealed_source_story(tmp_pat
     wires, observations = {}, {}
     for ch in index.chapter_ordinals:
         refs = list(index.chapter(ch))
-        wires[f'ch{ch:02d}'] = {'contract_version': 'story-v1', 'context_needs': [],
+        wires[f'ch{ch:02d}'] = chapter_wire_numbers({'contract_version': 'story-v3', 'context_needs': [],
             'referents': {'我': {'kind': 'person', 'label': '我', 'surface': '我', 'evidence_refs': [refs[0]]}},
             'events': {index.evidence[ref].text: {'summary': index.evidence[ref].text, 'participants': ['我'],
                 'temporal': {'frame': 'current', 'anchor_event': None}, 'scene_boundary': 'unknown',
-                'evidence_refs': [ref], 'claims': [], 'causal_hints': [], 'thread_hints': []} for ref in refs}}
+                'evidence_refs': [ref], 'claims': [], 'causal_hints': [], 'thread_hints': []} for ref in refs}}, index)
         observations[ch] = source_engine.compile_chapter(wires[f'ch{ch:02d}'], index=index, chapter_ordinal=ch)
     evidence = next(iter(index.evidence))
-    wires['book'] = {'contract_version': 'story-v1', 'entities': {'叙述者': {'kind': 'person', 'label': '叙述者',
+    wires['book'] = {'contract_version': 'story-v3', 'entities': {'叙述者': {'kind': 'person', 'label': '叙述者',
         'surfaces': [{'literal': '我', 'evidence_refs': [evidence]}],
         'mention_refs': [next(iter(row.referents)) for row in observations.values()]}},
         'events': {key: {'temporal': row.temporal.model_dump(), 'scene_boundary': 'unknown'}
@@ -220,8 +221,9 @@ def test_cli_prepares_annotations_then_compares_real_sealed_source_story(tmp_pat
         'expression': {'person': 'first', 'focalizers': ['叙述者'], 'statement': '第一人称叙述',
                        'mechanisms': [], 'evidence_refs': [evidence]}}
     observed = source_engine.compile_book(wires['book'], index=index, chapters=observations)
-    wires['names'] = {'contract_version': 'story-v1', 'people': {next(iter(observed.story.entities)):
-        {'family_group': None, 'family': None, 'given': None, 'aliases': [], 'pure_titles': ['我']}}}
+    wires['names'] = {'contract_version': 'story-v3', 'people': {next(iter(observed.story.entities)):
+        {'family_group': None, 'family': None, 'given': None, 'aliases': [],
+         'surfaces': {'我': [{'kind': 'text', 'literal': '我'}]}}}}
     initialize_workflow(output)
     active = {}
     transport = FakeTransport(lambda request, attempt: ChatResponse(
@@ -230,13 +232,19 @@ def test_cli_prepares_annotations_then_compares_real_sealed_source_story(tmp_pat
     boundary = assemble_paid_boundary(base=output, run_dir=book, source_identity=index.source_identity,
         source_content_sha256=index.content_sha256, root_sha1=stage1.root_sha1,
         profile=profile, yes=True, allow_source_export=True, transport=transport)
-    def ask(owner, prompt, compiler, *, index=None, max_chapter=None, system=SYSTEM, revision_seed=None):
+    def ask(owner, prompt, compiler, *, index=None, max_chapter=None, system=SYSTEM, revision_seed=None,
+            material_candidates=None, compile_with_materials=None, material_prompt=None, candidate_schema=None):
         active['owner'] = owner
+        if index is not None and material_candidates is None:
+            prompt += material_rules(owner)
         request = boundary.build_request(owner, prompt, json_mode=True, system=system, temperature=.4)
         return request_json(boundary.session, owner, request, compiler, repository=boundary.repository,
-                            index=index, max_chapter=max_chapter, revision_seed=revision_seed)
+                            index=index, max_chapter=max_chapter, revision_seed=revision_seed,
+                            material_candidates=material_candidates, compile_with_materials=compile_with_materials,
+                            material_prompt=material_prompt, candidate_schema=candidate_schema)
     run_workflow(repository=boundary.repository, chapters=stage1.chapters, hook_copy=stage1.hook_copy,
-                 ask=ask, through='stage2', source_identity=index.source_identity, concurrency=1)
+                 ask=ask, through='stage2', source_identity=index.source_identity, concurrency=1,
+                 provider=profile.provider, model=profile.model, request_profile=profile)
     heldout_chapters = deepcopy(stage1.chapters)
     heldout_chapters[0]['text'] += '\n另一部书的材料。'
     heldout_index = build_source_index(heldout_chapters, stage1.hook_copy, source_identity='heldout-source')

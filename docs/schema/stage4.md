@@ -20,7 +20,7 @@ Preserve的SourceFactIssue必须给source_ref、相对该正式记录的path与r
 
 ## 当前版本与判据
 
-本层正式故事产物**都是 schema story-v1**，旧根只读归档，须在新根由当前producer重建。
+本层正式故事产物**都是 schema story-v3**，旧根只读归档，须在新根由当前producer重建。
 
 当前注册表共 **6 条**：**6 hard**。
 

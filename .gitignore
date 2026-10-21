@@ -20,6 +20,9 @@ Output/
 #   与 `stage1/main_text.json`（**全本版权正文**）以未跟踪状态躺在树里，
 #   `git add -A` 会一次全收进去。这一行就是那次差点发生的事的落点。
 outputs/
+# 当前协议升级的独立输出根；历史证据与新购产物均不进仓。
+outputs_story_v2/
+outputs_story_v3/
 Novel_data/
 Test_data/
 .llm_cache/

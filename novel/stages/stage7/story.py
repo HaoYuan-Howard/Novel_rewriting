@@ -1,4 +1,4 @@
-"""story-v1 最终装配：只接受完整当前章包、正文、Hook 及其机械来源证明。
+"""story-v3 最终装配：只接受完整当前章包、正文、Hook 及其机械来源证明。
 
 本模块不读取文件、不调用模型、不改正文；持久化和交付路径属于 repository。
 文学质量保持 unver，章目录严格保留源章数及阅读序。
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from contracts.schema.source_story import STORY_VERSION
 from contracts.schema.story_prose import (
     ChapterBody, FinalChapterEntry, FinalManifest, FinalStory, HookBody, ProseIssue,
 )
@@ -56,12 +57,12 @@ def assemble_story(*, title: str, source_chapter_count: int,
     for body in bodies:
         parts.extend((f'\n\n第{body.chapter_ordinal}章\n\n', body.text))
     text = ''.join(parts)
-    manifest = FinalManifest(contract_version='story-v1', title=title, source_chapter_count=source_chapter_count,
+    manifest = FinalManifest(contract_version=STORY_VERSION, title=title, source_chapter_count=source_chapter_count,
                              chapters=tuple(entries), hook_packet_sha256=stable_sha256(hook_packet),
                              hook_body_sha256=sha256_text(hook.text),
                              hook_receipt_sha256=stable_sha256(hook.receipt),
                              final_text_sha256=sha256_text(text), mechanical='passed', semantic='unver')
-    return FinalStory(contract_version='story-v1', text=text, manifest=manifest)
+    return FinalStory(contract_version=STORY_VERSION, text=text, manifest=manifest)
 
 
 def verify_final_story(final: FinalStory, *, title: str, source_chapter_count: int,

@@ -162,7 +162,7 @@ status（ready/missing/invalid）、data（对象或null）、errors（字符串
 ready仍不表示文学质量通过。字段由 `contracts/schema/source_story.py`、
 `contracts/schema/target_story.py`、`contracts/schema/story_prose.py` 的当前唯一模型定义。
 
-run携带 `contract_version='story-v1'` 与 revision。前端轮询run，revision改变后取消在途旧材料并
+run携带 `contract_version='story-v3'` 与 revision。前端轮询run，revision改变后取消在途旧材料并
 重新查询对应书的source/target/章/Hook/delivery；相同revision不重复刷新全部长文。
 typed错误保留owner/node/item/path/context，不用中文报错散文推导修复路线。
 正文回执只证明协议、篇幅与身份等机械范围，semantic恒为unver；不将通过字节校验包装成文学质量通过。

@@ -1,4 +1,4 @@
-"""story-v1 的纯目标建模边界：提示、确定性编译、验证与写手投影。
+"""story-v3 的纯目标建模边界：提示、确定性编译、验证与写手投影。
 
 不读文件、不调用模型、不修输入。源审计引用只留 PreservationContract 与
 AdaptationMap；目标模型、章计划和写手材料不依赖源章/拍拓扑。
@@ -12,7 +12,8 @@ from typing import Any, Iterable, Mapping, TypeVar
 
 from contracts.schema.base import StrictModel
 from contracts.schema.source_story import (
-    SOURCE_REVISION_SELECTORS, StoryIssue, SourceRevisionScopeError, source_revision_owner,
+    STORY_VERSION, SOURCE_REVISION_SELECTORS, StoryIssue, StoryNamePart, SourceRevisionScopeError, source_revision_owner,
+    render_story_name_form,
 )
 from contracts.schema.target_story import (
     AdaptationEntry, AdaptationMap, CharacterArc, ChapterPacket, ChapterPlan,
@@ -94,13 +95,11 @@ def _acyclic(edges: Mapping[str, Iterable[str]], where: str, *, path: tuple = ()
         pending = {node: deps - ready for node, deps in pending.items() if node not in ready}
 
 
-def _format_name(template: str, *, family: str | None, given: str | None,
+def _format_name(template: tuple[StoryNamePart, ...], *, family: str | None, given: str | None,
                  aliases: Mapping[str, str]) -> str:
-    text = template.replace('{family}', family or '').replace('{given}', given or '')
-    for key, literal in aliases.items():
-        text = text.replace('{alias:' + key + '}', literal)
-    if '{' in text or '}' in text or not text.strip():
-        raise ValueError(f'名称模板不能闭合：{template!r}')
+    text = render_story_name_form(template, family=family, given=given, aliases=dict(aliases))
+    if not text.strip():
+        raise ValueError('名称分段不能渲染为空白称谓')
     return text
 
 
@@ -130,7 +129,7 @@ def compile_naming(wire: Mapping[str, Any] | NamingWire, source) -> NameMap:
                 _fail(f'Naming {ref} keep 必须说明理由', (*path, 'reason'))
             if entry.family is not None or entry.given is not None or entry.aliases:
                 _fail(f'Naming {ref} keep 不得混入改名字段', path)
-            if any(form is not None for form in structure.surface_forms.values()):
+            if any(part.kind != 'text' for form in structure.surface_forms.values() for part in form):
                 _fail(f'Naming {ref} 有正式姓名位，必须 rename', path)
             primary = entity.label
             surfaces = {s.literal: s.literal for s in entity.surfaces}
@@ -147,8 +146,8 @@ def compile_naming(wire: Mapping[str, Any] | NamingWire, source) -> NameMap:
             new_parts = {p for p in (entry.family, entry.given, *entry.aliases.values()) if p}
             if new_parts & old_parts:
                 _fail(f'Naming {ref} 新姓名部件仍含源旧字面', path)
-            surfaces = {literal: (_format_name(form, family=entry.family, given=entry.given,
-                                              aliases=entry.aliases) if form is not None else literal)
+            surfaces = {literal: _format_name(form, family=entry.family, given=entry.given,
+                                             aliases=entry.aliases)
                         for literal, form in structure.surface_forms.items()}
             if set(literals) - set(surfaces):
                 raise TargetStoryIssue(f'Naming {ref} 源称谓缺少构词登记', owner='names',
@@ -171,7 +170,7 @@ def compile_naming(wire: Mapping[str, Any] | NamingWire, source) -> NameMap:
         raise TargetCompileError(StoryIssue(code='target_name_collision', owner='current', item='book',
             path=('entries', i), message='Naming 目标人物主称谓冲突')
             for i, entry in enumerate(data.entries) if primary_counts[names[entry.entity_ref].primary] > 1)
-    return NameMap(contract_version='story-v1', names=names)
+    return NameMap(contract_version=STORY_VERSION, names=names)
 
 
 def _source_refs(source) -> set[str]:
@@ -223,7 +222,7 @@ def compile_preserve(wire: Mapping[str, Any] | PreserveWire, source,
     conflict_nos = _unique((c.conflict_no for c in data.consistency_decisions), 'Preserve conflicts', path=('consistency_decisions',))
     if set(conflict_nos) != set(range(1, len(source.conflicts) + 1)):
         _fail('Preserve 每条源冲突都须显式保留含混或局部一致化', ('consistency_decisions',))
-    return PreservationContract(contract_version='story-v1', requirements=tuple(requirements), world_rules=tuple(rules),
+    return PreservationContract(contract_version=STORY_VERSION, requirements=tuple(requirements), world_rules=tuple(rules),
         world_rule_decisions=data.world_rules,
         consistency_decisions=data.consistency_decisions, rewrite_direction=data.rewrite_direction,
         expression=data.expression, source_bindings=bindings)
@@ -396,7 +395,7 @@ def compile_target_model(wire: Mapping[str, Any] | TargetModelWire,
     for index, known in enumerate(initial_knowledge):
         if known.mode == 'known' and propositions[known.proposition_ref].status != 'established':
             _fail('初始知情不能把未确立/已推翻命题当作确知', ('initial_knowledge', index))
-    return TargetModelDraft(contract_version='story-v1', source_chapter_count=source_chapter_count,
+    return TargetModelDraft(contract_version=STORY_VERSION, source_chapter_count=source_chapter_count,
         total_length_budget=total_length_budget, premise=data.premise, narration=data.narration,
         style=data.style, character_voices=dict(data.character_voices), character_arcs=tuple(arcs),
         world_rules=preservation.world_rules, propositions=propositions,
@@ -476,7 +475,7 @@ def compile_chapter(wire: Mapping[str, Any] | ChapterPlanWire, model: TargetMode
     if problems:
         raise TargetCompileError(StoryIssue(code='writer_context_reference', owner='current',
             item=f'chapter:{chapter_ordinal}', path=path, message=message) for path, message in problems)
-    return ChapterPlan(contract_version='story-v1', chapter_ordinal=chapter_ordinal, scenes=data.scenes,
+    return ChapterPlan(contract_version=STORY_VERSION, chapter_ordinal=chapter_ordinal, scenes=data.scenes,
                        writer_context=data.writer_context)
 
 
@@ -511,7 +510,7 @@ def compile_target_story(model: TargetModelDraft, plans: Iterable[ChapterPlan],
                         model, chapter_ordinal=plan.chapter_ordinal)
     story = TargetStory(**model.model_dump(mode='json'), names=name_map.names,
         chapter_plans=plans, preservation=preservation.requirements)
-    adaptation = AdaptationMap(contract_version='story-v1', entries=tuple(AdaptationEntry(requirement_id=r.requirement_id,
+    adaptation = AdaptationMap(contract_version=STORY_VERSION, entries=tuple(AdaptationEntry(requirement_id=r.requirement_id,
         source_refs=preservation.source_bindings[r.requirement_id],
         target_event_refs=realized[r.requirement_id],
         status='realized' if realized[r.requirement_id] else 'optional_omitted')
@@ -571,7 +570,7 @@ def project_chapter_packet(story: TargetStory, chapter_ordinal: int, *,
             if action.event_no is not None:
                 actions.extend(f'称谓在此处正式揭示为：{display}' for display in event.name_releases.values())
     low, high = _band(chapter.length_budget, length_band)
-    return ChapterPacket(contract_version='story-v1', chapter_ordinal=chapter_ordinal,
+    return ChapterPacket(contract_version=STORY_VERSION, chapter_ordinal=chapter_ordinal,
         source_chapter_count=story.source_chapter_count, length_budget=chapter.length_budget,
         min_chars=low, max_chars=high, participants=chapter.participants, names=names,
         entry_state=entry_state, exit_state=exit_state, actions=tuple(actions),
@@ -626,7 +625,7 @@ def compile_hook(wire: Mapping[str, Any] | HookDesignWire, story: TargetStory,
     _unique((cue.rule_ref for cue in context.world_rules), 'Hook规则提示', path=('writer_context', 'world_rules'))
     _closed((cue.rule_ref for cue in context.world_rules), (r.rule_id for r in story.world_rules),
             'Hook规则提示', path=('writer_context', 'world_rules'))
-    return HookPlan(contract_version='story-v1', event_refs=refs,
+    return HookPlan(contract_version=STORY_VERSION, event_refs=refs,
         beats=tuple(HookBeat(event_ref=ref, trigger=beat.trigger, choice=beat.choice,
                             action=beat.action, result=beat.result) for ref, beat in zip(refs, data.beats)),
         writer_context=context, organization=data.organization, emphasis=data.emphasis,
@@ -640,7 +639,7 @@ def project_hook_packet(story: TargetStory, hook: HookPlan, *,
     participants = tuple(dict.fromkeys(person for ref in hook.event_refs for person in events[ref].participants))
     names = {person: hook.allowed_displays[person] for person in participants}
     low, high = _band(hook.length_budget, length_band)
-    return HookPacket(contract_version='story-v1', length_budget=hook.length_budget, min_chars=low, max_chars=high,
+    return HookPacket(contract_version=STORY_VERSION, length_budget=hook.length_budget, min_chars=low, max_chars=high,
         names=names,
         must_realize=tuple(f'触发：{beat.trigger}；选择：{beat.choice}；行动：{beat.action}；结果：{beat.result}'
                            for beat in hook.beats),

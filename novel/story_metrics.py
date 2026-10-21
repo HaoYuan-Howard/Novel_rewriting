@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
+from contracts.schema.source_story import STORY_VERSION
 from contracts.schema.workflow import AcceptanceRecordV1, WorkUnitBlobV1
 from novel.llm.ledger import read_cost_snapshot
 from novel import paths
@@ -60,7 +61,7 @@ def story_metrics(base, sid: str) -> dict:
                                          r.get('completion_tokens') is None for r in paid))
     denominator = totals['first_pass'] + totals['first_failed']
     response_denominator = totals['first_response_pass'] + totals['first_response_failed']
-    return {'contract_version': 'story-v1', 'sid': sid, 'totals': dict(totals),
+    return {'contract_version': STORY_VERSION, 'sid': sid, 'totals': dict(totals),
             'first_semantic_candidate_pass_rate': totals['first_pass'] / denominator if denominator else None,
             'first_candidate_denominator': denominator, 'unknown_units': totals['first_unknown'],
             'first_response_direct_pass_rate': (totals['first_response_pass'] / response_denominator

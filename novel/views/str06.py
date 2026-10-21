@@ -139,12 +139,12 @@ def _verified_delivery(repo):
     manifest = repo.check_model(MANIFEST)
     count = manifest.source_chapter_count
     packets = tuple(repo.check_model(chapter_rel(CHAPTER_PACKET, i)) for i in range(1, count + 1))
-    bodies = tuple(ChapterBody(contract_version='story-v1', chapter_ordinal=i,
+    bodies = tuple(ChapterBody(contract_version=STR06_RC_VERSION, chapter_ordinal=i,
         text=repo.read_text(chapter_rel(BODY, i)), receipt=repo.inspect_sealed_model(chapter_rel(BODY_RECEIPT, i)))
         for i in range(1, count + 1))
-    hook = HookBody(contract_version='story-v1', text=repo.read_text(HOOK), receipt=repo.check_model(HOOK_RECEIPT))
+    hook = HookBody(contract_version=STR06_RC_VERSION, text=repo.read_text(HOOK), receipt=repo.check_model(HOOK_RECEIPT))
     path = repo.path(FINAL.format(title=manifest.title))
-    final = FinalStory(contract_version='story-v1', text=repo.read_text(FINAL.format(title=manifest.title)), manifest=manifest)
+    final = FinalStory(contract_version=STR06_RC_VERSION, text=repo.read_text(FINAL.format(title=manifest.title)), manifest=manifest)
     issues = assembly_engine.verify_final_story(final, title=manifest.title, source_chapter_count=count,
         packets=packets, bodies=bodies, hook=hook, hook_packet=repo.check_model(HOOK_PACKET))
     if issues:

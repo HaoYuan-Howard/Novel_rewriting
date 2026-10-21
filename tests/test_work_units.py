@@ -260,13 +260,14 @@ def test_old_base_is_not_migrated_or_given_budget(tmp_path):
     assert not (tmp_path / '_service' / 'workflow.json').exists()
 
 
-def test_previous_workflow_manifest_is_refused_without_rewriting(tmp_path):
+@pytest.mark.parametrize('version', ['workflow-role-boundaries-v1', 'story-v1', 'story-v2'])
+def test_previous_workflow_manifest_is_refused_without_rewriting(tmp_path, version):
     from novel import paths
     from novel.work_units import check_workflow_write
     initialize_workflow(tmp_path)
     manifest = paths.workflow_manifest_path(tmp_path)
     old = json.loads(manifest.read_bytes())
-    old.update(schema_version=1, contract_version='workflow-role-boundaries-v1')
+    old.update(schema_version=1, contract_version=version, pipeline_contract_epoch=version)
     manifest.write_text(json.dumps(old), encoding='utf-8')
     before = manifest.read_bytes()
     with pytest.raises(WorkUnitRefused):

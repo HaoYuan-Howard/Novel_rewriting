@@ -1032,7 +1032,7 @@ class CandidateRunContext:
         """
         refs = tuple(one for ref in refs for one in _as_adoption_refs(ref))
         bundle = CommitBundleV1(
-            node=node, artifact=rel, artifact_sha256=artifact_sha256,
+            contract_version=STR06_RC_VERSION, node=node, artifact=rel, artifact_sha256=artifact_sha256,
             inputs=tuple(CommitInputRef(key=key, fingerprint=edge.file)
                          for key, edge in sorted(inputs.items())),
             adoptions=tuple(CommitAdoptionRef(
@@ -1255,10 +1255,12 @@ def open_candidate_epoch(*, code_version: str, task_id: str, session_run_id: str
         epoch_id='', ordinal=1, reason=reason, contract_version=contract_version,
         code_version=code_version, task_id=task_id, session_run_id=session_run_id,
         created_at=created_at)
-    return epoch._replace(epoch_id=digest({
+    epoch = epoch._replace(epoch_id=digest({
         'contract': candidate_contract_identity(), 'code': code_version,
         'ordinal': 1, 'reason': reason, 'task_id': task_id,
         'session': session_run_id, 'prev': ''}))
+    _validate_epoch(epoch)
+    return epoch
 
 
 def roll_candidate_epoch(prev: CandidateEpoch, *, reason: str, code_version: str,
@@ -1282,10 +1284,12 @@ def roll_candidate_epoch(prev: CandidateEpoch, *, reason: str, code_version: str
         epoch_id='', ordinal=ordinal, reason=reason,
         contract_version=contract_version, code_version=code_version,
         task_id=task_id, session_run_id=session_run_id, created_at=created_at)
-    return epoch._replace(epoch_id=digest({
+    epoch = epoch._replace(epoch_id=digest({
         'contract': candidate_contract_identity(), 'code': code_version,
         'ordinal': ordinal, 'reason': reason, 'task_id': task_id,
         'session': session_run_id, 'prev': prev.epoch_id}))
+    _validate_epoch(epoch)
+    return epoch
 
 
 def open_candidate_workflow(*, epoch: CandidateEpoch, source_identity: str,

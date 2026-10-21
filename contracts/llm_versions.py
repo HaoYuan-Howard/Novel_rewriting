@@ -5,7 +5,7 @@ from contracts.invariants import NODES
 
 # 每个分量只随对应公开协议/政策变化升版；换模型、换请求、窄修均不重置额度。
 STORY_LLM_VERSIONS = {
-    'str06.stage2.chapters': {'wire': 1, 'validator': 1},
+    'str06.stage2.chapters': {'wire': 2, 'validator': 2},
     'str06.stage2.book': {'wire': 1, 'validator': 1},
     'str06.stage2.associate': {'wire': 1, 'validator': 1},
     'str06.stage2.names': {'wire': 1, 'validator': 1},

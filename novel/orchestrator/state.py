@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 
+from contracts.schema.source_story import STORY_VERSION
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT,
 )
@@ -168,7 +169,7 @@ class _BodyIdentityProbe:
             from contracts.schema.story_prose import ChapterBody
             from novel.core.story_prose import verify_body
             receipt = self.repository.inspect_sealed_model(chapter_rel(BODY_RECEIPT, ordinal))
-            body = ChapterBody(contract_version='story-v1', chapter_ordinal=ordinal,
+            body = ChapterBody(contract_version=STORY_VERSION, chapter_ordinal=ordinal,
                                text=self.repository.read_text(chapter_rel(BODY, ordinal)), receipt=receipt)
             previous = self.repository.read_text(chapter_rel(BODY, ordinal - 1)) if ordinal > 1 else None
             self._checks[ordinal] = verify_body(body, self.packet(ordinal), prior_body=previous)
@@ -436,7 +437,7 @@ def stage1_chapter_count(store: ArtifactStore) -> int | None:
             return len(formal) if formal is not None else None
         snapshot = repository.inspect('runtime/source_snapshot.json')
         expected = {'contract_version', 'source_identity', 'content_sha256', 'chapters', 'hook_copy'}
-        if not isinstance(snapshot, dict) or set(snapshot) != expected or snapshot['contract_version'] != 'story-v1':
+        if not isinstance(snapshot, dict) or set(snapshot) != expected or snapshot['contract_version'] != STORY_VERSION:
             return None
         from novel.llm.paid_requests import workflow_from_disk
         workflow = workflow_from_disk(repository.inspect('runtime/candidate_workflow.json'))
@@ -685,7 +686,7 @@ def _owner_issue_states(novel_dir: Path) -> list['OwnerIssueState']:
     """读盘上 open 的跨节点修订问题（R3；`runtime/issues/<owner>.json`）。
 
     resolved 不进投影（留账不是待修订）；文件损坏即显式拒绝——它是续跑判定
-    的输入，静默当「没有问题」会把修订循环变成静默跳过（I-34）。只读story-v1/V3；``product_sha256`` 采本快照时的当前摘要（None＝
+    的输入，静默当「没有问题」会把修订循环变成静默跳过（I-34）。只读story-v3/V3；``product_sha256`` 采本快照时的当前摘要（None＝
     owner 产物不在盘上，门控见 `resume_verdict` 的 owner_revision 分支）。
     """
     import json as _json

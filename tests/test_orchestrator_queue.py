@@ -131,9 +131,14 @@ def test_target_chapter_queue_uses_real_state_verdict_and_free_follow_check(
 
 
 def test_legally_empty_association_is_skipped_without_rebuying_a_paid_node(queue_base, monkeypatch):
-    from novel.stages.stage2.story import compile_associate
-    observation = compile_associate({'contract_version': 'story-v1', 'verdicts': []},
-                                    book=SimpleNamespace(unresolved=()))
+    from contracts.schema.source_story import STORY_VERSION
+    from novel.stages.stage2.story import compile_associate, compile_book
+    from tests.story_facilities import _book_wire, _inputs
+
+    index, chapters = _inputs()
+    book = compile_book(_book_wire(index, chapters), index=index, chapters=chapters)
+    observation = compile_associate({'contract_version': STORY_VERSION, 'verdicts': []},
+                                    book=book, index=index)
     assert observation.verdicts == () and NODES['str06.stage2.associate'].paid
     association = ArtifactState(rel=ASSOCIATION, exists=True,
         bytes=len(observation.model_dump_json().encode('utf-8')), mtime=1,

@@ -1,4 +1,4 @@
-"""story-v1 目标故事契约：语义 wire 与正式目标真相分离。
+"""story-v3 目标故事契约：语义 wire 与正式目标真相分离。
 
 编号、预算、章边界快照及章包由 compiler 派生；模型只声明语义与引用选择。
 TargetModelDraft / ChapterPlan 是本层内部材料。TargetStory 是唯一目标真源；
@@ -11,9 +11,10 @@ from typing import Annotated, Literal
 from pydantic import Field, StringConstraints, model_validator
 
 from contracts.schema.base import StrictModel
+from contracts.schema.source_story import StoryVersion
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-Version = Literal['story-v1']
+Version = StoryVersion
 Position = Annotated[int, Field(strict=True, ge=1)]
 
 

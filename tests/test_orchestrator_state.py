@@ -47,7 +47,7 @@ def _manifest(root, title):
     h = 'a' * 64
     entry = FinalChapterEntry(chapter_ordinal=1, packet_sha256=h, prior_tail_sha256=h,
                              body_sha256=h, receipt_sha256=h, request_id=h)
-    manifest = FinalManifest(contract_version='story-v1', title=title,
+    manifest = FinalManifest(contract_version='story-v3', title=title,
         source_chapter_count=1, chapters=(entry,), hook_packet_sha256=h,
         hook_body_sha256=h, hook_receipt_sha256=h, final_text_sha256=h,
         mechanical='passed', semantic='unver')

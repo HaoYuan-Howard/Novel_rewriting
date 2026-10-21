@@ -36,7 +36,7 @@
   "run": {
     "candidate": "cand",
     "present": true,
-    "contract_version": "story-v1",
+    "contract_version": "story-v3",
     "revision": "36f07045a44adbe6b9fa077a19485d471a7f2a19d01ad1f54eb1e503a51a2d49",
     "status": "delivered",
     "failed_node": null,
@@ -274,7 +274,7 @@
     "revision": "36f07045a44adbe6b9fa077a19485d471a7f2a19d01ad1f54eb1e503a51a2d49",
     "status": "ready",
     "data": {
-      "contract_version": "story-v1",
+      "contract_version": "story-v3",
       "source_identity": "513a204e30b32257774954e73c7b758640813743dcefca5bfd59d01a490e867a",
       "entities": {
         "ent28a3bb64afdb96942206": {
@@ -294,7 +294,12 @@
             "given": null,
             "aliases": {},
             "surface_forms": {
-              "我": null
+              "我": [
+                {
+                  "kind": "text",
+                  "literal": "我"
+                }
+              ]
             }
           }
         },
@@ -329,9 +334,24 @@
               "al01": "盛儿"
             },
             "surface_forms": {
-              "婴儿": null,
-              "孩子": null,
-              "盛儿": "{alias:al01}"
+              "婴儿": [
+                {
+                  "kind": "text",
+                  "literal": "婴儿"
+                }
+              ],
+              "孩子": [
+                {
+                  "kind": "text",
+                  "literal": "孩子"
+                }
+              ],
+              "盛儿": [
+                {
+                  "kind": "alias",
+                  "alias_ref": "al01"
+                }
+              ]
             }
           }
         },
@@ -352,7 +372,12 @@
             "given": null,
             "aliases": {},
             "surface_forms": {
-              "来客": null
+              "来客": [
+                {
+                  "kind": "text",
+                  "literal": "来客"
+                }
+              ]
             }
           }
         }
@@ -722,7 +747,7 @@
     "revision": "36f07045a44adbe6b9fa077a19485d471a7f2a19d01ad1f54eb1e503a51a2d49",
     "status": "ready",
     "data": {
-      "contract_version": "story-v1",
+      "contract_version": "story-v3",
       "source_chapter_count": 2,
       "total_length_budget": 200,
       "premise": "照料婴儿时面对误会与迟到的信息",
@@ -1237,7 +1262,7 @@
       },
       "chapter_plans": [
         {
-          "contract_version": "story-v1",
+          "contract_version": "story-v3",
           "chapter_ordinal": 1,
           "scenes": [
             {
@@ -1332,7 +1357,7 @@
           }
         },
         {
-          "contract_version": "story-v1",
+          "contract_version": "story-v3",
           "chapter_ordinal": 2,
           "scenes": [
             {
@@ -1523,7 +1548,7 @@
     "data": {
       "chapter_ordinal": 1,
       "packet": {
-        "contract_version": "story-v1",
+        "contract_version": "story-v3",
         "chapter_ordinal": 1,
         "source_chapter_count": 2,
         "length_budget": 100,
@@ -1581,7 +1606,7 @@
       },
       "body": "我抱着婴儿走进屋里，腾出一只手扶住门。来客站在门外，我以为他受姐姐邀请，便让开半步。我抱着婴儿走进屋里，腾出一只手扶住门。来客站在门外，我以为他受姐姐邀请，便让开半步。",
       "receipt": {
-        "contract_version": "story-v1",
+        "contract_version": "story-v3",
         "kind": "body",
         "chapter_ordinal": 1,
         "packet_sha256": "867469171a1bb82faa1e09647339adf3b3d2a17f14442899a562617da84b7e84",
@@ -1610,7 +1635,7 @@
     "data": {
       "chapter_ordinal": 2,
       "packet": {
-        "contract_version": "story-v1",
+        "contract_version": "story-v3",
         "chapter_ordinal": 2,
         "source_chapter_count": 2,
         "length_budget": 100,
@@ -1670,7 +1695,7 @@
       },
       "body": "来客说明自己走错巷子，我才发觉先前的猜测没有根据。姐姐唤孩子安儿，我低头应了一声，把往事留在记忆里。来客说明自己走错巷子，我才发觉先前的猜测没有根据。姐姐唤孩子安儿，我低头应了一声，把往事留在记忆里。",
       "receipt": {
-        "contract_version": "story-v1",
+        "contract_version": "story-v3",
         "kind": "body",
         "chapter_ordinal": 2,
         "packet_sha256": "0be59817269b03723b02600a7d22d7937101305e6e3bb4ff877f06e709ed0b48",
@@ -1698,7 +1723,7 @@
     "status": "ready",
     "data": {
       "packet": {
-        "contract_version": "story-v1",
+        "contract_version": "story-v3",
         "length_budget": 100,
         "min_chars": 60,
         "max_chars": 130,
@@ -1728,7 +1753,7 @@
       },
       "body": "我抱着婴儿站在门边，姐姐的嘱托仿佛还在耳旁。门外来客抬起手，我等着他说出第一句话。我抱着婴儿站在门边，姐姐的嘱托仿佛还在耳旁。门外来客抬起手，我等着他说出第一句话。",
       "receipt": {
-        "contract_version": "story-v1",
+        "contract_version": "story-v3",
         "kind": "hook",
         "chapter_ordinal": null,
         "packet_sha256": "2d05b8ec579b2da5cff3f495683888804bfe638f546236025fd95e92787cba3f",

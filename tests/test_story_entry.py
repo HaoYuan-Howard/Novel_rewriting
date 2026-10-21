@@ -32,7 +32,7 @@ def test_current_cli_reaches_stage2_from_new_source_without_buying(tmp_path):
     assert len(books) == 1
     book = books[0].parent.parent
     workflow = json.loads(books[0].read_bytes())
-    assert workflow['epoch']['contract_version'] == 'story-v1'
+    assert workflow['epoch']['contract_version'] == 'story-v3'
     status = json.loads((book / 'runtime/workflow_status.json').read_bytes())
     assert status['status'] == 'needs_authorization'
     assert status['failed_node'] == 'str06.stage2.chapters'

@@ -16,7 +16,7 @@ contracts.judges —— 判据的【行】。**与它守的契约同层**（`Q-1
 要去盘上查才知道的问题——而正向覆盖率、落盘闸门、报告三个消费方都在问这件事。
 六个现役层手写一张表，加一层加一行。
 
-现役判据表由 Stage0、Stage1 和 story-v1 的 str06 三个模块组成。
+现役判据表由 Stage0、Stage1 和 story-v3 的 str06 三个模块组成。
 故事表只登记当前 schema/compiler/validator/repository 的实际机械职责；
 语义质量另标未评，不让旧故事判据名在新契约下假装仍然有效。
 """

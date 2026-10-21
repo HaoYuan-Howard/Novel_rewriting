@@ -109,7 +109,7 @@ from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 
 # 三层当前契约；运行时不注册旧故事模型。
 from contracts.schema.source_story import (
-    SourceStory, ChapterObservation, BookObservation, NamesObservation, AssociateObservation,
+    STORY_VERSION, SourceStory, ChapterObservation, BookObservation, NamesObservation, AssociateObservation,
 )
 from contracts.schema.target_story import (
     NameMap, PreservationContract, TargetModelDraft, ChapterPlan,
@@ -189,23 +189,23 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 3),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
     # 当前三层产物直接携带必填 contract_version，不另造数字信封。
-    'stage2/observations/ch{nn}.json': ArtifactSpec(ChapterObservation, 'story-v1'),
-    'stage2/observations/book.json': ArtifactSpec(BookObservation, 'story-v1'),
-    'stage2/observations/names.json': ArtifactSpec(NamesObservation, 'story-v1'),
-    'stage2/observations/associate.json': ArtifactSpec(AssociateObservation, 'story-v1'),
-    'stage2/story/source_story.json': ArtifactSpec(SourceStory, 'story-v1'),
-    'stage4/naming/name_map.json': ArtifactSpec(NameMap, 'story-v1'),
-    'stage4/story/preservation.json': ArtifactSpec(PreservationContract, 'story-v1'),
-    'stage4/drafts/book.json': ArtifactSpec(TargetModelDraft, 'story-v1'),
-    'stage4/drafts/ch{nn}.json': ArtifactSpec(ChapterPlan, 'story-v1'),
-    'stage4/story/target_story.json': ArtifactSpec(TargetStory, 'story-v1'),
-    'stage4/story/adaptation_map.json': ArtifactSpec(AdaptationMap, 'story-v1'),
-    'stage4/packets/ch{nn}.json': ArtifactSpec(ChapterPacket, 'story-v1'),
-    'stage4/drafts/hook.json': ArtifactSpec(HookPlan, 'story-v1'),
-    'stage4/packets/hook.json': ArtifactSpec(HookPacket, 'story-v1'),
-    'stage5/hook/receipt.json': ArtifactSpec(ProseReceipt, 'story-v1'),
-    'stage5/acceptance/body/ch{nn}.json': ArtifactSpec(ProseReceipt, 'story-v1'),
-    'stage7/final/delivery_manifest.json': ArtifactSpec(FinalManifest, 'story-v1'),
+    'stage2/observations/ch{nn}.json': ArtifactSpec(ChapterObservation, STORY_VERSION),
+    'stage2/observations/book.json': ArtifactSpec(BookObservation, STORY_VERSION),
+    'stage2/observations/names.json': ArtifactSpec(NamesObservation, STORY_VERSION),
+    'stage2/observations/associate.json': ArtifactSpec(AssociateObservation, STORY_VERSION),
+    'stage2/story/source_story.json': ArtifactSpec(SourceStory, STORY_VERSION),
+    'stage4/naming/name_map.json': ArtifactSpec(NameMap, STORY_VERSION),
+    'stage4/story/preservation.json': ArtifactSpec(PreservationContract, STORY_VERSION),
+    'stage4/drafts/book.json': ArtifactSpec(TargetModelDraft, STORY_VERSION),
+    'stage4/drafts/ch{nn}.json': ArtifactSpec(ChapterPlan, STORY_VERSION),
+    'stage4/story/target_story.json': ArtifactSpec(TargetStory, STORY_VERSION),
+    'stage4/story/adaptation_map.json': ArtifactSpec(AdaptationMap, STORY_VERSION),
+    'stage4/packets/ch{nn}.json': ArtifactSpec(ChapterPacket, STORY_VERSION),
+    'stage4/drafts/hook.json': ArtifactSpec(HookPlan, STORY_VERSION),
+    'stage4/packets/hook.json': ArtifactSpec(HookPacket, STORY_VERSION),
+    'stage5/hook/receipt.json': ArtifactSpec(ProseReceipt, STORY_VERSION),
+    'stage5/acceptance/body/ch{nn}.json': ArtifactSpec(ProseReceipt, STORY_VERSION),
+    'stage7/final/delivery_manifest.json': ArtifactSpec(FinalManifest, STORY_VERSION),
 
 }
 ARTIFACTS: dict[str, type[BaseModel]] = {

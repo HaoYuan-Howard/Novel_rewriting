@@ -1,4 +1,4 @@
-/** 当前 story-v1 三层只读监控；旧 Characters/Blueprint/Design/IR API 已退出。 */
+/** 当前 story-v3 三层只读监控；旧 Characters/Blueprint/Design/IR API 已退出。 */
 import type { StoryArtifactStatus } from './backend.generated'
 
 export interface StoryArtifactView<T> {
@@ -18,10 +18,23 @@ export interface StoryState {
   modality: string
 }
 
+export type StoryNamePart =
+  | { kind: 'text'; literal: string }
+  | { kind: 'family' | 'given' }
+  | { kind: 'alias'; alias_ref: string }
+
+export interface StoryNameStructure {
+  family_group: string | null
+  family: string | null
+  given: string | null
+  aliases: Record<string, string>
+  surface_forms: Record<string, StoryNamePart[]>
+}
+
 export interface SourceStoryData {
-  contract_version: 'story-v1'
+  contract_version: 'story-v3'
   source_identity: string
-  entities: Record<string, { kind: string; label: string; surfaces: { literal: string; evidence_refs: string[] }[] }>
+  entities: Record<string, { kind: string; label: string; surfaces: { literal: string; evidence_refs: string[] }[]; name: StoryNameStructure | null }>
   events: Record<string, { chapter_ordinal: number; order: number; summary: string; participants: string[]; scene_boundary: string; temporal: { frame: string; anchor_event: string | null }; evidence_refs: string[] }>
   propositions: Record<string, { statement: string; entity_refs: string[]; world_status: string; evidence_refs: string[] }>
   knowledge_updates: { update_id: string; holder: string; proposition_ref: string; mode: string; polarity: string; at: string; supersedes: string[]; evidence_refs: string[] }[]
@@ -37,7 +50,7 @@ export interface SourceStoryData {
 }
 
 export interface TargetStoryData {
-  contract_version: 'story-v1'
+  contract_version: 'story-v3'
   source_chapter_count: number
   total_length_budget: number
   premise: string
@@ -56,7 +69,7 @@ export interface TargetStoryData {
 }
 
 export interface ChapterPacketData {
-  contract_version: 'story-v1'
+  contract_version: 'story-v3'
   chapter_ordinal: number
   source_chapter_count: number
   length_budget: number
@@ -79,7 +92,7 @@ export type HookPacketData = Omit<ChapterPacketData,
   'chapter_ordinal' | 'source_chapter_count' | 'participants' | 'entry_state' | 'exit_state' | 'actions'>
 
 export interface StoryProseReceipt {
-  contract_version: 'story-v1'
+  contract_version: 'story-v3'
   kind: 'body' | 'hook'
   chapter_ordinal: number | null
   packet_sha256: string
@@ -252,7 +265,7 @@ export interface Str06OwnerIssuesView {
 }
 
 export interface Str06RunView {
-  contract_version: 'story-v1'
+  contract_version: 'story-v3'
   revision: string
   candidate: string
   present: boolean

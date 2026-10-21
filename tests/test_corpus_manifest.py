@@ -111,7 +111,7 @@ def _manifest_raw() -> dict:
         'artifacts': book['artifacts'],
     } for book in books]
     return {
-        'manifest_version': 2, 'contract_version': 'story-v1',
+        'manifest_version': 2, 'contract_version': 'story-v3',
         'generated_at': '2026-08-16T00:00:00Z',
         'code_identity': 'code',
         'artifact_inventory_sha256': corpus_manifest._canonical_sha256(inventory),
@@ -870,9 +870,9 @@ def test_current_story_inventory_validates_actual_seals_and_final_bytes(tmp_path
     before = {p.relative_to(case.root).as_posix(): p.read_bytes()
               for p in case.root.rglob('*') if p.is_file()}
     entries, payloads, codes = corpus_manifest._artifact_inventory(case.root)
-    assert payloads['stage2/story/source_story.json']['contract_version'] == 'story-v1'
+    assert payloads['stage2/story/source_story.json']['contract_version'] == 'story-v3'
     assert any(e.rel == BOOK_TEMPLATE_REL for e in entries)
-    assert any(e.schema_version == 'story-v1' for e in entries)
+    assert any(e.schema_version == 'story-v3' for e in entries)
     assert all('三层样书' not in e.rel for e in entries)
     assert codes
     after = {p.relative_to(case.root).as_posix(): p.read_bytes()

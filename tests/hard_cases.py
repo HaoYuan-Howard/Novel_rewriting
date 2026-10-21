@@ -1,4 +1,4 @@
-"""story-v1 每条 HARD 的生产红绿对照，输入均为明确的合成样例。
+"""story-v3 每条 HARD 的生产红绿对照，输入均为明确的合成样例。
 
 check 从合法底座只改变目标条件，真实调用 schema/compiler/validator/repository。
 结论来自生产异常或 issue，不能用规则名或扫描测试源码代替执行证据。

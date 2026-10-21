@@ -1,6 +1,6 @@
 # 三层故事流水线契约
 
-现役契约为 `story-v1`。Stage2 理解原小说，Stage4 设计目标小说，Stage5 执行写作，
+现役契约为 `story-v3`。Stage2 理解原小说，Stage4 设计目标小说，Stage5 执行写作，
 Stage7 核对与装配。新代码只支持当前契约；旧根原字节归档，新根从 Stage1 全量重建。
 旧观察、Blueprint、Design、IR、回执和历史模型响应不转换成当前正式产物。
 进度与删除清单见 `docs/REQUIREMENTS.md`；R/Q/B 归属见 `docs/BACKEND_CONTRACT.md`。
@@ -17,7 +17,7 @@ Stage7 核对与装配。新代码只支持当前契约；旧根原字节归档�
 semantic unit 负责语义选择；compiler 只转换、派发 ID、解析引用、折叠状态与投影；
 validator 只报告；repository 只持久化与验封；orchestrator 只编排与执行许可。
 运行入口 `novel/stages/chain.py::run_workflow`；正式路径唯一在 `contracts/story_paths.py`。
-所有 canonical 产物显式携带 `contract_version='story-v1'`，缺版本/旧版/未知字段拒绝。
+所有 canonical 产物显式携带 `contract_version='story-v3'`，缺版本/旧版/未知字段拒绝。
 
 ## 节点与顺序
 
@@ -53,7 +53,17 @@ validator 只报告；repository 只持久化与验封；orchestrator 只编排�
 `SourceStory` 包含 `entities/events/propositions/knowledge_updates/exposures/state_slots/`
 `state_updates/causal_links/threads/world_rules/expression/conflicts/evidence`。
 
+章节模型的 `ChapterWire` 只选择代码派发的整书阅读序正整数证据序号；引子与正文不共用序号，
+补料不重编号，章节补丁及材料查询也使用同一整数闭集。compiler转换为正式字符串证据ID后
+发布 `ChapterObservation`；book等后续消费者只读正式观察，不依赖模型整数表。
+整数协议显式升为story-v3，v1/v2根只读保留、在独立新根重建，不跨版本采用已购候选。
+
 - 实体有稳定 ID；未命名婴儿仍是 person。实体成立与显示姓名披露分开，不以真名初现章限制人物存在。
+  章观察的 `referents.surface` 是证据原文中连续出现的一个代表称呼；整书 `surfaces` 中每条
+  `literal` 同样只承载一个原文字面，不拼接别名。机械校验一次报告全部独立可定位的称谓错误，
+  不按标点拆字面或猜补称呼。多个局部指称统一后，参与者按实体 ID 稳定去重。
+  称谓与证据不匹配时，精确联修该条目的 `surface/evidence_refs`，保留所指主体含义；
+  普通字段与 `context_needs` 的证据问题同轮汇总，各自范围分别验证。
 - 事件有阅读章序/章内顺序、参与者、场景边界 new/continue/unknown、时间框架与证据。
   阅读序不等于故事时间；回忆和未来不会覆盖当前状态。
 - 命题保留模型给出的完整陈述，世界地位为 established/refuted/undetermined。
@@ -61,16 +71,40 @@ validator 只报告；repository 只持久化与验封；orchestrator 只编排�
 - 人物认知独立记录 holder、mode、polarity、at、supersedes；开场已有认知用 story_start。
   believes/hears_claim 不等于世界真相。读者披露另用 confirmed/claimed/suggested；
   confirmed 不能把 refuted/undetermined 命题升级成真。
+  `knowledge_updates` 的语义字典顺序不承担时序；compiler 根据阅读位置和 `supersedes` 依赖
+  派生稳定顺序，跨持有者、未来依赖、自指与循环明确拒绝。
 - 状态槽地址由主体＋aspect＋具体 focus 组成；同一人可同时筹钱、隐瞒身份。
   更新保留 set/unset/unknown、时态、modality 与 persistence；缺席、未知和显式解除不同。
 - 因果边明确 causes/motivates/enables/setup_payoff 与 stated/inferred；引用闭合不证明因果语义。
 - 线程允许 open/progress/resolve/abandon；章内孤立收束可作为观察保留，整合产物不能孤立关闭或终止后继续更新。
 - 世界规则与叙事表达都带证据；原作冲突/歧义保留，模型没判清的 unresolved 不冒充原文未知。
 
+关联回答的 `same/distinct` 必须在传递同一闭包内一致；已决回答在接受前实际应用并验证完整事实。
+`same` 只授予同一性合并，不能顺便改写命题世界地位、线程生命周期或具体状态。
+完全相同的线程更新可合并证据；其余合并冲突明确停止并报告修订范围不足，不诱导改答 `distinct` 过闸。
+names 与 associate 的 prompt schema 下发实际人物、候选和证据闭集，以及判定分支约束；
+姓名部件未知用 null，真正无法机械区分的部件歧义明确拒绝。
+
+`NamesWire.people[*].surfaces` 恰好覆盖该人物全部原称谓。每个称谓用非空分段数组声明
+`text` 原文字面、`family`、`given` 或 `alias` 原化名字面；compiler派发化名ID并编译为
+`StoryNameStructure.surface_forms` 的typed分段，核对拼接结果逐字等于原称谓。
+纯称谓使用全text分段，不再另存pure_titles或字符串模板；非null部件与化名都须实际被分段使用。
+例如“王王妃”明确为family＋text“王妃”，改姓后只渲染被声明的姓名位，不全局替换“王”字。
+回派可替换精确既有称谓的完整分段数组，允许语义重分段时增减段数；此原子权限只针对该称谓，
+不授予姓名整表、其他称谓或业务实体数组的增删重排。改变分段kind须定位整个segment，不能留下旧分支字段。
+
+`AssociateWire` 只含语义判定。补料请求显式指定已给候选的 `candidate_key`，可引用证据范围
+仅为该候选初始证据与实际送达该候选的补充段。`AssociateObservation` 由compiler额外写入
+源身份、book摘要及按候选分组的正式补充证据；模型不得自报这些绑定字段。
+材料控制回答及确定性查询结果进入耐久trace，免费恢复按当前源索引重算验证；修改runtime材料
+不能扩大接受集。正式SourceStory承载真正采用的证据，下游不读取runtime临时材料文件。
+
 `SourceIndex` 是原文码点段落索引，见 `novel/core/source_index.py`。证据文本由代码回取，
 正式验证与当前索引逐字核对。`read_segments/search_literal` 有范围、分母、游标、
 complete/truncated/empty 状态与清单摘要；空命中不是“不存在”的证明。
 补料不改变原任务写权限；不静默截断整书材料。
+窄修请求逐项保留原始错误、定位与授权范围；补料续答继续携带冻结候选及补丁协议。
+错误无法安全定位或需要授权外字段时立即停止，不只修部分位置后继续购买。
 
 ## Stage4：建模层
 

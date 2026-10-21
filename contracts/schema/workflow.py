@@ -9,13 +9,14 @@ from pydantic import Field, model_validator
 from contracts.invariants import OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.base import FrozenModel
 from contracts.schema.common import Sha256
+from contracts.schema.source_story import STORY_VERSION, StoryVersion
 
 
 class WorkflowManifest(FrozenModel):
     """当前输出根身份；不解码旧流水线或提供同根迁移。"""
     schema_version: Literal[1]
-    contract_version: Literal['story-v1']
-    pipeline_contract_epoch: Literal['story-v1']
+    contract_version: StoryVersion
+    pipeline_contract_epoch: StoryVersion
     task_id: Sha256
     created_at: int
 
@@ -377,6 +378,7 @@ class CommitBundleV1(FrozenModel):
     """
 
     schema_version: Literal[1] = 1
+    contract_version: StoryVersion
     node: str = Field(min_length=1)
     artifact: str = Field(min_length=1)
     artifact_sha256: Sha256
@@ -435,8 +437,8 @@ class CandidateRuntimeConfig(NamedTuple):
 STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 
 #: 当前三层契约身份；破坏性变更拒绝旧根，产物在新根重新生成。
-STR06_RC_VERSION: Final = 'story-v1'
-STR06_RC_LABELS: Final = ('story-v1',)
+STR06_RC_VERSION: Final = STORY_VERSION
+STR06_RC_LABELS: Final = (STORY_VERSION,)
 
 #: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`
 #: 是 typed 修复的显式 producer 边界（对齐正式 ExecutionEpochReason 的 continue）。
@@ -504,7 +506,7 @@ class OwnerIssueCorrection(FrozenModel):
 
 class OwnerIssueFileV3(FrozenModel):
     """当前三层唯一回派账；不解码或升级任何旧版本。"""
-    contract_version: Literal['story-v1']
+    contract_version: StoryVersion
     schema_version: Literal[3] = 3
     owner: str = Field(min_length=1)
     node: str = Field(min_length=1)
@@ -592,9 +594,9 @@ def owner_issue_node(owner: str) -> str:
 
 
 def owner_issue_record_of_payload(payload: Mapping[str, Any]) -> OwnerIssueFileV3:
-    """只读显式story-v1/V3；缺失版本与旧账均拒绝，不补当前摘要冒充旧证据。"""
-    if payload.get('contract_version') != 'story-v1' or payload.get('schema_version') != 3:
-        raise ValueError('回派账只支持显式story-v1/schema_version=3；旧根须独立重建')
+    """只读显式story-v3/V3；缺失版本与旧账均拒绝，不补当前摘要冒充旧证据。"""
+    if payload.get('contract_version') != STORY_VERSION or payload.get('schema_version') != 3:
+        raise ValueError('回派账只支持显式story-v3/schema_version=3；旧根须独立重建')
     return OwnerIssueFileV3.model_validate(dict(payload))
 
 

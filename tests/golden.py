@@ -18,6 +18,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from contracts.schema.source_story import STORY_VERSION, StoryVersion
 from contracts.invariants import STAGES
 from contracts.schema.orchestration import PipelineAgentProfiles
 from novel import paths, prov
@@ -35,7 +36,6 @@ CRITERIA = {
     'local_prose_coherence': '局部文笔连贯：句段自然具体、衔接清楚，不重复交代或写成导演说明',
 }
 GOLDEN_VERSION = 3
-STORY_VERSION = 'story-v1'
 
 
 class Strict(BaseModel):
@@ -51,7 +51,7 @@ class Source(Strict):
 
 class Manifest(Strict):
     schema_version: Literal[3]
-    story_contract_version: Literal['story-v1']
+    story_contract_version: StoryVersion
     source_root: Text
     output_root: Text
     code_version: Text
@@ -107,7 +107,7 @@ class BookReview(Strict):
 
 class Review(Strict):
     schema_version: Literal[3]
-    story_contract_version: Literal['story-v1']
+    story_contract_version: StoryVersion
     manifest_sha256: Sha256
     snapshot_sha256: Sha256
     reviewer: str = ''
@@ -170,7 +170,7 @@ def freeze(root: Path, output: Path, profiles: PipelineAgentProfiles,
     if baseline is not None:
         if (baseline.get('state') != 'pass' or baseline.get('schema_version') != GOLDEN_VERSION
                 or baseline.get('story_contract_version') != STORY_VERSION):
-            raise ValueError('基线必须是v3/story-v1六维已通过评价；旧契约报告不转换')
+            raise ValueError('基线必须是v3/story-v3六维已通过评价；旧契约报告不转换')
         if set(baseline['snapshot']['books']) != {book.sid for book in books}:
             raise ValueError('基线书目不匹配')
         for book in books:
@@ -196,7 +196,7 @@ def validate_baseline(manifest: Manifest) -> None:
     prior = manifest.baseline
     if (prior.get('schema_version') != GOLDEN_VERSION
             or prior.get('story_contract_version') != STORY_VERSION):
-        raise ValueError('旧质量评价不自动迁移；只接受v3/story-v1基线')
+        raise ValueError('旧质量评价不自动迁移；只接受v3/story-v3基线')
     snapshot = prior['snapshot']
     review = Review.model_validate(prior['review'])
     if (prior['state'] != 'pass' or snapshot['engineering_state'] != 'pass'
@@ -287,7 +287,7 @@ def accepted_output_bytes(book: Path) -> bytes:
     from novel.views.str06 import final_text_delivery
     delivered = final_text_delivery(book.parent, book.name)
     if delivered is None:
-        raise ValueError('当前story-v1交付尚未齐备')
+        raise ValueError('当前story-v3交付尚未齐备')
     _filename, text = delivered
     return text.encode('utf-8')
 
@@ -370,7 +370,7 @@ def review_template(manifest: Manifest, snapshot: dict[str, Any]) -> Review:
 def evaluate(manifest: Manifest, snapshot: dict[str, Any], review: Review) -> dict[str, Any]:
     if (snapshot.get('schema_version') != GOLDEN_VERSION
             or snapshot.get('story_contract_version') != STORY_VERSION):
-        raise ValueError('旧快照不转换；只接受v3/story-v1当前收集结果')
+        raise ValueError('旧快照不转换；只接受v3/story-v3当前收集结果')
     if review.manifest_sha256 != digest(manifest) or snapshot.get('manifest_sha256') != digest(manifest):
         raise ValueError('评价不属于当前冻结清单')
     if review.snapshot_sha256 != digest(snapshot):

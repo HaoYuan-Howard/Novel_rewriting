@@ -1,4 +1,4 @@
-"""story-v1共享测试输入与真实付费边界装配；不返回被测阶段的假成功结论。"""
+"""story-v3共享测试输入与真实付费边界装配；不返回被测阶段的假成功结论。"""
 from __future__ import annotations
 
 from collections import Counter
@@ -18,7 +18,7 @@ from novel import prov, paths
 from novel.config import Config
 from novel.errors import ProvenanceRefused, TerminalState
 from novel.llm.ledger import read_cost_snapshot
-from novel.llm.story_requests import MATERIAL_RULES, request_json
+from novel.llm.story_requests import material_rules, request_json
 from novel.llm.transport import ChatResponse, FakeTransport
 from novel.stages.chain import (
     NODE_ORDER, SYSTEM, assemble_paid_boundary, freeze_execution_profile, run_workflow,
@@ -28,7 +28,7 @@ from novel.work_units import initialize_workflow
 
 
 from types import SimpleNamespace as NS
-from contracts.schema.source_story import STORY_VERSION
+from contracts.schema.source_story import STORY_VERSION, StoryNameStructure
 from novel.core.source_index import build_source_index
 from novel.stages.stage4 import story as target_engine
 
@@ -59,6 +59,20 @@ def _materials():
     ])
 
 
+def chapter_wire_numbers(wire, index):
+    """测试显式构造整数章回答；未知值保留作红例，不提供生产stringwire兼容。"""
+    def convert(value):
+        if isinstance(value, dict):
+            return {key: [index.evidence_numbers.get(ref, ref) if isinstance(ref, str) else ref
+                          for ref in child]
+                    if key in ('evidence_refs', 'source_refs') and isinstance(child, (list, tuple))
+                    else convert(child) for key, child in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [convert(child) for child in value]
+        return deepcopy(value)
+    return convert(wire)
+
+
 def _chapter_wire(index, chapter):
     refs = list(index.chapter(chapter))
     referents = {
@@ -83,8 +97,8 @@ def _chapter_wire(index, chapter):
                        'temporal': {'frame': 'current', 'anchor_event': None},
                        'evidence_refs': [ref], 'scene_boundary': 'unknown',
                        'claims': [], 'causal_hints': [], 'thread_hints': []}
-    return {'contract_version': STORY_VERSION, 'referents': referents, 'events': events,
-            'context_needs': []}
+    return chapter_wire_numbers({'contract_version': STORY_VERSION, 'referents': referents, 'events': events,
+                                 'context_needs': []}, index)
 
 
 def _inputs():
@@ -177,8 +191,8 @@ def target_wires():
     """只构造输入；每例由真实纯compiler完成所有目标阶段。"""
     def person(label, family, given, group):
         return NS(kind='person', label=label, surfaces=(NS(literal=label),),
-            name=NS(family_group=group, family=family, given=given, aliases={},
-                    surface_forms={label: '{family}{given}'}))
+            name=StoryNameStructure(family_group=group, family=family, given=given, aliases={},
+                    surface_forms={label: [{'kind': 'family'}, {'kind': 'given'}]}))
     source = NS(entities={'person_a': person('沈旧', '沈', '旧', 'family_a'),
                           'person_b': person('周原', '周', '原', 'family_b')},
         events={'source_event_1': NS(chapter_ordinal=1), 'source_event_2': NS(chapter_ordinal=2)}, propositions={},
@@ -286,8 +300,9 @@ def pipeline_materials():
         literals = [s.literal for s in entity.surfaces]
         people[ref] = {'family_group': None, 'family': None, 'given': None,
             'aliases': ['盛儿'] if '盛儿' in literals else [],
-            'pure_titles': [text for text in literals if text != '盛儿']}
-    names_wire = {'contract_version': 'story-v1', 'people': people}
+            'surfaces': {text: [{'kind': 'alias' if text == '盛儿' else 'text', 'literal': text}]
+                         for text in literals}}
+    names_wire = {'contract_version': STORY_VERSION, 'people': people}
     source_names = source_engine.compile_names(names_wire, book=book)
     source = source_engine.compile_source_story(index=index, chapters=chapter_observations,
                                                book=book, names=source_names)
@@ -406,7 +421,7 @@ class PipelineRun:
         options = dict(repository=self.boundary.repository, chapters=self.chapters,
             ask=self.ask, budget=200, book_title='三层样书', through='stage7', concurrency=1,
             source_identity=self.index.source_identity, provider=self.boundary.provider,
-            model=self.boundary.model)
+            model=self.boundary.model, request_profile=self.boundary.profile)
         options.update(changes)
         return run_workflow(**options)
 
@@ -439,11 +454,15 @@ def make_pipeline(tmp_path, *, existing=None, readonly=False, scripts=None, dirn
         root_sha1=prov.content_sha1(b'fixture-source'),
         profile=profile, yes=not readonly, allow_source_export=not readonly,
         readonly=readonly, transport=transport)
-    def ask(owner, prompt, compiler, *, index=None, max_chapter=None, system=SYSTEM, revision_seed=None):
+    def ask(owner, prompt, compiler, *, index=None, max_chapter=None, system=SYSTEM, revision_seed=None,
+            material_candidates=None, compile_with_materials=None, material_prompt=None, candidate_schema=None):
         active['owner'] = owner
-        request = boundary.build_request(owner, prompt + (MATERIAL_RULES if index is not None else ''),
+        request = boundary.build_request(owner, prompt + (
+            material_rules(owner) if index is not None and material_candidates is None else ''),
                                           json_mode=True, system=system, temperature=.4)
         return request_json(boundary.session, owner, request, compiler,
                             repository=boundary.repository, index=index, max_chapter=max_chapter,
-                            revision_seed=revision_seed)
+                            revision_seed=revision_seed, material_candidates=material_candidates,
+                            compile_with_materials=compile_with_materials, material_prompt=material_prompt,
+                            candidate_schema=candidate_schema)
     return PipelineRun(tmp_path, root, chapters, index, wires, boundary, transport, calls, ask)

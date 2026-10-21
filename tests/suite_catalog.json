@@ -1,7 +1,7 @@
 {
   "change_scopes": {
     "str06": {
-      "_note": "当前story-v1三层主链；旧架构独占测试按职责账退役，通用故障反例移植至现役入口。",
+      "_note": "当前story-v3三层主链；旧架构独占测试按职责账退役，通用故障反例移植至现役入口。",
       "paths": [
         "contracts/story_paths.py",
         "contracts/schema/source_story.py",
@@ -579,6 +579,15 @@
       ]
     },
     "tests/test_stage2_recovery_runs.py": {
+      "cases": {
+        "test_chapter_complete_paid_candidate_recompiles_after_diagnostic_change": "stage",
+        "test_chapter_complete_paid_candidate_rejects_previous_story_versions_without_purchase": "stage",
+        "test_chapter_owner_revision_checks_complete_schema_before_freezing_or_replaying_seed": "stage",
+        "test_chapter_complete_paid_candidate_refuses_different_task_even_with_same_source": "stage",
+        "test_chapter_complete_paid_candidate_closes_identity_and_validation_failures_without_purchase": "stage",
+        "test_chapter_complete_candidate_replays_authenticated_format_recovery_without_rebuying": "stage",
+        "test_chapter_complete_candidate_replays_owner_revision_with_automatic_narrow_repair": "stage"
+      },
       "layer": "unit_contract",
       "stages": [
         "stage2"
@@ -679,9 +688,13 @@
       }
     },
     "tests/test_source_story.py": {
+      "cases": {
+        "test_names_owner_atomically_resegments_growing_and_shrinking_surfaces_and_replays_free": "stage"
+      },
       "layer": "unit_contract",
       "stages": [
-        "stage2"
+        "stage2",
+        "stage4"
       ]
     },
     "tests/test_target_story.py": {
@@ -716,6 +729,12 @@
       ]
     },
     "tests/test_story_runtime.py": {
+      "cases": {
+        "test_associate_owner_revision_inherits_authenticated_material_schema_and_replays_free": "stage",
+          "test_chapter_production_material_continuation_refreshes_patch_schema_and_replays_free": "stage",
+          "test_chapter_format_recovery_keeps_material_delivery_and_resumes_free": "stage",
+          "test_chapter_format_recovery_refuses_unproven_predecessor_materials": "stage"
+      },
       "layer": "unit_contract",
       "stages": [
         "stage2",

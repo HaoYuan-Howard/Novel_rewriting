@@ -12,8 +12,9 @@ from pydantic import ValidationError
 
 import contracts.schema
 from contracts.artifacts import (
-    ARTIFACT_PATHS, RETIRED_ARTIFACT_PATHS, artifact_rel,
+    ARTIFACT_PATHS, RETIRED_ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS, artifact_rel,
 )
+from contracts.schema.source_story import STORY_VERSION
 from contracts.invariants import NODES
 from contracts.schema import (
     ARTIFACTS,
@@ -87,7 +88,7 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '2026-08-22 阶段 B：恒 `sec_0001` 的 `section_id` 删除，产物收成 `{text}`',
         '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
     ),
-    # story-v1为新输出根独立契约；各正式载体以必填contract_version明确拒旧。
+    # story-v3在新输出根重建；v1姓名模板与整书修订权限不提供同根升级。
 
 }
 
@@ -134,6 +135,30 @@ def _concrete(rel: str) -> str:
     两条参数化照样全绿，扫的却是一批生产永远不会写出来的路径。
     """
     return artifact_rel(_ID_OF_REL[rel], n=1, nn=1)
+
+
+def test_current_story_version_is_shared_by_registry_models_and_candidate_identity():
+    from contracts.schema.workflow import STR06_RC_LABELS, STR06_RC_VERSION
+
+    assert STORY_VERSION == 'story-v3'
+    assert STR06_RC_VERSION == STORY_VERSION and STR06_RC_LABELS == (STORY_VERSION,)
+    assert set(STR06_ARTIFACT_RC_VERSIONS.values()) == {STORY_VERSION}
+    for rel, spec in ARTIFACT_SPECS.items():
+        if isinstance(spec.current_version, str):
+            assert spec.current_version == STORY_VERSION
+            assert spec.model.model_json_schema()['properties']['contract_version']['const'] == STORY_VERSION, rel
+
+
+@pytest.mark.parametrize('rel', sorted(rel for rel, spec in ARTIFACT_SPECS.items()
+    if isinstance(spec.current_version, str)), ids=lambda rel: rel)
+@pytest.mark.parametrize('old_version', ('story-v1', 'story-v2'))
+def test_previous_story_artifact_is_rejected_on_both_read_and_write(rel, old_version):
+    path = _concrete(rel)
+    old = {'contract_version': old_version, 'anything': 1}
+    for operation in (decode_artifact, encode_artifact):
+        with pytest.raises(ArtifactVersionError, match='schema'):
+            operation(path, old)
+    assert old == {'contract_version': old_version, 'anything': 1}
 
 
 def test_the_placeholder_helper_actually_produces_registered_paths():

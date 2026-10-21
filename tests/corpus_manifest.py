@@ -13,6 +13,7 @@ from typing import Any, Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from contracts.schema.source_story import STORY_VERSION
 from contracts.schema import (  # noqa: E402
     CorpusArtifactEntry, CorpusBookEntry, CorpusLedgerSummary, CorpusManifest,
     CorpusSkipExpectation, LedgerTokenSummary, artifact_spec, decode_artifact,
@@ -330,7 +331,7 @@ def build_manifest(
         for node in CURRENT_CORPUS_PAID_NODES
     ]
     return CorpusManifest(
-        manifest_version=2, contract_version='story-v1',
+        manifest_version=2, contract_version=STORY_VERSION,
         generated_at=datetime.now(timezone.utc).isoformat(timespec='seconds'),
         code_identity=code,
         artifact_inventory_sha256=inventory_sha,

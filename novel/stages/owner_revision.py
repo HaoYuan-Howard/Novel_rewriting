@@ -10,6 +10,7 @@ import hashlib
 from pathlib import Path
 from typing import Callable, NoReturn
 
+from contracts.schema.source_story import STORY_VERSION
 from contracts.invariants import CASCADE_REWIND_LIMIT, OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.workflow import (
     OWNER_PRODUCT_RELS, OwnerIssueFileV3, OwnerIssueV1,
@@ -258,7 +259,7 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
     if existing is not None and existing.status == 'open' \
             and fingerprint in history:
         repository.write(owner_issues_rel(owner), OwnerIssueFileV3(
-            contract_version='story-v1',
+            contract_version=STORY_VERSION,
             owner=owner, node=node, raised_by=raised_by, status='open',
             rounds_total=existing.rounds_total, fingerprint=fingerprint,
             against_sha256=against_sha256, no_progress=True, issues=issues,
@@ -271,7 +272,7 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
     rounds = existing.rounds_total if existing is not None else 0
     if rounds >= OWNER_REVISION_MAX_ROUNDS:
         repository.write(owner_issues_rel(owner), OwnerIssueFileV3(
-            contract_version='story-v1',
+            contract_version=STORY_VERSION,
             owner=owner, node=node, raised_by=raised_by, status='open',
             rounds_total=rounds, fingerprint=fingerprint,
             against_sha256=against_sha256, no_progress=False, issues=issues,
@@ -293,7 +294,7 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
             node=node, owner=owner, issues=issues, raised_by=raised_by,
             rounds=rounds)
     repository.write(owner_issues_rel(owner), OwnerIssueFileV3(
-            contract_version='story-v1',
+            contract_version=STORY_VERSION,
         owner=owner, node=node, raised_by=raised_by, status='open',
         rounds_total=rounds + 1, fingerprint=fingerprint,
         against_sha256=against_sha256, issues=issues,
@@ -379,8 +380,8 @@ def _stored_payload_text(repository, rel: str, *,
         raise RuntimeError(f'修订上一版不是 JSON：{rel}')
     if not isinstance(envelope, dict):
         raise RuntimeError(f'修订上一版不是 JSON 对象：{rel}')
-    if envelope.get('contract_version') != 'story-v1':
-        raise RuntimeError(f'修订上一版不属于当前story-v1：{rel}')
+    if envelope.get('contract_version') != STORY_VERSION:
+        raise RuntimeError(f'修订上一版不属于当前story-v3：{rel}')
     payload = envelope
     stripped = {k: v for k, v in payload.items() if not k.startswith('_')}
     if project is not None:

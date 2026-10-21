@@ -43,6 +43,7 @@ from typing import Any, Callable, Iterable, Iterator, NamedTuple, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from contracts.schema.source_story import STORY_VERSION
 from contracts.artifacts import (
     ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS,
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS,
@@ -1278,7 +1279,7 @@ class ArtifactStore:
             repository = Str06Repository(self.ctx.novel_dir)
             repository.inspect_sealed_model(HOOK_RECEIPT)
             packet = repository.check_model(HOOK_PACKET)
-            body = HookBody(contract_version='story-v1', text=self.read_own_text(HOOK),
+            body = HookBody(contract_version=STORY_VERSION, text=self.read_own_text(HOOK),
                             receipt=receipt)
             if verify_hook(body, packet):
                 return FreshnessReport('stale', 'consumed_changed', report.edges)
@@ -1387,7 +1388,7 @@ class ArtifactStore:
             snapshot = self.candidate_payload(snapshot_rel)
             if not isinstance(snapshot, dict) or set(snapshot) != {
                     'contract_version', 'source_identity', 'content_sha256', 'chapters', 'hook_copy'
-                    } or snapshot['contract_version'] != 'story-v1':
+                    } or snapshot['contract_version'] != STORY_VERSION:
                 return FreshnessReport('unknown', 'consumed_unresolved')
             index = build_source_index(snapshot['chapters'], snapshot['hook_copy'],
                                        source_identity=snapshot['source_identity'])
@@ -1450,7 +1451,7 @@ class ArtifactStore:
             repository = Str06Repository(self.ctx.novel_dir)
             repository.inspect_sealed_model(receipt_rel)
             packet = repository.check_model(chapter_rel(CHAPTER_PACKET, ordinal))
-            value = ChapterBody(contract_version='story-v1', chapter_ordinal=ordinal,
+            value = ChapterBody(contract_version=STORY_VERSION, chapter_ordinal=ordinal,
                                 text=repository.read_text(normalized), receipt=receipt)
             prior = repository.read_text(chapter_rel(BODY, ordinal - 1)) if ordinal > 1 else None
             if verify_body(value, packet, prior_body=prior):

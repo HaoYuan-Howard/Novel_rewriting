@@ -1,4 +1,4 @@
-"""story-v1 共用写作契约边界：请求、短尾、字节证明与受限合并。
+"""story-v3 共用写作契约边界：请求、短尾、字节证明与受限合并。
 
 这里是 Stage、repository 与编排共用的纯边界，不依赖任何 Stage 实现。
 只组装请求、检查和合并，不发模型请求、不读写文件。正文表达由模型完成；
@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
+from contracts.schema.source_story import STORY_VERSION
 from contracts.schema.story_prose import (
     BodyRequest, ChapterBody, HookBody, HookRequest, NeedsDesign, NeedsScope,
     OpeningParagraph, OpeningPatch, OpeningPatchAnswer, OpeningPatchRequest,
@@ -156,7 +157,7 @@ def _request_id(kind: str, packet_sha: str, tail_sha: str, system: str, user: st
 
 def _request_id_from_hashes(kind: str, packet_sha: str, tail_sha: str,
                             system_sha: str, user_sha: str) -> str:
-    return stable_sha256({'contract_version': 'story-v1', 'kind': kind, 'packet_sha256': packet_sha,
+    return stable_sha256({'contract_version': STORY_VERSION, 'kind': kind, 'packet_sha256': packet_sha,
                           'prior_tail_sha256': tail_sha, 'system_sha256': system_sha,
                           'user_sha256': user_sha})
 
@@ -174,7 +175,7 @@ def build_body_request(packet: ChapterPacket, *, prior_body: str | None = None) 
     packet_sha = stable_sha256(packet)
     tail_sha = sha256_text(tail)
     user = _render_packet(packet) + f'\n【前章短尾：{status}】\n' + tail
-    return BodyRequest(contract_version='story-v1', packet=packet, packet_sha256=packet_sha, prior_tail=tail,
+    return BodyRequest(contract_version=STORY_VERSION, packet=packet, packet_sha256=packet_sha, prior_tail=tail,
                        prior_tail_sha256=tail_sha, prior_tail_status=status,
                        system=WRITER_SYSTEM, user=user,
                        request_id=_request_id('body', packet_sha, tail_sha, WRITER_SYSTEM, user))
@@ -183,7 +184,7 @@ def build_body_request(packet: ChapterPacket, *, prior_body: str | None = None) 
 def build_hook_request(packet: HookPacket) -> HookRequest:
     packet_sha = stable_sha256(packet)
     user = '请依据以下同一目标故事的开篇材料写单个Hook。\n' + _render_packet(packet)
-    return HookRequest(contract_version='story-v1', packet=packet, packet_sha256=packet_sha, system=WRITER_SYSTEM, user=user,
+    return HookRequest(contract_version=STORY_VERSION, packet=packet, packet_sha256=packet_sha, system=WRITER_SYSTEM, user=user,
                        request_id=_request_id('hook', packet_sha, sha256_text(''), WRITER_SYSTEM, user))
 
 
@@ -242,7 +243,7 @@ def _receipt(text: str, request: BodyRequest | HookRequest, *, response_id: str,
     issues = validate_body(text, request, finish_reason=finish_reason)
     if issues:
         raise ProseRejected(issues)
-    return ProseReceipt(contract_version='story-v1', kind=request.kind,
+    return ProseReceipt(contract_version=STORY_VERSION, kind=request.kind,
                         chapter_ordinal=request.packet.chapter_ordinal if isinstance(request, BodyRequest) else None,
                         packet_sha256=request.packet_sha256,
                         prior_tail_sha256=request.prior_tail_sha256 if isinstance(request, BodyRequest) else sha256_text(''),
@@ -258,13 +259,13 @@ def accept_body(text: str | ProseDraft, request: BodyRequest, *, response_id: st
     text = text.text if isinstance(text, ProseDraft) else text
     receipt = _receipt(text, request, response_id=response_id, provider=provider,
                        model=model, finish_reason=finish_reason)
-    return ChapterBody(contract_version='story-v1', chapter_ordinal=request.packet.chapter_ordinal, text=text, receipt=receipt)
+    return ChapterBody(contract_version=STORY_VERSION, chapter_ordinal=request.packet.chapter_ordinal, text=text, receipt=receipt)
 
 
 def accept_hook(text: str | ProseDraft, request: HookRequest, *, response_id: str,
                 provider: str, model: str, finish_reason: str = 'stop') -> HookBody:
     text = text.text if isinstance(text, ProseDraft) else text
-    return HookBody(contract_version='story-v1', text=text, receipt=_receipt(text, request, response_id=response_id,
+    return HookBody(contract_version=STORY_VERSION, text=text, receipt=_receipt(text, request, response_id=response_id,
                                               provider=provider, model=model, finish_reason=finish_reason))
 
 
@@ -343,7 +344,7 @@ def opening_patch_request(chapter: ChapterBody, packet: ChapterPacket, *,
     user = (original_request.user + '\n【窄修原因】\n' + reason
             + '\n【可编辑自然段】\n' + json.dumps(_data_list(paragraphs), ensure_ascii=False))
     base_sha, receipt_sha = sha256_text(chapter.text), stable_sha256(chapter.receipt)
-    return OpeningPatchRequest(contract_version='story-v1', chapter_ordinal=chapter.chapter_ordinal,
+    return OpeningPatchRequest(contract_version=STORY_VERSION, chapter_ordinal=chapter.chapter_ordinal,
                                packet_sha256=original_request.packet_sha256,
                                prior_tail_sha256=original_request.prior_tail_sha256,
                                base_body_sha256=base_sha,
@@ -439,4 +440,4 @@ def apply_opening_patch(chapter: ChapterBody, patch: OpeningPatch | NeedsScope,
     receipt = chapter.receipt.model_copy(update={'body_sha256': sha256_text(text),
                                                 'prior_tail_sha256': request.prior_tail_sha256,
                                                 'patches': (*chapter.receipt.patches, record)})
-    return ChapterBody(contract_version='story-v1', chapter_ordinal=chapter.chapter_ordinal, text=text, receipt=receipt)
+    return ChapterBody(contract_version=STORY_VERSION, chapter_ordinal=chapter.chapter_ordinal, text=text, receipt=receipt)

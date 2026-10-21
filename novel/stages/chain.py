@@ -24,6 +24,7 @@ from contracts.story_paths import *
 from contracts.schema.orchestration import LegacyLlmProfile
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG, OwnerIssueV1
 from contracts.schema.story_prose import ChapterBody, HookBody, NeedsDesign, NeedsScope
+from contracts.schema.source_story import STORY_VERSION
 from contracts.schema.target_story import ChapterPacket, TargetStory
 from novel import paths, prov
 from novel.config import Config, load_config
@@ -31,7 +32,9 @@ from novel.core.text import count_non_whitespace_chars
 from novel.llm.paid_requests import (
     PaidRequestSession, PurchaseRequired, ValidationStop, digest, init_or_resume_candidate_workflow, semantic_owner_unit,
 )
-from novel.llm.story_requests import MATERIAL_RULES, RevisionSeed, SemanticResult, request_json, replay_semantic_trace, strict_json
+from novel.llm.story_requests import (
+    RevisionSeed, SemanticResult, material_rules, request_json, replay_semantic_trace, replay_material_trace, strict_json,
+)
 from novel.llm.transport import ChatRequest, DeepSeekTransport
 from novel.stages.stage2 import story as source_engine
 from novel.stages.stage4 import story as target_engine
@@ -62,6 +65,7 @@ class ChainContext:
     node_concurrency: dict[str, int] = field(default_factory=dict)
     body_chapters: tuple[int, ...] | None = None
     source_identity: str | None = None
+    request_profile: ExecutionProfile | None = None
 
     @property
     def index(self):
@@ -79,11 +83,278 @@ def _raw_trace_steps(trace):
             yield step
 
 
+def _chapter_task_request(user, *, index, ordinal, materials):
+    """当前整数任务只认一种实际schema；旧版本任务及显示协议不参与采用。"""
+    marker = '\n【输出 schema】'
+    current = source_engine.chapter_prompt(index, ordinal, materials=materials)
+    prefix, schema_text = current.rsplit(marker, 1)
+    start = prefix + marker
+    if user.startswith(start):
+        _schema, end = json.JSONDecoder().raw_decode(user[len(start):])
+        schema = strict_json(user[len(start):len(start) + end])
+        if digest(schema) != digest(strict_json(schema_text)):
+            raise ValueError('章候选原请求schema不是当前整数任务的真实材料投影')
+        boundary = len(start) + end
+        return user[:boundary], user[boundary:], schema
+    raise ValueError('章候选原请求的完整任务、源原文或引用格式协议不同')
+
+
+def _revision_protocol_tail(appends, removes):
+    return ('\n只返回 {"patches":[{"path":[授权路径],"value":替换值}]}'
+        + ('，另必填appends:[{"path":[授权容器],"value":追加列表或新键对象}]。' if appends else '。')
+        + ('另必填removes:[{"path":[授权字典语义键]}]。' if removes else '')
+        + '每个授权路径恰答一次；授权外保持原字节，禁止全量JSON、删除未授权条目或重排既有列表。'
+        + '只有atomic_paths中的精确称谓语义字段可整体重分段，其他数组位置冻结。'
+        + '修订须补齐所报真实剧情桥梁或必要决定，保持已冻结跨章边界；范围不足明确停止。')
+
+
+def _verify_chapter_format_request(ctx, owner, ref, tail, *, materials=(), before_ordinal=None):
+    """格式恢复绑定真实坏响应；前驱只可使用当前认证材料的已送达前缀。"""
+    from novel.llm.story_requests import _format_repair_user
+    from novel.work_units import readonly_budget
+    unit = readonly_budget(ctx.repository.root.parent, ref['sid'], ref['unit_id'])
+    ordinal = int(semantic_owner_unit(owner)[1].split(':', 1)[1])
+    ceiling = before_ordinal if before_ordinal is not None else unit.turn(ref['turn_id']).ordinal
+    for attempt_id, record in unit.acceptance_records():
+        if (record.get('owner') != owner or record.get('attempt_id') != attempt_id
+                or record.get('response_kind') != 'format_failure' or record.get('accepted') is not False
+                or record.get('parse') != 'failed' or record.get('mode') != 'json'):
+            continue
+        turn = unit.turn(record['turn_id'])
+        if turn.ordinal >= ceiling:
+            continue
+        payload = unit.attempt_request_payload(turn.turn_id, attempt_id)
+        actual = payload['request_payload']
+        original_user = actual['messages'][-1]['content']
+        request = str06_chat_request(ctx.request_profile, owner, original_user, json_mode=True,
+            system=SYSTEM, temperature=.4, enforce=False).cache_payload()
+        identity = digest({'owner': owner, 'provider': ctx.request_profile.provider, 'request': request})
+        if (digest(actual) != digest(request) or turn.request_sha256 != identity
+                or record.get('request_sha256') != identity):
+            continue
+        usable = unit.usable_response(identity)
+        if usable is None or usable[0].turn_id != turn.turn_id or usable[2] != attempt_id:
+            continue
+        response = payload['response']
+        if response.get('finish_reason') == 'length':
+            raise ValueError('章格式恢复的前驱响应已截断，不能绕过原付费边界')
+        raw = response['content'] if (response.get('content') or '').strip() else response.get('reasoning') or ''
+        try:
+            strict_json(raw)
+        except (ValueError, TypeError) as exc:
+            errors = [str(exc)]
+        else:
+            continue
+        if record.get('errors') != errors or tail != _format_repair_user('', errors, raw):
+            continue
+        # 格式修复期间仍可能继续补料。按当时实际送达的前缀复校旧schema，
+        # 不能要求坏响应已读到后来才取得的材料，也不能拿当前schema替旧请求背书。
+        for count in range(len(materials), -1, -1):
+            prior_materials = tuple(materials[:count])
+            task_user = original_user
+            if prior_materials:
+                frozen = json.dumps(prior_materials, ensure_ascii=False)
+                suffix = next((marker + frozen for marker in (
+                    '\n【已冻结补充材料】\n', '\n【冻结补充材料】\n')
+                    if original_user.endswith(marker + frozen)), None)
+                if suffix is None:
+                    continue
+                task_user = original_user[:-len(suffix)]
+            try:
+                _base, prior_tail, _schema = _chapter_task_request(task_user, index=ctx.index,
+                    ordinal=ordinal, materials=prior_materials)
+            except ValueError:
+                continue
+            rules = material_rules(owner)
+            if prior_tail.startswith(rules):
+                prior_tail = prior_tail[len(rules):]
+            elif not prior_materials:
+                continue
+            if prior_tail:
+                if not prior_tail.startswith('\n【格式修复】'):
+                    continue
+                _verify_chapter_format_request(ctx, owner, ref, prior_tail,
+                    materials=prior_materials, before_ordinal=turn.ordinal)
+            return
+    raise ValueError('章格式修复请求缺少同任务、同profile的真实坏响应前驱')
+
+
+def _verify_chapter_task_trace(ctx, owner, saved):
+    """逐步核对真实请求的任务与冻结控制JSON，不信runtime自报补丁范围。"""
+    from novel.llm.story_requests import _automatic_repair_user, _patch, _revision_patch
+    from novel.work_units import readonly_budget
+    ordinal = int(semantic_owner_unit(owner)[1].split(':', 1)[1])
+    profile, index = ctx.request_profile, ctx.index
+    if profile is None or ctx.provider != profile.provider or ctx.model != profile.model:
+        raise ValueError('章候选免费重编必须提供同一冻结执行profile')
+    workflow = ctx.repository.inspect('runtime/candidate_workflow.json')
+    if (workflow['source_identity'] != index.source_identity
+            or workflow['source_content_sha256'] != index.content_sha256):
+        raise ValueError('章候选免费重编的正式源输入身份不同')
+    raw_steps = list(_raw_trace_steps(saved['trace']))
+    if saved['refs'] != [step['ref'] for step in raw_steps]:
+        raise ValueError('章候选真实响应引用与语义trace顺序不同')
+    for step in raw_steps:
+        ref = step['ref']
+        unit = readonly_budget(ctx.repository.root.parent, ref['sid'], ref['unit_id'])
+        payload = unit.attempt_request_payload(ref['turn_id'], ref['attempt_id'])
+        prompts = ref['prompts']
+        expected = str06_chat_request(profile, owner, prompts['user'], json_mode=True,
+            system=SYSTEM, temperature=.4, enforce=False).cache_payload()
+        identity = digest({'owner': owner, 'provider': profile.provider, 'request': expected})
+        if (prompts['system'] != SYSTEM or digest(payload['request_payload']) != digest(expected)
+                or ref['request_sha256'] != identity or ref['request_fingerprint'] != identity
+                or ref['model'] != (payload['response'].get('model') or profile.model)):
+            raise ValueError('章候选原实际请求的profile、SYSTEM或请求身份不同')
+        if payload['response'].get('finish_reason') == 'length':
+            raise ValueError('章候选原响应已截断，不能绕过原付费边界')
+        response = payload['response']
+        raw = response['content'] if (response.get('content') or '').strip() else response.get('reasoning') or ''
+        if digest(strict_json(raw)) != digest(step['value']):
+            raise ValueError('章候选trace与真实原始JSON的值或类型不同')
+        usable = unit.usable_response(identity)
+        if (usable is None or usable[0].turn_id != ref['turn_id']
+                or usable[2] != ref['attempt_id'] or usable[3] != ref['response_sha256']):
+            raise ValueError('章候选原响应不满足付费边界当前免费usable_response条件')
+    seed, offset, candidate, materials, owner_suffix = None, 0, None, [], ''
+    if saved['kind'] == 'repair':
+        frozen = saved['revision']
+        # 基线的真实任务也须闭环；不能将另一任务的合法回答包装成修订seed。
+        _verify_chapter_task_trace(ctx, owner, frozen['baseline_record'])
+        seed = _seed_load(frozen['seed'])
+        offset, candidate = len(seed.trace), seed.baseline
+        materials = list(replay_material_trace(seed.trace, index=index, max_chapter=ordinal, owner=owner))
+    elif saved['kind'] != 'result':
+        raise ValueError('章候选只允许当前完整结果或显式修订')
+    _base, owner_suffix, _schema = _chapter_task_request(saved['owner_prompt'], index=index,
+        ordinal=ordinal, materials=tuple(materials))
+    if seed is None:
+        if owner_suffix or saved['base_prompt_sha256'] != digest({'system': SYSTEM, 'user': _base}):
+            raise ValueError('章候选原始任务请求身份不闭合')
+    else:
+        marker = '\n【限定工作单元的修订】\n'
+        if not owner_suffix.startswith(marker):
+            raise ValueError('章修订没有原冻结控制协议')
+        _control, end = json.JSONDecoder().raw_decode(owner_suffix[len(marker):])
+        strict_json(owner_suffix[len(marker):len(marker) + end])
+        if owner_suffix[len(marker) + end:] != _revision_protocol_tail(seed.append_paths, seed.remove_paths):
+            raise ValueError('章修订原冻结任务协议尾部不同')
+    last_capabilities = ({'replace': [list(path) for path in seed.paths],
+        'append': [list(path) for path in seed.append_paths], 'remove': [list(path) for path in seed.remove_paths],
+        'atomic': [list(path) for path in seed.atomic_paths]} if seed is not None else None)
+    for number, step in enumerate(saved['trace'][offset:], offset):
+        if step['kind'] not in ('material', 'result', 'patch', 'repair'):
+            raise ValueError('章候选trace包含本任务不支持的控制分支')
+        user = step['ref']['prompts']['user']
+        base, tail, schema = _chapter_task_request(user, index=index, ordinal=ordinal,
+                                                  materials=tuple(materials))
+        delivered = False
+        for marker in ('\n【已冻结补充材料】\n', '\n【冻结补充材料】\n'):
+            suffix = marker + json.dumps(materials, ensure_ascii=False)
+            if tail.endswith(suffix):
+                tail, delivered = tail[:-len(suffix)], True
+                break
+        if not tail.startswith(owner_suffix):
+            raise ValueError('章续答没有继承原冻结owner修订任务')
+        tail = tail[len(owner_suffix):]
+        rules = material_rules(owner)
+        if tail.startswith(rules):
+            base += owner_suffix + rules
+            tail = tail[len(rules):]
+        else:
+            base += owner_suffix
+            if number == offset:
+                raise ValueError('章原始业务请求未精确绑定材料控制协议')
+        if tail.startswith('\n【格式修复】'):
+            _verify_chapter_format_request(ctx, owner, step['ref'], tail, materials=materials)
+            tail = ''
+        if tail:
+            marker = '\n【冻结候选与窄修权限】\n'
+            if not tail.startswith(marker):
+                raise ValueError('章续答包含未知任务后缀')
+            _control, end = json.JSONDecoder().raw_decode(tail[len(marker):])
+            control = strict_json(tail[len(marker):len(marker) + end])
+            fields = {'candidate', 'errors', 'diagnostics', 'allowed_paths'} | ({'atomic_paths'} if seed else set())
+            if (set(control) != fields or digest(control['candidate']) != digest(candidate)
+                    or not isinstance(control['errors'], list) or not isinstance(control['diagnostics'], list)):
+                raise ValueError('章窄修原请求没有绑定上一步完整候选')
+            if seed is not None:
+                # 显式回派保持原seed能力；首补丁已合并后结构操作不得在后续窄修重做。
+                capabilities = step['paths'] if step['kind'] == 'repair' else last_capabilities
+                expected_atomic = [list(path) for path in seed.atomic_paths
+                                   if list(path) in control['allowed_paths']]
+                if digest(control['atomic_paths']) != digest(expected_atomic):
+                    raise ValueError('章修订原子权限未随当前replace范围收窄')
+                explicit = (base + marker + json.dumps(control, ensure_ascii=False)
+                    + '\n仅返回 {"patches":[{"path":[给定路径],"value":完整替换条目}]}'
+                    + ('，另必填appends（只可使用原授权容器）。' if capabilities['append'] else '。')
+                    + ('另必填removes（只可删除原授权字典语义键）。' if capabilities['remove'] else '')
+                    + '每个授权路径恰答一次；替换后的完整候选仍须符合原任务schema、引用和证据约束。'
+                    + ('只有atomic_paths中的精确语义字段可以整体重分段；其他数组位置冻结。' if expected_atomic else '')
+                    + '逐条修复全部diagnostics，不得只修第一条；不得改其他条目，不得删除未授权条目或重排既有数组。')
+                if base + tail != explicit:
+                    raise ValueError('章显式修订窄修协议与真实能力不同')
+                if step['kind'] == 'repair' and digest(capabilities['replace']) != digest(control['allowed_paths']):
+                    raise ValueError('章修订trace与真实请求replace权限不同')
+            elif base + tail != _automatic_repair_user(base, control, schema=schema, owner=owner):
+                raise ValueError('章窄修原请求的补丁协议或回答schema不同')
+            if step['kind'] == 'patch' and digest(step['paths']) != digest(control['allowed_paths']):
+                raise ValueError('章窄修trace权限与真实请求控制JSON不同')
+        elif step['kind'] == 'patch':
+            raise ValueError('章补丁缺少真实请求中的冻结候选与权限')
+        if number > offset and saved['trace'][number - 1]['kind'] == 'material' and not delivered:
+            raise ValueError('章补料没有实际送达后续业务请求')
+        if step['kind'] == 'material':
+            materials.extend(step['paths']['materials'])
+        elif step['kind'] == 'result':
+            if candidate is not None:
+                raise ValueError('章任务不能用第二份全量回答覆盖基线')
+            candidate = step['value']
+        elif step['kind'] == 'patch':
+            candidate = _patch(candidate, step['value'], tuple(tuple(path) for path in step['paths']))
+        else:
+            capabilities = step['paths']
+            if seed is None or not tail and any(capabilities[key] != [list(path) for path in value]
+                    for key, value in (('replace', seed.paths), ('append', seed.append_paths),
+                                       ('remove', seed.remove_paths), ('atomic', seed.atomic_paths))):
+                raise ValueError('章修订trace能力与原冻结seed不同')
+            candidate = _revision_patch(candidate, step['value'], *(tuple(tuple(path) for path in capabilities[key])
+                for key in ('replace', 'append', 'remove', 'atomic')))
+        if step['kind'] == 'repair':
+            last_capabilities = {**step['paths'], 'append': [], 'remove': []}
+    if digest(candidate) != digest(saved['wire']):
+        raise ValueError('章完整候选与真实请求控制链重建结果不同')
+
+
+def _recompile_chapter_candidate(ctx, owner, saved, compiler, *, prompt, index, max_chapter, system,
+                                 candidate_schema):
+    """只免费采用本根同任务完整v3候选；失败即停，绝不退回坏首答制造新购。"""
+    from novel.llm.story_requests import _compile_candidate
+    from novel.llm.ledger import read_cost_snapshot
+    if read_cost_snapshot(ctx.repository.root.parent, readonly=True)[1]:
+        raise ValueError('成本账有未提交尾，先恢复，不采用章完整候选')
+    if system != SYSTEM or index is None or max_chapter is None or candidate_schema is None:
+        raise ValueError('章完整候选免费重编缺少正式任务、索引或当前schema')
+    ordinal = int(semantic_owner_unit(owner)[1].split(':', 1)[1])
+    if (ordinal != max_chapter or index.source_identity != ctx.index.source_identity
+            or index.content_sha256 != ctx.index.content_sha256
+            or prompt != source_engine.chapter_prompt(index, ordinal)):
+        raise ValueError('章完整候选只能按当前正式章任务与同一输入免费重编')
+    refs = _verified_semantic_candidate(ctx, owner, saved)
+    materials = replay_material_trace(saved['trace'], index=index, max_chapter=max_chapter, owner=owner)
+    schema = source_engine.chapter_schema(index, ordinal, materials=materials)
+    if digest(candidate_schema(materials)) != digest(schema):
+        raise ValueError('章完整候选当前动态schema必须来自同一正式源与实际补料')
+    _compile_candidate(saved['wire'], compiler, owner=owner, schema=schema)
+    # 不冒充当前新prompt的缓存，不改写原候选/响应/费用，也不捏造DurableAnswer。
+    return SemanticResult(saved['wire'], refs, None, tuple(saved['trace']), materials)
+
+
 def _verified_semantic_candidate(ctx, owner, saved):
     """重建当前根原始已购回答；自报wire/hash或换根响应不能成为修订基线。"""
     from novel.llm.paid_requests import AdoptionRef
     from novel.work_units import readonly_budget
-    if saved['contract_version'] != 'story-v1':
+    if saved['contract_version'] != STORY_VERSION:
         raise ValueError('修订基线版本不是当前契约')
     refs, actual = [], {}
     for row in saved['refs']:
@@ -113,19 +384,61 @@ def _verified_semantic_candidate(ctx, owner, saved):
         ref = step['ref']
         if actual.get((ref['turn_id'], ref['attempt_id'])) != (ref, step['value']):
             raise ValueError('修订trace不是对应真实响应的原始JSON')
-    rebuilt = replay_semantic_trace(saved['trace'])
+    max_chapter = int(semantic_owner_unit(owner)[1].split(':', 1)[1]) if owner.startswith('ch') else None
+    association_book = ctx.repository.read_model(BOOK_OBSERVATION) if owner == 'associate' else None
+    candidates = tuple(item.key for item in association_book.unresolved) if association_book is not None else None
+    rebuilt = replay_semantic_trace(saved['trace'], index=ctx.index, max_chapter=max_chapter,
+                                    material_candidates=candidates, owner=owner)
     if rebuilt != saved['wire']:
         raise ValueError('修订基线不能由耐久原响应和授权补丁完整重建')
+    repair_seed = None
+    if saved['kind'] == 'repair':
+        frozen = saved['revision']
+        repair_seed = _frozen_seed(ctx, owner, frozen)
+        if (saved['owner_prompt'] != frozen['prompt']
+                or tuple(saved['trace'][:len(repair_seed.trace)]) != repair_seed.trace):
+            raise ValueError('修订没有继承同一真实基线与冻结修订请求')
+        for step in saved['trace'][len(repair_seed.trace):]:
+            if step['kind'] == 'material':
+                continue
+            if step['kind'] != 'repair' or set(step['paths']) != {'replace', 'append', 'remove', 'atomic'}:
+                raise ValueError('显式修订trace必须冻结实际补丁能力')
+            actual = {kind: tuple(tuple(path) for path in step['paths'][kind])
+                      for kind in ('replace', 'append', 'remove', 'atomic')}
+            expected_atomic = tuple(path for path in repair_seed.atomic_paths if path in actual['replace'])
+            if (not set(actual['replace']) <= set(repair_seed.paths)
+                    or not set(actual['append']) <= set(repair_seed.append_paths)
+                    or not set(actual['remove']) <= set(repair_seed.remove_paths)
+                    or actual['atomic'] != expected_atomic):
+                raise ValueError('修订trace能力越出冻结seed或保留了非当前条目的原子权限')
     last = saved['trace'][-1]['ref']
+    expected_user = saved['owner_prompt']
+    if association_book is not None:
+        materials = replay_material_trace(saved['trace'], index=ctx.index, material_candidates=candidates, owner=owner)
+        first_step, suffix = 0, ''
+        if repair_seed is not None:
+            first_step = len(repair_seed.trace)
+            inherited = replay_material_trace(repair_seed.trace, index=ctx.index, material_candidates=candidates, owner=owner)
+            inherited_prompt = source_engine.associate_prompt(association_book, index=ctx.index, materials=inherited)
+            if not saved['owner_prompt'].startswith(inherited_prompt):
+                raise ValueError('关联修订动态schema未继承基线实际补料权限')
+            suffix = saved['owner_prompt'][len(inherited_prompt):]
+        if (first_step >= len(saved['trace'])
+                or not saved['trace'][first_step]['ref']['prompts']['user'].startswith(saved['owner_prompt'])):
+            raise ValueError('关联补料原始请求没有绑定已声明的owner任务')
+        expected_user = source_engine.associate_prompt(association_book, index=ctx.index, materials=materials) + suffix
+    is_chapter = semantic_owner_unit(owner)[0] == 'str06.stage2.chapters'
     if (last['request_sha256'] != saved['request_sha256']
-            or not last['prompts']['user'].startswith(saved['owner_prompt'])):
+            or not is_chapter and not last['prompts']['user'].startswith(expected_user)):
         raise ValueError('修订基线与原owner请求身份不一致')
+    if is_chapter:
+        _verify_chapter_task_trace(ctx, owner, saved)
     return tuple(refs)
 
 
 def _seed_dump(seed):
     return {'kind': seed.kind, 'baseline': seed.baseline, 'paths': seed.paths,
-        'append_paths': seed.append_paths, 'remove_paths': seed.remove_paths,
+        'append_paths': seed.append_paths, 'remove_paths': seed.remove_paths, 'atomic_paths': seed.atomic_paths,
         'refs': [dict(ref._asdict()) for ref in seed.refs], 'trace': seed.trace}
 
 
@@ -134,6 +447,7 @@ def _seed_load(data):
     return RevisionSeed(kind=data['kind'], baseline=data['baseline'],
         paths=tuple(tuple(path) for path in data['paths']), append_paths=tuple(tuple(path) for path in data['append_paths']),
         remove_paths=tuple(tuple(path) for path in data['remove_paths']),
+        atomic_paths=tuple(tuple(path) for path in data['atomic_paths']),
         refs=tuple(AdoptionRef(**row) for row in data['refs']), trace=tuple(data['trace']))
 
 
@@ -143,15 +457,29 @@ def _frozen_seed(ctx, owner, frozen):
     if (seed.baseline != frozen['baseline_record']['wire'] or seed.refs != refs
             or seed.trace != tuple(frozen['baseline_record']['trace'])):
         raise ValueError('冻结seed未绑定原始已购基线、真实引用与trace')
+    if seed.atomic_paths != _owner_atomic_paths(owner, seed.baseline, seed.paths):
+        raise ValueError('冻结seed原子权限不符合当前owner的精确领域字段授权')
     marker = '\n【限定工作单元的修订】\n'
     control, _end = json.JSONDecoder().raw_decode(frozen['prompt'].rsplit(marker, 1)[1])
     if (control['kind'] != 'repair' or control['baseline'] != seed.baseline
             or control['baseline_sha256'] != digest(seed.baseline)
             or tuple(tuple(path) for path in control['paths']) != seed.paths
             or tuple(tuple(path) for path in control['append_paths']) != seed.append_paths
-            or tuple(tuple(path) for path in control['remove_paths']) != seed.remove_paths):
+            or tuple(tuple(path) for path in control['remove_paths']) != seed.remove_paths
+            or tuple(tuple(path) for path in control['atomic_paths']) != seed.atomic_paths):
         raise ValueError('冻结修订提示词未绑定同一基线与typed范围')
     return seed
+
+
+def _owner_atomic_paths(owner, baseline, paths):
+    """只为现役names中一个既有称谓的typed分段值授予原子replace权限。"""
+    if owner != 'names':
+        return ()
+    from contracts.schema.source_story import NamesWire
+    names = NamesWire.model_validate(baseline)
+    return tuple(path for path in paths if len(path) == 4 and all(type(part) is str for part in path)
+        and path[0] == 'people' and path[2] == 'surfaces' and path[1] in names.people
+        and path[3] in names.people[path[1]].surfaces)
 
 
 def _owner_repair_scope(ctx, owner, issue, baseline):
@@ -190,7 +518,9 @@ def _owner_repair_scope(ctx, owner, issue, baseline):
                     raise ValueError('typed remove只能定位字典语义键条目，不得压缩列表位置')
                 remove_paths.append(path)
             elif isinstance(value, list):
-                raise ValueError('整表修订没有既有条目定位；须显式扩大设计范围')
+                if not _owner_atomic_paths(owner, baseline, (path,)):
+                    raise ValueError('整表修订没有既有条目定位；须显式扩大设计范围')
+                replace_paths.append(path)
             else:
                 replace_paths.append(path)
     if not replace_paths and not append_paths and not remove_paths:
@@ -199,7 +529,46 @@ def _owner_repair_scope(ctx, owner, issue, baseline):
             tuple(dict.fromkeys(remove_paths)))
 
 
-def _json_call(ctx, owner, prompt, compiler, *, index=None, max_chapter=None, system=SYSTEM):
+def _owner_issue_prompt(ctx, owner, issues):
+    """章修订只投影明确证据字段；原问题账及正式来源仍保留canonical引用。"""
+    rows = [row.model_dump(mode='json') for row in issues]
+    if semantic_owner_unit(owner)[0] != 'str06.stage2.chapters':
+        return rows
+    numbers = ctx.index.evidence_numbers
+    def project(value):
+        if isinstance(value, dict):
+            return {key: ([numbers[ref] if type(ref) is str and ref in numbers else ref for ref in child]
+                          if key in ('evidence_refs', 'source_refs') and isinstance(child, list)
+                          else project(child)) for key, child in value.items()}
+        return [project(child) for child in value] if isinstance(value, list) else value
+    return project(rows)
+
+
+def _compile_revision_baseline(ctx, owner, saved, compiler, *, index, max_chapter,
+                               material_candidates, compile_with_materials, candidate_schema):
+    """首冻与冻结seed恢复共用免费硬闸；原基线只能使用当时真正送达的补料。"""
+    from novel.llm.story_requests import _compile_candidate, _diagnostic_details
+    try:
+        materials = replay_material_trace(saved['trace'], index=index or ctx.index,
+            max_chapter=max_chapter, material_candidates=material_candidates, owner=owner)
+        compiled = []
+        def compile_once(wire):
+            result = (compile_with_materials(wire, materials)
+                      if compile_with_materials is not None else compiler(wire))
+            compiled.append(result)
+            return result
+        _compile_candidate(saved['wire'], compile_once, owner=owner,
+            schema=candidate_schema(materials) if candidate_schema is not None else None)
+        return compiled[0], materials
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        node, item = semantic_owner_unit(owner)
+        raise ValidationStop('修订原基线未通过当前完整约束，先免费停止：' + str(exc),
+            code='revision_scope_required', node=node, stage=node.split('.')[1], item=item, phase='accept',
+            context={'owner': owner, 'baseline_issues': _diagnostic_details(exc)}) from exc
+
+
+def _json_call(ctx, owner, prompt, compiler, *, index=None, max_chapter=None, system=SYSTEM,
+               material_candidates=None, compile_with_materials=None, material_prompt=None, candidate_schema=None):
     from novel.stages.owner_revision import open_issue_record
     base_prompt_sha256 = digest({'system': system, 'user': prompt})
     revision_seed = None
@@ -214,41 +583,52 @@ def _json_call(ctx, owner, prompt, compiler, *, index=None, max_chapter=None, sy
             try:
                 from contracts.schema.workflow import OWNER_PRODUCT_RELS, chapter_owner_product_rel
                 rel = OWNER_PRODUCT_RELS.get(owner) or chapter_owner_product_rel(owner)
-                if rel is None or compiler(saved['wire']) != ctx.repository.inspect_sealed_model(rel):
+                baseline, inherited_materials = _compile_revision_baseline(ctx, owner, saved, compiler,
+                    index=index, max_chapter=max_chapter, material_candidates=material_candidates,
+                    compile_with_materials=compile_with_materials, candidate_schema=candidate_schema)
+                if rel is None or baseline != ctx.repository.inspect_sealed_model(rel):
                     raise ValueError('真实已购基线与问题所指的当前正式owner产物不同')
                 scoped, appends, removes = _owner_repair_scope(ctx, owner, issue, saved['wire'])
                 revision_seed = RevisionSeed(kind='repair', baseline=saved['wire'], paths=scoped,
-                    refs=refs, trace=tuple(saved['trace']), append_paths=appends, remove_paths=removes)
+                    refs=refs, trace=tuple(saved['trace']), append_paths=appends, remove_paths=removes,
+                    atomic_paths=_owner_atomic_paths(owner, saved['wire'], scoped))
+                if material_prompt is not None:
+                    prompt = material_prompt(inherited_materials)
+            except ValidationStop:
+                raise
             except (ValueError, KeyError, IndexError, TypeError) as exc:
                 node, item = semantic_owner_unit(owner)
                 raise ValidationStop(str(exc), code='revision_scope_required', node=node,
                     stage=node.split('.')[1], item=item, phase='accept') from exc
-            frozen = {'kind': 'repair', 'contract_version': 'story-v1', 'fingerprint': issue.fingerprint,
+            frozen = {'kind': 'repair', 'contract_version': STORY_VERSION, 'fingerprint': issue.fingerprint,
                 'against_sha256': issue.against_sha256, 'seed': _seed_dump(revision_seed),
                 'baseline_record': saved,
                 'prompt': prompt + '\n【限定工作单元的修订】\n' + json.dumps({
                     'kind': 'repair', 'baseline': saved['wire'], 'baseline_sha256': digest(saved['wire']),
                     'paths': scoped, 'append_paths': appends, 'remove_paths': removes,
-                    'issues': [row.model_dump(mode='json') for row in issue.issues]}, ensure_ascii=False)
-                    + '\n只返回 {"patches":[{"path":[授权路径],"value":替换值}]}'
-                    + ('，另必填appends:[{"path":[授权容器],"value":追加列表或新键对象}]。' if appends else '。')
-                    + ('另必填removes:[{"path":[授权字典语义键]}]。' if removes else '')
-                    + '每个授权路径恰答一次；授权外保持原字节，禁止全量JSON、删除未授权条目或重排既有列表。'
-                    + '修订须补齐所报真实剧情桥梁或必要决定，保持已冻结跨章边界；范围不足明确停止。'}
+                    'atomic_paths': revision_seed.atomic_paths,
+                    'issues': _owner_issue_prompt(ctx, owner, issue.issues)}, ensure_ascii=False)
+                    + _revision_protocol_tail(appends, removes)}
             ctx.repository.write(request_rel, frozen)
-        if (frozen['kind'] != 'repair' or frozen['contract_version'] != 'story-v1'
+        if (frozen['kind'] != 'repair' or frozen['contract_version'] != STORY_VERSION
                 or frozen['fingerprint'] != issue.fingerprint or frozen['against_sha256'] != issue.against_sha256):
             raise ValueError('冻结修订请求的种类、问题或原产物身份不一致')
         revision_seed = _frozen_seed(ctx, owner, frozen)
         if (revision_seed.paths, revision_seed.append_paths, revision_seed.remove_paths) != _owner_repair_scope(
                 ctx, owner, issue, revision_seed.baseline):
             raise ValueError('冻结补丁权限与当前typed问题范围不同')
+        _compile_revision_baseline(ctx, owner, frozen['baseline_record'], compiler,
+            index=index, max_chapter=max_chapter, material_candidates=material_candidates,
+            compile_with_materials=compile_with_materials, candidate_schema=candidate_schema)
         prompt = frozen['prompt']
     else:
         try:
             accepted = ctx.repository.inspect(f'runtime/semantic_candidates/{owner}.json')
         except FileNotFoundError:
             accepted = None
+        if accepted is not None and semantic_owner_unit(owner)[0] == 'str06.stage2.chapters':
+            return _recompile_chapter_candidate(ctx, owner, accepted, compiler, index=index,
+                prompt=prompt, max_chapter=max_chapter, system=system, candidate_schema=candidate_schema)
         if accepted is not None and accepted['base_prompt_sha256'] == base_prompt_sha256:
             # 原始输入未变时重放当前已接受的修订请求；不能把修订品覆盖成原缓存。
             prompt = accepted['owner_prompt']
@@ -258,11 +638,26 @@ def _json_call(ctx, owner, prompt, compiler, *, index=None, max_chapter=None, sy
                 revision_seed = _frozen_seed(ctx, owner, frozen)
                 if prompt != frozen['prompt']:
                     raise ValueError('修订重放必须使用原冻结请求提示词')
+    continuation_prompt = material_prompt
+    if revision_seed is not None and material_prompt is not None:
+        inherited = replay_material_trace(revision_seed.trace, index=index or ctx.index,
+            max_chapter=max_chapter, material_candidates=material_candidates, owner=owner)
+        inherited_prompt = material_prompt(inherited)
+        if not prompt.startswith(inherited_prompt):
+            raise ValueError('冻结修订提示词未继承已认证材料与当前动态schema')
+        revision_suffix = prompt[len(inherited_prompt):]
+        # 后续补料可以扩证据闭集，不能抹掉已冻结的基线、typed路径或修订协议。
+        continuation_prompt = lambda materials: material_prompt(materials) + revision_suffix
+    material_options = ({'material_candidates': material_candidates,
+        'compile_with_materials': compile_with_materials, 'material_prompt': continuation_prompt,
+        'candidate_schema': candidate_schema}
+        if any(value is not None for value in (material_candidates, compile_with_materials,
+                                               continuation_prompt, candidate_schema)) else {})
     result = ctx.ask(owner, prompt, compiler, index=index, max_chapter=max_chapter, system=system,
-                     revision_seed=revision_seed)
+                     revision_seed=revision_seed, **material_options)
     ctx.repository.write(f'runtime/semantic_candidates/{owner}.json', {
         'kind': 'repair' if revision_seed is not None else 'result',
-        'contract_version': 'story-v1', 'request_sha256': result.answer.request_sha256,
+        'contract_version': STORY_VERSION, 'request_sha256': result.answer.request_sha256,
         'base_prompt_sha256': base_prompt_sha256, 'owner_prompt': prompt, 'wire': result.value,
         'refs': [dict(ref._asdict()) for ref in result.refs], 'trace': result.trace,
         **({'revision': frozen} if revision_seed is not None else {})})
@@ -284,7 +679,11 @@ def run_chapters(ctx):
         ordinal = chapter['chapter_ordinal']
         compiler = lambda wire: source_engine.compile_chapter(wire, index=index, chapter_ordinal=ordinal)
         result = _json_call(ctx, f'ch{ordinal:02d}', source_engine.chapter_prompt(index, ordinal),
-                            compiler, index=index, max_chapter=ordinal)
+                            compiler, index=index, max_chapter=ordinal,
+                            material_prompt=lambda materials: source_engine.chapter_prompt(
+                                index, ordinal, materials=materials),
+                            candidate_schema=lambda materials: source_engine.chapter_schema(
+                                index, ordinal, materials=materials))
         return ordinal, result, compiler(result.value)
     with ThreadPoolExecutor(max_workers=ctx.pool_workers('str06.stage2.chapters', len(ctx.chapters))) as pool:
         results = list(pool.map(one, ctx.chapters))
@@ -341,7 +740,7 @@ def _verified_book_trace(ctx, group, prompt):
         matched = actual.get((ref['turn_id'], ref['attempt_id']))
         if matched is None or matched != (ref, step['value']):
             raise ValueError('全书冻结候选trace不等于耐久原响应')
-    return replay_semantic_trace(group['trace']), tuple(refs)
+    return replay_semantic_trace(group['trace'], index=ctx.index, owner='book'), tuple(refs)
 
 
 def _load_book_pending(ctx):
@@ -351,13 +750,13 @@ def _load_book_pending(ctx):
             return None
         candidate, intent = ctx.repository.inspect(_BOOK_CANDIDATE), ctx.repository.inspect(_BOOK_INTENT)
         ctx.repository.write(_BOOK_PENDING, {
-            'contract_version': 'story-v1', 'source_identity': intent['source_identity'],
+            'contract_version': STORY_VERSION, 'source_identity': intent['source_identity'],
             'content_sha256': intent['content_sha256'], 'status': 'waiting',
             'wire': candidate['wire'], 'wire_sha256': digest(candidate['wire']),
             'history': [{'kind': 'full', 'include_source': intent['include_source'],
                          'chapters': intent['chapters'], 'trace': candidate['trace'], 'refs': candidate['refs']}]})
     pending = ctx.repository.inspect(_BOOK_PENDING)
-    if (pending['contract_version'] != 'story-v1' or pending['source_identity'] != ctx.index.source_identity
+    if (pending['contract_version'] != STORY_VERSION or pending['source_identity'] != ctx.index.source_identity
             or pending['content_sha256'] != ctx.index.content_sha256 or not pending['history']):
         raise ValueError('全书冻结候选的源绑定损坏，拒绝从失效草稿继续')
     draft, before, all_refs = None, None, []
@@ -407,10 +806,10 @@ def _book_complete_trace(pending):
 def _save_complete_book_candidate(ctx, pending, wire, refs):
     """完整理解保持唯一基线；BookRepairWire只占其真实组合trace的一步。"""
     trace = _book_complete_trace(pending)
-    if replay_semantic_trace(trace) != wire:
+    if replay_semantic_trace(trace, owner='book') != wire:
         raise ValueError('全书完整基线不能由真实组合trace重建')
     last, group = trace[-1]['ref'], pending['history'][-1]
-    record = {'kind': 'result', 'contract_version': 'story-v1', 'wire': wire,
+    record = {'kind': 'result', 'contract_version': STORY_VERSION, 'wire': wire,
         'request_sha256': last['request_sha256'], 'owner_prompt': last['prompts']['user'],
         'base_prompt_sha256': digest({'system': SYSTEM, 'user': source_engine.book_prompt(
             ctx.index, _restore_chapter_snapshot(group['chapters']))}),
@@ -439,7 +838,7 @@ def run_book(ctx):
     if restored is None:
         compiler = lambda wire: source_engine.compile_book(wire, index=index, chapters=observations)
         for include_source in (True, False):
-            intent = {'contract_version': 'story-v1', 'source_identity': index.source_identity,
+            intent = {'contract_version': STORY_VERSION, 'source_identity': index.source_identity,
                       'content_sha256': index.content_sha256, 'chapters': _chapter_snapshot(observations),
                       'include_source': include_source}
             ctx.repository.write(_BOOK_INTENT, intent)
@@ -454,7 +853,7 @@ def run_book(ctx):
                 _load_book_pending(ctx)  # 先冻结可验证草稿，再回派局部owner。
                 raise
         observation = compiler(result.value)
-        pending = {'contract_version': 'story-v1', 'source_identity': index.source_identity,
+        pending = {'contract_version': STORY_VERSION, 'source_identity': index.source_identity,
             'content_sha256': index.content_sha256, 'status': 'published', 'wire': result.value,
             'wire_sha256': digest(result.value), 'history': [{'kind': 'full', 'include_source': include_source,
                 'chapters': _chapter_snapshot(observations), 'trace': result.trace,
@@ -532,21 +931,27 @@ def run_associate(ctx):
     book = ctx.repository.read_model(BOOK_OBSERVATION)
     prompt = source_engine.associate_prompt(book)
     if prompt is None:
-        from contracts.schema.source_story import AssociateObservation
-        ctx.repository.write(ASSOCIATION, AssociateObservation(contract_version='story-v1', verdicts=()),
+        ctx.repository.write(ASSOCIATION, source_engine.compile_associate(
+            {'contract_version': STORY_VERSION, 'verdicts': []}, book=book, index=ctx.index),
                              declared_free=True)
         return {'candidates': 0}
-    compiler = lambda wire: source_engine.compile_associate(wire, book=book)
-    result = _json_call(ctx, 'associate', prompt, compiler, index=ctx.index)
-    _publish_answer(ctx, ASSOCIATION, result, compiler(result.value))
+    index = ctx.index
+    compiler = lambda wire: source_engine.compile_associate(wire, book=book, index=index)
+    compile_materials = lambda wire, materials: source_engine.compile_associate(
+        wire, book=book, index=index, materials=materials)
+    result = _json_call(ctx, 'associate', prompt, compiler, index=index,
+        material_candidates=tuple(item.key for item in book.unresolved), compile_with_materials=compile_materials,
+        material_prompt=lambda materials: source_engine.associate_prompt(book, index=index, materials=materials))
+    _publish_answer(ctx, ASSOCIATION, result, compile_materials(result.value, result.materials))
     return {'candidates': len(book.unresolved)}
 
 
 def run_names(ctx):
     book = ctx.repository.read_model(BOOK_OBSERVATION)
     association = ctx.repository.read_model(ASSOCIATION)
-    compiler = lambda wire: source_engine.compile_names(wire, book=book, associate=association)
-    result = _json_call(ctx, 'names', source_engine.names_prompt(book, associate=association), compiler, index=ctx.index)
+    compiler = lambda wire: source_engine.compile_names(wire, book=book, associate=association, index=ctx.index)
+    result = _json_call(ctx, 'names', source_engine.names_prompt(book, associate=association, index=ctx.index),
+                        compiler, index=ctx.index)
     _publish_answer(ctx, NAME_OBSERVATION, result, compiler(result.value))
     return {'people': len(compiler(result.value).people)}
 
@@ -676,7 +1081,7 @@ def _prose_compiler(ctx, request):
 def _existing_body(ctx, ordinal):
     receipt = ctx.repository.inspect_sealed_model(chapter_rel(BODY_RECEIPT, ordinal))
     text = ctx.repository.read_text(chapter_rel(BODY, ordinal))
-    return ChapterBody(contract_version='story-v1', chapter_ordinal=ordinal, text=text, receipt=receipt)
+    return ChapterBody(contract_version=STORY_VERSION, chapter_ordinal=ordinal, text=text, receipt=receipt)
 
 
 def _origin(result, ctx):
@@ -746,7 +1151,7 @@ def run_assemble(ctx):
     packets = tuple(ctx.repository.inspect_sealed_model(chapter_rel(CHAPTER_PACKET, i))
                     for i in range(1, len(ctx.chapters) + 1))
     bodies = tuple(_existing_body(ctx, i) for i in range(1, len(ctx.chapters) + 1))
-    hook = HookBody(contract_version='story-v1', text=ctx.repository.read_text(HOOK), receipt=ctx.repository.read_model(HOOK_RECEIPT))
+    hook = HookBody(contract_version=STORY_VERSION, text=ctx.repository.read_text(HOOK), receipt=ctx.repository.read_model(HOOK_RECEIPT))
     value = assembly_engine.assemble_story(title=ctx.book_title or '新书', source_chapter_count=len(ctx.chapters),
                           packets=packets, bodies=bodies, hook=hook,
                           hook_packet=ctx.repository.read_model(HOOK_PACKET))
@@ -868,7 +1273,7 @@ def run_node(node_id, ctx):
     if ctx.repository.context is not None:
         ctx.repository.context.enter_node(node_id)
         ctx.repository.context.begin_run()
-    state = {'contract_version': 'story-v1', 'node': node_id, 'status': 'running', 'semantic': 'unver'}
+    state = {'contract_version': STORY_VERSION, 'node': node_id, 'status': 'running', 'semantic': 'unver'}
     ctx.repository.write('runtime/node_status/' + node_id + '.json', state)
     try:
         result = NODE_RUNNERS[node_id](ctx)
@@ -902,21 +1307,22 @@ def run_node(node_id, ctx):
 def run_workflow(*, repository, chapters, ask, budget=11000, through='stage7', hook_copy='',
                  book_title='', length_band=(.6,1.3), node_filter=None, body_chapters=None,
                  provider='unknown', model='unknown', concurrency=PIPELINE_DEFAULT_CONCURRENCY,
-                 node_concurrency=None, source_identity=None):
+                 node_concurrency=None, source_identity=None, request_profile=None):
     ctx = ChainContext(repository, ask, chapters, hook_copy, budget, book_title, length_band,
-                       provider, model, concurrency, dict(node_concurrency or {}), body_chapters, source_identity)
+                       provider, model, concurrency, dict(node_concurrency or {}), body_chapters,
+                       source_identity, request_profile)
     if through not in THROUGH_NODE:
         raise ValueError('through 必须是 stage2/stage4/stage5/stage7')
     selected = tuple(node_filter) if node_filter else NODE_ORDER[:NODE_ORDER.index(THROUGH_NODE[through]) + 1]
     if any(node not in NODE_ORDER for node in selected):
         raise ValueError('包含非当前契约节点')
-    status = {'contract_version': 'story-v1', 'status': 'running', 'through': through, 'accepted_body': False}
+    status = {'contract_version': STORY_VERSION, 'status': 'running', 'through': through, 'accepted_body': False}
     workflow = repository.inspect('runtime/candidate_workflow.json')
     if (workflow['source_identity'] != ctx.index.source_identity
             or workflow['source_content_sha256'] != ctx.index.content_sha256):
         raise ValueError('源输入与当前根冻结身份不同；请在新根重新生成')
     repository.write('runtime/source_snapshot.json', {
-        'contract_version': 'story-v1', 'source_identity': ctx.index.source_identity,
+        'contract_version': STORY_VERSION, 'source_identity': ctx.index.source_identity,
         'content_sha256': ctx.index.content_sha256, 'chapters': chapters, 'hook_copy': hook_copy})
     repository.write('runtime/workflow_status.json', status)
     reports = {}
@@ -993,18 +1399,22 @@ def _execute(args):
         root_sha1=root_sha1, source_content_sha256=source_engine.build_source_index(chapters, hook).content_sha256,
         profile=profile, yes=args.yes,
         allow_source_export=args.allow_source_export, readonly=args.check_only)
-    def ask(owner, prompt, compiler, *, index=None, max_chapter=None, system=SYSTEM, revision_seed=None):
-        if index is not None:
-            prompt += MATERIAL_RULES
+    def ask(owner, prompt, compiler, *, index=None, max_chapter=None, system=SYSTEM, revision_seed=None,
+            material_candidates=None, compile_with_materials=None, material_prompt=None, candidate_schema=None):
+        if index is not None and material_candidates is None:
+            prompt += material_rules(owner)
         request = boundary.build_request(owner, prompt, json_mode=True, system=system, temperature=.4)
         return request_json(boundary.session, owner, request, compiler,
                             repository=boundary.repository, index=index, max_chapter=max_chapter,
-                            revision_seed=revision_seed)
+                            revision_seed=revision_seed, material_candidates=material_candidates,
+                            compile_with_materials=compile_with_materials, material_prompt=material_prompt,
+                            candidate_schema=candidate_schema)
     print(run_workflow(repository=boundary.repository, chapters=chapters, hook_copy=hook,
         ask=ask, budget=args.budget or derive_total_length_budget(chapters), through=args.through,
         node_filter=args.node or None, body_chapters=getattr(args, 'body_chapters', None),
         book_title=args.book_title, length_band=(args.body_band_low, args.body_band_high),
-        provider=profile.provider, model=profile.model, source_identity=source_id, **frozen_concurrency(cfg)))
+        provider=profile.provider, model=profile.model, source_identity=source_id,
+        request_profile=profile, **frozen_concurrency(cfg)))
 
 
 class Stage1Input(NamedTuple):

@@ -10,7 +10,7 @@ body按章顺序写作，输入仅为本章ChapterPacket及已接受前章的有
 
 ## 当前版本与判据
 
-本层正式故事产物**都是 schema story-v1**，旧根只读归档，须在新根由当前producer重建。
+本层正式故事产物**都是 schema story-v3**，旧根只读归档，须在新根由当前producer重建。
 
 当前注册表共 **5 条**：**4 hard、1 unver**。
 

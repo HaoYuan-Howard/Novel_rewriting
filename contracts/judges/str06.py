@@ -1,4 +1,4 @@
-"""story-v1 三层链的机械判据目录。
+"""story-v3 三层链的机械判据目录。
 
 目录不实现第二套判定。schema、纯 compiler、正文/补丁 validator、repository
 发布校验和最终装配才是执行入口。tests/hard_cases.py 对每条 HARD 真跑红绿样本。

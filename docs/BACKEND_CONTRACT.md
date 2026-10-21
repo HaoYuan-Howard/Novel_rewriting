@@ -7,7 +7,7 @@
 维护时先按节点或稳定编号定位相关节，不通读全表。待办见 `docs/REQUIREMENTS.md`，当前形状见
 `docs/schema/`，关键裁决及证据限制见 `docs/DECISIONS.md`。这些关联检查不能证明模型的语义质量。
 
-现役故事契约为 `story-v1`：Stage2 事实理解、Stage4 目标建模、Stage5 顺序执行、Stage7 核对装配。
+现役故事契约为 `story-v3`：Stage2 事实理解、Stage4 目标建模、Stage5 顺序执行、Stage7 核对装配。
 节点、schema、consumer、恢复与只读 API 同批维护。运行只支持当前新契约，旧根保留原始证据并新根重建，
 不转换旧语义产物或沿用旧购买作为当前回答。机械验收不证明文学质量，真实首答与成本需另经授权运行验证。
 

@@ -2,7 +2,7 @@
 
 ## 身份与当前输出根
 
-输出根由 `contracts/schema/workflow.py::WorkflowManifest` 标识，必填当前schema_version=1、contract_version=story-v1、pipeline_contract_epoch=story-v1、task_id和created_at。只接受当前格式；旧根、旧产物和旧账原字节保留，在独立新根重建，不提供读迁移或同根升级。
+输出根由 `contracts/schema/workflow.py::WorkflowManifest` 标识，必填当前schema_version=1、contract_version=story-v3、pipeline_contract_epoch=story-v3、task_id和created_at。只接受当前格式；旧根、旧产物和旧账原字节保留，在独立新根重建，不提供读迁移或同根升级。
 
 每本书的CandidateWorkflow绑定当前契约表、源文件字节身份source_identity、source_root_sha1及规范原文source_content_sha256。runtime/source_snapshot.json必须可重算，且本根Stage1存在时与正式源输入逐章及raw双hash一致。契约或源身份漂移拒绝当前根；代码修复可以滚动epoch，既有工作单元与费用不重置。
 

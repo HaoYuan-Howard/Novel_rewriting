@@ -1,4 +1,4 @@
-"""story-v1 顺序写作、窄修及交付证明的确定性反例。
+"""story-v3 顺序写作、窄修及交付证明的确定性反例。
 
 所有响应来源显式使用 synthetic 标识；不调用真实模型，不读取本地小说。
 """
@@ -21,7 +21,7 @@ from novel.stages.stage7.story import assemble_story, verify_final_story
 
 
 def packet(chapter=1, *, count=2, **changes):
-    fields = dict(contract_version='story-v1', chapter_ordinal=chapter, source_chapter_count=count,
+    fields = dict(contract_version='story-v3', chapter_ordinal=chapter, source_chapter_count=count,
                   length_budget=100, min_chars=1, max_chars=5000,
                   participants=('e1',), names={'e1': '沈青'}, entry_state=(), exit_state=(),
                   actions=('沈青推门，向姐姐说明来意。',), must_realize=('说明来意。',),
@@ -33,7 +33,7 @@ def packet(chapter=1, *, count=2, **changes):
 
 
 def hook_packet():
-    return HookPacket(contract_version='story-v1', length_budget=60, min_chars=1, max_chars=5000,
+    return HookPacket(contract_version='story-v3', length_budget=60, min_chars=1, max_chars=5000,
                       names={'e1': '沈青'}, must_realize=('一封来历不明的信。',),
                       must_respect=(), continuity=(), creative_guidance=('停在她拆信前。',),
                       background=(), guard_only=('不揭示送信人。',))

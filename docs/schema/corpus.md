@@ -2,7 +2,7 @@
 
 冻结书目仍为两本17／25章源书，SID与章数唯一登记于
 `contracts/schema/corpus.py::CURRENT_CORPUS_BOOKS`，不读取旧输出补足当前分母。
-当前 manifest_version=2、contract_version=story-v1；旧清单拒识，输出在独立新根重建。
+当前 manifest_version=2、contract_version=story-v3；旧清单拒识，输出在独立新根重建。
 
 清单可提交且不含书名、正文或prompt：仅保存SID、归一化源SHA-1、章数、每份产物的
 相对路径、当前版本、原始文件SHA-256、冻结代码身份、真实生产dispatch与ledger汇总。
@@ -13,7 +13,7 @@ Stage0／1、SourceStory及观察、NameMap／PreservationContract、全书与�
 TargetStory／AdaptationMap、逐章和Hook写作包、正文与机械接受回执、最终清单及成书。
 章集合严格等于源阅读序，正文与回执成对存在。编译器和组装器的免费产物同样必备。
 
-Stage0／1固定数字schema信封；三层故事产物直接携带必填 `contract_version: story-v1`，
+Stage0／1固定数字schema信封；三层故事产物直接携带必填 `contract_version: story-v3`，
 不额外增加 `_schema_version`。两种现役载体都经同一注册表版本拒识。
 当前运行证据只允许 `runtime_evidence_rel` 登记的固定路径和家族；保留原字节hash，
 不把它们当领域模型。未知JSON、已退役路径、INVALID或错版均拒绝。

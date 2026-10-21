@@ -20,7 +20,7 @@ def test_current_artifacts_and_download_survive_service_restart(tmp_path):
             source = client.get('/api/str06/candidates/book/source-story').json()
             target = client.get('/api/str06/candidates/book/target-story').json()
             assert source['status'] == target['status'] == 'ready'
-            assert source['data']['contract_version'] == 'story-v1'
+            assert source['data']['contract_version'] == 'story-v3'
             chapter = client.get('/api/str06/candidates/book/chapters/1').json()
             assert chapter['data']['receipt']['semantic'] == 'unver'
             assert chapter['data']['packet']['chapter_ordinal'] == 1

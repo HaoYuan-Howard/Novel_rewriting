@@ -32,6 +32,8 @@ from tests.story_facilities import _source_event, pipeline_materials, make_pipel
 
 def test_all_fifteen_nodes_reach_sealed_final_text_and_repeat_without_purchase(tmp_path):
     case = make_pipeline(tmp_path)
+    assert all(type(ref) is int for owner in ('ch01', 'ch02')
+               for event in case.wires[owner]['events'].values() for ref in event['evidence_refs'])
     reports = case.run()
     assert tuple(reports) == NODE_ORDER
     assert len(reports) == 15
@@ -40,6 +42,8 @@ def test_all_fifteen_nodes_reach_sealed_final_text_and_repeat_without_purchase(t
     repository = case.boundary.repository
     source, story = repository.read_model(SOURCE_STORY), repository.read_model(TARGET_STORY)
     assert len(source.events) == 6 and len(story.events) == 6
+    assert all(isinstance(ref, str) and ref in case.index.evidence
+               for event in source.events.values() for ref in event.evidence_refs)
     assert repository.inspect_sealed_model(ADAPTATION_MAP).entries
     first = repository.inspect_sealed_model(CHAPTER_PACKET.format(nn='01'))
     assert '安儿' not in json.dumps(first.model_dump(mode='json'), ensure_ascii=False)
@@ -96,6 +100,90 @@ def test_schema_failure_uses_authorized_narrow_patch_then_real_publish(tmp_path)
     story = case.boundary.repository.read_model(TARGET_STORY)
     assert story.events[0].summary == wires['design']['events'][0]['summary']
     assert story.events[1].trigger == wires['design']['events'][1]['trigger']
+
+
+@pytest.mark.stage_scope('stage2')
+def test_stage2_repairs_all_compound_surfaces_in_one_turn_and_replays_free(tmp_path):
+    from contracts.story_paths import CHAPTER_OBSERVATION
+    _, index, wires = pipeline_materials()
+    bad = deepcopy(wires['ch01'])
+    for referent in bad['referents'].values():
+        referent['surface'] += '/另一个称呼'
+    for event in bad['events'].values():
+        event['temporal']['anchor_event'] = '局部自造事件锚'
+    event_key = next(iter(bad['events']))
+    other_evidence = list(bad['events'].values())[1]['evidence_refs'][0]
+    claim = {'statement': '章内已有命题证据', 'world_status': 'established',
+             'knowledge': [], 'reader_mode': 'none', 'evidence_refs': [other_evidence]}
+    bad['events'][event_key]['claims'] = [claim]
+    patch = {'patches': [{'path': ['referents', key, 'surface'], 'value': value['surface']}
+                         for key, value in wires['ch01']['referents'].items()]}
+    # 称呼/证据是跨字段关系：两端都明确核对，本例保留原来正确的证据。
+    patch['patches'].extend({'path': ['referents', key, 'evidence_refs'], 'value': value['evidence_refs']}
+                           for key, value in wires['ch01']['referents'].items())
+    patch['patches'].extend({'path': ['events', key, 'temporal', 'anchor_event'], 'value': None}
+                           for key in bad['events'])
+    # 关系错误的两端同属本章：允许补齐事件证据，保留有效命题，而非强迫删证据。
+    patch['patches'].extend([
+        {'path': ['events', event_key, 'claims', 0], 'value': claim},
+        {'path': ['events', event_key, 'evidence_refs'],
+         'value': [*wires['ch01']['events'][event_key]['evidence_refs'], other_evidence]},
+    ])
+    case = make_pipeline(tmp_path, scripts={'ch01': [bad, patch]})
+    case.run(through='stage2')
+    assert Counter(case.calls) == {'ch01': 2, 'ch02': 1, 'book': 1, 'names': 1}
+    repository = case.boundary.repository
+    chapter = repository.read_model(CHAPTER_OBSERVATION.format(nn='01'))
+    assert {value.surface for value in chapter.referents.values()} == {
+        value['surface'] for value in wires['ch01']['referents'].values()}
+    first_event = next(iter(chapter.events.values()))
+    canonical_evidence = index.evidence_ids[other_evidence]
+    assert first_event.claims[0].evidence_refs == (canonical_evidence,)
+    assert canonical_evidence in first_event.evidence_refs
+    assert repository.read_model(SOURCE_STORY).entities
+    cost_before = read_cost_snapshot(tmp_path, readonly=True)[0]
+    resumed = make_pipeline(tmp_path, existing=case, readonly=True)
+    resumed.run(through='stage2')
+    assert resumed.calls == []
+    assert [row for row in read_cost_snapshot(tmp_path, readonly=True)[0] if not row['cached']] == cost_before
+
+
+@pytest.mark.stage_scope('stage2')
+def test_stage2_associate_publishes_only_delivered_candidate_material_and_replays_free(tmp_path):
+    from contracts.schema.source_story import STORY_VERSION
+    from contracts.story_paths import ASSOCIATION
+    _, index, wires = pipeline_materials()
+    book = deepcopy(wires['book'])
+    initial = next(iter(index.chapter(1)))
+    supplemental = next(iter(index.chapter(2)))
+    key = '托付与邀请是否同一命题'
+    book['unresolved'] = [{'key': key, 'kind': 'proposition_identity',
+        'left': '托付孩子', 'candidates': ['来客受邀'], 'question': '这两个命题是否同一？',
+        'evidence_refs': [initial]}]
+    query = {'kind': 'need_materials', 'requests': [{'candidate_key': key,
+        'operation': 'read_segments', 'segment_ids': [supplemental], 'adjacent_paragraphs': 0}]}
+    answer = {'contract_version': STORY_VERSION, 'verdicts': [{'kind': 'identity', 'key': key,
+        'verdict': 'distinct', 'right': None, 'reason': '补充材料区分托付与邀请',
+        'evidence_refs': [supplemental]}]}
+    case = make_pipeline(tmp_path, scripts={'book': [book], 'associate': [query, answer]})
+    case.run(through='stage2')
+    repository = case.boundary.repository
+    observation = repository.read_model(ASSOCIATION)
+    assert observation.source_identity == case.index.source_identity
+    assert len(observation.supplemental_evidence) == 1
+    material = observation.supplemental_evidence[0]
+    assert material.candidate_key == key
+    assert set(material.evidence) == {supplemental}
+    assert material.evidence[supplemental] == case.index.evidence[supplemental]
+    assert repository.read_model(SOURCE_STORY).evidence[supplemental] == case.index.evidence[supplemental]
+    saved = repository.inspect('runtime/semantic_candidates/associate.json')
+    assert any(step['kind'] == 'material' for step in saved['trace'])
+    assert case.calls.count('associate') == 2
+    paid = [row for row in read_cost_snapshot(tmp_path, readonly=True)[0] if not row['cached']]
+    resumed = make_pipeline(tmp_path, existing=case, readonly=True)
+    resumed.run(through='stage2')
+    assert resumed.calls == []
+    assert [row for row in read_cost_snapshot(tmp_path, readonly=True)[0] if not row['cached']] == paid
 
 
 def _writer_bridge_repair(wires, *, hook=False):
@@ -318,7 +406,7 @@ def test_book_source_issue_reuses_paid_full_integration_and_repairs_only_closure
     book['source_issues'] = [{'chapter_ordinal': 1, 'item': _source_event(1, 3),
         'path': ['events', _source_event(1, 3), 'summary'], 'operation': 'replace', 'kind': 'contradiction',
         'message': '本章写的是猜测，不能抽成受邀进屋', 'evidence_refs': [evidence]}]
-    repair = {'contract_version': 'story-v1', 'kind': 'book_repair', 'changes': [
+    repair = {'contract_version': 'story-v3', 'kind': 'book_repair', 'changes': [
         {'path': ['source_issues'], 'operation': 'set', 'value': [],
          'reason': '局部事件已按原文修复', 'evidence_refs': [evidence]}]}
     chapter_patch = {'patches': [{'path': ['events', '猜测来客受邀', 'summary'],
@@ -367,7 +455,7 @@ def test_book_removes_wrong_local_referent_then_repairs_only_affected_book_entit
     evidence = list(index.chapter(1))[0]
     incorrect = deepcopy(wires['ch01'])
     incorrect['referents']['误抽第二个叙述者'] = {'kind': 'person', 'label': '误抽第二个叙述者',
-        'surface': '我', 'evidence_refs': [evidence]}
+        'surface': '我', 'evidence_refs': [index.evidence_numbers[evidence]]}
     observation = source_engine.compile_chapter(incorrect, index=index, chapter_ordinal=1)
     wrong_ref = next(ref for ref, row in observation.referents.items() if row.label == '误抽第二个叙述者')
     book = deepcopy(wires['book'])
@@ -377,7 +465,7 @@ def test_book_removes_wrong_local_referent_then_repairs_only_affected_book_entit
         'path': ['referents', wrong_ref], 'operation': 'remove', 'kind': 'unsupported',
         'message': '同一个我被误抽成另一个人，删除重复局部指称', 'evidence_refs': [evidence]}]
     remove = {'patches': [], 'removes': [{'path': ['referents', '误抽第二个叙述者']}]}
-    repair = {'contract_version': 'story-v1', 'kind': 'book_repair', 'changes': [
+    repair = {'contract_version': 'story-v3', 'kind': 'book_repair', 'changes': [
         {'path': ['source_issues'], 'operation': 'set', 'value': [],
          'reason': '已删除章观察误抽人物', 'evidence_refs': [evidence]},
         {'path': ['entities', '误抽第二个叙述者'], 'operation': 'remove', 'value': None,
@@ -430,7 +518,7 @@ def test_preserve_routes_single_chapter_book_fact_to_book_and_retains_complete_p
             'message': '不能把猜测抽成已发生事实', 'evidence_refs': [source_evidence]}]
         scripts['ch01'] = [incorrect_chapter, {'patches': [{'path': ['events', '猜测来客受邀', 'summary'],
             'value': wires['ch01']['events']['猜测来客受邀']['summary']}]}]
-        scripts['book'].insert(1, {'contract_version': 'story-v1', 'kind': 'book_repair', 'changes': [
+        scripts['book'].insert(1, {'contract_version': 'story-v3', 'kind': 'book_repair', 'changes': [
             {'path': ['source_issues'], 'operation': 'set', 'value': [],
              'reason': '源章误抽已修复', 'evidence_refs': [source_evidence]}]})
     case = make_pipeline(tmp_path, scripts=scripts)
@@ -486,7 +574,7 @@ def test_preserve_event_summary_returns_to_chapter_then_narrow_book_without_seco
         'evidence_refs': [evidence]}]
     chapter_patch = {'patches': [{'path': ['events', '猜测来客受邀', 'summary'],
         'value': wires['ch01']['events']['猜测来客受邀']['summary']}]}
-    book_repair = {'contract_version': 'story-v1', 'kind': 'book_repair', 'changes': [
+    book_repair = {'contract_version': 'story-v3', 'kind': 'book_repair', 'changes': [
         {'path': ['source_issues'], 'operation': 'set', 'value': [],
          'reason': '本次章动作修订不改变整书命题或人物统一，明确复验原空问题集', 'evidence_refs': [evidence]}]}
     case = make_pipeline(tmp_path, scripts={'ch01': [incorrect, chapter_patch],
@@ -503,3 +591,82 @@ def test_preserve_event_summary_returns_to_chapter_then_narrow_book_without_seco
     resumed = make_pipeline(tmp_path, existing=case, readonly=True)
     resumed.run()
     assert resumed.calls == []
+
+
+@pytest.mark.stage_scope('stage2')
+@pytest.mark.stage_scope('stage4')
+def test_preserve_evidence_address_returns_to_integer_chapter_owner_and_replays_free(tmp_path):
+    from contracts.story_paths import CHAPTER_OBSERVATION
+    from novel.stages.owner_revision import read_owner_issue_file
+    from novel.work_units import readonly_budget
+    _chapters, index, wires = pipeline_materials()
+    semantic_key = '猜测来客受邀'
+    evidence = list(index.chapter(1))[2]
+    correct_number = index.evidence_numbers[evidence]
+    wrong_number = index.evidence_numbers[list(index.chapter(1))[1]]
+    incorrect = deepcopy(wires['ch01'])
+    # 两者都是本章合法地址；无claims，不把语义证据错误变成类型或subset机械失败。
+    incorrect['events'][semantic_key]['evidence_refs'] = [wrong_number]
+    assert incorrect['events'][semantic_key]['claims'] == []
+    case = make_pipeline(tmp_path, scripts={'ch01': [incorrect]})
+    case.run(through='stage2')
+    repository = case.boundary.repository
+    candidate_rel = 'runtime/semantic_candidates/ch01.json'
+    original_candidate_bytes = repository.path(candidate_rel).read_bytes()
+    original_candidate = json.loads(original_candidate_bytes)
+    source = repository.read_model(SOURCE_STORY)
+    book = repository.read_model(BOOK_OBSERVATION)
+    source_ref = book.event_handles[_source_event(1, 3)]
+    assert source.events[source_ref].evidence_refs == (index.evidence_ids[wrong_number],)
+    original_ref = original_candidate['refs'][0]
+    unit = readonly_budget(tmp_path, original_ref['sid'], original_ref['unit_id'])
+    response_blob = unit.directory / (original_ref['response_sha256'] + '.json')
+    original_response_bytes = response_blob.read_bytes()
+    preserve_issue = deepcopy(wires['preserve'])
+    preserve_issue['source_issues'] = [{'source_ref': source_ref, 'path': ['evidence_refs', 0],
+        'operation': 'replace', 'kind': 'unsupported', 'statement': '该猜测由来客段支持，原证据错指赶集段',
+        'evidence_refs': [evidence]}]
+    path = ['events', semantic_key, 'evidence_refs', 0]
+    patch = {'patches': [{'path': path, 'value': correct_number}]}
+    book_repair = {'contract_version': 'story-v3', 'kind': 'book_repair', 'changes': [
+        {'path': ['source_issues'], 'operation': 'set', 'value': [],
+         'reason': '章事件证据已修正，其余人物统一及命题保持，继承新章证据', 'evidence_refs': [evidence]}]}
+    repaired = make_pipeline(tmp_path, existing=case, scripts={'ch01': [patch],
+        'book': [book_repair], 'preserve': [preserve_issue, wires['preserve']]})
+    repaired.run(through='stage4')
+    assert repaired.calls.count('ch01') == repaired.calls.count('book') == 1
+    assert repaired.calls.count('preserve') == 2 and 'ch02' not in repaired.calls
+    record = read_owner_issue_file(repository, 'ch01')
+    assert record.status == 'resolved'
+    assert record.issues[0].context['path'] == path
+    assert record.issues[0].context['evidence_refs'] == [evidence], '原问题账继续使用正式证据ID'
+    saved = repository.inspect(candidate_rel)
+    frozen = saved['revision']
+    assert frozen['baseline_record'] == original_candidate
+    assert frozen['seed']['paths'] == [path]
+    control, _end = json.JSONDecoder().raw_decode(
+        frozen['prompt'].split('【限定工作单元的修订】\n', 1)[1])
+    assert control['issues'][0]['context']['evidence_refs'] == [correct_number]
+    assert type(control['issues'][0]['context']['evidence_refs'][0]) is int
+    assert control['baseline']['events'][semantic_key]['evidence_refs'] == [wrong_number]
+    assert saved['trace'][-1]['value'] == patch
+    assert type(saved['trace'][-1]['value']['patches'][0]['value']) is int
+    assert saved['wire'] == wires['ch01']
+    observation = repository.read_model(CHAPTER_OBSERVATION.format(nn='01'))
+    assert observation.events[_source_event(1, 3)].evidence_refs == (evidence,)
+    assert repository.read_model(SOURCE_STORY).events[source_ref].evidence_refs == (evidence,)
+    assert repository.inspect_sealed_model(TARGET_STORY).events
+    assert response_blob.read_bytes() == original_response_bytes
+    assert sum('任务：进行唯一一次全书事实综合' in request.user for request in case.transport.calls) == 1
+    assert not any('任务：进行唯一一次全书事实综合' in request.user for request in repaired.transport.calls)
+    candidate_bytes = repository.path(candidate_rel).read_bytes()
+    source_bytes = repository.path(SOURCE_STORY).read_bytes()
+    cost_before = read_cost_snapshot(tmp_path, readonly=True)[0]
+    readonly = make_pipeline(tmp_path, existing=repaired, readonly=True)
+    readonly.run(through='stage4')
+    assert readonly.calls == []
+    assert repository.path(candidate_rel).read_bytes() == candidate_bytes
+    assert repository.path(SOURCE_STORY).read_bytes() == source_bytes
+    assert response_blob.read_bytes() == original_response_bytes
+    assert [row for row in read_cost_snapshot(tmp_path, readonly=True)[0] if not row['cached']] == [
+        row for row in cost_before if not row['cached']]

@@ -63,7 +63,7 @@ def test_retired_stage7_submodules_stay_deleted_inside_the_new_package():
     present = sorted(p.stem for p in root.glob('*.py'))
     assert present == ['__init__', 'story'], (
         f'novel/stages/stage7/ 的模块面变了：{present}；'
-        f'story-v1新根重建后Stage7只许 __init__／story'
+        f'story-v3新根重建后Stage7只许 __init__／story'
         f'（naming 随 str06.stage4.naming 迁往 stage4 包）')
     for name in _RETIRED_STAGE7_SUBMODULES:
         assert name not in present, f'旧 Stage7 producer 模块复活：{name}'

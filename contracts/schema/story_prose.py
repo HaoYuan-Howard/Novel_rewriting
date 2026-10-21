@@ -1,4 +1,4 @@
-"""story-v1 写作与交付契约：正文、真实来源回执和受限开篇补丁。
+"""story-v3 写作与交付契约：正文、真实来源回执和受限开篇补丁。
 
 模型只提供正文或明确的设计缺口；ID、请求身份和字节摘要由运行代码生成。
 机械回执不证明文学质量。来源字段由耐久回答边界填入，不由模型自报。
@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints, model_validator
 
+from contracts.schema.source_story import StoryVersion
 from contracts.schema.base import FrozenModel
 from contracts.schema.target_story import ChapterPacket, HookPacket
 
@@ -45,7 +46,7 @@ ProseAnswer = Annotated[ProseDraft | NeedsDesign, Field(discriminator='kind')]
 
 
 class BodyRequest(FrozenModel):
-    contract_version: Literal['story-v1']
+    contract_version: StoryVersion
     kind: Literal['body'] = 'body'
     packet: ChapterPacket
     packet_sha256: Digest
@@ -58,7 +59,7 @@ class BodyRequest(FrozenModel):
 
 
 class HookRequest(FrozenModel):
-    contract_version: Literal['story-v1']
+    contract_version: StoryVersion
     kind: Literal['hook'] = 'hook'
     packet: HookPacket
     packet_sha256: Digest
@@ -81,7 +82,7 @@ class OpeningParagraph(FrozenModel):
 
 
 class OpeningPatchRequest(FrozenModel):
-    contract_version: Literal['story-v1']
+    contract_version: StoryVersion
     kind: Literal['opening_patch'] = 'opening_patch'
     chapter_ordinal: int = Field(strict=True, ge=1)
     packet_sha256: Digest
@@ -150,7 +151,7 @@ class PatchApplication(FrozenModel):
 
 
 class ProseReceipt(FrozenModel):
-    contract_version: Literal['story-v1']
+    contract_version: StoryVersion
     kind: Literal['body', 'hook']
     chapter_ordinal: int | None = Field(strict=True, ge=1)
     packet_sha256: Digest
@@ -181,7 +182,7 @@ class ProseReceipt(FrozenModel):
 
 
 class ChapterBody(FrozenModel):
-    contract_version: Literal['story-v1']
+    contract_version: StoryVersion
     chapter_ordinal: int = Field(strict=True, ge=1)
     text: str = Field(min_length=1)
     receipt: ProseReceipt
@@ -194,7 +195,7 @@ class ChapterBody(FrozenModel):
 
 
 class HookBody(FrozenModel):
-    contract_version: Literal['story-v1']
+    contract_version: StoryVersion
     text: str = Field(min_length=1)
     receipt: ProseReceipt
 
@@ -215,7 +216,7 @@ class FinalChapterEntry(FrozenModel):
 
 
 class FinalManifest(FrozenModel):
-    contract_version: Literal['story-v1']
+    contract_version: StoryVersion
     title: Nonempty
     source_chapter_count: int = Field(strict=True, ge=1)
     chapters: tuple[FinalChapterEntry, ...]
@@ -234,6 +235,6 @@ class FinalManifest(FrozenModel):
 
 
 class FinalStory(FrozenModel):
-    contract_version: Literal['story-v1']
+    contract_version: StoryVersion
     text: str = Field(min_length=1)
     manifest: FinalManifest

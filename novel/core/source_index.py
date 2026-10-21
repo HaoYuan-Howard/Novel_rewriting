@@ -1,4 +1,4 @@
-"""story-v1 原文索引：代码生成证据段，纯只读定位，不解释小说。
+"""story-v3 原文索引：代码生成证据段，纯只读定位，不解释小说。
 
 查询只接受已冻结的 SourceIndex，不访问磁盘、网络、环境变量或最新观察。
 结果保留命中分母与截断事实；空命中不证明某项前因不存在。邻段是上下文，
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal, Mapping, Sequence
 
@@ -48,6 +48,16 @@ class SourceIndex:
     chapter_ordinals: tuple[int, ...]
     evidence: Mapping[str, SourceEvidence]
     index_version: str = STORY_VERSION
+    evidence_numbers: Mapping[str, int] = field(init=False, repr=False)
+    evidence_ids: Mapping[int, str] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        # 地址由完整源阅读序决定，含第0章引子；截取本章或补料不会重新编号。
+        ordered = sorted(self.evidence, key=lambda ref: (
+            self.evidence[ref].chapter_ordinal, self.evidence[ref].paragraph_ordinal))
+        numbers = {ref: number for number, ref in enumerate(ordered, 1)}
+        object.__setattr__(self, 'evidence_numbers', MappingProxyType(numbers))
+        object.__setattr__(self, 'evidence_ids', MappingProxyType({number: ref for ref, number in numbers.items()}))
 
     def chapter(self, chapter_ordinal: int, *, include_prelude: bool = True) -> dict[str, SourceEvidence]:
         if chapter_ordinal not in self.chapter_ordinals:

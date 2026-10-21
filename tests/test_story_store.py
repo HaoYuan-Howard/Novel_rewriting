@@ -12,7 +12,7 @@ from contracts.artifacts import STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT
 from contracts.schema import encode_artifact
 from contracts.schema.workflow import (
     CandidateWorkflow, OwnerIssueFileV3, OwnerIssueV1, chapter_owner_product_rel,
-    owner_issue_node, owner_issue_record_of_payload, owner_issues_rel,
+    commit_bundle_seal, owner_issue_node, owner_issue_record_of_payload, owner_issues_rel,
 )
 from contracts.story_paths import (
     BODY, BODY_RECEIPT, CHAPTER_OBSERVATION, CHAPTER_PACKET, CHAPTER_PLAN,
@@ -65,6 +65,27 @@ def test_current_source_packet_prose_and_delivery_are_fresh(published):
     overview = SimpleNamespace(stages=[stage_state(store, 'stage7')])
     assert FINAL.format(title='三层样书') in {
         row.rel for row in artifacts_for_node(overview, 'str06.stage7.assemble')}
+
+
+@pytest.mark.parametrize('version', [None, 'story-v1', 'story-v2'])
+def test_output_group_seals_require_current_explicit_contract_without_rewriting(published, version):
+    from novel.work_units import sealed_commit_bundles
+
+    bundles = sealed_commit_bundles(published.root)
+    assert bundles and all(bundle.contract_version == 'story-v3' for _path, bundle in bundles)
+    path, _bundle = bundles[0]
+    old = _read(path)
+    if version is None:
+        old.pop('contract_version')
+    else:
+        old['contract_version'] = version
+    # seal仍真实覆盖这些旧字节，版本拒识不能依赖“恰好hash不符”。
+    old['seal'] = commit_bundle_seal(old)
+    _write(path, old)
+    before = path.read_bytes()
+    with pytest.raises(ProvenanceRefused, match='形状不合约'):
+        sealed_commit_bundles(published.root)
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize('field', ['source_root_sha1', 'source_content_sha256'])
@@ -149,7 +170,7 @@ def test_missing_plan_does_not_destroy_source_authoritative_chapter_count(publis
     ('str06.stage2.names', 'stage2/observations/book.json'),
 ])
 def test_current_whole_payload_projection_tracks_semantics_and_ignores_only_provenance(node, upstream):
-    baseline = {'contract_version': 'story-v1', 'entities': {'e1': {'label': '婴儿'}},
+    baseline = {'contract_version': 'story-v3', 'entities': {'e1': {'label': '婴儿'}},
                 '_provenance': {'code': '旧'}}
     resolved, before = project_consumed(node, upstream, baseline)
     assert resolved
@@ -185,7 +206,7 @@ def test_strict_v3_owner_rounds_persist_and_only_original_detector_can_resolve(p
         discover_owner_issues(repo, raised_by='str06.stage2.book', owner='ch01',
                               node='str06.stage2.chapters', issues=[issue])
     record = read_owner_issue_file(repo, 'ch01')
-    assert record.contract_version == 'story-v1' and record.rounds_total == 1
+    assert record.contract_version == 'story-v3' and record.rounds_total == 1
     assert open_issue_targets_node(repo, 'str06.stage2.chapters')
     # 发布前中断，重放回派不能重复计轮。
     with pytest.raises(OwnerRevisionRequired):
@@ -214,6 +235,25 @@ def test_strict_v3_owner_rounds_persist_and_only_original_detector_can_resolve(p
 def test_old_issue_records_are_refused_without_migration_or_digest_substitution(version):
     with pytest.raises(ValueError, match='只支持'):
         owner_issue_record_of_payload({'schema_version': version, 'owner': 'book'})
+
+
+@pytest.mark.parametrize('version', ('story-v1', 'story-v2'))
+def test_previous_story_owner_issue_is_rejected_even_with_current_record_shape(published, version):
+    repo = published.boundary.repository
+    issue = OwnerIssueV1(code='source_unsupported', item=_source_event(1, 3), message='核对原文判断',
+        context={'path': ['events', _source_event(1, 3)], 'operation': 'replace'})
+    with pytest.raises(OwnerRevisionRequired):
+        discover_owner_issues(repo, raised_by='str06.stage2.book', owner='ch01',
+            node='str06.stage2.chapters', issues=[issue])
+    path = repo.path(owner_issues_rel('ch01'))
+    old = _read(path)
+    assert old['schema_version'] == 3 and old['contract_version'] == 'story-v3'
+    old['contract_version'] = version
+    _write(path, old)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='只支持显式story-v3'):
+        read_owner_issue_file(repo, 'ch01')
+    assert path.read_bytes() == before
 
 
 def test_explicitly_changed_repair_operation_has_a_separate_frozen_dispatch(published):

@@ -112,7 +112,7 @@ def test_execution_evidence_requires_complete_identity_and_discloses_interventio
     monkeypatch.setattr(paid_requests, 'commit_bundles', lambda *_:
                         [] if damage == 'missing_bundle' else [SimpleNamespace(adoptions=[adoption])])
     monkeypatch.setattr(usage_audit, 'audit_usage', lambda *_: {'evidence_errors': [], 'paid_attempts': 1})
-    metric = {'contract_version': 'story-v1', 'first_candidate_denominator': 1,
+    metric = {'contract_version': 'story-v3', 'first_candidate_denominator': 1,
               'first_semantic_candidate_pass_rate': 1.0, 'novel_quality': 'unver', 'source_quality': 'unver'}
     monkeypatch.setattr(story_metrics, 'story_metrics', lambda *_: metric)
     if damage == 'correction':
@@ -282,7 +282,7 @@ def test_baseline_bytes_and_manual_comparison_are_required(manifest, snapshot, t
     old_snapshot = {**snapshot, 'output_root': str(old_root), 'books': {
         '123': {**snapshot['books']['123'], 'output_sha256': G._sha('基线成书'.encode())}}}
     old_review = _review(manifest, old_snapshot)
-    prior = dict(schema_version=3, story_contract_version='story-v1', state='pass', snapshot=old_snapshot,
+    prior = dict(schema_version=3, story_contract_version='story-v3', state='pass', snapshot=old_snapshot,
                  review=old_review.model_dump(mode='json'))
     candidate = manifest.model_copy(update={'baseline': prior})
     G.validate_baseline(candidate)

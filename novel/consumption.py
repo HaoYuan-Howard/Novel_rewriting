@@ -81,7 +81,7 @@ def stage1_stage0_source(data: object) -> object:
     return source.get('normalized_source_sha1')
 
 
-# 只登记当前 story-v1 真实消费；Stage2 前置章观察不反向依赖后置综合。
+# 只登记当前 story-v3 真实消费；Stage2 前置章观察不反向依赖后置综合。
 # schema、证据和正式语义一律消费整份载荷；正文的前章材料仅消费实际短尾。
 CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     'stage1.partition': {

@@ -189,7 +189,7 @@ OLD_STAGE_MODULES = (
     'novel/stages/stage7/prompts.py', 'novel/stages/stage7/subs.py',
 )
 
-#: 当前 story-v1 per-stage 引擎及其共享纯边界（缺任何一个也红——
+#: 当前 story-v3 per-stage 引擎及其共享纯边界（缺任何一个也红——
 #: 「删除被静默扩大」与「旧面回来」是同一道闸的两半）。
 NEW_STAGE_MODULES = (
     'novel/stages/stage2/__init__.py', 'novel/stages/stage2/story.py',

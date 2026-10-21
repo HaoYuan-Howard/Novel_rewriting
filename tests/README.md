@@ -182,7 +182,7 @@ conda run -n novel_refactor python -m tests.golden evaluate --manifest E:/golden
 收集检查原文身份、现役阶段完成度、正式交付、稳定盘面，以及已结束运行的代码和 profiles；
 逐笔请求配置须与冻结节点配置一致，未观察到运行身份不会补绿。
 
-质量manifest、snapshot、review和result使用v3，显式story_contract_version=story-v1，维度精确为情节保全、结构原创、因果连续、
+质量manifest、snapshot、review和result使用v3，显式story_contract_version=story-v3，维度精确为情节保全、结构原创、因果连续、
 人物连续、自然推进和局部文笔连贯。旧v1/v2及旧故事契约评价拒识；当前产物在新根重新生成后重新评阅。
 `automatic_state`与工程、质量分别报告：未交付为incomplete，追加额度或冻结Agent之外的当前请求为assisted；
 缺少当前请求或采用身份、出现退役回派记录为unver。只有完整对应的Agent、provider attempts、成本账和当前封存采用证据

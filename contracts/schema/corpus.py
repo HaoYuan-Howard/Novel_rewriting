@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints, model_validator
 
+from contracts.schema.source_story import StoryVersion
 from contracts.schema.base import Sha1, StrictModel
 
 
@@ -84,7 +85,7 @@ class CorpusArtifactEntry(StrictModel):
     """One exact output; JSON artifacts additionally pin schema version."""
 
     rel: str = Field(min_length=1, pattern=r'^(?:stage[0-7]|runtime)/')
-    schema_version: int | Literal['story-v1'] | None
+    schema_version: int | StoryVersion | None
     sha256: Sha256
 
     @model_validator(mode='after')
@@ -232,7 +233,7 @@ class CorpusManifest(StrictModel):
     """Acceptance identity; intentionally contains no title or corpus body text."""
 
     manifest_version: Literal[2]
-    contract_version: Literal['story-v1']
+    contract_version: StoryVersion
     generated_at: str = Field(min_length=1)
     code_identity: str = Field(min_length=1)
     artifact_inventory_sha256: Sha256

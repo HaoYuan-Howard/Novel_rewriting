@@ -131,5 +131,5 @@ STAGE1_HOOK_COPY = artifact_rel('stage1.hook_copy')
 
 # 当前正式故事产物版本参与请求和候选契约身份；不提供旧版本解码或迁移。
 STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
-    rel: 'story-v1' for rel in STORY_ARTIFACTS
+    rel: 'story-v3' for rel in STORY_ARTIFACTS
 }

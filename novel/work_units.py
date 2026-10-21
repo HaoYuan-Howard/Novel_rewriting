@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from contracts.schema.source_story import STORY_VERSION
 from contracts.invariants import (
     BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES, narrow_unit_scopes,
 )
@@ -277,7 +278,7 @@ def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifest | None:
     try:
         return _read(base, path, WorkflowManifest)
     except (ValueError, WorkUnitRefused) as exc:
-        raise WorkUnitRefused('输出根不是当前story-v1契约；旧根只读归档，请在新根重新生成') from exc
+        raise WorkUnitRefused('输出根不是当前story-v3契约；旧根只读归档，请在新根重新生成') from exc
 
 
 def _require_clean_base(base: str | os.PathLike[str]) -> None:
@@ -327,8 +328,8 @@ def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifest:
         if existing is not None:
             return existing
         _require_clean_base(base)
-        manifest = WorkflowManifest(schema_version=1, contract_version='story-v1',
-            pipeline_contract_epoch='story-v1', task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
+        manifest = WorkflowManifest(schema_version=1, contract_version=STORY_VERSION,
+            pipeline_contract_epoch=STORY_VERSION, task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
                                       created_at=int(time.time()))
         _write(base, target, manifest)
         return manifest

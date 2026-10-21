@@ -13,6 +13,7 @@ from contracts.schema.target_story import (
     ChapterPacket, ChapterPlan, ChapterPlanWire, HookDesignWire, PreserveWire,
     RequirementWire, StoryState, TargetEventWire, TargetModelWire, TargetStory,
 )
+from contracts.schema.source_story import StoryNameAliasPart, StoryNameStructure
 from novel.stages.stage4.story import (
     build_target_model_prompt, compile_chapter, compile_hook, compile_naming,
     compile_preserve, compile_target_model, compile_target_story,
@@ -239,7 +240,7 @@ def test_short_name_does_not_rewrite_ordinary_words_in_real_writer_prompts():
     from novel.core.story_prose import build_body_request, build_hook_request
     source, naming, preserve, model, plans, hook = target_wires()
     source.entities['person_a'].name.aliases['al01'] = '阿旧'
-    source.entities['person_a'].name.surface_forms['阿旧'] = '{alias:al01}'
+    source.entities['person_a'].name.surface_forms['阿旧'] = (StoryNameAliasPart(kind='alias', alias_ref='al01'),)
     source.entities['person_a'].surfaces += (NS(literal='阿旧'),)
     naming['entries'][0]['aliases'] = {'al01': '安'}
     names = compile_naming(naming, source)
@@ -263,6 +264,25 @@ def test_short_name_does_not_rewrite_ordinary_words_in_real_writer_prompts():
     hook_prompt = build_hook_request(project_hook_packet(story, compile_hook(hook, story, length_budget=300))).user
     for prompt in (body_prompt, hook_prompt):
         assert '家中平安' in prompt and '家中平黑衣人' not in prompt
+
+
+def test_naming_keeps_all_text_title_with_null_name_components():
+    source, naming, *_ = target_wires()
+    person = source.entities['person_a']
+    person.label, person.surfaces = '先生', (NS(literal='先生'),)
+    person.name = StoryNameStructure(family_group=None, family=None, given=None, aliases={},
+        surface_forms={'先生': [{'kind': 'text', 'literal': '先生'}]})
+    naming['entries'][0] = {'entity_ref': 'person_a', 'action': 'keep', 'reason': '原作只有纯称谓'}
+    result = compile_naming(naming, source)
+    assert result.names['person_a'].primary == '先生'
+    assert result.names['person_a'].surfaces == {'先生': '先生'}
+
+
+def test_naming_cannot_keep_a_person_with_explicit_semantic_name_parts():
+    source, naming, *_ = target_wires()
+    naming['entries'][0] = {'entity_ref': 'person_a', 'action': 'keep', 'reason': '尝试保留姓名'}
+    with pytest.raises(TargetCompileError, match='必须 rename'):
+        compile_naming(naming, source)
 
 
 def test_future_secret_in_global_requirement_never_enters_early_writer_material():

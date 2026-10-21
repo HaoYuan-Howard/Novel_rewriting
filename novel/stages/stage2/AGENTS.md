@@ -1,7 +1,7 @@
 # Stage2 事实层开发
 
 本目录只负责对原小说的有证据理解。正式契约为
-`contracts/schema/source_story.py` 的 `story-v1`，对外唯一故事产物是
+`contracts/schema/source_story.py` 的 `story-v3`，对外唯一故事产物是
 `stage2/story/source_story.json`。旧协议、旧产物和旧流水线没有运行时读取或迁移入口；
 旧根保持原样，新根重建。跨层规则见根 AGENTS，产品行为见
 `docs/BACKEND_CONTRACT.md`，字段见 `docs/schema/str06.md`。
@@ -52,9 +52,13 @@
 
 纯compiler返回typed结果或带owner/item/path的结构化异常；validator不得修改输入。
 下游事实修订先用正式记录与相对字段路径定位唯一writer，再以真实BookObservation和冻结wire
-重编译验证后映射原语义键；不得按证据所属章或句柄中的数字猜owner/列表位置。姓名派生模板、
+重编译验证后映射原语义键；不得按证据所属章或句柄中的数字猜owner/列表位置。姓名部件、
+既有称谓语义段与文字字段经原names wire定位；kind改型须定位整个既有segment。
+replace可精确定位一个既有称谓的分段数组，由names的typed授权执行原子重新分段，
+允许段数增长或缩短；append也只能定位既有称谓分段容器。其他列表布局仍冻结，
+不替换姓名整表、不删除分段列表或修改compiler派发的alias_ref，不以空text或改姓名声明绕过权限。
 关联合并复合值或缺少原wire不能反猜修订地址，须明确scope不足。
-同节点修复只改授权条目；上游回派只写当前story-v1/V3账并保留终身轮数与指纹。
+同节点修复只改授权条目；上游回派只写当前story-v3/V3账并保留终身轮数与指纹。
 book的source_issue回派前保存未发布的已购草稿、原响应引用和章观察绑定；章owner修复后，
 仅按具体变化的引用/证据闭包发送book_repair逐项set/remove。新增关联须显式留证并登记
 扩大路径，不能默认整书重做，也不能直接采用失效草稿。草稿及补丁必须能从本根耐久响应

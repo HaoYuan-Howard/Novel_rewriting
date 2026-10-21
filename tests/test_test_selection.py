@@ -67,7 +67,10 @@ def test_mixed_stage_module_keeps_pure_contract_out_of_stage_layer():
     # 混合模块里逐例登记成 unit_contract 的那一例，不跟着模块的 stage 面升级。
     assert S.case_layer('tests/test_api_http.py::test_enums_matches_the_current_contract_over_the_wire', catalog)[0] == 'unit_contract'
     assert S.case_layer('tests/test_api_http.py::test_sandbox_selects_current_stage1_and_preserves_workflow_and_artifact_bytes', catalog)[0] == 'stage'
-    assert catalog['modules']['tests/test_source_story.py']['stages'] == ['stage2']
+    assert catalog['modules']['tests/test_source_story.py']['stages'] == ['stage2', 'stage4']
+    assert S.case_layer('tests/test_source_story.py::test_source_revision_name_parts_and_segments_need_real_names_wire', catalog)[0] == 'unit_contract'
+    assert S.case_layer('tests/test_source_story.py::test_names_owner_atomically_resegments_growing_and_shrinking_surfaces_and_replays_free', catalog)[0] == 'stage'
+    assert S.case_layer('tests/test_story_runtime.py::test_associate_owner_revision_inherits_authenticated_material_schema_and_replays_free', catalog)[0] == 'stage'
 
 
 def test_regression_reuses_both_layers_and_keeps_cross_stage_integration():
@@ -330,14 +333,16 @@ def test_scope_registration_rejects_missing_tests(tmp_path):
 
 
 def _pytest(tmp_path, *args):
-    # ⚠ 嵌套 pytest 的 basetemp 锚在**本 worker 的 basetemp 根**（`tmp_path.parent`），
-    #   不是本测试自己的 tmp 目录：外层闸门（如 `-n 4 --basetemp=E:/_tr/<名>`）之下，
-    #   每测试目录名再占 ~31 字符，嵌套 basetemp 叠上 Stage0 的最长临时归档后缀
-    #   （conftest 预检按 204 字符预算）就会撞 MAX_PATH——外层预检只核
-    #   `<外层根>\popen-gwN`，看不到这个再嵌套的深度。锚到 worker 根后，只要
-    #   外层自己过得了预检，嵌套层就还剩 ~26 字符余量。cache_dir 仍按测试隔离。
+    # 内层也启xdist时，沿用外层popen-gw目录会叠两层worker前缀并撞MAX_PATH。
+    # 只复用外层basetemp内本worker独占的短子根；内层pytest只会清空.sN，
+    # 不清外层根、本worker报告目录或其他worker的临时内容。cache仍按测试隔离。
+    worker_root = tmp_path.parent
+    worker_number = worker_root.name.removeprefix('popen-gw')
+    nested_root = (worker_root.parent / f'.s{worker_number}'
+                   if worker_number != worker_root.name and worker_number.isdecimal()
+                   else worker_root / '.sm')
     result = subprocess.run(
-        [sys.executable, '-B', '-m', 'pytest', '-n', '0', '--basetemp', str(tmp_path.parent / 't'),
+        [sys.executable, '-B', '-m', 'pytest', '-n', '0', '--basetemp', str(nested_root),
          '-o', f'cache_dir={tmp_path / "c"}', *args], cwd=S.ROOT,
         capture_output=True, text=True, encoding='utf-8', timeout=180)
     return result
