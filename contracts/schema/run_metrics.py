@@ -53,7 +53,6 @@ class UnitMetrics(StrictModel):
     scope: str
     content_turns: int = Field(ge=0)
     network_retries: int = Field(ge=0)
-    history_adopted: int = Field(ge=0)
     mechanical: int = Field(ge=0)
     cached_processing: int = Field(ge=0)
     usage: UsageSummary

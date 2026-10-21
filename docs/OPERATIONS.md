@@ -43,90 +43,17 @@ blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可�
 
 ## AgentRun 与流水线恢复
 
-所有 LLM 节点正式执行版本升版后，免费查看并同步现有单元额度：
+输出根只接受当前 story-v1。破坏性契约变化后，原根和成本账只读归档，在独立新根重新生成；不提供同根升级、旧 wire 转换或跨根候选采用。
+
+免费重验通过现役节点的 `--check-only` 执行：
 
 ```powershell
-conda run -n novel_refactor python -m novel.orchestrator.llm_budget_upgrade --base <Output目录> --sid <sid>
-conda run -n novel_refactor python -m novel.orchestrator.llm_budget_upgrade --base <Output目录> --sid <sid> --apply
+conda run -n novel_refactor python -m novel.cli run str06.stage4.compile <sid> --base <新Output目录> --check-only
 ```
 
-同步恢复至少基础四轮；同版本只一次，历史轮、费用、追加与 unknown 保留。V2 旧账首次
-同步建立版本基线并恢复，后续只按正式版本升版触发。入口零模型调用，不运行下游。
-原调用及免费采用也会在执行边界同步；只读查看不写账。整书总闸与付费/正文外发授权不变。
+同请求身份的耐久已购回答可以免费重放，确定性节点可以重编译和补提交；当前请求缺少合法回答时明确停止为 needs_authorization。新调用仍须 `--yes --allow-egress`，重验不会补填授权。正文按顺序核对本章包和实际前章短尾；尾部变化仅触发允许范围内的开篇窄修。
 
-
-已登记的现役同根升级先免费预览，再应用同一计划（不需要 API key、`--yes` 或外发授权）：
-
-```powershell
-conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录>
-conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录> `
-  --apply --subject-sha256 <预览SHA> --actor <操作者> --reason <升级依据>
-```
-
-预览输出附带 `rebuild_budgets`（重建节点的工作单元内容轮剩余额度，易变状态、
-不进计划指纹）。**应用前先核对**：`content_remaining` 为 0 的付费重建节点
-（如 hook_design）升级后第一步就会 `WorkUnitBudgetExhausted`——先对账那轮
-delivered、经跑书页追加额度或人工处置，再 apply，避免已交付的书停在
-「成书已归档、Hook 重建不了」。
-
-仅接受登记身份边。原产物和 workflow 原字节留在书内 `runtime/upgrades/<SHA>/`；
-不中断账与额度。升级同时收口锚定被归档产物的 open 回派账（rc22→rc23 即
-hook_design），typed 问题与轮数在 resolved 记录里留账。prepared 中断后以相同
-SHA 重放；代码或源身份漂移时明确阻断——**尚未归档任何文件**的恢复日志可显式
-放弃后重新规划：
-
-```powershell
-conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录> `
-  --abort-pending --actor <操作者> --reason <放弃依据>
-```
-
-已开始归档的日志没有放弃出路，必须重放同一计划至完成。升级与在跑的节点执行
-互斥（workflow 锁）；撞上时命令以显式终态退出并提示先停/等待，本次未写任何
-字节。rc22→rc23 之后重建 Hook Design、免费 Stage4 compile、Hook，再运行
-Stage5 body（逐章沿用／免费重验／局部恢复）和 Stage7 assemble。付费节点先用
-`--check-only` 核已购响应；新请求仍须原有的 `--yes` 与 `--allow-egress`
-授权，不在升级命令中购买。
-
-rc24→rc25 的 `identity-text-rc24-rc25` 升级用于身份引用文本协议（历史升级边；存量根全部升级或只读归档后删除条件见
-REQUIREMENTS）。rc25→rc26 的 `naming-forward-rc25-rc26` 升级用于命名前移与普通正文主链：旧 Design、Hook
-Design、编译视图、正文及回执按协议字面量归档，保留 Stage2 源材料、Preserve
-checkpoint、NameMap、已购回答和成本历史；随后从 `str06.stage4.naming` 重建，当前协议
-的免费输入检查先于模型请求。旧候选可只读诊断，不能当作 v12 回答采用。
-在跑书页按原配置继续时会依次重建其余节点；本升级本身不发模型请求。
-若本次需要补充缺失称谓，应先从 Names owner 以源文证据登记到现有人物，
-再重建下游，不能让 Design 临时猜新称谓或身份。
-
-自动运行的暂停、恢复、停止和按原配置继续使用跑书页；Stage 页只读监控。工程诊断先查询
-`python -m novel.cli --help` 和目标子命令 `--help`。内部执行入口为
-`novel/orchestrator/run_step.py`；命名 scratch
-诊断在 `novel/orchestrator/preflight.py`。这些模块均可用 `python -m <模块名> --help` 查看参数。
-运行代码和请求身份覆盖必要资源；当前 start/epoch 使用 `identity_version=3`（引擎
-`direct_llm` / `llm-executor/v1`），历史 ≤v2 epoch 只读原语义。
-旧身份只作历史证据读取，不能补新摘要重签；旧 owner 排空后才可开当前 epoch，不续旧供应商会话。
-
-现役唯一 executor 是直连 LLM（wire `kind=legacy` + `LegacyLlmProfile`：provider/model/
-effort/thinking）。本地 Agent CLI（`kind=agent` / driver / execution_mode）已退役：命中即
-`retired_executor_backend`（HTTP 410），不做静默降级。UI「模型执行配置」只消费
-`/api/agent/capabilities` 的 legacy providers 面。当前 Legacy provider 为 DeepSeek；
-如需其他 HTTP transport，须独立接入，不能复用 DeepSeek 的预算与 thinking 语义。
-正文外发授权与费用确认彼此独立。
-
-无回答的传输失败可由开发维护 agent 免费收口：先用
-`python -m novel.orchestrator.work_unit_recovery --base <根> --sid <sid> --unit-id <id> --turn-id <id>`
-取得预览；将 `preview_token`、执行者 `actor`、核实理由 `reason` 写入 JSON 后，同命令增加
-`--apply-request <JSON路径>`。已保存回答（delivered）未被正式提交引用而挡住额度追加时
-（自动对账只在取轮路径触发，额度已尽则取轮不可能），用
-`novel.orchestrator.work_unit_grants.reconcile_delivered(base, sid, unit_id, actor=…, reason=…)`
-显式让位（幂等、不返还轮次、保留回答与费用证据）。该入口逐项核成本、session、原请求、日志和 owner 排空证据，
-只把已确认失败的 unknown 改为 failed，不生成语义决定、不退还额度、不清除未知用量。
-存在已购回答或证据缺失时继续阻断，先恢复原结果；同一请求重放幂等。该入口不是产品跑书步骤；
-admission 账沿用历史命名（`commander_admissions.jsonl`）。两个分支：存量书 Commander 连接失败
-走原 Commander 证明；现役直连 executor 的**确定性 wire 拒收**（不可重试 `TransportError`，
-如 4xx 拒付——拒收种类闭集 `contracts/schema/work_unit_recovery.py::EXECUTOR_WIRE_REFUSAL_KINDS`）
-走 executor 分支（2026-10-02 R10c，DeepSeek 402 实证）。read_timeout 与未知异常的结果真未知，
-不在闭集内，保持 unknown。新 wire 已把确定性拒收直接记 failed（`novel/llm/paid_requests.py`），
-executor 分支服务存量轮与极端残差。
-现役关闭式验收走定向 pytest / 交付终验，不维护 agent-only 验收报告。
+跨节点问题持久记录目标owner、item、证据和问题指纹。回派只修当前工作单元，同指纹重复或额度耗尽即停止；重启不重置内容轮、整书额度或成本。未送达重试、结果unknown、截断和格式错误分别留证。结果unknown必须先对账，不能当作失败自动重买。
 
 ### 小说流水线成本与耗时配对观测
 
@@ -305,74 +232,19 @@ conda run -n novel_refactor python -m pytest -q tests/test_fixture_registry.py
 `--acknowledge-encrypted-offline-target`；该 flag 是操作者对介质的声明，工具本身不提供加密。
 
 
-## Stage4 免费编译与候选生命周期补尾（新链）
+## 当前三层首答与成本读数
 
-STR-06 新链的 Stage4 免费聚合由结构性禁付节点 `str06.stage4.compile` 承担：Design／Hook
-的已购 wire（bind 已退役，义务承载位随 BodyDesign 的 real 标注派生）经 `--check-only`
-或默认免费采用路径编译，全部采用不创建模型客户端。跨执行补尾
-不再是 `--recover-prepared` 一类人工恢复动作，而是候选生命周期自身的
-`committed_set_recovery`／`deterministic_replay`（`novel/llm/paid_requests.py::PaidRequestSession`）：
-同请求身份优先免费采用，缺失且未授权时停在该 owner 并报告需要授权（`PurchaseRequired`）。
-付费与正文外发是两份独立授权（`--yes`／`--allow-egress`），入口只有
-`novel.cli run <str06 节点> <sid>`；恢复入口与账务纪律见 `tests/test_str06_f7a_wiring.py`。
+```powershell
+conda run -n novel_refactor python -m tools.story_metrics --base <新Output目录> --sid <源SID>
+```
 
-旧书按 `legacy_incompatible` 只读拒识，重跑须在独立输出根按新链重新上传
-（裁决见 `docs/DECISIONS.md` 2026-09-09～10「一次整根切换」行）；旧链恢复动作
-（reaggregate／recover-prepared 一类）已随旧链整层退役；存量解码面与退役台账
-已随 STR-06 关闭批删除，旧根的恢复材料只按 Git 历史与冻结的盘上记录读取。
+读数从每个attempt的不可变first_acceptance及权威ledger派生。合法material续答单列，首个语义候选的失败、patch修复与unknown分开；免费重验不会覆盖首答结论。未分类的attempt和未完成单元仍在分母披露，源事实质量与最终文学质量均保持unver，只有真实golden验证才能提供质量结论。
 
-## 旧回派归因更正与历史用量补证
+## 当前故事层的免费恢复
 
-章观察人工窄修先用 `python -m tools.str06_review --base <输出根> --sid <sid>
-patch-preview --owner chNN --candidate <wire文件> --request-profile <原请求配置JSON>`
-检查差异与原请求身份。已有 `--wire-dir` 采用时，目录内对应的 chNN_patch_note.json
-须登记 base_response_identity 和非空 reason，旁边放 chNN_wire.json。
-`novel.cli run str06.stage2.chapters` 发现这些 patch note 后只执行对应章，其他章只读验封，
-不重放、不重新发布；无 note 的普通运行仍执行全章。缺 wire 或未选章缺少有效产物即拒绝。
-采用沿用请求身份/原响应/成本三方核对及 ContentRevision 发布。免费采用显式带
-`--check-only`，不带 `--yes` 或 `--allow-egress`；缺少完整 wire 就拒绝，不补购。
-生成提示或协议改变后，预检显式给 `--baseline-request-sha256 <已购摘要>`，仍捕获
-当前生产请求与完整接受闸；patch note 同时登记预检返回的 `applies_to_request_sha256`。
-未给当前应用摘要的旧 note 仍只允许同身份采用，不能伪造旧请求或暗改协议。
-显式双身份 note 也可用于内容未改的已购回答：核验原请求、响应与成本并通过当前完整
-接受闸后，以 owner patch 记录免费采用，不能因内容与原响应相同丢掉修订声明。
-`cross_cause` 预检还须给 `--upstream-associate-candidate <本轮身份wire>`，不拿旧
-盘面冒充本轮前置答案。章预检与生产共用包含真实回派范围的请求；Preserve 预检
-在 checkpoint 尚未发布时仍验证候选、姓名与 Brief，并分别报告冲突和 Design 未运行。
+通过原节点加 `--check-only` 复验当前契约和封存输入。已购响应先耐久后解析；发布中断时重放相同请求重新编译并封存，不能把未封存文件直接当正式输入。所有产物路径由 `contracts/story_paths.py` 登记，当前模型见 `docs/schema/str06.md`。
 
-`python -m novel.cli issue-correction <sid> --base <输出根> --owner preserve`
-只读重建当前正式材料并给出 evidence_sha256；只有已证明旧二分归因错误且全部当前
-问题可归因时才给出更正清单。以同一命令追加 `--apply --subject-sha256 <预览摘要>
---reason <更正理由>` 显式退出旧回派。输入在预览后变化即拒绝；原issue、rounds_total
-和费用保留，重复应用幂等。不可用它清除合法失败或给新owner退款／追加额度。
-names／Characters旧信封须先按新协议重建；冻结实验根不能靠改版本号伪装续跑。
-
-章内重复close曾被旧compile误派到associate时，同一命令指定`--owner associate`。
-CLI从正式Stage1读取完整章集合，按当前章观察和关联重建历史诊断；只有旧问题全部
-被章内生命周期错误覆盖才给出更正预览。正式输入缺失、未配对或另有未覆盖问题即拒绝。
-沿用同一`--apply --subject-sha256 ... --reason ...`提交方式；更正只退出旧路由，
-后续真实associate／compile复验仍会向具体章owner发起修订，不会把坏观察视为通过。
-
-`python tools/repair_rounds.py <输出根> --sid <sid> --usage-json`
-只读核对 ledger 与已购请求／响应证据，区分账内 reasoning 和嵌套usage补证。
-这里的sid是成本账与工作单元账里的书键，新链通常是含书名的目录名，不能只填数字后缀。
-成本账不存在或书键未匹配时明确拒绝，不能把“没有找到证据”记成零费用。
-缺失、冲突、坏账尾段明确报告；unknown不改零，缓存采用不重复计费。该入口不改
-原账、不补造供应商扣款，也不触发模型请求。
-
-非`--usage-json`报告按工作单元正式内容轮序统计；“首内容轮当前复验接受率”不等于历史首过率。
-免费复检更新接受记录时不增加内容轮；实验必须在每臂结束时冻结首过与返修证据。
-分母是`work_units.json`登记的单元：采用等路径取事务锁会留下只有`ledger.json.lock`的空壳
-目录，它们不是单元、被跳过；未登记却有其它内容的目录是账不闭合，显式拒绝。
-
-`python -X utf8 tools/replay_candidates.py <输出根> [--sid <sid>] [--owner design] [--json]`
-对根里已购的候选回答，按当前代码的验收与本根当前已发布输入在内存只读重放：不写盘、不发请求、
-不改账。每个内容轮并排给出“记录（当时输入）”的接受记录、“重放（当前输入）”的各项检查与规则码
-计数及材料问题归因、“沿用”判定（当前输入下完整预检全绿即可零调用采用）；patch 回合先在前一份
-候选上合并成整份再验收。报告头核对重放输入（章数组、预算、篇幅带）与原运行的 `input_sha256`
-是否吻合，对不上时单独标出，不据此断言缺陷。目前接入 design；其余 owner、无购买单元、
-上游未封存或 Stage1 不可读都如实标注 not_wired／no_unit／not_run，不记通过也不记失败。
-这是读数器不是判官：记录与重放不一致常因上游产物后来变了。
+成本与内容轮只读核对仍使用 `tools/repair_rounds.py`；它不修改账、不调用模型。缓存行单列，未知用量不作零；回放接受率不能充当新模型首答通过率。
 
 ## 请求配置与逐节点对照
 
@@ -387,14 +259,4 @@ provider、model、reasoning_effort和thinking_mode。编排器从冻结profiles
 该入口只接配置，不能替代实验manifest、相同输入冻结、独立请求身份、完整失败与费用统计。
 正式A/B前须核对代码、输入、协议、模型、停止规则及授权范围，不能靠改NODES模拟配置生效。
 
-`tools/str06_review.py ... patch-preview`同样接受`--request-profile`，须与被审阅请求一致；
-显式effort冲突即拒绝，工具通过同一冻结函数构造实际请求身份，始终不授予付费权限。
-
-Hook 当前协议为 `stage4-hook-design-v3`。旧 v1／v2 缺少正式组织选择和阅读期待，不能
-由代码猜补；原 v1→v2 换算入口已退出。保留旧响应、成本和原接受记录，当前运行需要
-以 v3 重新设计，再免费编译当前 HookContext（rc18）。新的付费或正文外发仍分别依
-本轮授权执行；免费复检不能购买缺失的现役回答。
-
-Hook 不再接受固定字数目标／上限选项。字符数只作观察；评价应将楔子与实际第 1 章
-成对阅读，并记录冲突、因果、声线、阅读期待和重复。机械通过与免费恢复不证明文学
-质量，也不能把历史回答免费复验接受率记成新协议首答通过率。
+Hook使用当前story-hook-v1协议和独立HookPacket，免费hook_compile只投影正式选择。旧回答原字节保留，当前运行不解码或转换旧协议。文学质量由后续golden set及人工评价确认，机械通过不等于质量通过。

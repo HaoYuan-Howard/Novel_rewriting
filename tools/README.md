@@ -20,14 +20,65 @@
 |---|---|---|
 | `scripts/export_backend_types.py` | 生成 `web/src/types/backend.generated.ts`（`--check`） | `tests/test_api_enums.py` 对账守卫 |
 | `calibrate_style_corpus.py` | 0 成本新链 Stage5 正文风格基线复算（`stage5/body/chNN.txt` vs 源文） | `tests/test_style_calibration.py` |
-| `book_overlap.py` | 用当前正文回执按身份正向重放成书，再量改名前正文与源文逐章 20 字重叠；缺证据不量 | `tests/test_book_overlap.py` |
 | `derive_schema.py` | 从盘上产物反推观察 schema（新链坐标；观察 ≠ 契约） | `docs/schema/_README.md` |
 | `probe_nonbody_word.py` | NONBODY_KINDS 增词前的门槛探针 | `docs/BACKEND_CONTRACT.md` |
-| `canary_chapters.py` | B6-A canary 选章（只读 sealed WriterBookIR；逐章计分＋三章＋下一条命令） | `tests/test_canary_chapters.py`、`docs/schema/str06.md` |
 | `ab_compare.py` | A/B 两位匿名评审对照评分 runner | `tests/test_ab_compare.py` |
+| `story_metrics.py` | 分列首响应直接可用、首个完整候选接受、材料响应、窄修与实际成本读数 | `tests/test_story_metrics.py` |
+| `story_facts.py` | 冻结源证据、隔离开发/保留样例，人工标注并比较实际 SourceStory；零付费 | `tests/test_story_facts.py`、执行规格 §5.3 |
 | `repair_rounds.py` | 修订轮回派账/收敛读数 | `tests/test_repair_rounds.py`、`docs/OPERATIONS.md` |
-| `replay_candidates.py` | 已购候选只读重放：按当前验收与本根当前输入在内存重放，给出各轮检查、规则码计数、归因与沿用判定 | `tests/test_replay_candidates.py`、`docs/OPERATIONS.md` |
-| `str06_review.py` | 新链候选根免费审阅（request_preview/views/obligations） | `docs/OPERATIONS.md`、`docs/schema/str06.md` |
+
+### 离线事实标注与比较
+
+`story_facts.py` 是开发评测工具，不进入生产节点、judge 或自动接受链。
+准备材料只需正式 Stage0/1，可以在抽取前独立标注；比较读取实际封存的
+`SourceStory`，不读取 prompt 或 reasoning 代替正式结果，不调用模型。
+
+显式设置 `NOVEL_DATA` 或 `NOVEL_CORPUS` 指向原始源书，`NOVEL_OUTPUT` 指向
+当前正式产物根。两个源变量同时设置必须一致。评测记录经 `--dataset-dir`
+指定到第三个独立目录，不能包含或位于源根、正式输出根内。源文件由
+`--source-relative` 在源根内定位，并与 Stage0 原始字节 SHA-256 核对。
+以下命令在仓根运行，使用 `novel_refactor` 环境。
+
+```powershell
+python -m tools.story_facts --dataset-dir E:/novel_evaluation/facts prepare --sample baby_dev --split dev --sid 123 --source-relative 样书_123.txt --evidence e001_00001 e001_00003 e002_00001
+python -m tools.story_facts --dataset-dir E:/novel_evaluation/facts compare --sample baby_dev
+```
+
+`prepare` 冻结 Stage1 源身份、内容摘要、段号、章/段序和原文，生成
+`dev/baby_dev/source.json` 与空的 `annotation.json`。只引用显式给出的段，
+需要先通读带地址的全书证据时，用 `--all-evidence` 明确冻结全部段，不能与 `--evidence` 混用。
+没有自动从待测候选制造金标。`dataset.json` 只存分集元数据和摘要，不复制原文；
+同一书的 SID、原文或内容身份不能跨 `dev`/`heldout`，改样例名或改证据范围也不行。
+重复准备不覆盖人工标注。比较某一开发样例不会加载其他保留样例的证据文件。
+
+人工编辑 `annotation.json`：全部九个维度保留 `coverage`，分别为实体绑定、事件、
+关键事实、因果、认识、读者披露、时间、线程和具体状态。未标注保持 `pending`；
+认为不适用须写 `not_applicable`、原文段号和理由。每条 `expectations` 写明
+`category`、`statement`、`presence: present|absent`、`evidence_refs` 和 `checks`。
+自然语言预期由人判断；可选的 `checks` 只比较人工对齐条目的具体字段，例如：
+
+```json
+{"path":["world_status"],"op":"equals","value":"refuted"}
+```
+
+`contains`/`lacks` 用于数组；字典值按所列字段逐项匹配，可检查同一实体含有
+“婴儿”和晚揭真名两种表面形式。它们是结构检查，不会判断两个自然语言陈述是否同义。
+
+`compare` 在 `comparison.json` 中列出证据范围内的实际候选路径、原始字段、
+未评价项和分母，另建绑定候选/标注摘要的 `review_<摘要>.json`。人工在 review
+中对齐实际路径，逐项填 `supported/missing/incorrect/unver`、评审者及依据；
+无依据新增、主体错误、错误强断言记入 `extras`，也须候选路径与源段。然后免费复算：
+
+```powershell
+python -m tools.story_facts --dataset-dir E:/novel_evaluation/facts compare --sample baby_dev --review E:/novel_evaluation/facts/dev/baby_dev/review_实际摘要.json
+```
+
+源字节、证据、标注或候选变化后，旧 review 不再有效。报告分别保留结构差异与
+人工语义结论；结构相等不会生成语义通过。人工标注召回只覆盖该 scope 的正向金标，
+未评价或没有分母时为 `null`；未对齐候选不自动计为无依据新增。它不证明整书召回、
+首答可用率或文学质量，需与 `story_metrics.py` 的过程读数及 golden 的成书评价分开报告。
+候选完全漏掉某冻结段时，该段仍留在金标分母；不会要求候选补造证据表才能比较，
+也不会自动把无候选判成缺失，须人工填 `missing` 后才计入召回结果。
 
 ### 已退役的剧情链导出工具（2026-09-26 清理删除）
 

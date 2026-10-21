@@ -48,9 +48,9 @@ def _dispatch_context(base, **fields):
 
 @pytest.fixture
 def box():
-    if not sandbox.books_with_stage3():
+    if not sandbox.books_with_stage1():
         pytest.skip('盘上没有语料——这几条**没在查**，不是「查过没事」')
-    s = sandbox.Sandbox(sandbox.books_with_stage3()[0])
+    s = sandbox.Sandbox(sandbox.books_with_stage1()[0])
     yield s
     s.close()
 
@@ -493,8 +493,8 @@ def test_single_repair_checks_a_recorded_run_but_does_not_guess_legacy(
 def test_a_paid_run_refuses_without_an_explicit_yes(box):
     """**花钱前必须人确认**（`Q-10`）。⚠ 且**不显示预估花费**——
     猜一个数写在界面上比不显示更坏。"""
-    assert N.is_paid('stage6.hook') is True
-    rc = _run('run', 'stage6.hook', box.sid, '--base', str(box.root))
+    assert N.is_paid('str06.stage5.hook') is True
+    rc = _run('run', 'str06.stage5.hook', box.sid, '--base', str(box.root))
     assert rc == X.TERMINAL_STATE
 
 

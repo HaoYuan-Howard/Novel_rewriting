@@ -160,6 +160,7 @@ def test_retired_formats_is_sole_kind_agent_discriminator() -> None:
 #: 旧链（F8c 删除）的 stage 引擎模块名：目录被新链 per-stage 包原地重建，
 #: 模块名才说了算——旧链引擎回来任何一个都当场红。
 OLD_STAGE_MODULES = (
+    'novel/stages/common.py', 'novel/stages/prose_contract.py',
     'novel/stages/stage2/analyze', 'novel/stages/stage2/blueprint',
     'novel/stages/stage2/characters', 'novel/stages/stage2/knowledge',
     'novel/stages/stage2/shared', 'novel/stages/stage2/extract.py',
@@ -188,21 +189,15 @@ OLD_STAGE_MODULES = (
     'novel/stages/stage7/prompts.py', 'novel/stages/stage7/subs.py',
 )
 
-#: 新链 per-stage 引擎模块（F8c 分流后的落位；缺任何一个也红——
+#: 当前 story-v1 per-stage 引擎及其共享纯边界（缺任何一个也红——
 #: 「删除被静默扩大」与「旧面回来」是同一道闸的两半）。
 NEW_STAGE_MODULES = (
-    'novel/stages/stage2/__init__.py',
-    'novel/stages/stage2/names.py',
-    'novel/stages/stage4/__init__.py', 'novel/stages/stage4/design.py',
-    'novel/stages/stage4/grounding.py', 'novel/stages/stage4/compile.py',
-    'novel/stages/stage4/guard.py', 'novel/stages/stage4/fold.py',
-    'novel/stages/stage4/book_ir.py', 'novel/stages/stage4/hook.py',
-    'novel/stages/stage4/hook_context.py',
-    'novel/stages/stage5/__init__.py', 'novel/stages/stage5/body.py',
-    'novel/stages/stage5/body_checks.py', 'novel/stages/stage5/hook_writer.py',
-    'novel/stages/stage7/__init__.py', 'novel/stages/stage4/naming.py',
-    'novel/stages/stage7/assembly.py',
-    'novel/stages/common.py', 'novel/stages/chain.py',
+    'novel/stages/stage2/__init__.py', 'novel/stages/stage2/story.py',
+    'novel/stages/stage4/__init__.py', 'novel/stages/stage4/story.py',
+    'novel/stages/stage5/__init__.py', 'novel/stages/stage5/story.py',
+    'novel/stages/stage7/__init__.py', 'novel/stages/stage7/story.py',
+    'novel/stages/chain.py', 'novel/core/source_index.py',
+    'novel/core/story_prose.py',
 )
 
 #: STR-06 关闭批删除的存量解码面（模块级；回来即红）。
@@ -226,16 +221,12 @@ def test_old_stage_engine_modules_stay_deleted_and_new_chain_stays_complete():
                 if (ROOT / m).exists()]
     problems += [f'新链模块未落位：{m}' for m in NEW_STAGE_MODULES
                  if not (ROOT / m).is_file()]
-    # 包回来了但装的是旧代码：新链包里混进旧链模块名同样红。
-    legacy_names = ('extract.py', 'checks.py', 'plot_design.py', 'plan.py',
-                    'write.py', 'review.py', 'rename.py', 'assemble.py',
-                    'prompts.py', 'measure.py', 'beats.py', 'actors.py',
-                    'reading.py', 'closure.py', 'subs.py')
+    # 当前模块面只允许公开包与 story，旧模块或兼容 shim 换名回流也会红。
     for directory in ('novel/stages/stage2', 'novel/stages/stage4',
                       'novel/stages/stage5', 'novel/stages/stage7'):
         present = {p.name for p in (ROOT / directory).glob('*.py')}
-        problems += [f'{directory}/ 混进旧链模块名：{n}'
-                     for n in legacy_names if n in present]
+        problems += [f'{directory}/ 混进非现役模块：{name}'
+                     for name in sorted(present - {'__init__.py', 'story.py'})]
     assert not problems, '\n'.join(problems)
 
 

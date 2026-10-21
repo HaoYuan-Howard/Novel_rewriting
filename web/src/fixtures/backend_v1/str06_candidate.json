@@ -1,790 +1,3134 @@
 {
- "candidates": {
-  "candidates": [
-   {
+  "_fixture": {
+    "mode": "synthetic",
+    "transport": "FakeTransport",
+    "real_paid_calls": 0,
+    "workflow_nodes": [
+      "str06.stage2.chapters",
+      "str06.stage2.book",
+      "str06.stage2.associate",
+      "str06.stage2.names",
+      "str06.stage2.compile",
+      "str06.stage4.naming",
+      "str06.stage4.preserve",
+      "str06.stage4.body_design",
+      "str06.stage4.chapters",
+      "str06.stage4.compile",
+      "str06.stage4.hook_design",
+      "str06.stage4.hook_compile",
+      "str06.stage5.hook",
+      "str06.stage5.body",
+      "str06.stage7.assemble"
+    ],
+    "origin": "tests.story_facilities.make_pipeline + current HTTP routes",
+    "policy": "产品域、正式ID、来源回执、时间与revision均保留实际生成字节；模型回答是确定性合成材料。"
+  },
+  "candidates": {
+    "candidates": [
+      {
+        "candidate": "cand",
+        "present": true,
+        "status": "delivered",
+        "updated_at": 1792519187
+      }
+    ]
+  },
+  "run": {
     "candidate": "cand",
     "present": true,
+    "contract_version": "story-v1",
+    "revision": "36f07045a44adbe6b9fa077a19485d471a7f2a19d01ad1f54eb1e503a51a2d49",
     "status": "delivered",
-    "updated_at": 1790269950
-   }
-  ]
- },
- "run": {
-  "candidate": "cand",
-  "present": true,
-  "status": "delivered",
-  "failed_node": null,
-  "accepted_body": true,
-  "failure_kind": null,
-  "detail": null,
-  "error_code": null,
-  "error_stage": null,
-  "error_node": null,
-  "error_item": null,
-  "error_phase": null,
-  "error_context": null,
-  "body_failures": {
-   "present": true,
-   "requested": [1, 2],
-   "attempted": [1, 2],
-   "chapters": [],
-   "recorded_at": 1790269950
+    "failed_node": null,
+    "accepted_body": true,
+    "failure_kind": null,
+    "detail": null,
+    "error_code": null,
+    "error_stage": null,
+    "error_node": null,
+    "error_item": null,
+    "error_phase": null,
+    "error_context": null,
+    "body_failures": null,
+    "chapter_observation_failures": null,
+    "assembly_report": null,
+    "owner_issues": null,
+    "epoch": {
+      "epoch_id": "7aa40aeabd27759835e0b84351699481d790d7e66bb6069a4d461f803f65c496",
+      "ordinal": 1,
+      "reason": "initial",
+      "session_run_id": "84a9c261fe3f4b209c527e64e65e51ce"
+    },
+    "nodes": [
+      {
+        "node": "str06.stage2.chapters",
+        "stage": "stage2",
+        "owner": "stage2.chapters",
+        "paid": true,
+        "produced": true
+      },
+      {
+        "node": "str06.stage2.book",
+        "stage": "stage2",
+        "owner": "stage2.book",
+        "paid": true,
+        "produced": true
+      },
+      {
+        "node": "str06.stage2.associate",
+        "stage": "stage2",
+        "owner": "stage2.associate",
+        "paid": true,
+        "produced": true
+      },
+      {
+        "node": "str06.stage2.names",
+        "stage": "stage2",
+        "owner": "stage2.names",
+        "paid": true,
+        "produced": true
+      },
+      {
+        "node": "str06.stage2.compile",
+        "stage": "stage2",
+        "owner": "stage2.compile",
+        "paid": false,
+        "produced": true
+      },
+      {
+        "node": "str06.stage4.naming",
+        "stage": "stage4",
+        "owner": "stage4.naming",
+        "paid": true,
+        "produced": true
+      },
+      {
+        "node": "str06.stage4.preserve",
+        "stage": "stage4",
+        "owner": "stage4.preserve",
+        "paid": true,
+        "produced": true
+      },
+      {
+        "node": "str06.stage4.body_design",
+        "stage": "stage4",
+        "owner": "stage4.body_design",
+        "paid": true,
+        "produced": true
+      },
+      {
+        "node": "str06.stage4.chapters",
+        "stage": "stage4",
+        "owner": "stage4.chapters",
+        "paid": true,
+        "produced": true
+      },
+      {
+        "node": "str06.stage4.compile",
+        "stage": "stage4",
+        "owner": "stage4.compile",
+        "paid": false,
+        "produced": true
+      },
+      {
+        "node": "str06.stage4.hook_design",
+        "stage": "stage4",
+        "owner": "stage4.hook_design",
+        "paid": true,
+        "produced": true
+      },
+      {
+        "node": "str06.stage4.hook_compile",
+        "stage": "stage4",
+        "owner": "stage4.hook_compile",
+        "paid": false,
+        "produced": true
+      },
+      {
+        "node": "str06.stage5.hook",
+        "stage": "stage5",
+        "owner": "stage5.hook",
+        "paid": true,
+        "produced": true
+      },
+      {
+        "node": "str06.stage5.body",
+        "stage": "stage5",
+        "owner": "stage5.body",
+        "paid": true,
+        "produced": true
+      },
+      {
+        "node": "str06.stage7.assemble",
+        "stage": "stage7",
+        "owner": "stage7.assemble",
+        "paid": false,
+        "produced": true
+      }
+    ],
+    "cost": {
+      "present": true,
+      "rows": 13,
+      "new_paid_rows": 13,
+      "cached_rows": 0,
+      "prompt_tokens": 156,
+      "completion_tokens": 104,
+      "reasoning_tokens": null,
+      "unknown_cost_rows": 0,
+      "per_node": [
+        {
+          "node": "str06.stage2.book",
+          "rows": 1,
+          "new_paid_rows": 1,
+          "cached_rows": 0,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "reasoning_tokens": null
+        },
+        {
+          "node": "str06.stage2.chapters",
+          "rows": 2,
+          "new_paid_rows": 2,
+          "cached_rows": 0,
+          "prompt_tokens": 24,
+          "completion_tokens": 16,
+          "reasoning_tokens": null
+        },
+        {
+          "node": "str06.stage2.names",
+          "rows": 1,
+          "new_paid_rows": 1,
+          "cached_rows": 0,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "reasoning_tokens": null
+        },
+        {
+          "node": "str06.stage4.body_design",
+          "rows": 1,
+          "new_paid_rows": 1,
+          "cached_rows": 0,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "reasoning_tokens": null
+        },
+        {
+          "node": "str06.stage4.chapters",
+          "rows": 2,
+          "new_paid_rows": 2,
+          "cached_rows": 0,
+          "prompt_tokens": 24,
+          "completion_tokens": 16,
+          "reasoning_tokens": null
+        },
+        {
+          "node": "str06.stage4.hook_design",
+          "rows": 1,
+          "new_paid_rows": 1,
+          "cached_rows": 0,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "reasoning_tokens": null
+        },
+        {
+          "node": "str06.stage4.naming",
+          "rows": 1,
+          "new_paid_rows": 1,
+          "cached_rows": 0,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "reasoning_tokens": null
+        },
+        {
+          "node": "str06.stage4.preserve",
+          "rows": 1,
+          "new_paid_rows": 1,
+          "cached_rows": 0,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "reasoning_tokens": null
+        },
+        {
+          "node": "str06.stage5.body",
+          "rows": 2,
+          "new_paid_rows": 2,
+          "cached_rows": 0,
+          "prompt_tokens": 24,
+          "completion_tokens": 16,
+          "reasoning_tokens": null
+        },
+        {
+          "node": "str06.stage5.hook",
+          "rows": 1,
+          "new_paid_rows": 1,
+          "cached_rows": 0,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "reasoning_tokens": null
+        }
+      ]
+    }
   },
-  "chapter_observation_failures": {
-   "present": true,
-   "requested": [1, 2],
-   "attempted": [1, 2],
-   "chapters": [],
-   "recorded_at": 1790269950
-  },
-  "assembly_report": {
-   "present": true,
-   "accepted_body": true,
-   "body_access": {
-    "accepted": [1, 2],
-    "missing": [],
-    "rejected": [],
-    "unknown": [],
-    "stale": []
-   },
-   "chain_problems": [],
-   "assembly": {
+  "sourceStory": {
+    "candidate_id": "cand",
+    "revision": "36f07045a44adbe6b9fa077a19485d471a7f2a19d01ad1f54eb1e503a51a2d49",
     "status": "ready",
-    "reason": "ok",
-    "delivery_identity": "53d4885521e612b7be0d606cb55e3ffd387052d6dfdb7b383bc24870fec83a9c"
-   }
-  },
-  "owner_issues": null,
-  "epoch": {
-   "epoch_id": "95478c68ab0a210f5ff791fd36b3417eb88599c9c21be8bb3d4d89803f728aa4",
-   "ordinal": 1,
-   "reason": "initial",
-   "session_run_id": "dfcb8c03fc3a4c9abd0d60e1980299d1"
-  },
-  "nodes": [
-   {
-    "node": "str06.stage2.book",
-    "stage": "stage2",
-    "owner": "stage2.book",
-    "paid": true,
-    "produced": true
-   },
-   {
-    "node": "str06.stage2.chapters",
-    "stage": "stage2",
-    "owner": "stage2.chapters",
-    "paid": true,
-    "produced": true
-   },
-   {
-    "node": "str06.stage2.names",
-    "stage": "stage2",
-    "owner": "stage2.names",
-    "paid": true,
-    "produced": true
-   },
-   {
-    "node": "str06.stage2.associate",
-    "stage": "stage2",
-    "owner": "stage2.associate",
-    "paid": true,
-    "produced": true
-   },
-   {
-    "node": "str06.stage2.compile",
-    "stage": "stage2",
-    "owner": "stage2.compile",
-    "paid": false,
-    "produced": true
-   },
-   {
-    "node": "str06.stage4.preserve",
-    "stage": "stage4",
-    "owner": "stage4.preserve",
-    "paid": true,
-    "produced": true
-   },
-   {
-    "node": "str06.stage4.body_design",
-    "stage": "stage4",
-    "owner": "stage4.body_design",
-    "paid": true,
-    "produced": true
-   },
-   {
-    "node": "str06.stage4.hook_design",
-    "stage": "stage4",
-    "owner": "stage4.hook_design",
-    "paid": true,
-    "produced": true
-   },
-   {
-    "node": "str06.stage4.compile",
-    "stage": "stage4",
-    "owner": "stage4.compile",
-    "paid": false,
-    "produced": true
-   },
-   {
-    "node": "str06.stage5.hook",
-    "stage": "stage5",
-    "owner": "stage5.hook",
-    "paid": true,
-    "produced": true
-   },
-   {
-    "node": "str06.stage5.body",
-    "stage": "stage5",
-    "owner": "stage5.body",
-    "paid": true,
-    "produced": true
-   },
-   {
-    "node": "str06.stage4.naming",
-    "stage": "stage7",
-    "owner": "stage4.naming",
-    "paid": true,
-    "produced": true
-   },
-   {
-    "node": "str06.stage7.assemble",
-    "stage": "stage7",
-    "owner": "stage7.assembly",
-    "paid": false,
-    "produced": true
-   }
-  ],
-  "cost": {
-   "present": true,
-   "rows": 12,
-   "new_paid_rows": 12,
-   "cached_rows": 0,
-   "prompt_tokens": 500,
-   "completion_tokens": 255,
-   "reasoning_tokens": null,
-   "unknown_cost_rows": 0,
-   "per_node": [
-    {
-     "node": "str06.stage2.associate",
-     "rows": 1,
-     "new_paid_rows": 1,
-     "cached_rows": 0,
-     "prompt_tokens": 10,
-     "completion_tokens": 10,
-     "reasoning_tokens": null
-    },
-    {
-     "node": "str06.stage2.book",
-     "rows": 1,
-     "new_paid_rows": 1,
-     "cached_rows": 0,
-     "prompt_tokens": 10,
-     "completion_tokens": 10,
-     "reasoning_tokens": null
-    },
-    {
-     "node": "str06.stage2.chapters",
-     "rows": 2,
-     "new_paid_rows": 2,
-     "cached_rows": 0,
-     "prompt_tokens": 20,
-     "completion_tokens": 20,
-     "reasoning_tokens": null
-    },
-    {
-     "node": "str06.stage2.names",
-     "rows": 1,
-     "new_paid_rows": 1,
-     "cached_rows": 0,
-     "prompt_tokens": 10,
-     "completion_tokens": 10,
-     "reasoning_tokens": null
-    },
-    {
-     "node": "str06.stage4.body_design",
-     "rows": 1,
-     "new_paid_rows": 1,
-     "cached_rows": 0,
-     "prompt_tokens": 10,
-     "completion_tokens": 10,
-     "reasoning_tokens": null
-    },
-    {
-     "node": "str06.stage4.hook_design",
-     "rows": 1,
-     "new_paid_rows": 1,
-     "cached_rows": 0,
-     "prompt_tokens": 10,
-     "completion_tokens": 10,
-     "reasoning_tokens": null
-    },
-    {
-     "node": "str06.stage4.preserve",
-     "rows": 1,
-     "new_paid_rows": 1,
-     "cached_rows": 0,
-     "prompt_tokens": 10,
-     "completion_tokens": 10,
-     "reasoning_tokens": null
-    },
-    {
-     "node": "str06.stage5.body",
-     "rows": 2,
-     "new_paid_rows": 2,
-     "cached_rows": 0,
-     "prompt_tokens": 400,
-     "completion_tokens": 160,
-     "reasoning_tokens": null
-    },
-    {
-     "node": "str06.stage5.hook",
-     "rows": 1,
-     "new_paid_rows": 1,
-     "cached_rows": 0,
-     "prompt_tokens": 10,
-     "completion_tokens": 5,
-     "reasoning_tokens": null
-    },
-    {
-     "node": "str06.stage4.naming",
-     "rows": 1,
-     "new_paid_rows": 1,
-     "cached_rows": 0,
-     "prompt_tokens": 10,
-     "completion_tokens": 10,
-     "reasoning_tokens": null
-    }
-   ]
-  }
- },
- "characters": {
-  "present": true,
-  "contract_version": null,
-  "characters": [
-   {
-    "char_id": "fu_jun",
-    "canonical": "夫君",
-    "surfaces": [
-     {
-      "surface": "夫君",
-      "from_chapter": 1,
-      "until_chapter": null
-     },
-     {
-      "surface": "陆大哥",
-      "from_chapter": 1,
-      "until_chapter": null
-     },
-     {
-      "surface": "陆兄",
-      "from_chapter": 1,
-      "until_chapter": null
-     }
-    ]
-   },
-   {
-    "char_id": "yun_niang",
-    "canonical": "苏芸娘",
-    "surfaces": [
-     {
-      "surface": "苏芸娘",
-      "from_chapter": 1,
-      "until_chapter": null
-     },
-     {
-      "surface": "芸娘",
-      "from_chapter": 1,
-      "until_chapter": null
-     },
-     {
-      "surface": "苏姑娘",
-      "from_chapter": 1,
-      "until_chapter": null
-     }
-    ]
-   }
-  ],
-  "name_structure": {
-   "families": {
-    "fam_lu": "陆",
-    "fam_su": "苏"
-   },
-   "people": {
-    "fu_jun": {
-     "family_id": "fam_lu",
-     "given": null,
-     "aliases": [],
-     "surface_forms": {
-      "夫君": null,
-      "陆大哥": "{family}大哥",
-      "陆兄": "{family}兄"
-     }
-    },
-    "yun_niang": {
-     "family_id": "fam_su",
-     "given": "芸娘",
-     "aliases": [],
-     "surface_forms": {
-      "苏芸娘": "{family}{given}",
-      "芸娘": "{given}",
-      "苏姑娘": "{family}姑娘"
-     }
-    }
-   }
-  }
- },
- "blueprint": {
-  "present": true,
-  "world_constraints": [],
-  "chapters": [
-   {
-    "chapter": 1,
-    "beats": [
-     {
-      "beat_id": "b01_01",
-      "event": "苏芸娘嫁入陆家，夫君立下旧约。",
-      "participants": [
-       "yun_niang",
-       "fu_jun"
+    "data": {
+      "contract_version": "story-v1",
+      "source_identity": "513a204e30b32257774954e73c7b758640813743dcefca5bfd59d01a490e867a",
+      "entities": {
+        "ent28a3bb64afdb96942206": {
+          "kind": "person",
+          "label": "叙述者",
+          "surfaces": [
+            {
+              "literal": "我",
+              "evidence_refs": [
+                "e001_00001"
+              ]
+            }
+          ],
+          "name": {
+            "family_group": null,
+            "family": null,
+            "given": null,
+            "aliases": {},
+            "surface_forms": {
+              "我": null
+            }
+          }
+        },
+        "entce0a75b47bc01563406d": {
+          "kind": "person",
+          "label": "婴儿",
+          "surfaces": [
+            {
+              "literal": "婴儿",
+              "evidence_refs": [
+                "e001_00001"
+              ]
+            },
+            {
+              "literal": "孩子",
+              "evidence_refs": [
+                "e002_00003"
+              ]
+            },
+            {
+              "literal": "盛儿",
+              "evidence_refs": [
+                "e002_00003"
+              ]
+            }
+          ],
+          "name": {
+            "family_group": null,
+            "family": null,
+            "given": null,
+            "aliases": {
+              "al01": "盛儿"
+            },
+            "surface_forms": {
+              "婴儿": null,
+              "孩子": null,
+              "盛儿": "{alias:al01}"
+            }
+          }
+        },
+        "ent798f164f9af856057ef4": {
+          "kind": "person",
+          "label": "来客",
+          "surfaces": [
+            {
+              "literal": "来客",
+              "evidence_refs": [
+                "e001_00003"
+              ]
+            }
+          ],
+          "name": {
+            "family_group": null,
+            "family": null,
+            "given": null,
+            "aliases": {},
+            "surface_forms": {
+              "来客": null
+            }
+          }
+        }
+      },
+      "events": {
+        "ev69680c53c79922d003e1": {
+          "chapter_ordinal": 1,
+          "order": 1,
+          "summary": "开场前我已知道姐姐把婴儿托付给我；我抱着婴儿走进屋里。",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "entce0a75b47bc01563406d"
+          ],
+          "temporal": {
+            "frame": "current",
+            "anchor_event": null
+          },
+          "scene_boundary": "unknown",
+          "evidence_refs": [
+            "e001_00001"
+          ]
+        },
+        "ev2fecc4fead4aba59eedd": {
+          "chapter_ordinal": 1,
+          "order": 2,
+          "summary": "我想查清身世，也决定明日赶集。",
+          "participants": [
+            "ent28a3bb64afdb96942206"
+          ],
+          "temporal": {
+            "frame": "current",
+            "anchor_event": null
+          },
+          "scene_boundary": "unknown",
+          "evidence_refs": [
+            "e001_00002"
+          ]
+        },
+        "eve6f6e4d668592bea8d5d": {
+          "chapter_ordinal": 1,
+          "order": 3,
+          "summary": "我猜来客是姐姐请来的，却没有证据。",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "ent798f164f9af856057ef4"
+          ],
+          "temporal": {
+            "frame": "current",
+            "anchor_event": null
+          },
+          "scene_boundary": "unknown",
+          "evidence_refs": [
+            "e001_00003"
+          ]
+        },
+        "ev2dd90bac935d26c3f3ff": {
+          "chapter_ordinal": 2,
+          "order": 1,
+          "summary": "来客解释自己走错巷子，姐姐从未请他。",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "ent798f164f9af856057ef4"
+          ],
+          "temporal": {
+            "frame": "current",
+            "anchor_event": null
+          },
+          "scene_boundary": "unknown",
+          "evidence_refs": [
+            "e002_00001"
+          ]
+        },
+        "ev071d988c8d33033e424d": {
+          "chapter_ordinal": 2,
+          "order": 2,
+          "summary": "我回想幼时病重，如今早已痊愈。",
+          "participants": [
+            "ent28a3bb64afdb96942206"
+          ],
+          "temporal": {
+            "frame": "current",
+            "anchor_event": null
+          },
+          "scene_boundary": "unknown",
+          "evidence_refs": [
+            "e002_00002"
+          ]
+        },
+        "ev3230e7f44252b32ce3d4": {
+          "chapter_ordinal": 2,
+          "order": 3,
+          "summary": "姐姐叫孩子盛儿，我这才知道他的名字。",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "entce0a75b47bc01563406d"
+          ],
+          "temporal": {
+            "frame": "current",
+            "anchor_event": null
+          },
+          "scene_boundary": "unknown",
+          "evidence_refs": [
+            "e002_00003"
+          ]
+        }
+      },
+      "propositions": {
+        "pd7ff754535e783b5cd48": {
+          "statement": "姐姐已把婴儿托付给叙述者",
+          "entity_refs": [
+            "entce0a75b47bc01563406d",
+            "ent28a3bb64afdb96942206"
+          ],
+          "world_status": "established",
+          "evidence_refs": [
+            "e001_00001"
+          ]
+        },
+        "pbe37a2820a886e4b0739": {
+          "statement": "来客是姐姐请来的",
+          "entity_refs": [
+            "ent798f164f9af856057ef4"
+          ],
+          "world_status": "refuted",
+          "evidence_refs": [
+            "e001_00003",
+            "e002_00001"
+          ]
+        },
+        "p0588426bafa096393dc9": {
+          "statement": "孩子名叫盛儿",
+          "entity_refs": [
+            "entce0a75b47bc01563406d"
+          ],
+          "world_status": "established",
+          "evidence_refs": [
+            "e002_00003"
+          ]
+        }
+      },
+      "knowledge_updates": [
+        {
+          "holder": "ent28a3bb64afdb96942206",
+          "proposition_ref": "pd7ff754535e783b5cd48",
+          "mode": "learns",
+          "polarity": "affirmative",
+          "at": "story_start",
+          "supersedes": [],
+          "evidence_refs": [
+            "e001_00001"
+          ],
+          "update_id": "ku1d4437d7fe37f734b9d4"
+        },
+        {
+          "holder": "ent28a3bb64afdb96942206",
+          "proposition_ref": "pbe37a2820a886e4b0739",
+          "mode": "believes",
+          "polarity": "affirmative",
+          "at": "eve6f6e4d668592bea8d5d",
+          "supersedes": [],
+          "evidence_refs": [
+            "e001_00003"
+          ],
+          "update_id": "ku050519c900b348654176"
+        },
+        {
+          "holder": "ent28a3bb64afdb96942206",
+          "proposition_ref": "pbe37a2820a886e4b0739",
+          "mode": "rejects",
+          "polarity": "negative",
+          "at": "ev2dd90bac935d26c3f3ff",
+          "supersedes": [
+            "ku050519c900b348654176"
+          ],
+          "evidence_refs": [
+            "e002_00001"
+          ],
+          "update_id": "kuc51f7598f02d70e48141"
+        }
       ],
-      "effects": [],
-      "scene_boundary": "new",
-      "temporal_mode": "single",
-      "cognition": [],
-      "loops": []
-     }
-    ],
-    "causal_edges": [],
-    "scenes": [
-     {
-      "scene_id": "sc01",
-      "beat_ids": [
-       "b01_01"
-      ]
-     }
-    ]
-   },
-   {
-    "chapter": 2,
-    "beats": [
-     {
-      "beat_id": "b02_01",
-      "event": "夫君夜半离家，芸娘发现玉佩之秘。",
-      "participants": [
-       "yun_niang",
-       "fu_jun"
+      "exposures": [
+        {
+          "event_ref": "eve6f6e4d668592bea8d5d",
+          "proposition_ref": "pbe37a2820a886e4b0739",
+          "mode": "suggested",
+          "evidence_refs": [
+            "e001_00003"
+          ]
+        },
+        {
+          "event_ref": "ev3230e7f44252b32ce3d4",
+          "proposition_ref": "p0588426bafa096393dc9",
+          "mode": "confirmed",
+          "evidence_refs": [
+            "e002_00003"
+          ]
+        }
       ],
-      "effects": [],
-      "scene_boundary": "new",
-      "temporal_mode": "single",
-      "cognition": [],
-      "loops": []
-     }
-    ],
-    "causal_edges": [],
-    "scenes": [
-     {
-      "scene_id": "sc02",
-      "beat_ids": [
-       "b02_01"
-      ]
-     }
-    ]
-   }
-  ]
- },
- "design": {
-  "present": true,
-  "graph_id": "pg_main",
-  "scenes": [
-   {
-    "scene_id": "s01",
-    "driver": {
-     "focal_actor": "yun_niang",
-     "immediate_want": "安度新婚",
-     "opposition": "夫君的怪异",
-     "turn": "立约"
-    },
-    "realization_brief": "重心在拜堂到立约的落差；从婚礼喧闹写起，展开洞房对坐，在旧约出口处收住，衔接下一场夜半异动。",
-    "pov": "yun_niang",
-    "voice": "冷峻",
-    "avoid": [],
-    "beats": [
-     {
-      "beat_id": "bt1",
-      "event": "拜堂成亲",
-      "participants": [
-       "yun_niang",
-       "fu_jun"
+      "state_slots": {
+        "slot7e06276b757ef3f6bb12": {
+          "subjects": [
+            "ent28a3bb64afdb96942206"
+          ],
+          "aspect": "intent",
+          "focus": "查清自己的身世"
+        },
+        "slot4cd733146e22ccf782e4": {
+          "subjects": [
+            "ent28a3bb64afdb96942206"
+          ],
+          "aspect": "intent",
+          "focus": "明日赶集安排"
+        },
+        "slot48d2e4b3c64de5f983f8": {
+          "subjects": [
+            "ent28a3bb64afdb96942206"
+          ],
+          "aspect": "health",
+          "focus": "身体病况"
+        }
+      },
+      "state_updates": [
+        {
+          "slot_ref": "slot7e06276b757ef3f6bb12",
+          "op": "set",
+          "value": "决定查身世",
+          "proposition_ref": null,
+          "at": "ev2fecc4fead4aba59eedd",
+          "effective_time": "current",
+          "modality": "actual",
+          "persistence": "stable_until_changed",
+          "evidence_refs": [
+            "e001_00002"
+          ],
+          "update_id": "su3260b5fd3ee58e79d577"
+        },
+        {
+          "slot_ref": "slot4cd733146e22ccf782e4",
+          "op": "set",
+          "value": "决定明日赶集",
+          "proposition_ref": null,
+          "at": "ev2fecc4fead4aba59eedd",
+          "effective_time": "current",
+          "modality": "actual",
+          "persistence": "stable_until_changed",
+          "evidence_refs": [
+            "e001_00002"
+          ],
+          "update_id": "su7424bba416c27d89811b"
+        },
+        {
+          "slot_ref": "slot48d2e4b3c64de5f983f8",
+          "op": "set",
+          "value": "已经康复",
+          "proposition_ref": null,
+          "at": "story_start",
+          "effective_time": "current",
+          "modality": "actual",
+          "persistence": "stable_until_changed",
+          "evidence_refs": [
+            "e002_00002"
+          ],
+          "update_id": "su485543318f4189991293"
+        },
+        {
+          "slot_ref": "slot48d2e4b3c64de5f983f8",
+          "op": "set",
+          "value": "幼时病重",
+          "proposition_ref": null,
+          "at": "ev071d988c8d33033e424d",
+          "effective_time": "past",
+          "modality": "actual",
+          "persistence": "stable_until_changed",
+          "evidence_refs": [
+            "e002_00002"
+          ],
+          "update_id": "su11764ff0d40a1e4db127"
+        }
       ],
-      "dramatic_intent": "成礼",
-      "target_delta": [
-       {
-        "domain": "relation",
-        "key": "marital_status",
-        "subjects": [
-         "yun_niang",
-         "fu_jun"
+      "causal_links": [
+        {
+          "from_event": "eve6f6e4d668592bea8d5d",
+          "to_event": "ev2dd90bac935d26c3f3ff",
+          "kind": "setup_payoff",
+          "support": "stated",
+          "evidence_refs": [
+            "e001_00003",
+            "e002_00001"
+          ]
+        }
+      ],
+      "threads": {
+        "th8a089573ef9cc4362362": {
+          "question": "来客是否受姐姐邀请？",
+          "updates": [
+            {
+              "event_ref": "eve6f6e4d668592bea8d5d",
+              "op": "open",
+              "resolution": null,
+              "evidence_refs": [
+                "e001_00003"
+              ]
+            },
+            {
+              "event_ref": "ev2dd90bac935d26c3f3ff",
+              "op": "resolve",
+              "resolution": "没有受邀，来客走错巷子",
+              "evidence_refs": [
+                "e002_00001"
+              ]
+            }
+          ]
+        }
+      },
+      "world_rules": {},
+      "expression": {
+        "person": "first",
+        "focalizers": [
+          "ent28a3bb64afdb96942206"
         ],
-        "holder": null,
-        "op": "set",
-        "value": "夫妻",
-        "scope": "book",
-        "knowledge_mode": null
-       }
-      ],
-      "delivery_hint": "",
-      "surface_introductions": []
-     },
-     {
-      "beat_id": "bt2",
-      "event": "洞房夜夫君立约",
-      "participants": [
-       "yun_niang",
-       "fu_jun"
-      ],
-      "dramatic_intent": "埋线",
-      "target_delta": [
-       {
-        "domain": "knowledge",
-        "key": "debt_agreement",
-        "subjects": [
-         "fu_jun"
+        "statement": "叙述者以第一人称讲述",
+        "mechanisms": [
+          "内心猜测与客观解释形成反差"
         ],
-        "holder": "yun_niang",
-        "op": "set",
-        "value": "夫君身负报恩之约",
-        "scope": "book",
-        "knowledge_mode": "known"
-       }
-      ],
-      "delivery_hint": "",
-      "surface_introductions": [
-       {
-        "char_id": "yun_niang",
-        "surfaces": [
-         "芸娘"
+        "evidence_refs": [
+          "e001_00003"
         ]
-       }
+      },
+      "conflicts": [],
+      "evidence": {
+        "e001_00001": {
+          "chapter_ordinal": 1,
+          "paragraph_ordinal": 1,
+          "text": "开场前我已知道姐姐把婴儿托付给我；我抱着婴儿走进屋里。"
+        },
+        "e001_00002": {
+          "chapter_ordinal": 1,
+          "paragraph_ordinal": 2,
+          "text": "我想查清身世，也决定明日赶集。"
+        },
+        "e001_00003": {
+          "chapter_ordinal": 1,
+          "paragraph_ordinal": 3,
+          "text": "我猜来客是姐姐请来的，却没有证据。"
+        },
+        "e002_00001": {
+          "chapter_ordinal": 2,
+          "paragraph_ordinal": 1,
+          "text": "来客解释自己走错巷子，姐姐从未请他。"
+        },
+        "e002_00002": {
+          "chapter_ordinal": 2,
+          "paragraph_ordinal": 2,
+          "text": "我回想幼时病重，如今早已痊愈。"
+        },
+        "e002_00003": {
+          "chapter_ordinal": 2,
+          "paragraph_ordinal": 3,
+          "text": "姐姐叫孩子盛儿，我这才知道他的名字。"
+        }
+      }
+    },
+    "errors": []
+  },
+  "targetStory": {
+    "candidate_id": "cand",
+    "revision": "36f07045a44adbe6b9fa077a19485d471a7f2a19d01ad1f54eb1e503a51a2d49",
+    "status": "ready",
+    "data": {
+      "contract_version": "story-v1",
+      "source_chapter_count": 2,
+      "total_length_budget": 200,
+      "premise": "照料婴儿时面对误会与迟到的信息",
+      "narration": "第一人称限知",
+      "style": "克制自然，由即时反应推进",
+      "character_voices": {
+        "ent28a3bb64afdb96942206": "谨慎中带一点自嘲"
+      },
+      "character_arcs": [
+        {
+          "entity_ref": "ent28a3bb64afdb96942206",
+          "starting_position": "凭猜测认定来意",
+          "pressure": "照料孩子的责任与陌生访客",
+          "choice": "听完解释后承认误会",
+          "event_refs": [
+            "ev0003",
+            "ev0004"
+          ],
+          "end_position": "分清猜测与事实"
+        }
+      ],
+      "world_rules": [],
+      "propositions": {
+        "tp0001": {
+          "statement": "姐姐已经托付婴儿给我",
+          "status": "established"
+        },
+        "tp0002": {
+          "statement": "来客受姐姐邀请",
+          "status": "refuted"
+        },
+        "tp0003": {
+          "statement": "孩子名叫安儿",
+          "status": "established"
+        }
+      },
+      "initial_state": [
+        {
+          "subject_ids": [
+            "ent28a3bb64afdb96942206"
+          ],
+          "dimension": "健康",
+          "qualifier": "身体",
+          "value": "已经痊愈",
+          "op": "set",
+          "modality": "actual"
+        }
+      ],
+      "initial_knowledge": [
+        {
+          "holder": "ent28a3bb64afdb96942206",
+          "proposition_ref": "tp0001",
+          "mode": "known"
+        }
+      ],
+      "initial_displays": {
+        "ent28a3bb64afdb96942206": "我",
+        "entce0a75b47bc01563406d": "婴儿",
+        "ent798f164f9af856057ef4": "来客"
+      },
+      "events": [
+        {
+          "event_id": "ev0001",
+          "summary": "我抱着受托照料的婴儿进屋",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "entce0a75b47bc01563406d"
+          ],
+          "trigger": "承接当前处境",
+          "choice": "我抱着受托照料的婴儿进屋",
+          "result": "我抱着受托照料的婴儿进屋",
+          "requires": [],
+          "after": [],
+          "temporal_frame": "current",
+          "realizes": [
+            "rq0001"
+          ],
+          "state_changes": [],
+          "knowledge_reads": [],
+          "knowledge_changes": [],
+          "name_releases": {}
+        },
+        {
+          "event_id": "ev0002",
+          "summary": "我决定查清身世并安排明日赶集",
+          "participants": [
+            "ent28a3bb64afdb96942206"
+          ],
+          "trigger": "承接当前处境",
+          "choice": "我决定查清身世并安排明日赶集",
+          "result": "我决定查清身世并安排明日赶集",
+          "requires": [],
+          "after": [],
+          "temporal_frame": "current",
+          "realizes": [
+            "rq0002"
+          ],
+          "state_changes": [
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "意图",
+              "qualifier": "身世",
+              "value": "查清身世",
+              "op": "set",
+              "modality": "actual"
+            },
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "意图",
+              "qualifier": "行程",
+              "value": "明日赶集",
+              "op": "set",
+              "modality": "actual"
+            }
+          ],
+          "knowledge_reads": [],
+          "knowledge_changes": [],
+          "name_releases": {}
+        },
+        {
+          "event_id": "ev0003",
+          "summary": "我误以为来客受姐姐邀请",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "ent798f164f9af856057ef4"
+          ],
+          "trigger": "承接当前处境",
+          "choice": "我误以为来客受姐姐邀请",
+          "result": "我误以为来客受姐姐邀请",
+          "requires": [],
+          "after": [],
+          "temporal_frame": "current",
+          "realizes": [
+            "rq0003"
+          ],
+          "state_changes": [],
+          "knowledge_reads": [],
+          "knowledge_changes": [
+            {
+              "holder": "ent28a3bb64afdb96942206",
+              "proposition_ref": "tp0002",
+              "mode": "believed"
+            },
+            {
+              "holder": "reader",
+              "proposition_ref": "tp0002",
+              "mode": "suspected"
+            }
+          ],
+          "name_releases": {}
+        },
+        {
+          "event_id": "ev0004",
+          "summary": "来客解释自己走错巷子，我纠正误会",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "ent798f164f9af856057ef4"
+          ],
+          "trigger": "承接当前处境",
+          "choice": "来客解释自己走错巷子，我纠正误会",
+          "result": "来客解释自己走错巷子，我纠正误会",
+          "requires": [
+            "ev0003"
+          ],
+          "after": [],
+          "temporal_frame": "current",
+          "realizes": [
+            "rq0004"
+          ],
+          "state_changes": [],
+          "knowledge_reads": [],
+          "knowledge_changes": [
+            {
+              "holder": "ent28a3bb64afdb96942206",
+              "proposition_ref": "tp0002",
+              "mode": "refuted"
+            },
+            {
+              "holder": "reader",
+              "proposition_ref": "tp0002",
+              "mode": "refuted"
+            }
+          ],
+          "name_releases": {}
+        },
+        {
+          "event_id": "ev0005",
+          "summary": "我回忆幼时病重，当前已经痊愈",
+          "participants": [
+            "ent28a3bb64afdb96942206"
+          ],
+          "trigger": "承接当前处境",
+          "choice": "我回忆幼时病重，当前已经痊愈",
+          "result": "我回忆幼时病重，当前已经痊愈",
+          "requires": [],
+          "after": [],
+          "temporal_frame": "past",
+          "realizes": [
+            "rq0005"
+          ],
+          "state_changes": [
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "健康",
+              "qualifier": "身体",
+              "value": "幼时病重",
+              "op": "set",
+              "modality": "actual"
+            }
+          ],
+          "knowledge_reads": [],
+          "knowledge_changes": [],
+          "name_releases": {}
+        },
+        {
+          "event_id": "ev0006",
+          "summary": "姐姐唤孩子安儿，我获知他的名字",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "entce0a75b47bc01563406d"
+          ],
+          "trigger": "承接当前处境",
+          "choice": "姐姐唤孩子安儿，我获知他的名字",
+          "result": "姐姐唤孩子安儿，我获知他的名字",
+          "requires": [],
+          "after": [],
+          "temporal_frame": "current",
+          "realizes": [
+            "rq0006"
+          ],
+          "state_changes": [],
+          "knowledge_reads": [],
+          "knowledge_changes": [
+            {
+              "holder": "ent28a3bb64afdb96942206",
+              "proposition_ref": "tp0003",
+              "mode": "known"
+            },
+            {
+              "holder": "reader",
+              "proposition_ref": "tp0003",
+              "mode": "known"
+            }
+          ],
+          "name_releases": {
+            "entce0a75b47bc01563406d": "安儿"
+          }
+        }
+      ],
+      "chapters": [
+        {
+          "chapter_ordinal": 1,
+          "purpose": "建立照料责任与来客误会",
+          "event_refs": [
+            "ev0001",
+            "ev0002",
+            "ev0003"
+          ],
+          "entry": "我抱着孩子进屋",
+          "exit": "我等着来客说明来意",
+          "length_budget": 100,
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "entce0a75b47bc01563406d",
+            "ent798f164f9af856057ef4"
+          ],
+          "entry_state": [
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "健康",
+              "qualifier": "身体",
+              "value": "已经痊愈",
+              "op": "set",
+              "modality": "actual"
+            }
+          ],
+          "exit_state": [
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "健康",
+              "qualifier": "身体",
+              "value": "已经痊愈",
+              "op": "set",
+              "modality": "actual"
+            },
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "意图",
+              "qualifier": "身世",
+              "value": "查清身世",
+              "op": "set",
+              "modality": "actual"
+            },
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "意图",
+              "qualifier": "行程",
+              "value": "明日赶集",
+              "op": "set",
+              "modality": "actual"
+            }
+          ],
+          "entry_knowledge": [
+            {
+              "holder": "ent28a3bb64afdb96942206",
+              "proposition_ref": "tp0001",
+              "mode": "known"
+            }
+          ],
+          "exit_knowledge": [
+            {
+              "holder": "ent28a3bb64afdb96942206",
+              "proposition_ref": "tp0001",
+              "mode": "known"
+            },
+            {
+              "holder": "ent28a3bb64afdb96942206",
+              "proposition_ref": "tp0002",
+              "mode": "believed"
+            },
+            {
+              "holder": "reader",
+              "proposition_ref": "tp0002",
+              "mode": "suspected"
+            }
+          ],
+          "entry_displays": {
+            "ent28a3bb64afdb96942206": "我",
+            "entce0a75b47bc01563406d": "婴儿",
+            "ent798f164f9af856057ef4": "来客"
+          },
+          "exit_displays": {
+            "ent28a3bb64afdb96942206": "我",
+            "entce0a75b47bc01563406d": "婴儿",
+            "ent798f164f9af856057ef4": "来客"
+          }
+        },
+        {
+          "chapter_ordinal": 2,
+          "purpose": "纠正误会并获知孩子名字",
+          "event_refs": [
+            "ev0004",
+            "ev0005",
+            "ev0006"
+          ],
+          "entry": "来客继续解释",
+          "exit": "我抱紧安儿，接受眼前的责任",
+          "length_budget": 100,
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "ent798f164f9af856057ef4",
+            "entce0a75b47bc01563406d"
+          ],
+          "entry_state": [
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "健康",
+              "qualifier": "身体",
+              "value": "已经痊愈",
+              "op": "set",
+              "modality": "actual"
+            },
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "意图",
+              "qualifier": "身世",
+              "value": "查清身世",
+              "op": "set",
+              "modality": "actual"
+            },
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "意图",
+              "qualifier": "行程",
+              "value": "明日赶集",
+              "op": "set",
+              "modality": "actual"
+            }
+          ],
+          "exit_state": [
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "健康",
+              "qualifier": "身体",
+              "value": "已经痊愈",
+              "op": "set",
+              "modality": "actual"
+            },
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "意图",
+              "qualifier": "身世",
+              "value": "查清身世",
+              "op": "set",
+              "modality": "actual"
+            },
+            {
+              "subject_ids": [
+                "ent28a3bb64afdb96942206"
+              ],
+              "dimension": "意图",
+              "qualifier": "行程",
+              "value": "明日赶集",
+              "op": "set",
+              "modality": "actual"
+            }
+          ],
+          "entry_knowledge": [
+            {
+              "holder": "ent28a3bb64afdb96942206",
+              "proposition_ref": "tp0001",
+              "mode": "known"
+            },
+            {
+              "holder": "ent28a3bb64afdb96942206",
+              "proposition_ref": "tp0002",
+              "mode": "believed"
+            },
+            {
+              "holder": "reader",
+              "proposition_ref": "tp0002",
+              "mode": "suspected"
+            }
+          ],
+          "exit_knowledge": [
+            {
+              "holder": "ent28a3bb64afdb96942206",
+              "proposition_ref": "tp0001",
+              "mode": "known"
+            },
+            {
+              "holder": "ent28a3bb64afdb96942206",
+              "proposition_ref": "tp0002",
+              "mode": "refuted"
+            },
+            {
+              "holder": "reader",
+              "proposition_ref": "tp0002",
+              "mode": "refuted"
+            },
+            {
+              "holder": "ent28a3bb64afdb96942206",
+              "proposition_ref": "tp0003",
+              "mode": "known"
+            },
+            {
+              "holder": "reader",
+              "proposition_ref": "tp0003",
+              "mode": "known"
+            }
+          ],
+          "entry_displays": {
+            "ent28a3bb64afdb96942206": "我",
+            "entce0a75b47bc01563406d": "婴儿",
+            "ent798f164f9af856057ef4": "来客"
+          },
+          "exit_displays": {
+            "ent28a3bb64afdb96942206": "我",
+            "entce0a75b47bc01563406d": "安儿",
+            "ent798f164f9af856057ef4": "来客"
+          }
+        }
+      ],
+      "names": {
+        "ent28a3bb64afdb96942206": {
+          "entity_id": "ent28a3bb64afdb96942206",
+          "primary": "叙述者",
+          "surfaces": {
+            "我": "我"
+          }
+        },
+        "entce0a75b47bc01563406d": {
+          "entity_id": "entce0a75b47bc01563406d",
+          "primary": "安儿",
+          "surfaces": {
+            "婴儿": "婴儿",
+            "孩子": "孩子",
+            "盛儿": "安儿"
+          }
+        },
+        "ent798f164f9af856057ef4": {
+          "entity_id": "ent798f164f9af856057ef4",
+          "primary": "来客",
+          "surfaces": {
+            "来客": "来客"
+          }
+        }
+      },
+      "chapter_plans": [
+        {
+          "contract_version": "story-v1",
+          "chapter_ordinal": 1,
+          "scenes": [
+            {
+              "setting": "屋内",
+              "time": "当前",
+              "pov": "ent28a3bb64afdb96942206",
+              "participants": [
+                "ent28a3bb64afdb96942206",
+                "entce0a75b47bc01563406d",
+                "ent798f164f9af856057ef4"
+              ],
+              "goal": "照料孩子并弄清来意",
+              "opposition": "信息不完整",
+              "turn": "我误以为来客受姐姐邀请",
+              "realization": "通过当下行动、对白与反应展开，不复述提纲",
+              "actions": [
+                {
+                  "event_no": 1,
+                  "trigger": "承接当前处境",
+                  "choice": "我抱着受托照料的婴儿进屋",
+                  "action": "我抱着受托照料的婴儿进屋",
+                  "response": "我按眼前信息作出即时反应",
+                  "result": "我抱着受托照料的婴儿进屋",
+                  "transition": "承接上一动作，回忆另标时间"
+                },
+                {
+                  "event_no": 2,
+                  "trigger": "承接当前处境",
+                  "choice": "我决定查清身世并安排明日赶集",
+                  "action": "我决定查清身世并安排明日赶集",
+                  "response": "我按眼前信息作出即时反应",
+                  "result": "我决定查清身世并安排明日赶集",
+                  "transition": "承接上一动作，回忆另标时间"
+                },
+                {
+                  "event_no": 3,
+                  "trigger": "承接当前处境",
+                  "choice": "我误以为来客受姐姐邀请",
+                  "action": "我误以为来客受姐姐邀请",
+                  "response": "我按眼前信息作出即时反应",
+                  "result": "我误以为来客受姐姐邀请",
+                  "transition": "承接上一动作，回忆另标时间"
+                }
+              ]
+            }
+          ],
+          "writer_context": {
+            "purpose": "建立照料责任与来客误会",
+            "entry": "我抱着孩子进屋",
+            "exit": "我等着来客说明来意",
+            "narration": "第一人称限知",
+            "style": "通过即时动作和反应推进",
+            "entry_state": [
+              {
+                "item_no": 1,
+                "text": "当前身体已经痊愈"
+              }
+            ],
+            "exit_state": [
+              {
+                "item_no": 1,
+                "text": "当前身体已经痊愈"
+              }
+            ],
+            "entry_knowledge": [
+              {
+                "item_no": 1,
+                "text": "姐姐已经把婴儿托付给我"
+              }
+            ],
+            "world_rules": [],
+            "requirements": [
+              {
+                "requirement_ref": "rq0001",
+                "placement": "respect",
+                "text": "我抱着受托照料的婴儿进屋，保留主体、时态与知情差异"
+              },
+              {
+                "requirement_ref": "rq0002",
+                "placement": "respect",
+                "text": "我决定查清身世并安排明日赶集，保留主体、时态与知情差异"
+              },
+              {
+                "requirement_ref": "rq0003",
+                "placement": "respect",
+                "text": "我误以为来客受姐姐邀请，保留主体、时态与知情差异"
+              }
+            ],
+            "voices": {
+              "ent28a3bb64afdb96942206": "谨慎中带一点自嘲"
+            }
+          }
+        },
+        {
+          "contract_version": "story-v1",
+          "chapter_ordinal": 2,
+          "scenes": [
+            {
+              "setting": "屋内",
+              "time": "紧接上章，回忆处明确回溯",
+              "pov": "ent28a3bb64afdb96942206",
+              "participants": [
+                "ent28a3bb64afdb96942206",
+                "ent798f164f9af856057ef4",
+                "entce0a75b47bc01563406d"
+              ],
+              "goal": "照料孩子并弄清来意",
+              "opposition": "信息不完整",
+              "turn": "姐姐唤孩子安儿，我获知他的名字",
+              "realization": "通过当下行动、对白与反应展开，不复述提纲",
+              "actions": [
+                {
+                  "event_no": 1,
+                  "trigger": "承接当前处境",
+                  "choice": "来客解释自己走错巷子，我纠正误会",
+                  "action": "来客解释自己走错巷子，我纠正误会",
+                  "response": "我按眼前信息作出即时反应",
+                  "result": "来客解释自己走错巷子，我纠正误会",
+                  "transition": "承接上一动作，回忆另标时间"
+                },
+                {
+                  "event_no": 2,
+                  "trigger": "承接当前处境",
+                  "choice": "我回忆幼时病重，当前已经痊愈",
+                  "action": "我回忆幼时病重，当前已经痊愈",
+                  "response": "我按眼前信息作出即时反应",
+                  "result": "我回忆幼时病重，当前已经痊愈",
+                  "transition": "承接上一动作，回忆另标时间"
+                },
+                {
+                  "event_no": 3,
+                  "trigger": "承接当前处境",
+                  "choice": "姐姐唤孩子安儿，我获知他的名字",
+                  "action": "姐姐唤孩子安儿，我获知他的名字",
+                  "response": "我按眼前信息作出即时反应",
+                  "result": "姐姐唤孩子安儿，我获知他的名字",
+                  "transition": "承接上一动作，回忆另标时间"
+                }
+              ]
+            }
+          ],
+          "writer_context": {
+            "purpose": "纠正误会并获知孩子名字",
+            "entry": "来客继续解释",
+            "exit": "我抱紧安儿，接受眼前的责任",
+            "narration": "第一人称限知",
+            "style": "通过即时动作和反应推进",
+            "entry_state": [
+              {
+                "item_no": 1,
+                "text": "当前身体已经痊愈"
+              }
+            ],
+            "exit_state": [
+              {
+                "item_no": 1,
+                "text": "当前身体已经痊愈"
+              }
+            ],
+            "entry_knowledge": [
+              {
+                "item_no": 1,
+                "text": "姐姐已经把婴儿托付给我"
+              }
+            ],
+            "world_rules": [],
+            "requirements": [
+              {
+                "requirement_ref": "rq0004",
+                "placement": "respect",
+                "text": "来客解释自己走错巷子，我纠正误会，保留主体、时态与知情差异"
+              },
+              {
+                "requirement_ref": "rq0005",
+                "placement": "respect",
+                "text": "我回忆幼时病重，当前已经痊愈，保留主体、时态与知情差异"
+              },
+              {
+                "requirement_ref": "rq0006",
+                "placement": "respect",
+                "text": "姐姐唤孩子安儿，我获知他的名字，保留主体、时态与知情差异"
+              }
+            ],
+            "voices": {
+              "ent28a3bb64afdb96942206": "谨慎中带一点自嘲"
+            }
+          }
+        }
+      ],
+      "preservation": [
+        {
+          "requirement_id": "rq0001",
+          "kind": "plot",
+          "statement": "我抱着受托照料的婴儿进屋",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "entce0a75b47bc01563406d"
+          ],
+          "required": true,
+          "satisfaction": "我抱着受托照料的婴儿进屋，保留主体、时态与知情差异",
+          "requires": [],
+          "constraints": [],
+          "details": []
+        },
+        {
+          "requirement_id": "rq0002",
+          "kind": "plot",
+          "statement": "我决定查清身世并安排明日赶集",
+          "participants": [
+            "ent28a3bb64afdb96942206"
+          ],
+          "required": true,
+          "satisfaction": "我决定查清身世并安排明日赶集，保留主体、时态与知情差异",
+          "requires": [],
+          "constraints": [],
+          "details": []
+        },
+        {
+          "requirement_id": "rq0003",
+          "kind": "revelation",
+          "statement": "我误以为来客受姐姐邀请",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "ent798f164f9af856057ef4"
+          ],
+          "required": true,
+          "satisfaction": "我误以为来客受姐姐邀请，保留主体、时态与知情差异",
+          "requires": [],
+          "constraints": [],
+          "details": []
+        },
+        {
+          "requirement_id": "rq0004",
+          "kind": "revelation",
+          "statement": "来客解释自己走错巷子，我纠正误会",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "ent798f164f9af856057ef4"
+          ],
+          "required": true,
+          "satisfaction": "来客解释自己走错巷子，我纠正误会，保留主体、时态与知情差异",
+          "requires": [
+            "rq0003"
+          ],
+          "constraints": [],
+          "details": []
+        },
+        {
+          "requirement_id": "rq0005",
+          "kind": "plot",
+          "statement": "我回忆幼时病重，当前已经痊愈",
+          "participants": [
+            "ent28a3bb64afdb96942206"
+          ],
+          "required": true,
+          "satisfaction": "我回忆幼时病重，当前已经痊愈，保留主体、时态与知情差异",
+          "requires": [],
+          "constraints": [],
+          "details": []
+        },
+        {
+          "requirement_id": "rq0006",
+          "kind": "plot",
+          "statement": "姐姐唤孩子安儿，我获知他的名字",
+          "participants": [
+            "ent28a3bb64afdb96942206",
+            "entce0a75b47bc01563406d"
+          ],
+          "required": true,
+          "satisfaction": "姐姐唤孩子安儿，我获知他的名字，保留主体、时态与知情差异",
+          "requires": [],
+          "constraints": [],
+          "details": []
+        }
       ]
-     },
-     {
-      "beat_id": "bt3",
-      "event": "芸娘立誓查清",
-      "participants": [
-       "yun_niang"
-      ],
-      "dramatic_intent": "立意",
-      "target_delta": [
-       {
-        "domain": "knowledge",
-        "key": "vow",
-        "subjects": [
-         "yun_niang"
-        ],
-        "holder": "yun_niang",
-        "op": "set",
-        "value": "她决意查清真相",
-        "scope": "book",
-        "knowledge_mode": "known"
-       }
-      ],
-      "delivery_hint": "",
-      "surface_introductions": []
-     }
-    ]
-   },
-   {
-    "scene_id": "s02",
-    "driver": {
-     "focal_actor": "yun_niang",
-     "immediate_want": "查明真相",
-     "opposition": "无凭据",
-     "turn": "发现玉佩"
     },
-    "realization_brief": "重心在玉佩的发现；从空房冷起，压缩等待，在字面露出的瞬间收束。",
-    "pov": "yun_niang",
-    "voice": "冷峻",
-    "avoid": [],
-    "beats": [
-     {
-      "beat_id": "bt1",
-      "event": "夫君夜半离家",
-      "participants": [
-       "fu_jun"
-      ],
-      "dramatic_intent": "悬念",
-      "target_delta": [
-       {
-        "domain": "character",
-        "key": "whereabouts",
-        "subjects": [
-         "fu_jun"
+    "errors": []
+  },
+  "chapter1": {
+    "candidate_id": "cand",
+    "revision": "36f07045a44adbe6b9fa077a19485d471a7f2a19d01ad1f54eb1e503a51a2d49",
+    "status": "ready",
+    "data": {
+      "chapter_ordinal": 1,
+      "packet": {
+        "contract_version": "story-v1",
+        "chapter_ordinal": 1,
+        "source_chapter_count": 2,
+        "length_budget": 100,
+        "min_chars": 60,
+        "max_chars": 130,
+        "participants": [
+          "ent28a3bb64afdb96942206",
+          "entce0a75b47bc01563406d",
+          "ent798f164f9af856057ef4"
         ],
-        "holder": null,
-        "op": "set",
-        "value": "去向不明",
-        "scope": "book",
-        "knowledge_mode": null
-       }
-      ],
-      "delivery_hint": "",
-      "surface_introductions": []
-     },
-     {
-      "beat_id": "bt2",
-      "event": "芸娘发现玉佩秘密",
-      "participants": [
-       "yun_niang"
-      ],
-      "dramatic_intent": "揭示",
-      "target_delta": [
-       {
-        "domain": "knowledge",
-        "key": "jade_secret",
-        "subjects": [
-         "fu_jun"
+        "names": {
+          "ent28a3bb64afdb96942206": "我",
+          "entce0a75b47bc01563406d": "婴儿",
+          "ent798f164f9af856057ef4": "来客"
+        },
+        "entry_state": [
+          "我〔实际；状态约束〕：当前身体已经痊愈"
         ],
-        "holder": "yun_niang",
-        "op": "set",
-        "value": "玉佩刻着沈字",
-        "scope": "book",
-        "knowledge_mode": "known"
-       }
-      ],
-      "delivery_hint": "",
-      "surface_introductions": []
-     }
-    ]
-   }
-  ],
-  "chapters": [
-   {
-    "chapter_ordinal": 1,
-    "purpose": "新婚之夜埋下旧约之疑",
-    "scene_ids": [
-     "s01"
-    ]
-   },
-   {
-    "chapter_ordinal": 2,
-    "purpose": "玉佩之谜浮出水面",
-    "scene_ids": [
-     "s02"
-    ]
-   }
-  ],
+        "exit_state": [
+          "我〔实际；状态约束〕：当前身体已经痊愈"
+        ],
+        "actions": [
+          "故事时间：当前发生；触发：承接当前处境；选择：我抱着受托照料的婴儿进屋；行动：我抱着受托照料的婴儿进屋；回应：我按眼前信息作出即时反应；结果：我抱着受托照料的婴儿进屋；衔接：承接上一动作，回忆另标时间",
+          "故事时间：当前发生；触发：承接当前处境；选择：我决定查清身世并安排明日赶集；行动：我决定查清身世并安排明日赶集；回应：我按眼前信息作出即时反应；结果：我决定查清身世并安排明日赶集；衔接：承接上一动作，回忆另标时间",
+          "故事时间：当前发生；触发：承接当前处境；选择：我误以为来客受姐姐邀请；行动：我误以为来客受姐姐邀请；回应：我按眼前信息作出即时反应；结果：我误以为来客受姐姐邀请；衔接：承接上一动作，回忆另标时间"
+        ],
+        "must_realize": [
+          "故事时间：当前发生；触发：承接当前处境；选择：我抱着受托照料的婴儿进屋；行动：我抱着受托照料的婴儿进屋；回应：我按眼前信息作出即时反应；结果：我抱着受托照料的婴儿进屋；衔接：承接上一动作，回忆另标时间",
+          "故事时间：当前发生；触发：承接当前处境；选择：我决定查清身世并安排明日赶集；行动：我决定查清身世并安排明日赶集；回应：我按眼前信息作出即时反应；结果：我决定查清身世并安排明日赶集；衔接：承接上一动作，回忆另标时间",
+          "故事时间：当前发生；触发：承接当前处境；选择：我误以为来客受姐姐邀请；行动：我误以为来客受姐姐邀请；回应：我按眼前信息作出即时反应；结果：我误以为来客受姐姐邀请；衔接：承接上一动作，回忆另标时间"
+        ],
+        "must_respect": [
+          "叙述：第一人称限知",
+          "我已确认：姐姐已经把婴儿托付给我",
+          "我抱着受托照料的婴儿进屋，保留主体、时态与知情差异",
+          "我决定查清身世并安排明日赶集，保留主体、时态与知情差异",
+          "我误以为来客受姐姐邀请，保留主体、时态与知情差异",
+          "称谓表表示本章最终可用显示；具体揭名仍须等到对应行动，不得提前点破。"
+        ],
+        "continuity": [
+          "入场：我抱着孩子进屋",
+          "本章收束：我等着来客说明来意"
+        ],
+        "creative_guidance": [
+          "本章目的：建立照料责任与来客误会",
+          "本章表达：通过即时动作和反应推进",
+          "第1场：屋内；时间：当前；视角：我；诉求：照料孩子并弄清来意；阻力：信息不完整；转折：我误以为来客受姐姐邀请；演出：通过当下行动、对白与反应展开，不复述提纲",
+          "我的声线：谨慎中带一点自嘲"
+        ],
+        "background": [],
+        "guard_only": [
+          "未到目标事件位置的结果、知情与秘密不得提前兑现。",
+          "本章没有给出的跨章前史、承诺、秘密答案与持续状态不得新增。"
+        ]
+      },
+      "body": "我抱着婴儿走进屋里，腾出一只手扶住门。来客站在门外，我以为他受姐姐邀请，便让开半步。我抱着婴儿走进屋里，腾出一只手扶住门。来客站在门外，我以为他受姐姐邀请，便让开半步。",
+      "receipt": {
+        "contract_version": "story-v1",
+        "kind": "body",
+        "chapter_ordinal": 1,
+        "packet_sha256": "867469171a1bb82faa1e09647339adf3b3d2a17f14442899a562617da84b7e84",
+        "prior_tail_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "original_prior_tail_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "body_sha256": "dc7f5d0973f67fc0420fead154cfd42b9def9f5bda0086a5746728ec459a19ec",
+        "original_body_sha256": "dc7f5d0973f67fc0420fead154cfd42b9def9f5bda0086a5746728ec459a19ec",
+        "request_id": "25b81559ab862938f587a3bc0c182c44e432a3c0806373b0e3f1b81b893a9df8",
+        "response_id": "17e43cb14520fabd20fdc01438fa3d2cdb221feec547e1db3f88d8bdf2f8b87e",
+        "provider": "https://api.deepseek.com",
+        "model": "deepseek-flash",
+        "system_sha256": "8fe2a39af536ec758b2de795f164bd366221e4e1667759924e0e7d5f69678b64",
+        "user_sha256": "1eba225c4c77d2c083a2e83efdf59b9f0d23e748156255e910d3e08613f78dc5",
+        "finish_reason": "stop",
+        "mechanical": "passed",
+        "semantic": "unver",
+        "patches": []
+      }
+    },
+    "errors": []
+  },
+  "chapter2": {
+    "candidate_id": "cand",
+    "revision": "36f07045a44adbe6b9fa077a19485d471a7f2a19d01ad1f54eb1e503a51a2d49",
+    "status": "ready",
+    "data": {
+      "chapter_ordinal": 2,
+      "packet": {
+        "contract_version": "story-v1",
+        "chapter_ordinal": 2,
+        "source_chapter_count": 2,
+        "length_budget": 100,
+        "min_chars": 60,
+        "max_chars": 130,
+        "participants": [
+          "ent28a3bb64afdb96942206",
+          "ent798f164f9af856057ef4",
+          "entce0a75b47bc01563406d"
+        ],
+        "names": {
+          "ent28a3bb64afdb96942206": "我",
+          "ent798f164f9af856057ef4": "来客",
+          "entce0a75b47bc01563406d": "安儿"
+        },
+        "entry_state": [
+          "我〔实际；状态约束〕：当前身体已经痊愈"
+        ],
+        "exit_state": [
+          "我〔实际；状态约束〕：当前身体已经痊愈"
+        ],
+        "actions": [
+          "故事时间：当前发生；触发：承接当前处境；选择：来客解释自己走错巷子，我纠正误会；行动：来客解释自己走错巷子，我纠正误会；回应：我按眼前信息作出即时反应；结果：来客解释自己走错巷子，我纠正误会；衔接：承接上一动作，回忆另标时间",
+          "故事时间：过去回溯；触发：承接当前处境；选择：我回忆幼时病重，当前已经痊愈；行动：我回忆幼时病重，当前已经痊愈；回应：我按眼前信息作出即时反应；结果：我回忆幼时病重，当前已经痊愈；衔接：承接上一动作，回忆另标时间",
+          "故事时间：当前发生；触发：承接当前处境；选择：姐姐唤孩子安儿，我获知他的名字；行动：姐姐唤孩子安儿，我获知他的名字；回应：我按眼前信息作出即时反应；结果：姐姐唤孩子安儿，我获知他的名字；衔接：承接上一动作，回忆另标时间",
+          "称谓在此处正式揭示为：安儿"
+        ],
+        "must_realize": [
+          "故事时间：当前发生；触发：承接当前处境；选择：来客解释自己走错巷子，我纠正误会；行动：来客解释自己走错巷子，我纠正误会；回应：我按眼前信息作出即时反应；结果：来客解释自己走错巷子，我纠正误会；衔接：承接上一动作，回忆另标时间",
+          "故事时间：过去回溯；触发：承接当前处境；选择：我回忆幼时病重，当前已经痊愈；行动：我回忆幼时病重，当前已经痊愈；回应：我按眼前信息作出即时反应；结果：我回忆幼时病重，当前已经痊愈；衔接：承接上一动作，回忆另标时间",
+          "故事时间：当前发生；触发：承接当前处境；选择：姐姐唤孩子安儿，我获知他的名字；行动：姐姐唤孩子安儿，我获知他的名字；回应：我按眼前信息作出即时反应；结果：姐姐唤孩子安儿，我获知他的名字；衔接：承接上一动作，回忆另标时间",
+          "称谓在此处正式揭示为：安儿"
+        ],
+        "must_respect": [
+          "叙述：第一人称限知",
+          "我已确认：姐姐已经把婴儿托付给我",
+          "来客解释自己走错巷子，我纠正误会，保留主体、时态与知情差异",
+          "我回忆幼时病重，当前已经痊愈，保留主体、时态与知情差异",
+          "姐姐唤孩子安儿，我获知他的名字，保留主体、时态与知情差异",
+          "称谓表表示本章最终可用显示；具体揭名仍须等到对应行动，不得提前点破。"
+        ],
+        "continuity": [
+          "入场：来客继续解释",
+          "本章收束：我抱紧安儿，接受眼前的责任"
+        ],
+        "creative_guidance": [
+          "本章目的：纠正误会并获知孩子名字",
+          "本章表达：通过即时动作和反应推进",
+          "第1场：屋内；时间：紧接上章，回忆处明确回溯；视角：我；诉求：照料孩子并弄清来意；阻力：信息不完整；转折：姐姐唤孩子安儿，我获知他的名字；演出：通过当下行动、对白与反应展开，不复述提纲",
+          "我的声线：谨慎中带一点自嘲"
+        ],
+        "background": [],
+        "guard_only": [
+          "未到目标事件位置的结果、知情与秘密不得提前兑现。",
+          "本章没有给出的跨章前史、承诺、秘密答案与持续状态不得新增。"
+        ]
+      },
+      "body": "来客说明自己走错巷子，我才发觉先前的猜测没有根据。姐姐唤孩子安儿，我低头应了一声，把往事留在记忆里。来客说明自己走错巷子，我才发觉先前的猜测没有根据。姐姐唤孩子安儿，我低头应了一声，把往事留在记忆里。",
+      "receipt": {
+        "contract_version": "story-v1",
+        "kind": "body",
+        "chapter_ordinal": 2,
+        "packet_sha256": "0be59817269b03723b02600a7d22d7937101305e6e3bb4ff877f06e709ed0b48",
+        "prior_tail_sha256": "dc7f5d0973f67fc0420fead154cfd42b9def9f5bda0086a5746728ec459a19ec",
+        "original_prior_tail_sha256": "dc7f5d0973f67fc0420fead154cfd42b9def9f5bda0086a5746728ec459a19ec",
+        "body_sha256": "4eb4a910f776a79a0c876a58d838db650474d6e622587baa5f8ac1fbd5c4b57c",
+        "original_body_sha256": "4eb4a910f776a79a0c876a58d838db650474d6e622587baa5f8ac1fbd5c4b57c",
+        "request_id": "88c18bdb41885379c5bfd4e929a09fd27aeb08dba310d12eee30bc3601fda821",
+        "response_id": "c0e39dd9b68e781744f9f13321a5e921e14e9ddf886cbe5f803168c9444733bd",
+        "provider": "https://api.deepseek.com",
+        "model": "deepseek-flash",
+        "system_sha256": "8fe2a39af536ec758b2de795f164bd366221e4e1667759924e0e7d5f69678b64",
+        "user_sha256": "fa969df5e481ce226ecee90c13cd52a3193376aa43d3c68e0029e03b2a810f7e",
+        "finish_reason": "stop",
+        "mechanical": "passed",
+        "semantic": "unver",
+        "patches": []
+      }
+    },
+    "errors": []
+  },
   "hook": {
-   "person": "first",
-   "focalizers": [
-    "yun_niang"
-   ],
-   "materials": [
-    "s02#bt1",
-    "s01#bt2"
-   ],
-   "concealed": [
-    "fu_jun"
-   ],
-   "forbidden_reveals": 1,
-   "design_brief": "从深夜冷开倒叙入新婚夜旧约，信息逐层升级后在新婚夜收束，玉佩之谜不露。"
-  },
-  "binding": {
-   "obligations": 1,
-   "entries": [
-    {
-     "obligation_id": "ob01",
-     "scene_id": "s01",
-     "beat_ref": "s01#bt2",
-     "supporting_beat_refs": [
-      "s01#bt1"
-     ]
-    }
-   ],
-   "unbound": []
-  }
- },
- "ir": {
-  "present": true,
-  "book_title": "报恩",
-  "target_chapter_count": 2,
-  "total_length_budget": 2000,
-  "length_band_low": 0.01,
-  "length_band_high": 0.05,
-  "chapters": [
-   {
-    "chapter_ordinal": 1,
-    "purpose": "新婚之夜埋下旧约之疑",
-    "length_budget": 1000,
-    "scene_ids": [
-     "s01"
-    ],
-    "scene_lines": [
-     "s01（pov=yun_niang）yun_niang想「安度新婚」受阻于「夫君的怪异」"
-    ]
-   },
-   {
-    "chapter_ordinal": 2,
-    "purpose": "玉佩之谜浮出水面",
-    "length_budget": 1000,
-    "scene_ids": [
-     "s02"
-    ],
-    "scene_lines": [
-     "s02（pov=yun_niang）yun_niang想「查明真相」受阻于「无凭据」"
-    ]
-   }
-  ],
-  "release_schedule": [
-   {
-    "char_id": "fu_jun",
-    "surfaces": [
-     "夫君"
-    ],
-    "from_chapter": 1
-   },
-   {
-    "char_id": "yun_niang",
-    "surfaces": [
-     "芸娘",
-     "苏芸娘"
-    ],
-    "from_chapter": 1
-   }
-  ]
- },
- "chapter1": {
-  "ordinal": 1,
-  "present": true,
-  "prose": "拜堂之夜，苏芸娘望着夫君，旧约出口，烛火到天亮才熄，她记住了每一个字。",
-  "receipt": {
-   "status": "accepted",
-   "mechanical_checks": [
-    "non_empty",
-    "encoding",
-    "no_wrapper",
-    "withheld_literals",
-    "length_band"
-   ],
-   "semantic": "unverified",
-   "length": {
-    "char_count": 35,
-    "target_chars": 1000,
-    "band_low": 10,
-    "band_high": 50,
-    "within_band": true,
-    "deviation_ratio": -0.965
-   },
-   "length_disclosed": false,
-   "request_identity": "f5e3192863f41a8f21a05c950913d8c6bcf65c19084cdf958db9c2766c66ea0c",
-   "protocol_version": "str06-body-protocol-v4",
-   "renderer_version": "str06-render-v4",
-   "validator_version": "str06-body-mechanical-v1"
-  }
- },
- "hook": {
-  "present": true,
-  "prose": "苏芸娘望着空房。",
-  "receipt": {
-   "hook_context_sha256": "5af8c0c708b8d388a4b6df32eb70409a156d1c4d1902a54cc416f84c6248fbae",
-   "prose_sha256": "b50c4965bbd1730d16ec752c958ebf275042f7fa9fbed6136300a1b2270f1afc",
-   "request_identity": "2abd0e710931ffb7055599ed3b29603daae40a5396ef8289c78a8da1bd8b4dfa",
-   "validator_version": "str06-hook-mechanical-v1",
-   "status": "accepted",
-   "mechanical_checks": [
-    "non_empty",
-    "length",
-    "encoding",
-    "no_wrapper",
-    "withheld_literals"
-   ],
-   "semantic": "unverified",
-   "_provenance": {
-    "code": "5bd8f5c99a3206c263d8d2197198136e8e1978e3-dirty.3107112ab13cab29",
-    "root_clean_sha1": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "inputs": {
-     "stage4/context/hook/hook.json": {
-      "file": "aa6c77f6e7",
-      "consumed": null
-     }
+    "candidate_id": "cand",
+    "revision": "36f07045a44adbe6b9fa077a19485d471a7f2a19d01ad1f54eb1e503a51a2d49",
+    "status": "ready",
+    "data": {
+      "packet": {
+        "contract_version": "story-v1",
+        "length_budget": 100,
+        "min_chars": 60,
+        "max_chars": 130,
+        "names": {
+          "ent28a3bb64afdb96942206": "我",
+          "entce0a75b47bc01563406d": "婴儿"
+        },
+        "must_realize": [
+          "触发：姐姐先前的托付；选择：我决定抱着婴儿进屋；行动：我抱着婴儿进屋；结果：照料落到眼前"
+        ],
+        "must_respect": [
+          "我已确认：姐姐已经把婴儿托付给我"
+        ],
+        "continuity": [
+          "收束：停在门外来客出现"
+        ],
+        "creative_guidance": [
+          "从抱孩子入屋开场",
+          "责任落到我身上的当下",
+          "阅读期待：来客将带来什么变化",
+          "本段表达：用眼前动作开场"
+        ],
+        "background": [],
+        "guard_only": [
+          "只能呈现选定事件与授权知情；不得新增结局、解释秘密或改写主体动机。"
+        ]
+      },
+      "body": "我抱着婴儿站在门边，姐姐的嘱托仿佛还在耳旁。门外来客抬起手，我等着他说出第一句话。我抱着婴儿站在门边，姐姐的嘱托仿佛还在耳旁。门外来客抬起手，我等着他说出第一句话。",
+      "receipt": {
+        "contract_version": "story-v1",
+        "kind": "hook",
+        "chapter_ordinal": null,
+        "packet_sha256": "2d05b8ec579b2da5cff3f495683888804bfe638f546236025fd95e92787cba3f",
+        "prior_tail_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "original_prior_tail_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "body_sha256": "e9ea395b3446c5d473e22fd3497723ac5b88cca1632931695f921cf9024b3288",
+        "original_body_sha256": "e9ea395b3446c5d473e22fd3497723ac5b88cca1632931695f921cf9024b3288",
+        "request_id": "574df736e5e90acbe847bd40c026ab93ea140de79291a52e8c87e2694ed629d7",
+        "response_id": "16b841e33ceaf6f285d6c02ee59a19a7909aa91f90106e2e919386307c712402",
+        "provider": "https://api.deepseek.com",
+        "model": "deepseek-flash",
+        "system_sha256": "8fe2a39af536ec758b2de795f164bd366221e4e1667759924e0e7d5f69678b64",
+        "user_sha256": "ef356f9fc5306b6d0e9b403a8bde3397bb507f5516944e66da847970cc8511be",
+        "finish_reason": "stop",
+        "mechanical": "passed",
+        "semantic": "unver",
+        "patches": []
+      }
     },
+    "errors": []
+  },
+  "delivery": {
+    "present": true,
+    "delivery_identity": "b987eb674503563539489e2d31bd28f13dc70ba6f2e9c4f9873e81470e0f49e9",
+    "final_text_sha256": "b987eb674503563539489e2d31bd28f13dc70ba6f2e9c4f9873e81470e0f49e9",
+    "chapters": [
+      {
+        "chapter_ordinal": 1,
+        "prose_sha256": "dc7f5d0973f67fc0420fead154cfd42b9def9f5bda0086a5746728ec459a19ec",
+        "length": null,
+        "length_disclosed": false
+      },
+      {
+        "chapter_ordinal": 2,
+        "prose_sha256": "4eb4a910f776a79a0c876a58d838db650474d6e622587baa5f8ac1fbd5c4b57c",
+        "length": null,
+        "length_disclosed": false
+      }
+    ],
+    "length_reading": null,
+    "name_residue": null,
+    "disclosure": "机械证明通过；小说质量未评（unver）"
+  },
+  "progress": {
+    "sid": "cand",
+    "resume_frontier": {
+      "state": "ready",
+      "node": "stage0.remove",
+      "seq": 1,
+      "label": "stage0 非正文剔除",
+      "resume_verdict": "run",
+      "why": "run：产物不在盘上：stage0/revisions.json, stage0/clean_text.txt",
+      "waiting_on": null,
+      "paid": false,
+      "writes": "stage0/revisions.json · stage0/clean_text.txt",
+      "next_handler": "code",
+      "review_states": null,
+      "verified_skipped_nodes": [],
+      "verified_skipped_count": 0
+    },
+    "steps": [
+      {
+        "seq": 1,
+        "node": "stage0.remove",
+        "label": "stage0 非正文剔除",
+        "paid": false,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 2,
+        "node": "stage1.partition",
+        "label": "stage1 分章",
+        "paid": false,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 3,
+        "node": "str06.stage2.chapters",
+        "label": "逐章源文理解",
+        "paid": true,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 4,
+        "node": "str06.stage2.book",
+        "label": "全书事实语义整合",
+        "paid": true,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 5,
+        "node": "str06.stage2.associate",
+        "label": "具体未决项窄消歧",
+        "paid": true,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 6,
+        "node": "str06.stage2.names",
+        "label": "源实体名称结构",
+        "paid": true,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 7,
+        "node": "str06.stage2.compile",
+        "label": "发布唯一 SourceStory",
+        "paid": false,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 8,
+        "node": "str06.stage4.naming",
+        "label": "目标人物命名",
+        "paid": true,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 9,
+        "node": "str06.stage4.preserve",
+        "label": "保真选择与局部一致化",
+        "paid": true,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 10,
+        "node": "str06.stage4.body_design",
+        "label": "整书目标骨架",
+        "paid": true,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 11,
+        "node": "str06.stage4.chapters",
+        "label": "逐章场景与行动展开",
+        "paid": true,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 12,
+        "node": "str06.stage4.compile",
+        "label": "发布 TargetStory 与章包",
+        "paid": false,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 13,
+        "node": "str06.stage4.hook_design",
+        "label": "目标 Hook 组织",
+        "paid": true,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 14,
+        "node": "str06.stage4.hook_compile",
+        "label": "编译 Hook 写手材料",
+        "paid": false,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 15,
+        "node": "str06.stage5.hook",
+        "label": "Hook 成文与回执",
+        "paid": true,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 16,
+        "node": "str06.stage5.body",
+        "label": "顺序正文与章间窄修",
+        "paid": true,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      },
+      {
+        "seq": 17,
+        "node": "str06.stage7.assemble",
+        "label": "核对回执后装配成书",
+        "paid": false,
+        "beacon": "pending",
+        "last_exit": null,
+        "last_ts": null,
+        "elapsed": null
+      }
+    ],
+    "stage_done": {
+      "stage0": false,
+      "stage1": false,
+      "stage2": true,
+      "stage4": true,
+      "stage5": true,
+      "stage7": true
+    },
+    "events_tail": [],
+    "work_units": [
+      {
+        "unit_id": "19d1a9597eb528db0f3f431d605489174d9ec4c2d997481d009940a279db977d",
+        "node": "str06.stage4.chapters",
+        "role": "executor",
+        "scope": "chapter:2",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "af8593cd323fe5e45473b84b7776fd40691279784ae518683c04a71f088c7e11",
+        "latest_response_sha256": "0f644a1e92e00fc28beb5d0ce0a40f4ca49302929cbebf3c0a4269ca47d1d4c1",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "af8593cd323fe5e45473b84b7776fd40691279784ae518683c04a71f088c7e11",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "1b30637fc6cf73309cac59573619d7ae07a5402bc8815e8b240a23802c3d1996",
+        "node": "str06.stage2.book",
+        "role": "executor",
+        "scope": "book",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "ba2cc054ecdedc49f716c66cc29243d100098fa54655b959755e178f10460e60",
+        "latest_response_sha256": "f7539dcbb0660883162ed1ce71757ffe7ab6b3366e56ba1f4d58a4f69eb349d5",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "ba2cc054ecdedc49f716c66cc29243d100098fa54655b959755e178f10460e60",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "28a02ec9d12084c9ea03305ef8634d0714cda446d180f2ba489366a27b90db4e",
+        "node": "str06.stage4.naming",
+        "role": "executor",
+        "scope": "book",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "8e2f054c451d9c6647d5d300e771451e21d8b562f6d599310d0fda46bdaa2b31",
+        "latest_response_sha256": "34dcb8515c3514771219d13539312a6d7c8c18dd1fcb33c1d2730fb6671139a4",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "8e2f054c451d9c6647d5d300e771451e21d8b562f6d599310d0fda46bdaa2b31",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "3993cd965a5ccb25b1611561574b4795f9130eb8bcf73656877ddcfd9fff8e82",
+        "node": "str06.stage5.body",
+        "role": "executor",
+        "scope": "chapter:1",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "4079bd309e9e67ce51947c3e02c751f7b2b989942712f2773e8de27836b64d73",
+        "latest_response_sha256": "17e43cb14520fabd20fdc01438fa3d2cdb221feec547e1db3f88d8bdf2f8b87e",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "4079bd309e9e67ce51947c3e02c751f7b2b989942712f2773e8de27836b64d73",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "4887caa84ff214408a695727f4bf359e8f23a59f37749b3164e1da8d791a3dbe",
+        "node": "str06.stage5.body",
+        "role": "executor",
+        "scope": "chapter:2",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "81a71f700d01a6eda2fcc4e6c5d97232cd3a63cdc35dbe52aa52a6cd4644a633",
+        "latest_response_sha256": "c0e39dd9b68e781744f9f13321a5e921e14e9ddf886cbe5f803168c9444733bd",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "81a71f700d01a6eda2fcc4e6c5d97232cd3a63cdc35dbe52aa52a6cd4644a633",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "714a4fbe98cd774bde9e8528033f252129956eca9fc9298132751b44f08ccede",
+        "node": "str06.stage5.hook",
+        "role": "executor",
+        "scope": "book",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "eda57a1e3d9501e8583aba90e6002d917d33833a712127fc07255a77c6edba37",
+        "latest_response_sha256": "16b841e33ceaf6f285d6c02ee59a19a7909aa91f90106e2e919386307c712402",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "eda57a1e3d9501e8583aba90e6002d917d33833a712127fc07255a77c6edba37",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "7fde830fa993cd2676be1504a7ce235f3e012f86d6a1a43cdf57efbc6c37ba2e",
+        "node": "str06.stage2.chapters",
+        "role": "executor",
+        "scope": "chapter:2",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "f0993f0afb24413e2f53cc41ba8d26286871fa9fe05f3e6bb0543a98ddda2710",
+        "latest_response_sha256": "65033fb6884bc970d05040d53516c3e33c502de5b7b2586d6e72ba77803f1339",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "f0993f0afb24413e2f53cc41ba8d26286871fa9fe05f3e6bb0543a98ddda2710",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "a21dc1d7e9913ad9fcc6b3232cbd2742cf62deadf058188a05f7bc3011730333",
+        "node": "str06.stage4.chapters",
+        "role": "executor",
+        "scope": "chapter:1",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "b9f40227f8f44187927e9ec0028516fef9c6d54685b62ee6ebd09e2025e91d39",
+        "latest_response_sha256": "957e5309f26ef9a14606912aaa61995be4683bf7755fa6dea2b86d72b7f60171",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "b9f40227f8f44187927e9ec0028516fef9c6d54685b62ee6ebd09e2025e91d39",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "b8a0443db8791f30d50fdedf0a97ada17085fd0baaa809ab48d53fac8b31d06c",
+        "node": "str06.stage2.chapters",
+        "role": "executor",
+        "scope": "chapter:1",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "69578ad3a127d51244b13b6102a4c3493eefed6277bc00f583ce9b4709c6bbaf",
+        "latest_response_sha256": "6299fbb1397c05851e95543ff13c0e137c43f29f3988d7b31afee2757abbe1b9",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "69578ad3a127d51244b13b6102a4c3493eefed6277bc00f583ce9b4709c6bbaf",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "bc70130eaf3bdeba78790fe538029e59664142a795b4ed14d203c66b38660cc4",
+        "node": "str06.stage4.hook_design",
+        "role": "executor",
+        "scope": "book",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "c61386902e0f2a0ad86773d13b3393fa03407956981ccff8ab97bf0a7a4420e0",
+        "latest_response_sha256": "90db279f74eb05023c9e9c7c2f9d9faa2bd7c13b3f9bbb88bd76ecdf48001513",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "c61386902e0f2a0ad86773d13b3393fa03407956981ccff8ab97bf0a7a4420e0",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "c23107f86ec2c4ff3a9ad812bb448b5075488cd75b56db0fb7ff9dbab0226af0",
+        "node": "str06.stage4.preserve",
+        "role": "executor",
+        "scope": "book",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "abaa07c813b1a15bf8b9092a1739a93d9b2e3945faa777b2609234fccbf8eb4a",
+        "latest_response_sha256": "51ea48eba92a9f326ad3820b32fc99c0d6cfe54af673fe41b39bfb4f88e064b4",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "abaa07c813b1a15bf8b9092a1739a93d9b2e3945faa777b2609234fccbf8eb4a",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "d36218397f617c231ab7436a44f7f03873c7d7bc37f9292213971e906601cdbf",
+        "node": "str06.stage4.body_design",
+        "role": "executor",
+        "scope": "book",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "f0bbb4427edc16e2eea54658e7ca272d2776aaf3e3b619b1508c4a739f3f124f",
+        "latest_response_sha256": "3bf69f02b2914fd97a07f842ec045fdea47c5685c1be804dc61eee7ed027b590",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "f0bbb4427edc16e2eea54658e7ca272d2776aaf3e3b619b1508c4a739f3f124f",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      },
+      {
+        "unit_id": "e83a1e184fb194feec2396cec3267d2a28684af623ca45593c9255e3e506e964",
+        "node": "str06.stage2.names",
+        "role": "executor",
+        "scope": "book",
+        "content_used": 1,
+        "content_limit": 4,
+        "content_base_limit": 4,
+        "content_granted": 0,
+        "content_refunded": 0,
+        "grant_count": 0,
+        "refund_count": 0,
+        "content_remaining": 3,
+        "state": "delivered",
+        "latest_request_sha256": "7f815384e5d72422e86b4e414a12027c6e195bc77a18f48acead7cb489948a40",
+        "latest_response_sha256": "d5d4528c6408a5624ddb97fa7690eb5885e5dd960f5d5e4d6692ce3dea7b4c64",
+        "recovery_action": "replay_response",
+        "registered": true,
+        "processing": {
+          "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+          "input_sha256": "7f815384e5d72422e86b4e414a12027c6e195bc77a18f48acead7cb489948a40",
+          "total": 1,
+          "pending": 0,
+          "generated": 1,
+          "mechanical": 0,
+          "cached": 0,
+          "failed": 0,
+          "unknown": 0,
+          "reason": null
+        },
+        "review": null,
+        "review_unavailable_reason": null
+      }
+    ],
+    "work_units_unavailable_reason": null,
+    "current_recovery_actions": []
+  },
+  "metrics": {
+    "sid": "cand",
+    "run_id": null,
+    "runs": [
+      {
+        "run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+        "kind": "ledger",
+        "state": "unknown",
+        "started_at": null,
+        "ended_at": null,
+        "elapsed_seconds": null
+      }
+    ],
     "usage": {
-     "calls_made": 1,
-     "calls_cached": 0,
-     "prompt_tokens": 10,
-     "completion_tokens": 5,
-     "reasoning_tokens": null
+      "observed_rows": 13,
+      "conflicting_rows": 0,
+      "wire_calls": 13,
+      "cached_calls": 0,
+      "unknown_cache_calls": 0,
+      "failed_calls": 0,
+      "unknown_outcome_calls": 0,
+      "missing_usage_calls": 0,
+      "missing_latency_calls": 0,
+      "known_prompt_tokens": 156,
+      "known_completion_tokens": 104,
+      "prompt_tokens": 156,
+      "completion_tokens": 104,
+      "total_tokens": 260,
+      "reasoning_tokens": null,
+      "known_model_time_ms": 0,
+      "model_time_ms": 0,
+      "known_active_time_ms": 0,
+      "active_time_ms": 0,
+      "missing_interval_calls": 0
     },
-    "prompts": {
-     "hook_writer.system": "907619240c",
-     "hook_writer.user": "b51c98ffae"
+    "units": [
+      {
+        "unit_id": "19d1a9597eb528db0f3f431d605489174d9ec4c2d997481d009940a279db977d",
+        "node": "str06.stage4.chapters",
+        "role": "executor",
+        "scope": "chapter:2",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "d810af64b0754933af3452143984eaad",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:50+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "1b30637fc6cf73309cac59573619d7ae07a5402bc8815e8b240a23802c3d1996",
+        "node": "str06.stage2.book",
+        "role": "executor",
+        "scope": "book",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "4a0124756a5e4db6a0f9bfd12f284a92",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:48+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "28a02ec9d12084c9ea03305ef8634d0714cda446d180f2ba489366a27b90db4e",
+        "node": "str06.stage4.naming",
+        "role": "executor",
+        "scope": "book",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "4b0b2b485d994f568ddd5b5fca7d5814",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:49+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "3993cd965a5ccb25b1611561574b4795f9130eb8bcf73656877ddcfd9fff8e82",
+        "node": "str06.stage5.body",
+        "role": "executor",
+        "scope": "chapter:1",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "4fbb18d347434466a5073fbfc4ac57cf",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:51+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "4887caa84ff214408a695727f4bf359e8f23a59f37749b3164e1da8d791a3dbe",
+        "node": "str06.stage5.body",
+        "role": "executor",
+        "scope": "chapter:2",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "a38eedbaa05b41d6af3f9b714dfbdf9e",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:52+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "714a4fbe98cd774bde9e8528033f252129956eca9fc9298132751b44f08ccede",
+        "node": "str06.stage5.hook",
+        "role": "executor",
+        "scope": "book",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "f35e74478c404152b20cdb042531a8d4",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:51+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "7fde830fa993cd2676be1504a7ce235f3e012f86d6a1a43cdf57efbc6c37ba2e",
+        "node": "str06.stage2.chapters",
+        "role": "executor",
+        "scope": "chapter:2",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "ccf80f9b06464b778b5124da3f6e0cd3",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:48+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "a21dc1d7e9913ad9fcc6b3232cbd2742cf62deadf058188a05f7bc3011730333",
+        "node": "str06.stage4.chapters",
+        "role": "executor",
+        "scope": "chapter:1",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "c7997fab122246e3b75a2abf5b432bd2",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:50+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "b8a0443db8791f30d50fdedf0a97ada17085fd0baaa809ab48d53fac8b31d06c",
+        "node": "str06.stage2.chapters",
+        "role": "executor",
+        "scope": "chapter:1",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "b3f1822143ea441bbed159a59e0469aa",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:48+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "bc70130eaf3bdeba78790fe538029e59664142a795b4ed14d203c66b38660cc4",
+        "node": "str06.stage4.hook_design",
+        "role": "executor",
+        "scope": "book",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "06a3f7c1922c49f0bf6a65ce00a7e925",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:51+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "c23107f86ec2c4ff3a9ad812bb448b5075488cd75b56db0fb7ff9dbab0226af0",
+        "node": "str06.stage4.preserve",
+        "role": "executor",
+        "scope": "book",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "2786e53d501548d1a42e45be78e52088",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:49+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "d36218397f617c231ab7436a44f7f03873c7d7bc37f9292213971e906601cdbf",
+        "node": "str06.stage4.body_design",
+        "role": "executor",
+        "scope": "book",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "b1e9d6c3fe114820824a618ae73547d6",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:50+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      },
+      {
+        "unit_id": "e83a1e184fb194feec2396cec3267d2a28684af623ca45593c9255e3e506e964",
+        "node": "str06.stage2.names",
+        "role": "executor",
+        "scope": "book",
+        "content_turns": 1,
+        "network_retries": 0,
+        "mechanical": 0,
+        "cached_processing": 0,
+        "usage": {
+          "observed_rows": 1,
+          "conflicting_rows": 0,
+          "wire_calls": 1,
+          "cached_calls": 0,
+          "unknown_cache_calls": 0,
+          "failed_calls": 0,
+          "unknown_outcome_calls": 0,
+          "missing_usage_calls": 0,
+          "missing_latency_calls": 0,
+          "known_prompt_tokens": 12,
+          "known_completion_tokens": 8,
+          "prompt_tokens": 12,
+          "completion_tokens": 8,
+          "total_tokens": 20,
+          "reasoning_tokens": null,
+          "known_model_time_ms": 0,
+          "model_time_ms": 0,
+          "known_active_time_ms": 0,
+          "active_time_ms": 0,
+          "missing_interval_calls": 0
+        },
+        "attempts": [
+          {
+            "attempt_id": "7c1da770555d43369ace0ef23f119d57",
+            "turn": 1,
+            "run_id": "53e1784c-0256-48a8-a2c2-2495d683cca9",
+            "parent_run_id": "84a9c261fe3f4b209c527e64e65e51ce",
+            "session_run_id": null,
+            "state": "ok",
+            "cached": false,
+            "prompt_tokens": 12,
+            "completion_tokens": 8,
+            "reasoning_tokens": null,
+            "latency_ms": 0,
+            "first_token_ms": null,
+            "finished_at": "2026-10-20T17:59:49+00:00",
+            "issue": null
+          }
+        ],
+        "issues": []
+      }
+    ],
+    "unassigned_rows": 0,
+    "unassigned_usage": {
+      "observed_rows": 0,
+      "conflicting_rows": 0,
+      "wire_calls": 0,
+      "cached_calls": 0,
+      "unknown_cache_calls": 0,
+      "failed_calls": 0,
+      "unknown_outcome_calls": 0,
+      "missing_usage_calls": 0,
+      "missing_latency_calls": 0,
+      "known_prompt_tokens": 0,
+      "known_completion_tokens": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "total_tokens": 0,
+      "reasoning_tokens": 0,
+      "known_model_time_ms": 0,
+      "model_time_ms": 0,
+      "known_active_time_ms": 0,
+      "active_time_ms": 0,
+      "missing_interval_calls": 0
     },
-    "model": "fake",
-    "adopted_models": [
-     "fake"
-    ]
-   }
-  }
- },
- "naming": {
-  "present": true,
-  "entries": [
-   {
-    "char_ref": "fu_jun",
-    "family": "顾",
-    "given": null,
-    "full": "顾",
-    "aliases": {},
-    "keep_reason": null
-   },
-   {
-    "char_ref": "yun_niang",
-    "family": "柳",
-    "given": "婉",
-    "full": "柳婉",
-    "aliases": {},
-    "keep_reason": null
-   }
-  ]
- },
- "delivery": {
-  "present": true,
-  "delivery_identity": "53d4885521e612b7be0d606cb55e3ffd387052d6dfdb7b383bc24870fec83a9c",
-  "final_text_sha256": "67ad65448467e1843a2c460402b0897dc9d249806dab8a29b648d3ddddbecb6b",
-  "chapters": [
-   {
-    "chapter_ordinal": 1,
-    "prose_sha256": "b43fe4fd64b6d6225d258e23d31aebdbf784820cc4ecb8439e9bb8ecf2a3931a",
-    "length": {
-     "char_count": 35,
-     "target_chars": 1000,
-     "band_low": 10,
-     "band_high": 50,
-     "within_band": true,
-     "deviation_ratio": -0.965
-    },
-    "length_disclosed": false
-   },
-   {
-    "chapter_ordinal": 2,
-    "prose_sha256": "7037630aabd61bf56ba2b0c8d6a64f35ccbac307f604cae2ecdd4afd847849a3",
-    "length": {
-     "char_count": 37,
-     "target_chars": 1000,
-     "band_low": 10,
-     "band_high": 50,
-     "within_band": true,
-     "deviation_ratio": -0.963
-    },
-    "length_disclosed": false
-   }
-  ],
-  "length_reading": {
-   "total_chars": 72,
-   "total_length_budget": 2000,
-   "whole_book_deviation_ratio": -0.964
+    "issues": []
   },
-  "disclosure": "回执只覆盖章级机械检查；章内揭示位置、逐场义务兑现与成文质量未经语义验证，semantic=unverified 如实保留"
- },
- "book": "柳婉望着空房。\n\n拜堂之夜，柳婉望着夫君，旧约出口，烛火到天亮才熄，她记住了每一个字。\n\n夫君夜半离家，婉在他枕下发现玉佩，字迹陌生，她把玉佩藏回原处，坐到天明。"
+  "book": "三层样书\n\n我抱着婴儿站在门边，姐姐的嘱托仿佛还在耳旁。门外来客抬起手，我等着他说出第一句话。我抱着婴儿站在门边，姐姐的嘱托仿佛还在耳旁。门外来客抬起手，我等着他说出第一句话。\n\n第1章\n\n我抱着婴儿走进屋里，腾出一只手扶住门。来客站在门外，我以为他受姐姐邀请，便让开半步。我抱着婴儿走进屋里，腾出一只手扶住门。来客站在门外，我以为他受姐姐邀请，便让开半步。\n\n第2章\n\n来客说明自己走错巷子，我才发觉先前的猜测没有根据。姐姐唤孩子安儿，我低头应了一声，把往事留在记忆里。来客说明自己走错巷子，我才发觉先前的猜测没有根据。姐姐唤孩子安儿，我低头应了一声，把往事留在记忆里。",
+  "book_filename": "三层样书_rewriting.txt"
 }

@@ -52,12 +52,20 @@ def test_freeze_reads_all_txt_and_binds_bytes_profiles_and_output(manifest):
     assert not Path(manifest.output_root).exists()
 
 
-def test_v2_requires_current_six_dimensions_and_rejects_old_evaluation(manifest, snapshot):
+def test_v3_requires_current_story_contract_and_six_dimensions(manifest, snapshot):
     assert set(G.CRITERIA) == {'core_preservation', 'structural_originality',
         'causal_continuity', 'character_continuity', 'natural_progression', 'local_prose_coherence'}
     with pytest.raises(ValidationError):
         G.Manifest.model_validate({**manifest.model_dump(), 'schema_version': 1})
-    with pytest.raises(ValueError, match='v2'):
+    with pytest.raises(ValidationError):
+        G.Manifest.model_validate({**manifest.model_dump(), 'schema_version': 2})
+    missing = manifest.model_dump()
+    missing.pop('schema_version')
+    with pytest.raises(ValidationError):
+        G.Manifest.model_validate(missing)
+    with pytest.raises(ValidationError):
+        G.Manifest.model_validate({**manifest.model_dump(), 'story_contract_version': 'str06-rc24'})
+    with pytest.raises(ValueError, match='v3'):
         G.evaluate(manifest, {**snapshot, 'schema_version': 1}, _review(manifest, snapshot))
 
 
@@ -72,24 +80,24 @@ def test_quality_result_does_not_override_automatic_run_evidence(manifest, snaps
 
 
 @pytest.mark.parametrize('damage,expected', [
-    ('none', 'pass'), ('profile', 'pass'), ('manual_patch', 'assisted'),
-    ('historical', 'assisted'), ('outside_agent', 'assisted'), ('grant', 'assisted'),
+    ('none', 'pass'), ('profile', 'pass'), ('manual_patch', 'unver'),
+    ('historical', 'unver'), ('outside_agent', 'assisted'), ('grant', 'assisted'),
     ('book_grant', 'assisted'), ('missing_attempt', 'unver'), ('missing_bundle', 'unver'),
-    ('duplicate_cost', 'unver'), ('tail', 'unver'), ('correction', 'assisted')])
+    ('duplicate_cost', 'unver'), ('tail', 'unver'), ('correction', 'unver')])
 def test_execution_evidence_requires_complete_identity_and_discloses_intervention(
         manifest, monkeypatch, damage, expected):
     from novel.llm import ledger, paid_requests, usage_audit
-    from novel import work_units
+    from novel import work_units, story_metrics
     book = Path(manifest.output_root) / '合成书_123'
     profile = manifest.profiles.executor_default.profile
-    row = dict(sid=book.name, cached=False, node='str06.stage2.book',
+    row = dict(sid='123', cached=False, node='str06.stage2.book',
                request_model=profile.model, reasoning_effort=profile.reasoning_effort,
                thinking=profile.thinking_mode == 'on', attempt_id='attempt', request_fingerprint='request')
     if damage == 'profile':
         row['reasoning_effort'] = 'low' if profile.reasoning_effort != 'low' else 'high'
     monkeypatch.setattr(ledger, 'read_cost_snapshot', lambda *_a, **_k:
                         ([row, row] if damage == 'duplicate_cost' else [row], damage == 'tail'))
-    attempt = SimpleNamespace(attempt_id='attempt', request_fingerprint='request')
+    attempt = SimpleNamespace(attempt_id='attempt', request_fingerprint='request', response_sha256='r' * 64)
     turn = SimpleNamespace(turn_id='turn', agent_run_id='outside' if damage == 'outside_agent' else 'agent',
                            attempts=[] if damage == 'missing_attempt' else [attempt])
     unit = SimpleNamespace(unit_id='unit', grants=['grant'] if damage == 'grant' else [], turns=[turn])
@@ -97,25 +105,24 @@ def test_execution_evidence_requires_complete_identity_and_discloses_interventio
     monkeypatch.setattr(work_units, 'readonly_budget', lambda *_: SimpleNamespace(_read=lambda: unit))
     monkeypatch.setattr(work_units, 'read_book_budget', lambda *_:
                         SimpleNamespace(grants=['grant'] if damage == 'book_grant' else []))
-    adoption = SimpleNamespace(owner='book', patch={'reason': 'manual'} if damage == 'manual_patch' else None,
-        historical={'source': 'old'} if damage == 'historical' else None,
-        turn_id='turn', attempt_id='attempt', request_sha256='request')
+    # 退役的外部/人工采用缺少当前unit/turn/attempt来源，不解码旧字段来补证明。
+    adoption = SimpleNamespace(owner='book', unit_id='unit',
+        turn_id='' if damage in ('manual_patch', 'historical') else 'turn',
+        attempt_id='attempt', request_sha256='request', response_sha256='r' * 64)
     monkeypatch.setattr(paid_requests, 'commit_bundles', lambda *_:
                         [] if damage == 'missing_bundle' else [SimpleNamespace(adoptions=[adoption])])
     monkeypatch.setattr(usage_audit, 'audit_usage', lambda *_: {'evidence_errors': [], 'paid_attempts': 1})
+    metric = {'contract_version': 'story-v1', 'first_candidate_denominator': 1,
+              'first_semantic_candidate_pass_rate': 1.0, 'novel_quality': 'unver', 'source_quality': 'unver'}
+    monkeypatch.setattr(story_metrics, 'story_metrics', lambda *_: metric)
     if damage == 'correction':
-        original = dict(schema_version=2, owner='preserve', node='str06.stage4.preserve',
-            raised_by='str06.stage4.compile', status='open', rounds_total=2, fingerprint='old',
-            against_sha256='a' * 64, issues=[dict(code='material_name_leak', message='错误归因')], updated_at=1)
-        issue = {**original, 'schema_version': 3, 'status': 'superseded', 'dispatch_pending': False,
-                 'corrections': [dict(original=original, evidence_sha256='b' * 64,
-                     reason='已证明属于Design', target_owners=['design'], created_at=2)]}
         path = book / 'runtime/issues/preserve.json'
         path.parent.mkdir(parents=True)
-        path.write_text(json.dumps(issue), encoding='utf-8')
+        path.write_text('{旧更正证据，不得尝试解码或转换}', encoding='utf-8')
     result = G.capture_execution(manifest, book, ['agent'])
     assert result['automation'] == expected
     assert result['request_profiles_current'] is (damage != 'profile')
+    assert result['first_answer_metrics'] == metric
 
 
 @pytest.mark.parametrize('damage', ['changed', 'missing', 'extra'])
@@ -275,7 +282,7 @@ def test_baseline_bytes_and_manual_comparison_are_required(manifest, snapshot, t
     old_snapshot = {**snapshot, 'output_root': str(old_root), 'books': {
         '123': {**snapshot['books']['123'], 'output_sha256': G._sha('基线成书'.encode())}}}
     old_review = _review(manifest, old_snapshot)
-    prior = dict(schema_version=2, state='pass', snapshot=old_snapshot,
+    prior = dict(schema_version=3, story_contract_version='story-v1', state='pass', snapshot=old_snapshot,
                  review=old_review.model_dump(mode='json'))
     candidate = manifest.model_copy(update={'baseline': prior})
     G.validate_baseline(candidate)
@@ -308,3 +315,29 @@ def test_supervisor_pause_stops_owned_run_and_preserves_recovery_identity(manife
     result = G.execute(manifest, yes=True, egress_authorized=True)
     assert result['state'] == 'blocked' and result['runs'] == [{'sid': '123', 'run_id': 'paused-run'}]
     assert stopped == ['paused-run']
+
+
+def test_current_download_proof_preserves_crlf_and_refuses_unsealed_or_changed_final_bytes(tmp_path):
+    from novel.errors import ArtifactUnreadable, UnsealedArtifact
+    from tests.story_facilities import make_pipeline, pipeline_materials
+    from contracts.story_paths import FINAL, HOOK, NAME_MAP
+    from novel.llm.ledger import read_cost_snapshot
+    from novel.orchestrator.state import readonly_ctx
+    from novel.store import ArtifactStore
+    _chapters, _index, wires = pipeline_materials()
+    answer = {**wires['body_ch01'], 'text': wires['body_ch01']['text'].replace('，', '，\r\n\r\n', 1)}
+    hook = {**wires['hook_writer'], 'text': wires['hook_writer']['text'].replace('，', '，\r\n\r\n', 1)}
+    case = make_pipeline(tmp_path, scripts={'body_ch01': [answer], 'hook_writer': [hook]})
+    case.run()
+    raw = (case.root / FINAL.format(title='三层样书')).read_bytes()
+    assert b'\r\n\r\n' in raw
+    assert b'\r\n\r\n' in case.boundary.repository.path(HOOK).read_bytes()
+    context = readonly_ctx(case.root, 'str06.stage5.hook', G.prov.code_version())
+    assert ArtifactStore(context).freshness(HOOK).state == 'fresh'
+    rows, partial = read_cost_snapshot(tmp_path)
+    written_code = case.boundary.repository.inspect(NAME_MAP)['_provenance']['code']
+    assert rows and not partial and all(row['code'] == written_code for row in rows)
+    assert G.accepted_output_bytes(case.root) == raw
+    (case.root / FINAL.format(title='三层样书')).write_bytes(raw + b'changed')
+    with pytest.raises((ArtifactUnreadable, UnsealedArtifact)):
+        G.accepted_output_bytes(case.root)

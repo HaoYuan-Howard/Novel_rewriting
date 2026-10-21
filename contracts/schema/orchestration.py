@@ -786,7 +786,6 @@ class WorkUnitProcessingView(StrictModel):
     pending: int = Field(ge=0)
     generated: int = Field(ge=0)
     mechanical: int = Field(ge=0)
-    history_adopted: int = Field(ge=0)
     cached: int = Field(ge=0)
     failed: int = Field(ge=0)
     unknown: int = Field(ge=0)
@@ -795,7 +794,7 @@ class WorkUnitProcessingView(StrictModel):
     @model_validator(mode='after')
     def _complete(self) -> WorkUnitProcessingView:
         if self.total != sum(getattr(self, key) for key in (
-                'pending', 'generated', 'mechanical', 'history_adopted', 'cached', 'failed', 'unknown')):
+                'pending', 'generated', 'mechanical', 'cached', 'failed', 'unknown')):
             raise ValueError('工作单元处理数量必须完整且不重复')
         return self
 

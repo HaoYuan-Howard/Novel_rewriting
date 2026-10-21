@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { get, getBlob, getText, post } from './client'
+import { get, getBlob, getText, getTextFile, post } from './client'
 
 afterEach(() => vi.unstubAllGlobals())
 
 describe('HTTP 错误适配', () => {
-  it.each([['JSON', get], ['正文', getText], ['下载', getBlob]] as const)(
+  it.each([['JSON', get], ['正文', getText], ['下载', getBlob], ['具名下载', getTextFile]] as const)(
     '%s 消费保留后端拒绝类别、消息与免费恢复提示', async (_label, read) => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
         kind: 'UpstreamStale', message: '当前成书与来源不一致',
@@ -39,5 +39,19 @@ describe('HTTP 错误适配', () => {
     expect(fetch).toHaveBeenLastCalledWith('/api/echo', expect.objectContaining({
       method: 'POST', headers: { 'X-Novel-UI': '1', 'Content-Type': 'application/json' },
     }))
+  })
+
+  it('下载使用后端UTF8文件名与原始换行，文件名缺失或编码损坏不能静默重拼', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response('正文\r\n\r\n尾段', { headers: {
+        'Content-Disposition': "attachment; filename=\"book.txt\"; filename*=UTF-8''%E9%9B%A8%E4%B8%AD%E9%80%81%E4%BF%A1_rewriting.txt",
+      } }))
+      .mockResolvedValueOnce(new Response('正文'))
+      .mockResolvedValueOnce(new Response('正文', { headers: {
+        'Content-Disposition': "attachment; filename*=UTF-8''%ZZ",
+      } })))
+    expect(await getTextFile('/book?download=true')).toEqual({ text: '正文\r\n\r\n尾段', filename: '雨中送信_rewriting.txt' })
+    await expect(getTextFile('/book')).rejects.toMatchObject({ kind: 'malformed' })
+    await expect(getTextFile('/book')).rejects.toMatchObject({ kind: 'malformed' })
   })
 })

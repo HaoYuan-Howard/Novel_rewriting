@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 import contracts.schema
 from contracts.artifacts import (
-    ARTIFACT_PATHS, RETIRED_STAGE3_STYLE_GROUNDING, artifact_rel,
+    ARTIFACT_PATHS, RETIRED_ARTIFACT_PATHS, artifact_rel,
 )
 from contracts.invariants import NODES
 from contracts.schema import (
@@ -65,14 +65,6 @@ def test_schema_model_map_is_derived_from_the_current_registry():
 #: 「盘上的旧字节从此读不进来」，而本仓**没有迁移机制** ⇒ 每一次都必须同批回答
 #: 「存量产物由谁重建」。答不出来的破坏不许落。
 _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
-    'stage2/observations/names.json': (
-        2, 'CS-R：names v2显式声明局部名称同一性及原句证据，旧回答不能推断为空声明',
-        'str06.stage2.names按新协议重建；冻结根保持只读，新epoch与付费授权核对后执行',
-    ),
-    'stage2/characters/characters.json': (
-        2, 'CS-R：名称结构保留resolutions，canonical语义可按已证明对应归一',
-        'names v2观察就绪后由str06.stage2.compile免费重建双真源，不手补字段',
-    ),
     'stage1/main_text.json': (
         3,
         '两次破坏。v2（2026-08-22）：`section_id` 删除，`source_chapter_label: str` '
@@ -95,21 +87,8 @@ _SHAPE_BREAKS: dict[str, tuple[int, str, str]] = {
         '2026-08-22 阶段 B：恒 `sec_0001` 的 `section_id` 删除，产物收成 `{text}`',
         '同 `stage1/main_text.json`：`stage1.partition` 免费重跑',
     ),
-    # ── STR-06 新链（F8a）────────────────────────────────────────────
-    # 新链建立时 schema 化产物全部 current_version=1；CS-R两项例外已登记在上方。三级路径是
-    # 切换时新建的命名空间，盘上没有旧信封字节（旧路径整体退役，见
-    # `contracts/artifacts.py::RETIRED_ARTIFACT_PATHS`）。形状破坏史由另外两条线
-    # 承载，不在本表重复登记：
-    #   ① 模型自带 `contract_version` 字面量（Characters v6／ReconstructionBrief／
-    #      SemanticBinding／ExecutionPlan／PresentationGraph／HookContext／
-    #      WriterBookIR／ChapterReceipt／NameMap v6，与候选产物表逐字对账，
-    #      `tests/test_str06_candidates.py` 守着）；
-    #   ② 候选产物表的 `schema_version` RC 标签（rc2→rc3→rc4 的批次定格，
-    #      `tests/test_str06_f7e_freeze.py` 钉住冻结基线）。
-    # 未声明 `contract_version` 的模型（Blueprints v17、CharactersCore 抽取）按
-    # F8 义务在本注册表登记形状（即 `ARTIFACT_SPECS` 条目自身）——不往模型加非
-    # exclude 字段：那会改 `model_dump` 字节，从而改 prompt 与 F7a 历史采用的
-    # 已购请求身份。
+    # story-v1为新输出根独立契约；各正式载体以必填contract_version明确拒旧。
+
 }
 
 
@@ -127,7 +106,7 @@ def test_the_whole_registry_is_on_one_scale_and_the_migration_ladder_stays_gone(
     ⚠ 漏登记会红、登记了但版本对不上也会红：那张表与注册表**互为对方的守卫**。
     """
     live = {rel: spec.current_version for rel, spec in ARTIFACT_SPECS.items()
-            if spec.current_version != 1}
+            if isinstance(spec.current_version, int) and spec.current_version != 1}
     assert live == {rel: v for rel, (v, _what, _who) in _SHAPE_BREAKS.items()}, \
         '有产物升了版却没在 `_SHAPE_BREAKS` 里登记（或登记了却没升）——' \
         '升版的含义是「存量读不进来」，必须同批答出「由谁重建」'
@@ -202,7 +181,8 @@ def test_every_registered_artifact_round_trips_through_the_v1_envelope(rel: str)
     #   `test_the_whole_registry_is_on_one_scale_...` 一个守卫。写死之后，将来按文档
     #   规定的方式给某一份产物 `current_version` +1，会连带炸掉这两条参数化的
     #   注册表全表 × N 个用例——真正该红的那一条淹没在里面，而那正是本批要消灭的形状。
-    assert encoded['_schema_version'] == spec.current_version
+    marker_key = 'contract_version' if isinstance(spec.current_version, str) else '_schema_version'
+    assert encoded[marker_key] == spec.current_version
     if spec.root:
         assert set(encoded) == {'_schema_version', 'payload'}, \
             'root 产物的信封只能有这两个键'
@@ -212,7 +192,8 @@ def test_every_registered_artifact_round_trips_through_the_v1_envelope(rel: str)
 
     decoded = decode_artifact(path, encoded)
     assert decoded.version == spec.current_version
-    assert decoded.payload == payload
+    expected = {'contract_version': spec.current_version, **payload} if isinstance(spec.current_version, str) else payload
+    assert decoded.payload == expected
 
 
 @pytest.mark.parametrize('rel', sorted(ARTIFACT_SPECS), ids=lambda r: r)
@@ -243,7 +224,7 @@ def test_only_the_current_version_is_read(rel: str, marker: object):
     elif spec.root:
         raw = {'_schema_version': marker, 'payload': payload}
     else:
-        raw = {'_schema_version': marker, 'anything': 1}
+        raw = {'contract_version' if isinstance(spec.current_version, str) else '_schema_version': marker, 'anything': 1}
 
     with pytest.raises(ArtifactVersionError) as caught:
         decode_artifact(path, raw)
@@ -267,7 +248,7 @@ def test_paths_feed_schema_nodes_consumption_and_runtime_from_one_catalog():
     assert {rel for spec in NODES.values() for rel in spec.produces} <= catalog
     assert {
         rel for projections in CONSUMED_PROJECTIONS.values() for rel in projections
-    } <= catalog
+    } <= catalog | {'runtime/source_snapshot.json'}
     # F8a 后逐章正文/回执的字面键直接以模板为 id；旧 stage5.chapter／
     # rejected_revision（Stage5 Review 收敛账）随旧链退役。
     assert artifact_rel('stage5/body/ch{nn}.txt', nn=3) == 'stage5/body/ch03.txt'
@@ -304,9 +285,9 @@ def test_retired_stage4_identity_artifact_is_not_discovered_or_registered():
 
 
 def test_retired_stage3_path_is_not_a_current_artifact_or_node_output():
-    assert RETIRED_STAGE3_STYLE_GROUNDING not in ARTIFACT_SPECS
-    assert artifact_key(RETIRED_STAGE3_STYLE_GROUNDING) is None
-    assert RETIRED_STAGE3_STYLE_GROUNDING not in {
+    assert RETIRED_ARTIFACT_PATHS['stage3.style_grounding'] not in ARTIFACT_SPECS
+    assert artifact_key(RETIRED_ARTIFACT_PATHS['stage3.style_grounding']) is None
+    assert RETIRED_ARTIFACT_PATHS['stage3.style_grounding'] not in {
         rel for spec in NODES.values() for rel in spec.produces
     }
 
@@ -343,7 +324,7 @@ def test_retired_stage3_payload_has_no_current_decoder(marker):
     else:
         raw['_schema_version'] = marker
     with pytest.raises(ArtifactVersionError):
-        decode_artifact(RETIRED_STAGE3_STYLE_GROUNDING, raw)
+        decode_artifact(RETIRED_ARTIFACT_PATHS['stage3.style_grounding'], raw)
 
 
 def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp_path: Path):
@@ -360,10 +341,8 @@ def test_unreadable_current_artifacts_do_not_take_down_read_only_aggregation(tmp
         }), ensure_ascii=False),
         encoding='utf-8')
     malformed = json.dumps({'_schema_version': 1}, ensure_ascii=False)
-    # B2（2026-09-27）：`stage2/compiled/book_extraction.json` 已退役（D9）；
-    # 损坏样本改用现役观察产物（Characters core 的同族形状闸不变）。
-    (book / 'stage2' / 'characters').mkdir()
-    (book / 'stage2' / 'characters' / 'characters.json').write_text(
+    (book / 'stage2' / 'story').mkdir()
+    (book / 'stage2' / 'story' / 'source_story.json').write_text(
         malformed, encoding='utf-8')
 
     ov = overview(root, '123')

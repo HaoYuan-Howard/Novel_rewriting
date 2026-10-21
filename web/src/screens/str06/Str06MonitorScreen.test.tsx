@@ -1,232 +1,132 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { ChromeProvider } from '@/hooks/useChrome'
 import { api } from '@/api/endpoints'
 import { mockApi } from '@/api/mock'
-import { render, screen, waitFor } from '@testing-library/react'
+import { qkStr06 } from '@/api/queryKeys'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Str06MonitorScreen } from './Str06MonitorScreen'
 
-afterEach(() => {
-  vi.restoreAllMocks()
-})
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
-/** 候选监控屏不在 `/n/:sid` 路由树里：自带一套最小路由（providers 与 renderRoute 相同）。 */
-function renderCandidate(candidate: string) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } },
-  })
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter
-        initialEntries={['/str06/' + candidate]}
-        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
-      >
-        <ChromeProvider>
-          <Routes>
-            <Route path="/str06/:candidate" element={<Str06MonitorScreen />} />
-          </Routes>
-        </ChromeProvider>
-      </MemoryRouter>
-    </QueryClientProvider>,
-  )
+function renderCandidate(candidate = 'cand') {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
+  const rendered = render(<QueryClientProvider client={queryClient}>
+    <MemoryRouter initialEntries={['/str06/' + candidate]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <Routes><Route path="/str06/:candidate" element={<Str06MonitorScreen />} /></Routes>
+    </MemoryRouter>
+  </QueryClientProvider>)
+  return { ...rendered, queryClient }
 }
 
-/** 屏只经 api.* 取数：用 mockApi 的录制数据回填真实数据缝（两条路同一形状）。 */
-function stubCandidateApi(candidate: string) {
-  const listed = { candidates: [{ candidate, present: true, status: 'delivered', updated_at: 1 }] }
-  vi.spyOn(api, 'getStr06Candidates').mockResolvedValue(listed)
+function stubCandidateApi(candidate = 'cand') {
+  vi.spyOn(api, 'getStr06Candidates').mockImplementation(() => mockApi.getStr06Candidates())
   vi.spyOn(api, 'getStr06Run').mockImplementation(() => mockApi.getStr06Run(candidate))
-  vi.spyOn(api, 'getStr06Characters').mockImplementation(() => mockApi.getStr06Characters(candidate))
-  vi.spyOn(api, 'getStr06Blueprint').mockImplementation(() => mockApi.getStr06Blueprint(candidate))
-  vi.spyOn(api, 'getStr06Design').mockImplementation(() => mockApi.getStr06Design(candidate))
-  vi.spyOn(api, 'getStr06Ir').mockImplementation(() => mockApi.getStr06Ir(candidate))
+  vi.spyOn(api, 'getStr06SourceStory').mockImplementation(() => mockApi.getStr06SourceStory(candidate))
+  vi.spyOn(api, 'getStr06TargetStory').mockImplementation(() => mockApi.getStr06TargetStory(candidate))
+  vi.spyOn(api, 'getStr06Chapter').mockImplementation((_candidate, ordinal) => mockApi.getStr06Chapter(candidate, ordinal))
   vi.spyOn(api, 'getStr06Hook').mockImplementation(() => mockApi.getStr06Hook(candidate))
-  vi.spyOn(api, 'getStr06Naming').mockImplementation(() => mockApi.getStr06Naming(candidate))
   vi.spyOn(api, 'getStr06Delivery').mockImplementation(() => mockApi.getStr06Delivery(candidate))
-  return listed
 }
 
-describe('Str06MonitorScreen', () => {
-  it('renders the recorded candidate root over the single data seam', async () => {
-    const listed = await mockApi.getStr06Candidates()
-    const candidate = listed.candidates[0].candidate
-    const run = await mockApi.getStr06Run(candidate)
-    const chapter = await mockApi.getStr06Chapter(candidate, 1)
-    const delivery = await mockApi.getStr06Delivery(candidate)
-    stubCandidateApi(candidate)
-    vi.spyOn(api, 'getStr06Chapter').mockImplementation((_c, o) =>
-      mockApi.getStr06Chapter(candidate, o))
-
-    renderCandidate(candidate)
-
-    expect(await screen.findByText('STR-06 候选链 · 只读监控')).toBeInTheDocument()
-    // 「跑到哪了」是盘面事实：status 与产物节点数来自后端，前端不拼。
-    expect(await screen.findByText(run.status!)).toBeInTheDocument()
-    const produced = run.nodes.filter((n) => n.produced).length
-    await waitFor(() =>
-      expect(screen.getByTestId('str06-produced-nodes'))
-        .toHaveTextContent(`产物节点 ${produced}/${run.nodes.length}`))
-
-    // 章正文与回执：semantic 恒 unverified，机械检查名单原样呈现。
-    expect(await screen.findByText(chapter.prose!)).toBeInTheDocument()
-    const receipt = screen.getByTestId('str06-chapter-receipt')
-    expect(receipt).toHaveTextContent('unverified')
-    expect(receipt).toHaveTextContent(chapter.receipt!.mechanical_checks.join('、'))
-
-    // 交付 manifest：成书身份与全书偏差读数是盘面事实。
-    expect(screen.getByText(delivery.delivery_identity!.slice(0, 12))).toBeInTheDocument()
-    expect(screen.getByText(String(delivery.length_reading!.whole_book_deviation_ratio)))
-      .toBeInTheDocument()
-
-    // 集合核对报告（收尾批）：五态原样呈现，空态是「无」，不是 unknown。
-    const report = await screen.findByTestId('str06-assembly-report')
-    expect(report).toHaveTextContent('Stage7 集合核对')
-    expect(report).toHaveTextContent('assembly ready')
-    expect(report).toHaveTextContent('有效')
-    expect(report).toHaveTextContent('1、2')
-    // 成功 run 不渲染失败块（失败形状缺席是 null，不是空对象）。
-    expect(screen.queryByTestId('str06-run-failure')).not.toBeInTheDocument()
-    // 逐章留证（D3/W2）是「最近一次完成执行」的合法空清单：两块并排呈现，
-    // 无失败章——与「没执行过」的缺席 null 是两件事。
-    const bodyFailures = screen.getByTestId('str06-body-failures')
-    expect(bodyFailures).toHaveTextContent('正文 · 逐章失败留证')
-    expect(bodyFailures).toHaveTextContent('最近一次完成执行')
-    expect(bodyFailures).toHaveTextContent('无失败章')
-    const observationFailures = screen.getByTestId('str06-chapter-observation-failures')
-    expect(observationFailures).toHaveTextContent('章观察 · 逐章失败留证')
-    expect(observationFailures).toHaveTextContent('无失败章')
-    // 干净链从没起过修订轮：回派账缺席是 null，不渲染空账本。
-    expect(screen.queryByTestId('str06-owner-issues')).not.toBeInTheDocument()
+describe('三层只读监控', () => {
+  it('通过同一数据缝展示三层、当前章包与真实来源回执，并能切换章节', async () => {
+    stubCandidateApi()
+    renderCandidate()
+    expect(await screen.findByText('小说重写 · 三层只读监控')).toBeVisible()
+    expect(await screen.findByText('Stage2 · 源事实层')).toBeVisible()
+    expect(await screen.findByText('Stage4 · 目标故事层')).toBeVisible()
+    expect(await screen.findByText('Stage5 · 正文执行层')).toBeVisible()
+    await waitFor(() => expect(screen.getAllByTestId('story-prose-receipt').length).toBe(2))
+    expect(screen.getByText('源事实 → 目标故事 → 正文执行。机械检查与阅读质量分别呈现。')).toBeVisible()
+    expect(screen.getByRole('button', { name: '第 1 章' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', { name: '第 2 章' }))
+    await waitFor(() => expect(screen.getByText(/来客说明自己走错巷子，我才发觉先前的猜测没有根据。/)).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: '第 2 章' })).toHaveAttribute('aria-pressed', 'true')
+    expect(api.getStr06Chapter).toHaveBeenCalledWith('cand', 2)
+    expect(screen.queryByRole('button', { name: /批准|编辑|重新生成/ })).not.toBeInTheDocument()
   })
 
-  it('renders the failure shape and chapter failures straight from the run view', async () => {
-    const candidate = 'cand'
-    const recorded = await mockApi.getStr06Run(candidate)
-    // 失败形状是服务端直投影（workflow_status.json + body_failures.json）；
-    // 前端不发明读数，只呈现类别、code/phase/item 定位与逐章留证。
-    const failedRun = {
-      ...recorded,
-      status: 'failed',
-      failed_node: 'str06.stage5.body',
-      accepted_body: false,
-      failure_kind: 'ExecutionError',
-      detail: '第2章截断即停（finish_reason=length），不重写、不进候选',
-      error_code: 'truncated',
-      error_stage: '',
-      error_node: 'str06.stage5.body',
-      error_item: 'chapter:2',
-      error_phase: 'accept',
-      error_context: { owner: 'body_ch02' },
-      body_failures: {
-        present: true,
-        requested: [1, 2],
-        attempted: [1, 2],
-        chapters: [
-          { chapter_ordinal: 2, failure_kind: 'ExecutionError', detail: '截断的开头。' },
-        ],
-        recorded_at: 1790269950,
-      },
-      assembly_report: null,
+  it('区分材料缺失、契约错误与已生成，不以空数据冒充通过', async () => {
+    stubCandidateApi()
+    vi.spyOn(api, 'getStr06SourceStory').mockResolvedValue({ candidate_id: 'cand', revision: 'bad',
+      status: 'invalid', data: null, errors: ['源事实引用不存在，已拒绝发布。'] })
+    vi.spyOn(api, 'getStr06TargetStory').mockResolvedValue({ candidate_id: 'cand', revision: 'missing',
+      status: 'missing', data: null, errors: [] })
+    renderCandidate()
+    expect(await screen.findByText('源事实引用不存在，已拒绝发布。')).toBeVisible()
+    expect(await screen.findByText('目标故事尚未发布，等待目标建模与编译。')).toBeVisible()
+    expect(screen.getByText('尚无可写作章节')).toBeVisible()
+    expect(api.getStr06Chapter).not.toHaveBeenCalled()
+  })
+
+  it('run修订变化后在同一挂载中刷新材料；相同修订不反复失效', async () => {
+    stubCandidateApi()
+    const run = await mockApi.getStr06Run('cand')
+    const source = await mockApi.getStr06SourceStory('cand')
+    if (!source.data) throw new Error('合成样本缺SourceStory')
+    const getRun = vi.spyOn(api, 'getStr06Run').mockResolvedValue({ ...run, revision: 'revision-1' })
+    const getSource = vi.spyOn(api, 'getStr06SourceStory').mockResolvedValue(source)
+    const { queryClient } = renderCandidate()
+    await screen.findAllByText('我猜来客是姐姐请来的，却没有证据。')
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0))
+    const firstCalls = getSource.mock.calls.length
+    await queryClient.invalidateQueries({ queryKey: qkStr06.run('cand') })
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0))
+    expect(getSource.mock.calls.length).toBe(firstCalls)
+    getRun.mockResolvedValue({ ...run, revision: 'revision-2' })
+    getSource.mockResolvedValue({ ...source, revision: 'revision-2', data: { ...source.data,
+      expression: { ...source.data.expression, statement: '最新源事实已发布，保留错误信念的纠正。' } } })
+    await queryClient.invalidateQueries({ queryKey: qkStr06.run('cand') })
+    expect(await screen.findByText('最新源事实已发布，保留错误信念的纠正。')).toBeVisible()
+    expect(getSource.mock.calls.length).toBeGreaterThan(firstCalls)
+  })
+
+  it('保留未知用量及节点失败定位，不补造费用或下一步动作', async () => {
+    stubCandidateApi()
+    const run = await mockApi.getStr06Run('cand')
+    vi.spyOn(api, 'getStr06Run').mockResolvedValue({ ...run, revision: 'failed', status: 'failed',
+      failure_kind: 'needs_design', failed_node: 'str06.stage5.body', detail: '入场站位有冲突，需要目标层修订。',
+      error_node: 'str06.stage4.chapters', error_item: 'chapter:2',
+      cost: { present: true, rows: 1, new_paid_rows: 1, cached_rows: 0, prompt_tokens: null,
+        completion_tokens: null, reasoning_tokens: null, unknown_cost_rows: 1, per_node: [] } })
+    renderCandidate()
+    const failed = await screen.findByTestId('str06-run-failure')
+    expect(failed).toHaveTextContent('chapter:2')
+    expect(failed).toHaveTextContent('str06.stage4.chapters')
+    expect(failed).toHaveTextContent('入场站位有冲突，需要目标层修订。')
+    expect(screen.getAllByText('unknown').length).toBeGreaterThan(0)
+  })
+
+  it('下载失败明确显示后端错误，不把未读取成功当作下载完成', async () => {
+    stubCandidateApi()
+    vi.spyOn(api, 'getStr06Book').mockRejectedValue(new Error('最终字节与manifest不一致，拒绝下载。'))
+    renderCandidate()
+    const button = await screen.findByRole('button', { name: '下载成书全文' })
+    fireEvent.click(button)
+    expect(await screen.findByText('最终字节与manifest不一致，拒绝下载。')).toBeVisible()
+    expect(button).toBeEnabled()
+  })
+
+  it('下载沿用后端给出的中文书名，不从candidate重新拼文件名', async () => {
+    stubCandidateApi()
+    const file = await mockApi.getStr06Book('cand')
+    vi.spyOn(api, 'getStr06Book').mockResolvedValue(file)
+    const create = vi.fn((_blob: Blob | MediaSource) => 'blob:verified-book')
+    const revoke = vi.fn()
+    class DownloadURL extends URL {
+      static override createObjectURL = create
+      static override revokeObjectURL = revoke
     }
-    stubCandidateApi(candidate)
-    vi.spyOn(api, 'getStr06Run').mockResolvedValue(failedRun)
-    vi.spyOn(api, 'getStr06Chapter').mockImplementation((_c, o) =>
-      mockApi.getStr06Chapter(candidate, o))
-
-    renderCandidate(candidate)
-
-    expect(await screen.findByText('STR-06 候选链 · 只读监控')).toBeInTheDocument()
-    expect(await screen.findByText('failed')).toBeInTheDocument()
-    const failure = screen.getByTestId('str06-run-failure')
-    expect(failure).toHaveTextContent('ExecutionError')
-    expect(failure).toHaveTextContent('truncated')
-    expect(failure).toHaveTextContent('chapter:2')
-    expect(failure).toHaveTextContent('body_ch02')
-    const failures = screen.getByTestId('str06-body-failures')
-    expect(failures).toHaveTextContent('第 2 章')
-    expect(failures).toHaveTextContent('ExecutionError')
-    // 请求范围与实际执行章是「最近一次完成执行」的事实，原样呈现。
-    expect(failures).toHaveTextContent('请求')
-    expect(failures).toHaveTextContent('实际执行')
-    // Stage7 未跑：报告缺席（null）不渲染，不造「核对过」的空面。
-    expect(screen.queryByTestId('str06-assembly-report')).not.toBeInTheDocument()
-  })
-
-  it('renders revision rounds next to the stop reason straight from the run view', async () => {
-    const candidate = 'cand'
-    const recorded = await mockApi.getStr06Run(candidate)
-    // R3 监控面：修订轮（runtime/issues 回派账投影）与停止原因（失败形状直投影）
-    // 并排呈现——轮数上限 rounds_cap 由后端投影，前端不抄契约常量；status、
-    // code、item 都是后端事实，前端不发明读数。
-    const revisedRun = {
-      ...recorded,
-      status: 'failed',
-      failed_node: 'str06.stage4.compile',
-      failure_kind: 'OwnerRevisionStop',
-      detail:
-        'str06.stage4.compile 的修订要求没有进展：design 修订后同一问题集原样重现，' +
-        '按 item 停（同一问题集重复即停）：must_keep_unbound[ob01]：必保义务 ob01 尚未承载',
-      owner_issues: {
-        present: true,
-        rounds_cap: 2,
-        records: [
-          {
-            owner: 'design',
-            node: 'str06.stage4.body_design',
-            raised_by: 'str06.stage4.compile',
-            status: 'open',
-            rounds_total: 1,
-            fingerprint: 'a'.repeat(64),
-            issues: [
-              {
-                code: 'must_keep_unbound',
-                item: 'ob01',
-                message: '必保义务 ob01 尚未承载（owner=design；目标场景缺承载）',
-                context: { unbound_owner: 'design' },
-              },
-            ],
-            updated_at: 1790269950,
-          },
-        ],
-      },
-    }
-    stubCandidateApi(candidate)
-    vi.spyOn(api, 'getStr06Run').mockResolvedValue(revisedRun)
-    vi.spyOn(api, 'getStr06Chapter').mockImplementation((_c, o) =>
-      mockApi.getStr06Chapter(candidate, o))
-
-    renderCandidate(candidate)
-
-    expect(await screen.findByText('STR-06 候选链 · 只读监控')).toBeInTheDocument()
-    const rounds = await screen.findByTestId('str06-owner-issues')
-    expect(rounds).toHaveTextContent('修订轮 · 跨节点回派')
-    expect(rounds).toHaveTextContent('design')
-    expect(rounds).toHaveTextContent('open')
-    expect(rounds).toHaveTextContent('must_keep_unbound')
-    expect(rounds).toHaveTextContent('ob01')
-    expect(rounds).toHaveTextContent('必保义务 ob01 尚未承载')
-    expect(rounds).toHaveTextContent('str06.stage4.body_design')
-    expect(rounds).toHaveTextContent('str06.stage4.compile')
-    // 修订轮 1／2：分子来自盘上回派账，分母是后端投影的契约常量。
-    expect(rounds).toHaveTextContent('1')
-    expect(rounds).toHaveTextContent('2')
-    // 停止原因与修订轮并排：失败形状直投影（含按 item 的 typed 问题清单）。
-    const failure = screen.getByTestId('str06-run-failure')
-    expect(failure).toHaveTextContent('OwnerRevisionStop')
-    expect(failure).toHaveTextContent('同一问题集重复即停')
-    expect(failure).toHaveTextContent('must_keep_unbound[ob01]')
-  })
-
-  it('keeps a missing candidate as an error, never as the recorded root', async () => {
-    vi.spyOn(api, 'getStr06Candidates').mockResolvedValue({
-      candidates: [{ candidate: 'cand', present: true, status: 'delivered', updated_at: 1 }],
+    vi.stubGlobal('URL', DownloadURL)
+    const names: string[] = []
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      names.push(this.download)
     })
-    vi.spyOn(api, 'getStr06Run').mockRejectedValue(new Error('没有这个候选根：not-recorded'))
-    renderCandidate('not-recorded')
-
-    // 未知候选根答错，不渲染任何盘面事实（不拿样本候选根顶替）。
-    expect(await screen.findByText('没有这个候选根：not-recorded')).toBeInTheDocument()
-    expect(screen.queryByText('STR-06 候选链 · 只读监控')).not.toBeInTheDocument()
+    renderCandidate()
+    fireEvent.click(await screen.findByRole('button', { name: '下载成书全文' }))
+    await waitFor(() => expect(names).toEqual(['三层样书_rewriting.txt']))
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(revoke).toHaveBeenCalledWith('blob:verified-book')
   })
 })

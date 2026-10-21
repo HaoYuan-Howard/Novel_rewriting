@@ -1,3 +1,5 @@
+> 本文件保存历史裁决，关联实现可能已退役。2026-10-20起当前故事契约为story-v1；历史代码引用在 `docs/specs/story_retirement_inventory.json` 的冻结Git基线查阅，不构成运行兼容或当前入口。
+
 # 关键裁决与证据索引
 
 本文解释当前设计的理由及证据限制，不定义现役行为、不记施工流水账。契约见 BACKEND_CONTRACT，

@@ -905,13 +905,11 @@ def test_fresh_epoch_blocker_wiring_stays_retired(base, corpus, monkeypatch):
     assert captured['run_blocked_action'] is None
 
 
-def test_retired_stage5_reviewer_rewrite_blocker_stops_without_dispatch(
+def test_source_owner_problem_stops_without_dispatch(
         base, corpus, monkeypatch):
-    """已退役的 reviewer-rewrite waiter 现在只是表外 blocker：停在人工恢复面。
+    """源故事 owner 尚待恢复时不得猜成执行许可，也不能用滚 epoch 逃过阻断。
 
-    原用例验证「fresh epoch 换代后把新 session_run_id 交给子进程」；该派发
-    面随旧链补尾 waiter 退役，改守现役行为：这个 waiting_on 不再派发任何
-    子进程、不再滚 epoch，epoch_closed 与 ended 的 2/stopped 同步落账。
+    无已登记恢复动作就不派发子进程，epoch_closed 与 ended 的 2/stopped 同步落账。
     """
     dispatched: list[tuple] = []
     monkeypatch.setattr(
@@ -919,10 +917,9 @@ def test_retired_stage5_reviewer_rewrite_blocker_stops_without_dispatch(
         lambda *_args, **_kwargs: SimpleNamespace(
             state='blocked', code_version='test-code-version',
             action=SimpleNamespace(
-                node='stage5.write',
-                flags=['--reviewer-rewrite',
-                       'stage5/reviewer_rewrite_request.json'],
-                waiting_on=agent.queue.WAITING_ON_STAGE5_REVIEWER_REWRITE,
+                node='str06.stage2.book',
+                flags=['--check-only'],
+                waiting_on=agent.queue.WAITING_ON_RESUME_DECISION,
                 action_sha256='a' * 64),
             execution_token=None))
 
@@ -944,7 +941,7 @@ def test_retired_stage5_reviewer_rewrite_blocker_stops_without_dispatch(
     [ended] = [row for row in events if row.kind == 'ended']
     assert closed.exit_code == ended.exit_code == 2
     assert ended.outcome is not None and ended.outcome.state == 'stopped'
-    assert agent.queue.WAITING_ON_STAGE5_REVIEWER_REWRITE in ended.outcome.reason
+    assert agent.queue.WAITING_ON_RESUME_DECISION in ended.outcome.reason
     assert agent_session_audit.read_events(base) == []
 
 

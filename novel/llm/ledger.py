@@ -1036,20 +1036,20 @@ class CostLedger:
                     counter.seen[key] += 1
 
     def claim_work_unit_attempts(self, budget: Any, turn_id: str, *, purpose: str) -> None:
-        """通过持久业务账户显式采用历史调用，原费用/run 身份保持原样。"""
+        """通过当前持久工作单元认领本账已有尝试，原费用/run身份保持原样。"""
         from novel.work_units import WorkUnitBudget
         if not isinstance(budget, WorkUnitBudget):
-            raise ProvenanceRefused('历史采用缺真实工作单元账户')
+            raise ProvenanceRefused('本账恢复缺真实工作单元账户')
         bindings = budget.recovery_attempts(turn_id)
         wanted = {str(row['attempt_id']): row for row in bindings}
         if len(wanted) != len(bindings) or not wanted:
-            raise ProvenanceRefused('历史采用的尝试集合为空或不唯一')
+            raise ProvenanceRefused('本账恢复的尝试集合为空或不唯一')
         with self._lock:
             missing = set(wanted) - set(self._request_fingerprints)
             if not missing:
                 return
             if self.path is None:
-                raise ProvenanceRefused('历史采用缺盘上成本账')
+                raise ProvenanceRefused('本账恢复缺盘上成本账')
             with process_append_lock(self.path):
                 raw = self.path.read_bytes()
             if raw and not raw.endswith(b'\n'):

@@ -43,57 +43,17 @@ class PathFamily(NamedTuple):
 #: 家族键 → 身份。键用 `str06.<owner>.<family>` 命名，防与现役 `ARTIFACT_PATHS`
 #: 的 `stageN.<name>` 键撞语义空间。
 STR06_PATH_FAMILIES: Final[dict[str, PathFamily]] = {
-    # B2 五节点观察家族（2026-09-27，D3/D8/D9）：观察与关联决定是付费的
-    # 内部材料（已购恢复证据），不是可重建派生物也不是普通缓存——kind 取
-    # 'semantic'（删除政策输入：与 canonical 同级保留，不随派生物清理）。
-    'str06.stage2.observations': PathFamily(
-        prefix='stage2/observations/', kind='semantic', writer_owner='stage2.semantic'),
-    # Characters／Blueprint 双真源的唯一 writer 是 str06.stage2.compile（D9）。
-    'str06.stage2.characters': PathFamily(
-        prefix='stage2/characters/', kind='canonical', writer_owner='stage2.compile'),
-    'str06.stage2.blueprints': PathFamily(
-        prefix='stage2/blueprints/', kind='canonical', writer_owner='stage2.compile'),
-    'str06.stage2.acceptance': PathFamily(
-        prefix='stage2/acceptance/', kind='audit', writer_owner='stage2.acceptance'),
-    'str06.stage4.design': PathFamily(
-        prefix='stage4/design/', kind='canonical', writer_owner='stage4.design'),
-    # grounding 目录混居两职：reconstruction_brief.json 是 Derived，
-    # semantic_binding.json 是完整 Canonical snapshot。按文件区分，登记在同一
-    # 家族；「checkpoint 存储不是下游读取接口」同理——它也不在本表内。
-    'str06.stage4.grounding': PathFamily(
-        prefix='stage4/grounding/', kind='derived+canonical', writer_owner='stage4.grounding'),
-    'str06.stage4.compiled': PathFamily(
-        prefix='stage4/compiled/', kind='derived', writer_owner='stage4.compile'),
-    # 全书静态写作 IR（F5）：嵌入全部场景双视图的唯一 Derived artifact。
-    'str06.stage4.ir': PathFamily(
-        prefix='stage4/ir/', kind='derived', writer_owner='stage4.context'),
-    'str06.stage4.context': PathFamily(
-        prefix='stage4/context/', kind='derived', writer_owner='stage4.context'),
-    'str06.stage4.acceptance.guard': PathFamily(
-        prefix='stage4/acceptance/guard/', kind='report', writer_owner='stage4.guard'),
-    # R2.8：compile 的 WriterPacket 指标（audit 报面；先采数、不设阈值）。
-    # ⚠ 前缀宽于 guard 家族，必须排在其后——家族匹配按插入序取首个命中。
-    'str06.stage4.acceptance.metrics': PathFamily(
-        prefix='stage4/acceptance/', kind='report', writer_owner='stage4.compile'),
-    # 正文按章成文（F5）：ch{nn}.txt 是 prose，章级 attempts 记录是 audit；
-    # 按文件区分，登记在同一家族（同 stage5.hook 的先例）。
-    'str06.stage5.body': PathFamily(
-        prefix='stage5/body/', kind='prose+audit', writer_owner='stage5.body_writer'),
-    'str06.stage5.acceptance.body': PathFamily(
-        prefix='stage5/acceptance/body/', kind='report', writer_owner='stage5.body_writer'),
-    # Hook 目录混居两职：hook.txt 是 prose，receipt.json 是 audit；按文件区分，
-    # 登记在同一家族（同 stage4.grounding 的先例）。
-    'str06.stage5.hook': PathFamily(
-        prefix='stage5/hook/', kind='prose+audit', writer_owner='stage5.hook_writer'),
-    # 目标命名前置（2026-10-18，rc26）：name_map 从 Stage7 末端前移到 Stage4，
-    # 成为 Preserve 与设计链的正式输入；家族随节点迁移。
-    'str06.stage4.naming': PathFamily(
-        prefix='stage4/naming/', kind='canonical', writer_owner='stage4.naming'),
-    # 交付目录混居两职：final 正文是 prose，组装报告与 diff proof 是 audit。
-    'str06.stage7.final': PathFamily(
-        prefix='stage7/final/', kind='prose+audit', writer_owner='stage7.assembly'),
-    'str06.runtime': PathFamily(
-        prefix='runtime/', kind='runtime', writer_owner='runtime'),
+    'stage2.observations': PathFamily('stage2/observations/', 'semantic', 'stage2.semantic'),
+    'stage2.story': PathFamily('stage2/story/', 'canonical', 'stage2.compile'),
+    'stage4.naming': PathFamily('stage4/naming/', 'canonical', 'stage4.naming'),
+    'stage4.story': PathFamily('stage4/story/', 'canonical', 'stage4.compile'),
+    'stage4.drafts': PathFamily('stage4/drafts/', 'semantic', 'stage4.semantic'),
+    'stage4.packets': PathFamily('stage4/packets/', 'derived', 'stage4.compile'),
+    'stage5.body': PathFamily('stage5/body/', 'prose', 'stage5.body'),
+    'stage5.receipts': PathFamily('stage5/acceptance/body/', 'audit', 'stage5.body'),
+    'stage5.hook': PathFamily('stage5/hook/', 'prose+audit', 'stage5.hook'),
+    'stage7.final': PathFamily('stage7/final/', 'prose+audit', 'stage7.assembly'),
+    'runtime': PathFamily('runtime/', 'runtime', 'runtime'),
 }
 
 

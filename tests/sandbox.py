@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""把一组当前契约产物复制到临时书目录，供写盘测试使用。"""
+"""复制当前 Stage0/1 产物，供 CLI、HTTP 与运行子进程的隔离测试。"""
 from __future__ import annotations
 
 import json
@@ -8,158 +6,82 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from contracts.artifacts import (
-    STAGE2_GLOBAL_EDIT, STAGE4_PLAN_EDIT, STAGE6_HOOK_EDIT,
-    STAGE7_NAME_MAP_EDIT,
-)
-from contracts.schema import decode_artifact, encode_artifact
+from contracts.artifacts import STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT
+from contracts.schema import ARTIFACTS, decode_artifact, encode_artifact, formal_artifact_rel
+from novel import paths
+from novel.work_units import workflow_manifest
 from tests import corpus
 
-STAGE3_INPUTS = (
-    'stage1/main_text.json',
-    'stage1/hook_copy.json',
-    'stage2/global_grounding.json',
-)
+STAGE1_INPUTS = (STAGE0_REVISIONS, STAGE1_MAIN_TEXT, STAGE1_HOOK_COPY)
+CHAIN_ROOT = STAGE0_CLEAN_TEXT
 
 
-def books_with_stage3() -> list[str]:
-    return sorted({
-        artifact.book_dir
-        for artifact in corpus.iter_artifacts()
-        if artifact.rel == 'stage3/style_grounding.json'
-    })
+def books_with_stage1() -> list[str]:
+    """选择当前根中 Stage0/1 正式输入齐备的书，不以退役产物筛样。"""
+    root = corpus.corpus_root()
+    if root is None:
+        return []
+    if workflow_manifest(root) is None:
+        raise ValueError('配置的产物根缺少当前工作流身份；旧根不能作为当前沙箱语料')
+    present = {}
+    for artifact in corpus.iter_artifacts():
+        present.setdefault(artifact.book_dir, set()).add(artifact.rel)
+    return sorted(book for book, rels in present.items()
+                  if set(STAGE1_INPUTS) <= rels and (root / book / CHAIN_ROOT).is_file())
 
 
 def current(book: str, rel: str):
-    artifact = next(
-        (item for item in corpus.iter_artifacts()
-         if item.book_dir == book and item.rel == rel),
-        None,
-    )
+    artifact = next((item for item in corpus.iter_artifacts()
+                     if item.book_dir == book and item.rel == rel), None)
     return corpus.load_current(artifact) if artifact is not None else None
 
 
-# 调用侧沿用这个短名；返回值已经是严格验证过的当前契约，不做裁剪。
 cut = current
 
 
-#: 全链根。**它不是一份「输入选择」，是这本书的身份**——所以由沙箱无条件搬，
-#: 不由每个调用侧各自记得写进 `rels`。
-CHAIN_ROOT = 'stage0/clean_text.txt'
-
-#: 人工决策集（`--apply-edit` 的输入）。**它们是「必要的可选项」**：
-#: 一本走过 apply-edit 的书，被编辑的那份产物把决策集记成了一条**真实上游边**
-#: （`novel/consumption.py::CONSUMED_PROJECTIONS` 给它们各登记了一格投影）。
-#: 沙箱不带 ⇒ 幽灵边 ⇒ `novel/orchestrator/state.py` 把该产物判 `unknown`
-#: （历史形态还要经 `approvals.py::_proof_for_seen` 抛 `ApprovalRequired` 并级联
-#: 堵死 `s2`→`s7`，该审批解码面已随 2026-10-04 裁决删除）
-#: ⇒ 缺一份 `stage2/global_edit.json` 会让下游一批与它毫无字面关系的用例红。
-#:
-#: ⚠ **必须条件搬**：没走过 apply-edit 的书没有这一份，无条件写进 `rels` 会撞
-#: `Sandbox.__init__` 的 assert。用 `edits_of(book)`。
-#: ⚠ **名单从 `contracts/artifacts.py` 派生，不在这里手抄第二份**——
-#:   「沙箱漏一条上游边」这个形状到 2026-08-18 已经出现三次：
-#:   `stage0/clean_text.txt`（17 条红）、`stage7/name_map_edit.json`、`stage2/global_edit.json`。
-HUMAN_EDITS = (STAGE2_GLOBAL_EDIT, STAGE4_PLAN_EDIT,
-               STAGE6_HOOK_EDIT, STAGE7_NAME_MAP_EDIT)
-
-
-def edits_of(book: str) -> tuple[str, ...]:
-    """这本书盘上**真有**的那几份人工决策集（没有就不返回，交给调用侧直接拼进 `rels`）。"""
-    return tuple(rel for rel in HUMAN_EDITS if current(book, rel) is not None)
-
-
 def source_resolves_in_a_sandbox(book: str) -> bool:
-    """这本书的 `stage0` 新鲜度在**沙箱里**答得出吗（记录的源路径自己还在盘上）。
-
-    ⚠⚠ `stage0/revisions.json` 的新鲜度**不走通用来源账**：它拿链根记录的
-    `source_ref` 去比 `normalized_source_sha1`（`novel/store.py::_stage0_revisions_freshness`）。
-    那条路径失效时才由 `novel/core/source.py::resolve_recorded_source` 按
-    `<base>/_service/uploads/<sha256>/<name>` 回落重锚——**而沙箱的 base 里没有那一层**
-    ⇒ 该产物判 `unknown`（`novel/orchestrator/state.py` 按 ghost/no_provenance 收口）。
-    历史形态是 `novel/orchestrator/approvals.py::_proof_for_seen` 当场抛
-    `ApprovalRequired` 再级联堵死 `s2`→`s7`、报成「预置审批链失败」——该审批
-    解码面已随 2026-10-04 裁决删除，但「选一本答得出的书」这个结论不变。
-
-    ⚠⚠ **不要改成「把源 txt 拷进沙箱的 `_service/uploads/`」。** 试过，它会当场撞守卫：
-    `tests/test_api_http.py::test_the_service_writes_nothing_at_all` 断言沙箱里
-    **根本没有 `_service/`**（历史还有 `tests/test_approvals.py` 的「GET 不许落
-    服务状态」，该文件已随审批面退役删除）。那条守的是 `R-11.3`，比这里的方便
-    重要得多 ⇒ 改成**选一本答得出的书**。
-
-    ⚠⚠ **这个 helper 自己漂过一次，代价是整片语料面静默变暗**（2026-08-23 查实）。
-    2026-08-22 阶段 B 把 `original_path: str` 换成了 typed `source_ref: SourceRef`
-    （`contracts/schema/stage0.py`），而这里仍在 `.get('original_path')`
-    ⇒ 恒得 `None` ⇒ 恒 `False` ⇒ **当时 `tests/test_approvals.py` 的 6 条语料用例
-    从那天起全部 skip**（该文件已随审批面退役删除），一条红都不发。
-    被它盖住的东西是实打实的：
-    同一天改的「默认全书闭卷」既没被验证，`test_default_depth_is_...one_two_three`
-    里 `[1, 2, 3]` 那个陈旧断言也没被推翻。
-    ⇒ **守卫漂了不一定假红，
-    也可能假绿**——而静默 skip 与「查过、没事」在报告上长得一模一样。
-    ⇒ 定位符**从注册模型的属性取**，不手抄 JSON key、也不在这里展开
-    `SourceRef` 那个联合（`contracts/schema/stage0.py` 明说读取端只有一个入口）。
-    字段再改一次名，这里会当场 `AttributeError`，而不是又一次静默变暗。
-    """
-    from contracts.schema import ARTIFACTS
+    """只认记录的源路径；不向副本补入源正文或伪造来源。"""
     from novel.core.source import resolve_recorded_source
-
-    rel = 'stage0/revisions.json'
-    payload = current(book, rel)
+    payload = current(book, STAGE0_REVISIONS)
     if payload is None:
         return False
-    #: `base=None` = 只问记录的那条路径本身，不猜——沙箱里能读到的正是这一支。
-    typed = ARTIFACTS[rel].model_validate(payload)
+    typed = ARTIFACTS[STAGE0_REVISIONS].model_validate(payload)
     return resolve_recorded_source(typed.source.source_ref, None) is not None
 
 
 class Sandbox:
-    """一本书的临时副本。**恒带全链根**，`rels` 里的字节形态产物按字节原样拷。
+    """保留当前工作流身份及产物原字节；不拷贝付费账或重建旧数据。"""
 
-    ⚠⚠ `stage0/clean_text.txt` 是全链根：任何一次 `free_provenance` /
-    `llm_provenance` / `rewrite_provenance` 都要拿它算 `root_clean_sha1`
-    （`RunContext._require_single_root`），写盘口那道闸还要拿它比对
-    （`ArtifactStore._refuse_bad_provenance`）⇒ **一个会写盘的沙箱没有它就一定抛
-    `ProvenanceRefused`**，而 CLI 那一侧会把它渲染成退出码 3「结构性拒绝（这是 bug）」
-    ——一条纯粹的环境缺料被报成代码自相矛盾。
-
-    ⚠ 曾经的形态是「各调用侧自己记得把它写进 `rels`」：两处手抄了拷贝代码，
-    其余七个文件漏掉，于是 2026-08-16 那次全量语料跑里 17 条红在同一句话上。
-    ⇒ 收进构造函数，**只有一个落点**。
-    """
-
-    def __init__(self, book: str, rels: tuple[str, ...] = STAGE3_INPUTS) -> None:
-        self.root = Path(tempfile.mkdtemp())
+    def __init__(self, book: str, rels: tuple[str, ...] = STAGE1_INPUTS,
+                 *, root: Path | None = None) -> None:
+        source_root = corpus.corpus_root()
+        if source_root is None or workflow_manifest(source_root) is None:
+            raise ValueError('没查：需要显式配置的当前产物根及工作流身份')
+        self.root = Path(tempfile.mkdtemp()) if root is None else Path(root)
         self.dir = self.root / book
         self.book = book
-        self.sid = book.rsplit('_', 1)[-1]
-        for rel in (CHAIN_ROOT, *rels):
-            path = self.dir / rel
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if not rel.endswith('.json'):
-                source = corpus.corpus_root() / book / rel
-                assert source.is_file(), f'{book} 少了 {rel}，沙箱无法建立'
-                # 按字节拷：文本模式会把 LF 翻成 CRLF，而这三份产物是 LF-only 契约。
-                path.write_bytes(source.read_bytes())
-                continue
-            data = current(book, rel)
-            assert data is not None, f'{book} 少了 {rel}，沙箱无法建立'
-            path.write_text(
-                json.dumps(encode_artifact(rel, data), ensure_ascii=False),
-                encoding='utf-8',
-            )
+        self.sid = paths.derive_source_meta(book)[0]
+        source_manifest = paths.workflow_manifest_path(source_root)
+        target_manifest = paths.workflow_manifest_path(self.root)
+        target_manifest.parent.mkdir(parents=True, exist_ok=True)
+        target_manifest.write_bytes(source_manifest.read_bytes())
+        for rel in dict.fromkeys((CHAIN_ROOT, *rels)):
+            source = source_root / book / rel
+            assert source.is_file(), f'{book} 少了 {rel}，沙箱无法建立'
+            if rel.endswith('.json'):
+                payload = decode_artifact(rel, json.loads(source.read_bytes())).payload
+                ARTIFACTS[formal_artifact_rel(rel)].model_validate(payload)
+            target = self.dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
 
     def read(self, rel: str) -> dict:
-        raw = json.loads((self.dir / rel).read_text(encoding='utf-8'))
-        return decode_artifact(rel, raw).payload
+        return decode_artifact(rel, json.loads((self.dir / rel).read_bytes())).payload
 
     def write(self, rel: str, data: dict) -> None:
-        path = self.dir / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(encode_artifact(rel, data), ensure_ascii=False),
-            encoding='utf-8',
-        )
+        target = self.dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(json.dumps(encode_artifact(rel, data), ensure_ascii=False).encode('utf-8'))
 
     def close(self) -> None:
         shutil.rmtree(self.root, ignore_errors=True)

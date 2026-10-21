@@ -107,26 +107,15 @@ from contracts.schema.stage0 import (
 )
 from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 
-# ── STR-06 新链契约模型（F8a 激活；F8c 分流至正式 stageN 模块后改 import）──
-from contracts.schema.source import (
-    BlueprintsArtifactV17, CharactersArtifactV6, CharactersCore,
+# 三层当前契约；运行时不注册旧故事模型。
+from contracts.schema.source_story import (
+    SourceStory, ChapterObservation, BookObservation, NamesObservation, AssociateObservation,
 )
-from contracts.schema.observation import (
-    STAGE2_ASSOCIATE_PROTOCOL, AssociateObservation,
-    BookObservation, ChapterObservation, NamesObservation,
+from contracts.schema.target_story import (
+    NameMap, PreservationContract, TargetModelDraft, ChapterPlan,
+    TargetStory, AdaptationMap, ChapterPacket, HookPlan, HookPacket,
 )
-from contracts.schema.grounding import (
-    PreserveCheckpoint, ReconstructionBrief, SemanticBinding,
-)
-from contracts.schema.execution import ExecutionPlan
-from contracts.schema.design import (
-    THREAD_ENDINGS, BodyDesign, ChapterAssignment, ChapterEntry,
-    PresentationGraph, ThreadAction, ThreadKind,
-)
-from contracts.schema.hook import HookContext, HookReceipt
-from contracts.schema.book_ir import WriterBookIR
-from contracts.schema.receipt import ChapterReceipt
-from contracts.schema.naming import NameMapV6
+from contracts.schema.story_prose import ProseReceipt, FinalManifest
 
 class ArtifactVersionError(ValueError):
     """一份产物不是当前注册版本。错误恒带文件与版本。
@@ -140,7 +129,7 @@ class ArtifactVersionError(ValueError):
     """
 
     def __init__(self, message: str, *, rel: str | None = None,
-                 found: int | None = None, expected: int | None = None) -> None:
+                 found: int | str | None = None, expected: int | str | None = None) -> None:
         super().__init__(message)
         self.rel = rel
         self.found = found
@@ -149,7 +138,7 @@ class ArtifactVersionError(ValueError):
     @property
     def is_older_than_current(self) -> bool:
         """盘上那份**确实是一个更早的注册版本**（不是坏信封、不是未来版本）。"""
-        return (self.found is not None and self.expected is not None
+        return (type(self.found) is int and type(self.expected) is int
                 and self.found < self.expected)
 
 
@@ -164,7 +153,7 @@ class ArtifactSpec:
     """
 
     model: type[BaseModel]
-    current_version: int = 1
+    current_version: int | str = 1
 
     @property
     def root(self) -> bool:
@@ -174,7 +163,7 @@ class ArtifactSpec:
 @dataclass(frozen=True)
 class DecodedArtifact:
     payload: Any
-    version: int
+    version: int | str
 
 
 #: **产物相对路径 → 当前契约。** 路径里的 `{n}` / `{nn}` 是占位符。
@@ -199,51 +188,25 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # Stage0～7 减法完成后，两本现役书统一从头重建，不做迁移或手补字段。
     STAGE1_MAIN_TEXT: ArtifactSpec(MainText, 3),
     STAGE1_HOOK_COPY: ArtifactSpec(HookCopy, 2),
-    # ── STR-06 新链（F8a 激活；键即相对路径，见 contracts/artifacts.py）────────
-    # 【版本口径】新链产物全部 current_version=1：三级路径是切换时新建的命名
-    #   空间，盘上没有旧信封字节可读（旧路径已整体退役，见 RETIRED_ARTIFACT_PATHS）。
-    #   形状破坏史不在信封上累加，而由两条线承载：① 模型自带 `contract_version`
-    #   字面量（Characters v6／Brief／Binding／Plan／Graph／BookIR／HookContext／
-    #   ChapterReceipt／NameMap v5，与候选产物表逐字对账）；② 候选产物表的
-    #   `schema_version` RC 标签（rc2→rc3→rc4 的批次定格）。未声明
-    #   `contract_version` 的模型（Blueprints v17）按 F8
-    #   义务在本注册表登记形状（即本表条目自身），不进模型——往模型加非 exclude
-    #   字段会改 `model_dump` 字节，从而改 prompt 与已购请求身份，F7a 的历史
-    #   采用会当场失配（`_provenance` 用 exclude=True 正是为守住这条）。
-    # Stage2：源语义（str06.stage2.source／names）
-    # v13（2026-09-26 质量改进批次二）：拍模型改三类转移（effects／cognition／
-    #   loops）＋场景边界与时间模式＋章蓝图场景分段；存量 v12 盘面明确拒读
-    #   （SchemaVersionRefused），由新独立根重新抽取，不做迁移。
-    # B2 五节点观察与关联协议（2026-09-27，D3/D8/D9）：协议版本由模型自带的
-    # `protocol_version` 字面量承载（I-13 显式版本化，无运行时转换层）；联合
-    # 抽取派生输入 `stage2/compiled/book_extraction.json` 已退役（D9）。
-    'stage2/observations/book.json': ArtifactSpec(BookObservation, 1),
-    'stage2/observations/ch{nn}.json': ArtifactSpec(ChapterObservation, 1),
-    # CS-R：名称同一性必须由 names 留证声明；旧观察不能补空声明冒充已核验。
-    # names 按新协议重建后，compile 免费重建 Characters，旧根保留证据不原地猜迁。
-    'stage2/observations/names.json': ArtifactSpec(NamesObservation, 2),
-    'stage2/observations/associate.json': ArtifactSpec(AssociateObservation, 1),
-    'stage2/blueprints/chapter_blueprints.json': ArtifactSpec(BlueprintsArtifactV17, 1),
-    'stage2/characters/characters.json': ArtifactSpec(CharactersArtifactV6, 2),
-    # Stage4：目标命名（命名前移批，rc26）与目标故事设计、确定性编译
-    'stage4/naming/name_map.json': ArtifactSpec(NameMapV6, 1),
-    'runtime/preserve_checkpoint.json': ArtifactSpec(PreserveCheckpoint, 1),
-    'stage4/grounding/reconstruction_brief.json': ArtifactSpec(ReconstructionBrief, 1),
-    'stage4/grounding/semantic_binding.json': ArtifactSpec(SemanticBinding, 1),
-    'stage4/compiled/execution_plan.json': ArtifactSpec(ExecutionPlan, 1),
-    'stage4/design/body_design.json': ArtifactSpec(BodyDesign, 1),
-    'stage4/design/presentation_graph.json': ArtifactSpec(PresentationGraph, 1),
-    'stage4/context/hook/hook.json': ArtifactSpec(HookContext, 1),
-    'stage4/ir/writer_book_ir.json': ArtifactSpec(WriterBookIR, 1),
-    # Stage5：按章正文与 Hook 回执（body／hook）
-    'stage5/hook/receipt.json': ArtifactSpec(HookReceipt, 1),
-    'stage5/acceptance/body/ch{nn}.json': ArtifactSpec(ChapterReceipt, 1),
-    # Stage7：交付（assemble）
-    # ⚠ 自由形态派生记录（input_snapshots／fold／guard 两份／delivery_manifest）
-    #   与三份正文（hook.txt／ch{nn}.txt／{title}_rewriting.txt）只登记路径
-    #   （`contracts/artifacts.py::ARTIFACT_PATHS`），不进本表：它们的形状由唯一
-    #   writer 的契约治理（同 `stage0/clean_text.txt` 的先例，见模块头），
-    #   信封版本对「没有第二 Shape」的记录不携带信息。
+    # 当前三层产物直接携带必填 contract_version，不另造数字信封。
+    'stage2/observations/ch{nn}.json': ArtifactSpec(ChapterObservation, 'story-v1'),
+    'stage2/observations/book.json': ArtifactSpec(BookObservation, 'story-v1'),
+    'stage2/observations/names.json': ArtifactSpec(NamesObservation, 'story-v1'),
+    'stage2/observations/associate.json': ArtifactSpec(AssociateObservation, 'story-v1'),
+    'stage2/story/source_story.json': ArtifactSpec(SourceStory, 'story-v1'),
+    'stage4/naming/name_map.json': ArtifactSpec(NameMap, 'story-v1'),
+    'stage4/story/preservation.json': ArtifactSpec(PreservationContract, 'story-v1'),
+    'stage4/drafts/book.json': ArtifactSpec(TargetModelDraft, 'story-v1'),
+    'stage4/drafts/ch{nn}.json': ArtifactSpec(ChapterPlan, 'story-v1'),
+    'stage4/story/target_story.json': ArtifactSpec(TargetStory, 'story-v1'),
+    'stage4/story/adaptation_map.json': ArtifactSpec(AdaptationMap, 'story-v1'),
+    'stage4/packets/ch{nn}.json': ArtifactSpec(ChapterPacket, 'story-v1'),
+    'stage4/drafts/hook.json': ArtifactSpec(HookPlan, 'story-v1'),
+    'stage4/packets/hook.json': ArtifactSpec(HookPacket, 'story-v1'),
+    'stage5/hook/receipt.json': ArtifactSpec(ProseReceipt, 'story-v1'),
+    'stage5/acceptance/body/ch{nn}.json': ArtifactSpec(ProseReceipt, 'story-v1'),
+    'stage7/final/delivery_manifest.json': ArtifactSpec(FinalManifest, 'story-v1'),
+
 }
 ARTIFACTS: dict[str, type[BaseModel]] = {
     key: spec.model for key, spec in ARTIFACT_SPECS.items()
@@ -319,6 +282,16 @@ def decode_artifact(rel: str, data: Any) -> DecodedArtifact:
     if spec is None:
         return DecodedArtifact(data, 0)
 
+    if isinstance(spec.current_version, str):
+        marker = data.get('contract_version') if isinstance(data, dict) else None
+        if marker != spec.current_version or '_schema_version' in data:
+            raise ArtifactVersionError(
+                f'{rel}: schema contract_version={marker!r} 不是当前 {spec.current_version}；'
+                '旧根只读归档，请从 producer 在新根重新生成',
+                rel=rel, found=marker, expected=spec.current_version)
+        return DecodedArtifact({key: value for key, value in data.items()
+                                if key != '_provenance'}, spec.current_version)
+
     marker: Any = None
     payload = data
     if spec.root:
@@ -359,6 +332,12 @@ def encode_artifact(rel: str, payload: Any) -> Any:
     spec = artifact_spec(rel)
     if spec is None:
         return payload
+    if isinstance(spec.current_version, str):
+        if not isinstance(payload, dict) or '_schema_version' in payload:
+            raise ArtifactVersionError(f'{rel}: 当前故事 schema 必须为单一对象载体')
+        if payload.get('contract_version', spec.current_version) != spec.current_version:
+            raise ArtifactVersionError(f'{rel}: schema 版本不符，须从 producer 在新根重建')
+        return {'contract_version': spec.current_version, **payload}
     if spec.root:
         return {'_schema_version': spec.current_version, 'payload': payload}
     if not isinstance(payload, dict):
@@ -397,5 +376,5 @@ __all__ = [
     'decode_artifact', 'encode_artifact',
     # B2 观察与关联协议（contracts/schema/observation.py）
     'AssociateObservation', 'BookObservation', 'ChapterObservation',
-    'NamesObservation', 'STAGE2_ASSOCIATE_PROTOCOL',
+    'NamesObservation', 'SourceStory', 'TargetStory', 'ChapterPacket',
 ]

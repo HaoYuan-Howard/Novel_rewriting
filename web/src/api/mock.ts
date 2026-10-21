@@ -30,15 +30,12 @@ import type {
 } from '@/types/agent'
 import type { EnumsResponse } from '@/types/enums'
 import type {
-  Str06BlueprintView,
   Str06CandidateList,
-  Str06CharactersView,
   Str06ChapterView,
   Str06DeliveryView,
-  Str06DesignView,
   Str06HookView,
-  Str06IrNavView,
-  Str06NamingView,
+  Str06SourceStoryView,
+  Str06TargetStoryView,
   Str06RunView,
 } from '@/types/str06'
 import type {
@@ -52,6 +49,7 @@ import type {
 } from '@/types/jobs'
 import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
 import type { RunProgress } from '@/types/run'
+import type { RunMetrics } from '@/types/runMetrics'
 import type {
   CheckKind,
   Stage0Extras,
@@ -256,27 +254,27 @@ function fx<T>(file: string): T {
 interface Str06Fixture {
   candidates: Str06CandidateList
   run: Str06RunView
-  characters: Str06CharactersView
-  blueprint: Str06BlueprintView
-  design: Str06DesignView
-  ir: Str06IrNavView
+  sourceStory: Str06SourceStoryView
+  targetStory: Str06TargetStoryView
   chapter1: Str06ChapterView
+  chapter2: Str06ChapterView
   hook: Str06HookView
-  naming: Str06NamingView
   delivery: Str06DeliveryView
+  progress: RunProgress
+  metrics: RunMetrics
   book: string
+  book_filename: string
 }
 
 /** 样本候选根名：与 fixture 的 candidates[0].candidate 对账（写死两份必然分家）。 */
 const STR06_FIXTURE_CANDIDATE = 'cand'
-/** 样本只录了第 1 章；别的章号答 nosample，不编一章空数据。 */
-const STR06_FIXTURE_CHAPTER = 1
+/** 当前合成样本完整录了两章；其它章号明确答 nosample。 */
 
 function str06Fixture(): Str06Fixture {
   return fx<Str06Fixture>('str06_candidate.json')
 }
 
-function str06Read<K extends keyof Omit<Str06Fixture, 'book'>>(
+function str06Read<K extends keyof Omit<Str06Fixture, 'book' | 'book_filename'>>(
   candidate: string, key: K,
 ): Promise<Str06Fixture[K]> {
   if (candidate !== STR06_FIXTURE_CANDIDATE) {
@@ -285,11 +283,12 @@ function str06Read<K extends keyof Omit<Str06Fixture, 'book'>>(
   return later(structuredClone(str06Fixture()[key]))
 }
 
-function str06ReadBook(candidate: string): string {
+function str06ReadBook(candidate: string): { text: string; filename: string } {
   if (candidate !== STR06_FIXTURE_CANDIDATE) {
     throw new ApiError('nosample', '/str06/candidates/' + candidate + '/book')
   }
-  return str06Fixture().book
+  const fixture = str06Fixture()
+  return { text: fixture.book, filename: fixture.book_filename }
 }
 
 /* ---------------------------------------------------------------- 延迟 */
@@ -594,26 +593,15 @@ function mockStage1View(): Stage1View {
 
 /* ---------------------------------------------------------- 跑书进度样例 */
 
-/** mock 的静态镜像（CS-3 bind 退役后 13 个 `str06.` 节点，B5 对齐）；
- *  真实响应由后端直接从 NODES 派生。label/paid 与 `contracts/invariants.py::NODES` 逐字对账，
- *  夹具与 mock 的 node id 由 `tests/test_retired_surface_scan.py` 钉到 NODES。 */
-const PIPELINE_STEPS: { node: string; label: string; paid: boolean }[] = [
-  { node: 'stage0.remove', label: 'stage0 非正文剔除', paid: false },
-  { node: 'stage1.partition', label: 'stage1 分章', paid: false },
-  { node: 'str06.stage2.book', label: 'Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）', paid: true },
-  { node: 'str06.stage2.chapters', label: 'Stage2 逐章观察（事件与三类转移；互不依赖，D3）', paid: true },
-  { node: 'str06.stage2.names', label: 'Stage2 源名称结构观察（家族、名、化名、称谓构词）', paid: true },
-  { node: 'str06.stage2.associate', label: 'Stage2 跨章关联（同一命题、同维状态、悬念配对、跨章因果与续场，D8）', paid: true },
-  { node: 'str06.stage2.compile', label: 'Stage2 确定性编译：解析证据、生成 ID、执行关联，发布 Characters＋Blueprint（D9）', paid: false },
-  { node: 'str06.stage4.preserve', label: 'Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影', paid: true },
-  { node: 'str06.stage4.body_design', label: 'Stage4 目标故事与导演说明设计（BodyDesign）', paid: true },
-  { node: 'str06.stage4.hook_design', label: 'Stage4 Hook 设计并经 publish_graph 唯一发布 PresentationGraph', paid: true },
-  { node: 'str06.stage4.compile', label: 'Stage4 确定性编译：ExecutionPlan／Guard／WriterBookIR／HookContext', paid: false },
-  { node: 'str06.stage5.hook', label: 'Stage5 Hook 成文（同 Context 有限重写＋机械验）', paid: true },
-  { node: 'str06.stage5.body', label: 'Stage5 按章正文成文（机械检查＋有限重写＋章级回执）', paid: true },
-  { node: 'str06.stage4.naming', label: 'Stage4 目标命名（NameMap v6 赋值；置于 Preserve 之前）', paid: true },
-  { node: 'str06.stage7.assemble', label: 'Stage7 改名替换与成书装配（TXT 先落盘、manifest 最后提交）', paid: false },
-]
+/** 顺序、标签与费用均消费后端枚举夹具，不维护第二份节点清单。 */
+const PIPELINE_STEPS = (() => {
+  const enums = fx<EnumsResponse>('enums.json')
+  return enums.pipeline_steps.map((node) => {
+    const spec = enums.job_kinds[node]
+    if (!spec) throw new ApiError('malformed', '/mock/enums', { message: '节点顺序引用未登记节点：' + node })
+    return { node, label: spec.label, paid: spec.paid }
+  })
+})()
 
 /** 静态样例：全节点 pending + 空事件流 + 全 null 的 stage_done。 */
 function mockRunProgress(sid: string): RunProgress {
@@ -772,10 +760,12 @@ export const mockApi: Api = {
       currentMockNovel(raw<LegacyNovel>('novel_overview.json')),
     ),
 
-  // 进度屏在 stage0.remove 前就要能开（书目录可能还没建）——任何 sid 都给静态样例，不走 bookOnly
-  getRunProgress: (sid) => later(mockRunProgress(sid)),
-  getRunMetrics: (sid, runId) => runId ? noBook(`/novels/${sid}/run/metrics?run_id=${runId}`)
-    : noBook(`/novels/${sid}/run/metrics`),
+  // cand消费同一离线合成根的真实运行投影；其它sid保留尚未开跑的静态形状。
+  getRunProgress: (sid) => sid === STR06_FIXTURE_CANDIDATE
+    ? later(structuredClone(str06Fixture().progress)) : later(mockRunProgress(sid)),
+  getRunMetrics: (sid, runId) => sid === STR06_FIXTURE_CANDIDATE && !runId
+    ? later(structuredClone(str06Fixture().metrics))
+    : noBook(`/novels/${sid}/run/metrics` + (runId ? `?run_id=${runId}` : '')),
   previewWorkUnitGrant: async () => { throw new Error('离线样本未提供工作单元额度授权，请连接真实服务') },
   grantWorkUnit: async () => { throw new Error('离线样本未提供工作单元额度授权，请连接真实服务') },
 
@@ -985,15 +975,12 @@ export const mockApi: Api = {
      只读——mock 不伪造任何候选链写动作（那属于 CLI 子进程，不属于服务）。 */
   getStr06Candidates: () => later(str06Fixture().candidates),
   getStr06Run: (candidate) => str06Read(candidate, 'run'),
-  getStr06Characters: (candidate) => str06Read(candidate, 'characters'),
-  getStr06Blueprint: (candidate) => str06Read(candidate, 'blueprint'),
-  getStr06Design: (candidate) => str06Read(candidate, 'design'),
-  getStr06Ir: (candidate) => str06Read(candidate, 'ir'),
+  getStr06SourceStory: (candidate) => str06Read(candidate, 'sourceStory'),
+  getStr06TargetStory: (candidate) => str06Read(candidate, 'targetStory'),
   getStr06Chapter: (candidate, o) =>
-    o === STR06_FIXTURE_CHAPTER ? str06Read(candidate, 'chapter1')
+    o === 1 ? str06Read(candidate, 'chapter1') : o === 2 ? str06Read(candidate, 'chapter2')
       : noChapter('/str06/candidates/' + candidate + '/chapters/' + o),
   getStr06Hook: (candidate) => str06Read(candidate, 'hook'),
-  getStr06Naming: (candidate) => str06Read(candidate, 'naming'),
   getStr06Delivery: (candidate) => str06Read(candidate, 'delivery'),
   getStr06Book: (candidate) => later(str06ReadBook(candidate)),
 }

@@ -22,8 +22,8 @@ function fixture(sid = 'book-1', runId?: string): RunMetrics {
   return {
     sid, run_id: runId ?? null, usage,
     runs: [{ run_id: 'run-1', kind: 'agent', state: 'failed', started_at: 100, ended_at: 200, elapsed_seconds: 100 }],
-    units: [{ unit_id: sid + '-unit', node: 'stage2.blueprint', role: 'executor', scope: 'chapter:3',
-      content_turns: 1, network_retries: 1, history_adopted: 2, mechanical: 0, cached_processing: 1,
+    units: [{ unit_id: sid + '-unit', node: 'str06.stage2.chapters', role: 'executor', scope: 'chapter:3',
+      content_turns: 1, network_retries: 1, mechanical: 0, cached_processing: 1,
       usage, issues: ['一次失败尚无用量'], attempts: [{
         attempt_id: sid + '-attempt', turn: 1, run_id: 'producer-1', parent_run_id: 'run-1',
         session_run_id: 'session-1', state: 'error', cached: false,
@@ -44,7 +44,8 @@ describe('运行统计的真实消费形状', () => {
     expect(screen.getByText('结果未知 0 次；冲突记录 0 条')).toBeVisible()
     expect(log).not.toHaveBeenCalled()
     fireEvent.click(screen.getByText('1 内容轮 · 1 网络重试'))
-    expect(await screen.findByText('历史采用 2 · 机械处理 0 · 缓存处理 1')).toBeVisible()
+    expect(await screen.findByText('机械处理 0 · 缓存处理 1')).toBeVisible()
+    expect(screen.queryByText(/历史采用/)).not.toBeInTheDocument()
     expect(screen.getByText(/首 token：未知/)).toBeVisible()
     fireEvent.click(screen.getByText('查看所属运行日志'))
     expect(await screen.findByText('该运行的原始日志')).toBeVisible()

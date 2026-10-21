@@ -8,6 +8,9 @@ export type Freshness = (typeof FRESHNESS)[number]
 export const ARTIFACT_DISPLAY = ['missing', 'fresh', 'stale', 'unknown'] as const
 export type FreshnessDisplay = (typeof ARTIFACT_DISPLAY)[number]
 
+export const STORY_ARTIFACT_STATUS = ['ready', 'missing', 'invalid'] as const
+export type StoryArtifactStatus = (typeof STORY_ARTIFACT_STATUS)[number]
+
 export const BADGES = ['pass', 'amber', 'fail'] as const
 export type Badge = (typeof BADGES)[number]
 

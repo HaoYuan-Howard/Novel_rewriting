@@ -186,13 +186,20 @@ def test_no_read_only_response_carries_a_verdict():
     from tests import corpus, sandbox
     if corpus.corpus_root() is None:
         pytest.skip('盘上没有语料——本条**没在查**，不是「查过没事」')
-    box = sandbox.Sandbox(sandbox.books_with_stage3()[0])
+    books = sandbox.books_with_stage1()
+    corpus.declared_dependency(bool(books), needs='当前Stage0/1输入',
+        produced_by='stage0.remove → stage1.partition', cost='免费')
+    box = sandbox.Sandbox(books[0])
     try:
         with TestClient(create_app(box.root)) as c:
-            view = c.get(f'/api/novels/{box.sid}/stage2/global').json()
+            response = c.get(f'/api/novels/{box.sid}/stage1')
+            assert response.status_code == 200, response.text
+            view = response.json()
             assert not ({'badge', 'passed', 'counts'} & set(view)), \
-                'Stage2 读屏带上了判定——那是第二个判官'
-            report = c.get(f'/api/novels/{box.sid}/check/stage2').json()
+                'Stage1 读屏带上了判定——那是第二个判官'
+            checked = c.get(f'/api/novels/{box.sid}/check/stage1')
+            assert checked.status_code == 200, checked.text
+            report = checked.json()
             assert {'badge', 'passed', 'counts'} <= set(report), \
                 '守卫的守卫：判定该出现的那一份里也没有，说明本条在查一个空响应'
     finally:
@@ -220,9 +227,8 @@ def test_the_three_state_domains_reach_the_wire():
 def test_unknown_freshness_actually_happens_on_the_wire():
     """⭐ 「取值面里有」不等于「发得出来」。
 
-    固定语料里的存量产物大多生成于统一注册表之前，仍有大量 `consumed=null`，
-    所以这条在该语料上必然能命中——它防的是将来某次改动把 `unknown` 变成一个
-    **永不出现的取值**，而那种改动在取值面测试里看不出任何区别。
+    在当前副本移走Stage0机器回执，让仍在盘上的clean正文来源保持unknown；
+    不依赖历史语料恰好缺证据，检查真实HTTP三态消费。
     """
     pytest.importorskip('fastapi', reason='没装 fastapi ⇒ 本条**没在查**')
     from fastapi.testclient import TestClient
@@ -231,8 +237,12 @@ def test_unknown_freshness_actually_happens_on_the_wire():
     from tests import corpus, sandbox
     if corpus.corpus_root() is None:
         pytest.skip('盘上没有语料——本条**没在查**，不是「查过没事」')
-    box = sandbox.Sandbox(sandbox.books_with_stage3()[0])
+    books = sandbox.books_with_stage1()
+    corpus.declared_dependency(bool(books), needs='当前Stage0/1输入',
+        produced_by='stage0.remove → stage1.partition', cost='免费')
+    box = sandbox.Sandbox(books[0])
     try:
+        (box.dir / 'stage0/revisions.json').unlink()
         with TestClient(create_app(box.root)) as c:
             ov = c.get(f'/api/novels/{box.sid}').json()
             seen = {a['freshness'] for st in ov['stages'] for a in st['artifacts']}
@@ -334,9 +344,9 @@ def test_frontend_does_not_rejudge_scene_budget_band():
 
     # 旧链 PlanSceneLine/Stage4IndexRow 载体已删除（2026-10-04 清理批）；
     # 「视图不带出档判定」由 schema 层的删除本身闭合，这里只钉现役判据归属。
-    assert REGISTRY.get('scene_budget_distribution').stage == 'stage4'
-    assert REGISTRY.get('length_budget_conserved').stage == 'stage4'
-    assert REGISTRY.get('body_length_band').stage == 'stage5'
+    assert REGISTRY.get('story_target_chapters').stage == 'stage4'
+    assert REGISTRY.get('story_packet_projection').stage == 'stage4'
+    assert REGISTRY.get('story_prose_complete').stage == 'stage5'
 
 
 # ───────────────────────── `R-11.7` 贵贱只有一处算 ─────────────────────────

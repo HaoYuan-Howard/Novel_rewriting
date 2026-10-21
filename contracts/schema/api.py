@@ -39,6 +39,7 @@ from pydantic import Field, field_validator, model_serializer, model_validator
 
 from contracts.invariants import (
     LLM_EXECUTOR_NODES,
+    STORY_ARTIFACT_STATUS,
     PIPELINE_PARALLEL_NODES, PIPELINE_DEFAULT_CONCURRENCY,
     PIPELINE_TOTAL_CONCURRENCY_MIN, PIPELINE_TOTAL_CONCURRENCY_MAX,
     AgentProfileSettingsState,
@@ -67,6 +68,7 @@ from contracts.schema.orchestration import (
     JobState, NovelOverview, PipelineAgentProfiles, QueueRun,
 )
 from contracts.schema.stage0 import Stage0RevisionOrigin, Stage0Warning
+from contracts.schema.source_story import STORY_VERSION, StoryVersion
 # ⚠ F8a：`contracts.schema.stage6` 的 import 随 Stage6 整层退役删除
 #   （HookApprovalResolution／HookProvenance／HookSources／Mech；F6d 登记）。
 # ⚠ 2026-10-04 清理批（用户裁决：不保留旧产物读兼容）：旧链读屏视图、写回
@@ -1092,175 +1094,6 @@ class ErrorBody(StrictModel):
 # `--check-only` 复检里核。
 # ═════════════════════════════════════════════════════════════════════════════
 
-class Str06SurfaceWindowView(StrictModel):
-    """一个称谓的时间窗（源事实）：从 from_chapter 起可解析到该人物。"""
-
-    surface: str = Field(min_length=1)
-    from_chapter: int = Field(ge=1)
-    until_chapter: int | None = None
-
-
-class Str06CharacterView(StrictModel):
-    char_id: str = Field(min_length=1)
-    canonical: str = Field(min_length=1)
-    surfaces: tuple[Str06SurfaceWindowView, ...] = Field(min_length=1)
-
-
-class Str06NameStructureView(StrictModel):
-    """源名称结构（Stage2 names 窄调用产出）：家族、名、化名与称谓构词。"""
-
-    families: dict[str, str] = Field(default_factory=dict,
-                                     description='family_id → 姓字面（可复姓）')
-    people: dict[str, dict[str, Any]] = Field(default_factory=dict,
-                                              description='char_id → 结构条目原样投影')
-
-
-class Str06CharactersView(StrictModel):
-    present: bool
-    contract_version: str | None = None
-    characters: tuple[Str06CharacterView, ...] = ()
-    name_structure: Str06NameStructureView | None = None
-
-
-class Str06BlueprintBeatView(StrictModel):
-    beat_id: str = Field(min_length=1)
-    event: str = Field(min_length=1)
-    participants: tuple[str, ...] = ()
-    effects: tuple[dict[str, Any], ...] = ()
-    #: v13（质量改进批次二）：cognition 取代 reveals；loops 独立成数组。
-    cognition: tuple[dict[str, Any], ...] = ()
-    loops: tuple[dict[str, Any], ...] = ()
-    scene_boundary: str | None = None
-    temporal_mode: str | None = None
-
-
-class Str06BlueprintChapterView(StrictModel):
-    chapter: int = Field(ge=1)
-    beats: tuple[Str06BlueprintBeatView, ...] = Field(min_length=1)
-    #: v13：compiler 生成的场景分段（跨章场景在续章同样出现）。
-    scenes: tuple[dict[str, Any], ...] = ()
-    causal_edges: tuple[dict[str, Any], ...] = ()
-
-
-class Str06BlueprintView(StrictModel):
-    present: bool
-    world_constraints: tuple[dict[str, Any], ...] = ()
-    chapters: tuple[Str06BlueprintChapterView, ...] = ()
-
-
-class Str06DesignSceneView(StrictModel):
-    scene_id: str = Field(min_length=1)
-    driver: dict[str, str]
-    realization_brief: str = Field(min_length=1, description='导演说明的可读投影；仅解码身份标记，正式产物不改')
-    pov: str = Field(min_length=1)
-    voice: str = Field(min_length=1)
-    avoid: tuple[str, ...] = ()
-    beats: tuple[dict[str, Any], ...] = Field(min_length=1)
-
-
-class Str06DesignChapterView(StrictModel):
-    chapter_ordinal: int = Field(ge=1)
-    purpose: str = Field(min_length=1)
-    scene_ids: tuple[str, ...] = Field(min_length=1)
-
-
-class Str06DesignHookView(StrictModel):
-    """Hook 的正式选择（PresentationGraph.hook）：只投影选择本身，不重算。
-
-    `person`／`materials` 的取值面属于产物契约（`HookPov`／`HookMaterial`）——
-    视图层不抄第二份字面量，原样投影已由产物模型校验过的值。
-    """
-
-    person: str = Field(min_length=1)
-    focalizers: tuple[str, ...] = Field(min_length=1)
-    materials: tuple[str, ...] = Field(min_length=1,
-                                       description='按设计序的 beat_ref（乱序冷开合法）')
-    concealed: tuple[str, ...] = ()
-    forbidden_reveals: int = Field(ge=0, description='禁止揭示条数（逐条在盘面）')
-    design_brief: str = Field(min_length=1)
-
-
-class Str06DesignBindingView(StrictModel):
-    obligations: int = Field(ge=0)
-    entries: tuple[dict[str, Any], ...] = ()
-    unbound: tuple[str, ...] = ()
-
-
-class Str06DesignView(StrictModel):
-    present: bool
-    graph_id: str | None = None
-    scenes: tuple[Str06DesignSceneView, ...] = ()
-    chapters: tuple[Str06DesignChapterView, ...] = ()
-    hook: Str06DesignHookView | None = None
-    binding: Str06DesignBindingView | None = None
-
-
-class Str06IrChapterView(StrictModel):
-    chapter_ordinal: int = Field(ge=1)
-    purpose: str = Field(min_length=1)
-    length_budget: int = Field(ge=1)
-    scene_ids: tuple[str, ...] = Field(min_length=1)
-    scene_lines: tuple[str, ...] = Field(min_length=1)
-
-
-class Str06IrNavView(StrictModel):
-    """WriterBookIR 的导航面：章预算、章目的、逐场摘要行与称谓释放位置表。"""
-
-    present: bool
-    book_title: str = ''
-    target_chapter_count: int | None = Field(default=None, ge=1)
-    total_length_budget: int | None = Field(default=None, ge=1)
-    length_band_low: float | None = Field(default=None, gt=0)
-    length_band_high: float | None = Field(default=None, gt=0)
-    chapters: tuple[Str06IrChapterView, ...] = ()
-    release_schedule: tuple[dict[str, Any], ...] = ()
-
-
-class Str06ChapterReceiptView(StrictModel):
-    """章级回执的监控投影：机械范围与语义未评分开，篇幅披露显式。
-
-    `status`／`semantic` 原样投影产物回执（取值面属于 `ChapterReceipt`；
-    语义恒 `unverified`——机械通过不升级为语义已验）。
-    """
-
-    status: str = Field(min_length=1)
-    mechanical_checks: tuple[str, ...] = Field(min_length=1)
-    semantic: str = Field(min_length=1, default='unverified')
-    length: dict[str, Any]
-    length_disclosed: bool = False
-    request_identity: str = Field(min_length=1)
-    protocol_version: str = Field(min_length=1)
-    renderer_version: str = Field(min_length=1)
-    validator_version: str = Field(min_length=1)
-
-
-class Str06ChapterView(StrictModel):
-    ordinal: int = Field(ge=1)
-    present: bool
-    prose: str | None = None
-    receipt: Str06ChapterReceiptView | None = None
-
-
-class Str06HookView(StrictModel):
-    present: bool
-    prose: str | None = None
-    receipt: dict[str, Any] | None = None
-
-
-class Str06NamingEntryView(StrictModel):
-    char_ref: str = Field(min_length=1)
-    family: str = Field(min_length=1)
-    given: str | None = None
-    full: str = Field(min_length=1)
-    aliases: dict[str, str] = Field(default_factory=dict)
-    keep_reason: str | None = None
-
-
-class Str06NamingView(StrictModel):
-    present: bool
-    entries: tuple[Str06NamingEntryView, ...] = ()
-
-
 class Str06DeliveryChapterView(StrictModel):
     chapter_ordinal: int = Field(ge=1)
     prose_sha256: str | None = None
@@ -1434,6 +1267,8 @@ class Str06RunView(StrictModel):
 
     candidate: str = Field(min_length=1)
     present: bool
+    contract_version: StoryVersion = STORY_VERSION
+    revision: str = ""
     status: str | None = None
     failed_node: str | None = None
     accepted_body: bool | None = None
@@ -1463,3 +1298,12 @@ class Str06CandidateSummary(StrictModel):
 
 class Str06CandidateList(StrictModel):
     candidates: tuple[Str06CandidateSummary, ...] = ()
+
+
+class StoryArtifactView(StrictModel):
+    """当前故事产物的只读状态；缺失与损坏分别披露。"""
+    candidate_id: str
+    revision: str
+    status: Literal[STORY_ARTIFACT_STATUS]
+    data: dict[str, Any] | None
+    errors: tuple[str, ...] = ()

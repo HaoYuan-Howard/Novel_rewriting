@@ -164,7 +164,6 @@ def get(base: str, sid: str, run_id: str | None = None) -> RunMetricsView:
         units.append(UnitMetrics(
             unit_id=ledger.unit_id, node=ledger.node, role=ledger.role, scope=ledger.scope,
             content_turns=turns, network_retries=retries,
-            history_adopted=sum(row.kind == 'history_adopted' for row in processing),
             mechanical=sum(row.kind == 'mechanical' for row in processing),
             cached_processing=sum(row.kind == 'cached' for row in processing),
             usage=summarize(costs, incomplete=tail or incomplete_unit,

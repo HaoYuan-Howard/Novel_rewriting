@@ -32,7 +32,7 @@ from novel.llm.paid_requests import (
     workflow_to_disk,
 )
 from novel.store import Str06Repository
-from tests.str06_facilities import make_context
+from tests.story_facilities import make_context
 
 _SOURCE = 'b' * 64
 
@@ -48,7 +48,7 @@ def _init(repo, *, source_identity=_SOURCE, code='code-a', created_at=1759000000
           readonly=False):
     return init_or_resume_candidate_workflow(
         repository=repo, base=repo.root.parent, code=code, root_sha1='a' * 40,
-        source_identity=source_identity, task_id='task-1', configured_model='fake',
+        source_identity=source_identity, source_content_sha256='c' * 64, task_id='task-1', configured_model='fake',
         created_at=created_at, readonly=readonly)
 
 

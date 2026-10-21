@@ -145,24 +145,37 @@ Prompt 选型完成后，`prompt_variants`、`prompt_defaults` 与 `--prompt-var
 | `POST /api/agent/runs/:id/stop` | `AgentRunRecord`（202） | 只受理永久终止：后台先关 admission gate、terminate 全部 Executor 子进程树并 drain，闭合后才追加 ended；stop 后不可 resume，HTTP 返回不冒充 drain 已完成 |
 | `POST /api/agent/runs/:id/pause` | `AgentRunRecord`（202） | 只受理暂停：立即停止接纳新节点，后台等待当前 claim/beacon 闭合后才追加 paused；不取消正常付费节点，HTTP 返回不冒充已 paused |
 | `POST /api/agent/runs/:id/resume` | `AgentRunRecord`（202） | 受理后由后台同身份续 current epoch/provider session；代码或执行契约 漂移时同 parent run 开新 epoch并免费复检 |
-| `GET /api/str06/candidates` | `contracts/schema/api.py::Str06CandidateList`（输出根下的候选根与各自 run 级状态；以 workflow 身份记录为标记） | 新链候选链只读监控面（F7d）；F8 起与现役 `/novels` 面物理分开 |
-| `GET /api/str06/candidates/:candidate/run` | `Str06RunView`（workflow 状态、失败形状、epoch、节点盘面事实、逐章失败留证、Stage7 集合核对五态报告、修订轮回派账与 ledger 成本；无 badge/passed/counts） | 节点 `produced` 是 I/O 事实，不充当业务状态；失败形状直投影 `workflow_status.json`（`failure_kind`／`detail`，ExecutionError 另带 `error_code/stage/node/item/phase/context` 六字段）；`body_failures`／`chapter_observation_failures`／`assembly_report` 缺席是 null（该节点还没有一次完成执行，不冒充合法空值），逐章留证按「最近一次完成执行」形状（`requested`／`attempted`／`chapters`／`recorded_at`；正文与章观察同形共用）呈现；五态分开、unknown 不作零（I-42）；R3 修订轮经 `owner_issues` 投影 `runtime/issues/<owner>.json`（open 与 resolved 都在、`rounds_total` 终身不复位、`rounds_cap` 是契约常量投影），停止原因在失败形状里带按 item 的 typed 问题清单，两面并排不互相推导 |
-| `GET /api/str06/candidates/:candidate/characters` | `Str06CharactersView`（Characters v6 称谓时间窗＋源名称结构） | 新 |
-| `GET /api/str06/candidates/:candidate/blueprint` | `Str06BlueprintView`（Blueprint v17 世界约束、逐章 beats 与因果边） | 新 |
-| `GET /api/str06/candidates/:candidate/design` | `Str06DesignView`（graph／binding：导演说明、章目的、Hook 选择与 Binding 条目） | 新 |
-| `GET /api/str06/candidates/:candidate/ir` | `Str06IrNavView`（WriterBookIR 导航：章预算、章目的、逐场摘要行与称谓释放位置表） | 新 |
-| `GET /api/str06/candidates/:candidate/chapters/:ordinal` | `Str06ChapterView`（章正文＋章回执：机械范围、semantic 恒 unverified、篇幅披露显式） | present=false 与合法空值分开 |
-| `GET /api/str06/candidates/:candidate/hook` | `Str06HookView`（Hook 成文与机械回执） | 新 |
-| `GET /api/str06/candidates/:candidate/naming` | `Str06NamingView`（NameMap v5 只读投影） | 新 |
-| `GET /api/str06/candidates/:candidate/delivery` | `Str06DeliveryView`（manifest 就绪核对记录与全书篇幅读数） | 新 |
-| `GET /api/str06/candidates/:candidate/book` | UTF-8 纯文本（`stage7/final/{title}_rewriting.txt` 原样流出）；没有成书是 404 不是空 200 | 新链下载面（成书 URL 字面与盘上文件名是两件事） |
+| `GET /api/str06/candidates` | `contracts/schema/api.py::Str06CandidateList`，当前输出根下的工作流根清单与 run 状态 | 全部只读；旧契约根明示不兼容，不能当作新链结果 |
+| `GET /api/str06/candidates/:candidate/run` | `Str06RunView`：contract_version、revision、状态、typed失败、节点、epoch与成本 | produced是I/O事实；费用只来自权威ledger且按本书sid过滤，真实调用/缓存分列，缺用量保持unknown；revision变化后刷新材料 |
+| `GET /api/str06/candidates/:candidate/source-story` | `StoryArtifactView`，data为完整当前 `SourceStory` | 校验当前版本、发布seal与输入；缺失、损坏与合法空字段分开 |
+| `GET /api/str06/candidates/:candidate/target-story` | `StoryArtifactView`，data为完整当前 `TargetStory` | 唯一目标故事读面，含目标名称、整书模型与章计划 |
+| `GET /api/str06/candidates/:candidate/chapters/:ordinal` | `StoryArtifactView`，data为chapter_ordinal、packet、body、receipt | packet=ChapterPacket或null，body=string或null，receipt=ProseReceipt或null；不能从正文存在推导已接受 |
+| `GET /api/str06/candidates/:candidate/hook` | `StoryArtifactView`，data为packet、body、receipt | packet=HookPacket或null；正文和回执各自可缺失 |
+| `GET /api/str06/candidates/:candidate/delivery` | `Str06DeliveryView`：当前可交付状态、manifest摘要与披露 | 从当前章包/正文/Hook/回执重新证明；存在文件不单独代表ready |
+| `GET /api/str06/candidates/:candidate/book?download=true` | UTF-8纯文本，已核验最终TXT原样流出 | 核对当前包、前章短尾、正文与Hook回执及manifest后才下载；没有成书404，失效不返回空200；文件名来自Content-Disposition的UTF-8 filename* |
+
+### 当前故事 DTO 与刷新
+
+`contracts/schema/api.py::StoryArtifactView` 的固定外壳为 candidate_id、revision、
+status（ready/missing/invalid）、data（对象或null）、errors（字符串数组）。
+根不存在由路由返回404；根存在而材料未生成为missing，旧版或坏结构为invalid；
+ready仍不表示文学质量通过。字段由 `contracts/schema/source_story.py`、
+`contracts/schema/target_story.py`、`contracts/schema/story_prose.py` 的当前唯一模型定义。
+
+run携带 `contract_version='story-v1'` 与 revision。前端轮询run，revision改变后取消在途旧材料并
+重新查询对应书的source/target/章/Hook/delivery；相同revision不重复刷新全部长文。
+typed错误保留owner/node/item/path/context，不用中文报错散文推导修复路线。
+正文回执只证明协议、篇幅与身份等机械范围，semantic恒为unver；不将通过字节校验包装成文学质量通过。
+旧characters/blueprint/design/ir/naming端点及其DTO/query key已经退出，没有兼容转发。
+HTTP与视图只读，不购买模型，不补写产物或回执。
+
 
 > #### 审批工作包 / Stage7 终审包（已退役）
 >
 > `ApprovalWorkpack` v2、Stage5/7 紧凑终审包及配套 `review_token` 提交协议已随
 > 全自动单模式与 STR-06 关闭批删除：写面、模板、余额投影与 HTTP 路由都不存在，
-> schema 载体不再保留（历史形状见 Git 历史）。rc26（命名前移批次 C）起疑似旧名残留由
-> `name_residue_report` 定位报告披露（不阻断），交付判定走 `str06` 候选只读面。
+> schema 载体不再保留。当前交付判定走三层故事只读面，机械与语义未评分开；
+> 不恢复旧人审、旧IR或姓名定位报告作为当前放行依据。
 
 > #### `Stage0Report` 是窄视图
 >
@@ -309,7 +322,7 @@ parent/epoch 与 session 只用于关联，不从日志文字或时间接近补�
 同一业务单元可以跨运行，累计内容轮与本次调用不能互换。旧无关联行单列且保留成本，
 无法证明归属、重复 attempt、未提交尾或缺失用量均披露；不以未知作为零，也不隐藏失败分母。
 重复身份的行不进入已知小计，完整合计为 null。只有 cached=false 是确定网络调用，
-缓存命中和历史采用不重复计入旧费用，reasoning 只作 completion 子口径。
+当前请求缓存重放单列，不重复计入既有实付；不发布退役历史采用计数。reasoning 只作 completion 子口径。
 
 运行历时来自运行起止，包含暂停和等待；模型尝试耗时取 latency_ms 累计；模型活跃区间由
 原账完成时刻和耗时还原后取并集，保留原时间精度，不把重叠相加成墙钟。缺时刻/耗时/尝试时
@@ -351,8 +364,8 @@ Stage6 三候选定稿面（Stage6View/Stage6PrepareView/Stage6ApprovalWorkpack/
 ## 五h、命名替换只读投影（已退役）
 
 旧链 Stage7 改名对照屏（`Stage7View`／`NameDecisionLine`／`HookRename`）与配套
-写回请求体已随旧链人工定稿面删除；现役命名与交付只读面是
-`GET /api/str06/candidates/:candidate/naming`（`Str06NamingView`）与 `/book` 下载。
+写回请求体已随旧链人工定稿面删除；当前目标名称随
+`GET /api/str06/candidates/:candidate/target-story` 的TargetStory展示，交付走 `/book` 下载。
 
 
 ## 五i、`InboxView` —— 待人工清单
@@ -416,13 +429,12 @@ HTTP 侧「书 id 不合法」的产地是**客户端**，那是 400。
 Stage2 语义审阅、`blueprint-reading-workpack` 阅读工作包、`blueprint/edit` 人工写回面
 与 `Run.blueprint_progress` 字段已随旧 Stage2/4/5/7 链整层退役（STR-06 切换，F8c）：
 `GET /api/novels/:sid/check/:kind` 的取值面只剩 `stage0`/`stage1`，新链的复检是节点级
-`--check-only`；盘面只读投影走 `GET /api/str06/candidates/:candidate/blueprint`
-（Blueprint v17 世界约束、逐章 beats 与因果边）与 `.../run`（节点 `produced` 是 I/O 事实，
-不充当业务状态；ledger 成本单列）。历史形状见 Git，不为退役面保留第二个 HTTP 落点。
+`--check-only`；当前事实读面为 `GET /api/str06/candidates/:candidate/source-story`，
+运行状态为 `.../run`。节点produced仍是I/O事实，ledger成本单列；不为退役面保留第二个HTTP落点。
 
 ### 写作上下文的即时读数（旧链，已退役）
 
 Stage4 `ctx_chapter` / `CtxChapterView` / WriterContext v10 与 Stage5 的成稿读数随旧链
-整层退役；新链的等效只读投影是 `GET /api/str06/candidates/:candidate/ir`
-（WriterBookIR 导航：章预算、章目的、逐场摘要行与称谓释放位置表）。源文缺失或不可读时
-相应读数为 null，界面显示“未知”；展示字段不能作为新任务书提交。
+整层退役；当前目标建模由 `GET /api/str06/candidates/:candidate/target-story` 展示，
+实际写手材料在 `.../chapters/:ordinal` 和 `.../hook`。材料缺失、坏结构与合法空分区按外壳分别表达；
+展示字段不能作为新任务书提交。

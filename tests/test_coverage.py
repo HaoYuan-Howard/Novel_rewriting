@@ -653,7 +653,7 @@ def test_every_stage_with_rules_declares_its_count_in_the_schema_doc():
 
 
 #: `**都是 schema v1**` —— 逐层「本层全部产物同一版本」的集体声明。
-_SCHEMA_VERSION_CLAIM = re.compile(r'\*\*都是 schema v(\d+)\*\*')
+_SCHEMA_VERSION_CLAIM = re.compile(r'\*\*都是 schema (v\d+|story-v\d+)\*\*')
 
 
 def test_schema_docs_that_claim_a_version_match_the_registry():
@@ -666,12 +666,12 @@ def test_schema_docs_that_claim_a_version_match_the_registry():
     那条「全表恒 v1」的反向守卫红（那是设计好的），而这几份散文会**静默变假**——
     那正是这一批刚从 migration 身上拆掉的坑，别换个字段重埋一遍。
     """
-    claimed: dict[str, set[int]] = {}
+    claimed: dict[str, set[int | str]] = {}
     for stage in _documented_stages():
         hits = _SCHEMA_VERSION_CLAIM.findall(
             _schema_doc(stage).read_text(encoding='utf-8'))
         if hits:
-            claimed[stage] = {int(hit) for hit in hits}
+            claimed[stage] = {int(hit[1:]) if hit.startswith('v') else hit for hit in hits}
     assert claimed, '一层都没扫到「都是 schema vN」——正则多半失配了，那时下面全绿'
 
     drift: dict[str, str] = {}

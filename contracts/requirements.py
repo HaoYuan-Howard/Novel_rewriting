@@ -36,7 +36,7 @@ _B_DEF = re.compile(r'^\|\s*\*\*(B-\d+)\*\*')
 # 两行「—」· 一行 `度量`），而它们在测试里与「填了 HARD」长得一模一样地绿。
 # ⇒ `tests/test_coverage.py::test_every_r_item_declares_something` 现在盯着它。
 _MARKER_TOKENS = (
-    ('HARD', 'HARD'), ('INFO', 'INFO'), ('闸门', 'GATE'), ('度量', 'METRIC'),
+    ('HARD', 'HARD'), ('INFO', 'INFO'),
     ('载体', 'CARRIER'), ('结构', 'STRUCTURAL'), ('不适用', 'N_A'),
 )
 # 「见 `R-0.7`」这类职责转授。**只认行首的「见」**：`**`人`**，见 `B-20`` 那种是
@@ -44,7 +44,7 @@ _MARKER_TOKENS = (
 _DELEGATE_RE = re.compile(r'^见\s*`?((?:R|Q|B)-[\d.]+[a-z]?)`?')
 
 #: 判据在查的那几个（正向覆盖率要求它们必须有一条注册判据指着）。
-_EXPECTS_RULE = frozenset({'HARD', 'INFO', 'GATE', 'METRIC'})
+_EXPECTS_RULE = frozenset({'HARD', 'INFO'})
 
 
 @dataclass(frozen=True)
@@ -60,8 +60,8 @@ class Who:
 
     @property
     def guards(self) -> tuple[str, ...]:
-        """阻断/提示/闸门三个。**不含 `METRIC`**——度量无条件产出，它不是一道门。"""
-        return tuple(m for m in self.markers if m in ('HARD', 'INFO', 'GATE'))
+        """当前需求文档声明的阻断/提示判据。"""
+        return tuple(m for m in self.markers if m in ('HARD', 'INFO'))
 
     @property
     def claims_guard(self) -> bool:
@@ -72,8 +72,7 @@ class Who:
     def expects_rule(self) -> bool:
         """它声称有一条**注册判据**在管它。正向覆盖率查的是这个。
 
-        ⚠ 比 `claims_guard` 多一个 `METRIC`：度量不是门，但它同样必须有一条注册判据——
-        「这条度量无条件报出」与「根本没人算它」必须分得开（判据 21）。"""
+        当前目录没有独立度量/人工闸声明；新增职责须同步解析域与真实生产判据。"""
         return any(m in _EXPECTS_RULE for m in self.markers)
 
     @property

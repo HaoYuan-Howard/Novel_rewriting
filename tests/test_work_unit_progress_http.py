@@ -1,6 +1,8 @@
 """运行页真实 HTTP 重启读取来源账；进度读口只读、篡改即不可用（不替换 planner/producer）。"""
 import json
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from novel import paths
@@ -19,7 +21,8 @@ def _book(tmp_path) -> object:
     return book
 
 
-def test_current_review_progress_is_read_only_and_survives_http_restart(tmp_path):
+@pytest.mark.parametrize('damage', ('receipt', 'retired_processing'))
+def test_current_review_progress_is_read_only_and_survives_http_restart(tmp_path, damage):
     book = _book(tmp_path)
     sid = paths.derive_source_meta(book.name)[0]
     budget = WorkUnitBudget(tmp_path, sid, 'str06.stage5.body', scope='chapter:1')
@@ -40,10 +43,19 @@ def test_current_review_progress_is_read_only_and_survives_http_restart(tmp_path
     assert not [row for row in snapshots[0] if row.get('role') == 'commander']
     assert budget.path.read_bytes() == before
     raw = json.loads(budget.path.read_bytes())
-    raw['processing'][0]['evidence_sha256'] = '0' * 64
+    if damage == 'receipt':
+        raw['processing'][0]['evidence_sha256'] = '0' * 64
+    else:
+        from novel.work_units import _digest
+        row = raw['processing'][0]
+        row['kind'] = 'history_adopted'
+        row['processing_id'] = _digest({'unit_id': budget.unit_id,
+            **{key: value for key, value in row.items() if key != 'processing_id' and value is not None}})
     budget.path.write_text(json.dumps(raw), encoding='utf-8')
+    damaged_bytes = budget.path.read_bytes()
     with TestClient(create_app(base=str(tmp_path))) as client:
         response = client.get(f'/api/novels/{sid}/run')
         assert response.status_code == 200, response.text
         assert response.json()['work_units'] is None
         assert response.json()['work_units_unavailable_reason']
+    assert budget.path.read_bytes() == damaged_bytes

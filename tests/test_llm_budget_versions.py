@@ -59,42 +59,28 @@ def test_every_llm_scope_gets_four_new_rounds_once(tmp_path, monkeypatch, node, 
 
 
 def test_version_catalogue_reads_actual_protocol_policy_renderer_and_guards(monkeypatch):
-    from contracts.artifacts import STR06_ARTIFACT_RC_VERSIONS
-    from contracts.schema import design, receipt
-    assert {node for node, spec in NODES.items() if spec.paid} == {n for n, _ in PAID_SCOPES}
-    monkeypatch.setattr(design, 'STAGE4_DESIGN_WIRE_PROTOCOL', 'stage4-design-v11')
-    assert llm_node_versions('str06.stage4.body_design')['wire'] == 11
-    monkeypatch.setattr(workflow, 'STAGE4_PRESERVE_POLICY_VERSION', 11)
-    assert llm_node_versions('str06.stage4.preserve')['policy'] == 11
-    monkeypatch.setattr(receipt, 'RENDERER_VERSION', 'str06-render-v13')
-    assert llm_node_versions('str06.stage5.body')['renderer'] == 13
-    monkeypatch.setattr(receipt, 'HOOK_VALIDATOR_VERSION', 'str06-hook-mechanical-v5')
-    assert llm_node_versions('str06.stage5.hook')['validator'] == 5
-    path = 'stage4/design/body_design.json'
-    monkeypatch.setitem(STR06_ARTIFACT_RC_VERSIONS, path, 'str06-rc23')
-    assert llm_node_versions('str06.stage4.body_design')[f'artifact:{path}'] == 23
+    from contracts.llm_versions import STORY_LLM_VERSIONS
+    paid = {node for node, spec in NODES.items() if spec.paid}
+    assert set(STORY_LLM_VERSIONS) == paid
+    for node, axis in [('str06.stage4.body_design', 'wire'), ('str06.stage4.preserve', 'policy'),
+                       ('str06.stage5.body', 'renderer'), ('str06.stage5.hook', 'validator')]:
+        monkeypatch.setitem(STORY_LLM_VERSIONS[node], axis, 11)
+        assert llm_node_versions(node)[axis] == 11
     with pytest.raises(ValueError):
         llm_node_versions('str06.stage4.compile')
 
 
-def test_v2_read_is_lossless_and_explicit_apply_establishes_baseline_once(tmp_path):
+def test_old_ledger_version_is_rejected_without_changing_original_bytes(tmp_path):
     budget = WorkUnitBudget(tmp_path, '42', 'str06.stage4.body_design')
     _exhaust(budget)
     raw = budget._read().model_dump(mode='json')
     raw.pop('version_resets')
     raw['schema_version'] = 2
-    budget.path.write_text(json.dumps(raw), encoding='utf-8')
+    budget.path.write_text(json.dumps(raw), encoding='utf8')
     before = budget.path.read_bytes()
-    assert budget.remaining == 0 and budget.path.read_bytes() == before
-    assert llm_budget_upgrade.preview(tmp_path, '42')[0]['after_remaining'] == 4
+    with pytest.raises(WorkUnitRefused):
+        budget._read()
     assert budget.path.read_bytes() == before
-    budget.synchronize_version()
-    assert budget._read().schema_version == 3 and budget.remaining == 4
-    snapshot = budget.path.with_name('ledger.v2.' + hashlib.sha256(before).hexdigest() + '.json')
-    assert snapshot.read_bytes() == before
-    after = budget.path.read_bytes()
-    budget.synchronize_version()
-    assert budget.path.read_bytes() == after
 
 
 def test_grant_preview_points_to_free_version_sync_without_writing(tmp_path, monkeypatch):
@@ -108,30 +94,6 @@ def test_grant_preview_points_to_free_version_sync_without_writing(tmp_path, mon
     assert budget.path.read_bytes() == before
 
 
-def test_v2_migration_interruption_keeps_original_bytes_and_replay_resets_once(tmp_path, monkeypatch):
-    budget = WorkUnitBudget(tmp_path, '42', 'str06.stage4.body_design')
-    _exhaust(budget)
-    payload = budget._read().model_dump(mode='json')
-    payload.pop('version_resets')
-    payload['schema_version'] = 2
-    budget.path.write_text(json.dumps(payload), encoding='utf-8')
-    original = budget.path.read_bytes()
-    replace = work_units._replace_snapshot
-
-    def fail_publish(source, target):
-        if target == budget.path:
-            raise OSError('模拟 V3 发布中断')
-        return replace(source, target)
-
-    monkeypatch.setattr(work_units, '_replace_snapshot', fail_publish)
-    with pytest.raises(OSError, match='发布中断'):
-        budget.synchronize_version()
-    assert budget.path.read_bytes() == original
-    assert list(budget.directory.glob('ledger.v2.*.json'))[0].read_bytes() == original
-    monkeypatch.setattr(work_units, '_replace_snapshot', replace)
-    assert budget.synchronize_version()['additional'] == 4
-    assert budget.synchronize_version()['additional'] == 0
-    assert budget.remaining == 4 and len(list(budget.directory.glob('ledger.v2.*.json'))) == 1
 
 
 def test_zero_addition_establishes_version_and_does_not_erase_extra_grant(tmp_path, monkeypatch):
@@ -191,34 +153,13 @@ def test_upgrade_does_not_clear_unknown_or_bypass_book_ceiling(tmp_path, monkeyp
 
 @pytest.mark.stage_scope('stage4')
 def test_paid_boundary_resets_exhausted_upgraded_node_without_new_grant(tmp_path, monkeypatch):
-    from tests.test_str06_f7a_wiring import _Transport, _request, _session
-    transport = _Transport()
-    base, repo, ledger, session = _session(tmp_path, transport)
+    from tests.story_facilities import make_pipeline
+    case = make_pipeline(tmp_path)
     for index in range(4):
-        session.send('preserve', _request(user=f'old-{index}'))
-    monkeypatch.setattr(workflow, 'STAGE4_PRESERVE_POLICY_VERSION',
-                        workflow.STAGE4_PRESERVE_POLICY_VERSION + 1)
-    answer = session.send('preserve', _request(user='upgraded'))
-    budget = session._unit_for('preserve')
-    assert answer.ordinal == 5 and budget.remaining == 3
-    assert len(budget._read().grants) == 0 and transport.calls == 5
+        case.ask('preserve', f'old-{index}', lambda wire: wire)
+    _upgrade(monkeypatch, 'str06.stage4.preserve')
+    answer = case.ask('preserve', 'upgraded', lambda wire: wire)
+    budget = case.boundary.session._unit_for('preserve')
+    assert answer.answer.ordinal == 5 and budget.remaining == 3
+    assert len(budget._read().grants) == 0 and len(case.calls) == 5
     assert budget._read().version_resets[-1].additional == 4
-
-
-def test_free_apply_and_contract_upgrade_adapter_cannot_refund_same_version_twice(tmp_path):
-    from novel.store import Str06Repository
-    base = tmp_path / 'out'
-    repo = Str06Repository(base / '42')
-    budget = WorkUnitBudget(base, '42', 'str06.stage4.body_design')
-    _exhaust(budget)
-    raw = budget._read().model_dump(mode='json')
-    raw.pop('version_resets')
-    raw['schema_version'] = 2
-    budget.path.write_text(json.dumps(raw), encoding='utf-8')
-    applied = llm_budget_upgrade.apply(base, '42')
-    assert applied[0]['additional'] == 4 and budget.remaining == 4
-    turn = budget.reserve(_sha('next'), run_id='new-run')
-    budget.finish(turn.turn_id, outcome='failed')
-    assert llm_budget_upgrade.apply(base, '42') == [] and budget.remaining == 3
-    assert budget.refund_for_upgrade(_sha('old-contract-edge'), reason='重放旧升级')['additional'] == 0
-    assert budget.remaining == 3

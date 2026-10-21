@@ -250,12 +250,10 @@ class RunContext:
         return current
 
     def _require_single_root(self) -> str:
-        from novel.store import ArtifactStore
         root = self.root_clean_sha1
-        store = ArtifactStore(self)
         mismatched = {
             rel: value for rel, value in tuple(self._observed_roots.items())
-            if value != root and not store.equivalent_body_root(rel, value)
+            if value != root
         }
         if mismatched:
             raise ProvenanceRefused(
@@ -472,14 +470,9 @@ class RunContext:
         """
         current = self._require_single_root()
         if prev.root_clean_sha1 != current:
-            from novel.source_identity import body_inputs_only, same_body_source
-            from novel.store import ArtifactStore
-            if not (body_inputs_only(self.node, self.edges) and same_body_source(
-                    ArtifactStore(self), prev.root_clean_sha1, node=self.node, inputs=prev.inputs)):
-                raise ProvenanceRefused(
-                    f'{self.node}: 旧稿 root_clean_sha1={prev.root_clean_sha1}，当前根={current}；'
-                    '局部改写不能把旧根内容伪装成新根产物，必须从产地重建')
-            # 正文逐字相同的已审源修订只证明可继续消费；原模型根仍保留。
+            raise ProvenanceRefused(
+                f'{self.node}: 旧稿 root_clean_sha1={prev.root_clean_sha1}，当前根={current}；'
+                '局部改写不能把旧根内容伪装成新根产物，必须从产地重建')
         return prev.partially_rewritten(by=by, code=self.code, inputs=self.edges)
 
     def _settled(self, out: P) -> P:

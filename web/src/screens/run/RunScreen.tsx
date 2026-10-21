@@ -552,14 +552,17 @@ export function RunScreen() {
                         <td>{unit.processing ? <>
                           总量 {unit.processing.total}，待处理 {unit.processing.pending}<br />
                           新生成 {unit.processing.generated}，机械处理 {unit.processing.mechanical}<br />
-                          历史采用 {unit.processing.history_adopted}，缓存 {unit.processing.cached}<br />
+                          缓存 {unit.processing.cached}<br />
                           失败 {unit.processing.failed}，未知 {unit.processing.unknown}
                           {unit.processing.reason ? <p className="m-0">{unit.processing.reason}</p> : null}
                         </> : unit.registered === false ? '尚无处理记录' : '处理来源未知'}</td>
                         <td>{unit.review ? <>
                           义务总量 {unit.review.total}<br />
                           待审 {unit.review.pending}，决定继承 {unit.review.decision_inherited}
-                        </> : unit.role === 'commander' ? `审阅进度未知：${unit.review_unavailable_reason ?? '尚无当前义务投影'}` : '由人工审阅'}</td>
+                        </> : <>
+                          未提供审阅结论
+                          {unit.review_unavailable_reason ? <p className="m-0">{unit.review_unavailable_reason}</p> : null}
+                        </>}</td>
                         <td><span>{unit.state}</span><br /><span>{unit.recovery_action ?? '无已登记恢复动作'}</span>
                           {unit.registered !== false ? <WorkUnitBudgetGrant sid={sid} unitId={unit.unit_id} /> : null}
                         </td>

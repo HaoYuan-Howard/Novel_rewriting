@@ -201,7 +201,7 @@ describe('Agent 进展驱动书级读模型刷新', () => {
     live.setFresh()
     live.advance()
     // 不手工失效，也不重挂页面；只等 useRunProgress 的现役 2.5 秒轮询。
-    expect(await screen.findByText('下一节点：Stage2 源名称结构观察（家族、名、化名、称谓构词）', {}, { timeout: 4500 }))
+    expect(await screen.findByText('下一节点：源实体名称结构', {}, { timeout: 4500 }))
       .toBeVisible()
     expect(qc.getQueryData(qk.novel(SID))).toEqual(live.freshNovel)
     expect(qc.getQueryData(qk.check(SID, 'stage0'))).toEqual(live.freshReport)

@@ -1,74 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""paid_requests —— Runtime：付费请求边界（外发、额度、尝试、耐久与证据）＋
-STR-06 候选链的运行上下文、workflow／epoch 身份与候选契约身份。
+"""当前三层运行的唯一付费边界与发布来源上下文。
 
-【B1 执行设施】Runtime 只管外发与记录，不收业务 validate 回调：
-`send(owner, request)` 返回 `DurableAnswer`（耐久响应引用：原响应按 attempt
-存储在工作单元账并被 attempt 引用）。解析、救回（D5）、校验等业务接受归调用方
-组合函数（`ask_json`／`ask_text_once`）。错误统一 `ExecutionError`
-（stage/node/item/phase/code/context）。
-
-【缓存先于授权】
-`send` 先查同请求身份的**可用**已购响应（ok 且非空的 attempt；空回答不占据
-请求身份，D5），缺失时查显式历史采用（F7a，`--adopt-root`），再检查授权并
-购买——工具层不得在缓存命中之前拒绝未授权的重放。新调用需要显式授权；未授权
-抛 `PurchaseRequired`。
-
-【尝试与额度（每轮至多 WORK_UNIT_MAX_DELIVERY_ATTEMPTS 次）】
-未送达（连接/DNS/TLS 失败、连接超时、429、5xx）在同一内容轮内有界退避重试
-（`TransportRetryPolicy` 2/4/8 秒）；已送达后结果未知（读超时）记 unknown、
-不自动重试（`transport._classify` 不再对超时一刀切）。确定性拒收（不可重试的
-`TransportError`，如 4xx 余额/鉴权拒绝）服务端明确未处理请求、无回答无用量，
-直接记 failed 终态（2026-10-02 R10c：此前记 unknown 会把运行永久卡在没有收口面
-的轮上，DeepSeek 402 实证）；unknown 只留给结果真未知的情形，交恢复入口对账
-（Q-13）。正常结束但正文为空记一次
-失败 attempt（留证、如实计费），由调用方在同轮内重发。截断
-（``finish_reason='length'``，上限 `contracts.invariants.LLM_MAX_OUTPUT_TOKENS`
-＝131072）是节点设计缺陷：即停该 item，不重试、不加预算（D6）。每次外发前
-整书总闸（`_service/runs/<sid>/book_budget.json` 持久账）按 attempt 计数一次
-——unknown 也计入、重启不重置；`book_call_ceiling` 从同一准入账派生。
-单元内容轮上限与总闸同一把锁序结算，不建第二本预算账（I-17）；ledger 是成本
-唯一权威。
-
-【五层记录】SemanticRequest＝工作单元 (node, scope)＋请求身份（冻结请求工作包
-随 `reserve` 落 blob）；ContentRevision＝`WorkUnitContentTurn`（owner patch 是
-无外发的修订，落 `runtime/revisions/<owner>.json`）；ProviderAttempt＝
-`WorkUnitAttempt`＋attempt 级响应 blob；AcceptanceRecord（语义恒 unver）与
-CommitBundle（输入清单、采用证据、输出摘要与 seal）见
-`contracts/schema/workflow.py`，封存落候选根 `runtime/commit/`。候选根旧的
-`runtime/request_*`／`validation_*`／`admission.json`／`adopt_*` 写路已按
-REQUIREMENTS 映射表退役；旧输出根的同类文件只读保留作 F7a 历史采用证据。
-
-【provenance：纯函数＋显式引用】
-付费产物的来源账只由写盘方显式传入的 `AdoptionRef` 构造（无进程内共享采用
-窗口）：生成事实（prompts／adopted_models）来自引用，成本只从 ledger 的精确
-attempt 行聚合（`CostLedger.usage_for_attempt_rows`），不按时间窗刻度差值归账。
-同一份付费产出的第二个 key 用 `claim_usage=False` 继承生成事实、不重复认领。
-采用状态从 seal 派生：被已封存 CommitBundle 引用的内容轮在下一次取轮前对账为
-adopted（`sealed_turn_references`），未封存的 delivered 轮关闭让位；
-`reserved`／`unknown` 轮不自动关闭、不自动重购，交恢复入口对账（Q-13）。
-
-【inputs 只记真读到的】`record_edge` 在 repository 读盘时登记（键 =
-`family_input_key` 完整路径）。单进程 pipeline 在内存里传递对象不产生边——各
-owner 经 repository 读写，inputs 随之闭合；缺边是诚实的空，不是假账。
-
-【窄返修协议（CS-H H2，RC-57～59；`docs/schema/repair_convergence.md` D 表）】
-`ask_json` 的条目返修在 CS-patch（RC-46/47）之上补齐四件事：
-① **带基底起步**（`PatchBaseline`）：免费判定已完整预检过 owner 已发布版本的
-   修订对照 wire 时（窄复核沿用），返修从该基底开始，不发整份首轮请求；
-② **窄输入**（`NarrowPatchRequest`）：patch 轮只带协议规则＋失败条目＋依赖切片
-   ＋合法取值，**不带整份原请求与前序材料全文**——请求规模只与失败条目及其依赖
-   挂钩（M3 返修宽度；对照读数见 REQUIREMENTS CS-H H2 判据⑤）；
-③ **可选目标闭集**（RC-58）：责任位置须由模型决定的规则码（`PATCH_ROUTES`
-   登记 ``optional``：必保义务漏标、series 接受拍互斥）发候选拍闭集，模型只
-   覆盖选中的子集（至少一个），回答路径必须落在闭集内；
-④ **无进展按根因**：owner 的验收反馈按根因聚合成任务（同一规则码的多处命中
-   是一个任务并附受影响位置，`stage4/preflight.py::DesignInspection.feedback`），
-   接受循环以任务身份判定进展——候选字节变化不算进展，回派与重入不重置任何额度。
-整份出口是闭集（RC-59）：只有 JSON 回答无法解码／整体形状失败／协议字面量不符
-才退整份修订——局部称谓、单条义务、编译缺陷一律走条目返修或按所在面回派，规则
-码→处置的逐码清点在 `contracts/judges/str06.py::PATCH_ROUTES`。
+send先查本根同请求身份的耐久回答，再核验付费/外发许可及持久额度。原响应、
+每次attempt、费用、首次接受和当前接受分别留证；unknown与截断禁止自动重购。
+语义解析、材料控制和窄补丁属于story_requests，当前文件不识别小说旧协议。
+正式发布只使用真实响应引用，源身份/契约身份漂移拒绝当前根，代码修复可开新epoch。
 """
 from __future__ import annotations
 
@@ -83,9 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Final, NamedTuple, Sequence
 
 from contracts.artifacts import ARTIFACT_PATHS, STR06_ARTIFACT_RC_VERSIONS
-from contracts.judges.str06 import PATCH_ROUTES
 from novel import paths, prov, run_identity
-from novel.core.validation import ValidationIssue, validation_identity
 from contracts.invariants import (
     NARROW_OWNER_UNITS, NODES, OWNER_REVISION_MAX_ROUNDS, WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
 )
@@ -94,13 +29,12 @@ from contracts.schema.common import FreeProvenance, InputEdge, LlmProvenance
 from contracts.schema.families import STR06_PATH_FAMILIES
 from contracts.schema.workflow import (
     EPOCH_REASONS, STR06_RC_LABELS, STR06_RC_VERSION,
-    STR06_NODE_IDENTITY_EXTRAS, STR06_RUNTIME_CONFIG,
+    STR06_RUNTIME_CONFIG,
     AcceptanceRecordV1, CandidateEpoch, CandidateWorkflow, candidate_node_owner,
     commit_bundle_seal, CommitAdoptionRef, CommitBundleV1, CommitInputRef,
     CommitOutputRef,
 )
 from novel.errors import ProvenanceRefused, TerminalState, UpgradeRefused
-from novel.llm.json_text import normalize_json_text
 from novel.llm.ledger import CostLedger, ledger_path, read_cost_snapshot
 from novel.llm.retry import TransportRetryPolicy
 from novel.llm.transport import ChatRequest, Transport, TransportError
@@ -112,19 +46,13 @@ from novel.work_units import (
 )
 
 __all__ = [
-    'AdoptionRef', 'BaselineAttempt', 'CandidateRunContext', 'DurableAnswer',
-    'ExecutionError', 'ValidationStop',
-    'NarrowContext', 'NarrowPatchRequest',
-    'PaidRequestSession', 'PatchBaseline', 'PatchLocate', 'PatchTarget', 'PatchedAnswer',
-    'PatchPlan', 'PatchPlanningError', 'prepare_patch_plan',
-    'PurchaseRequired', 'RUNTIME_PHASES', 'UpstreamOwned', 'WORKFLOW_REL',
-    'accept_patch_answer', 'ask_json', 'ask_text_once', 'candidate_artifact',
-    'candidate_contract_identity', 'format_json_path', 'normalize_patch_targets',
-    'candidate_node', 'check_candidate_workflow', 'digest',
-    'init_or_resume_candidate_workflow', 'open_candidate_epoch',
-    'open_candidate_workflow', 'patch_user_prompt', 'revision_user_prompt',
-    'roll_candidate_epoch',
-    'semantic_owner_unit', 'purchased_baseline', 'sealed_turn_references', 'workflow_from_disk', 'workflow_to_disk',
+    'AdoptionRef', 'CandidateRunContext', 'DurableAnswer', 'ExecutionError',
+    'ValidationStop', 'PaidRequestSession', 'PurchaseRequired', 'WORKFLOW_REL',
+    'candidate_artifact', 'candidate_contract_identity', 'candidate_node',
+    'check_candidate_workflow', 'digest', 'init_or_resume_candidate_workflow',
+    'open_candidate_epoch', 'open_candidate_workflow', 'roll_candidate_epoch',
+    'reconcile_delivered_turns', 'semantic_owner_unit', 'sealed_turn_references',
+    'workflow_from_disk', 'workflow_to_disk', 'revision_user_prompt',
 ]
 
 #: 候选根 workflow 身份记录的唯一落点（runtime 家族，非版本化书产物）。
@@ -206,7 +134,7 @@ def candidate_artifact(rel: str) -> str | None:
 # `WORK_UNIT_MAX_DELIVERY_ATTEMPTS` 次）；AcceptanceRecord／CommitBundle 见
 # `contracts/schema/workflow.py`。候选根的 `runtime/request_*`、
 # `runtime/validation_*`、`runtime/admission.json`、`runtime/adopt_*` 四类
-# 旧写路按映射表退役（旧根文件只读保留作 F7a 历史采用证据）。
+# 旧写路均已退役；原字节可冻结归档，不参与当前请求的读取或采用。
 #
 # 【Runtime 不收业务回调】`send`／`record_acceptance` 只管外发、额度、尝试、
 # 耐久与证据；解析、救回（D5）、校验等业务接受归调用方的组合函数
@@ -295,22 +223,19 @@ class AdoptionRef(NamedTuple):
 
     provenance 由纯函数按本引用构造：不再有进程内共享采用窗口；成本只从
     ledger 的精确 attempt 行聚合（``attempt_id``＋``request_fingerprint``）。
-    wire／历史采用没有工作单元 attempt（``unit_id``/``turn_id``/``attempt_id``
-    为空），生成事实仍如实登记，成本聚合为空（历史实付留在源根账内）。
+    只接受本根当前请求的工作单元、内容轮和耐久响应；免费重放保留原尝试身份。
     """
 
     owner: str                        # runner 词汇 owner（＝ ledger purpose）
-    model: str                        # 实际响应模型；空串只在 wire 采用无回显时
+    model: str                        # 实际响应模型
     prompts: dict[str, str]           # 渲染后 prompt 原文（铸造时取指纹）
-    sid: str = ''
-    request_sha256: str = ''          # 请求身份（SemanticRequest）
-    unit_id: str = ''                 # 工作单元
-    turn_id: str = ''                 # ContentRevision（内容轮）
-    attempt_id: str = ''              # ProviderAttempt
-    response_sha256: str = ''         # attempt 级耐久响应 blob 引用
-    request_fingerprint: str = ''     # ledger 行的请求指纹（成本聚合键）
-    historical: dict | None = None    # 历史采用证据（cost_link／源根／历史用量）
-    patch: dict | None = None         # owner patch 修订说明（基线身份＋reason）
+    sid: str
+    request_sha256: str               # 请求身份（SemanticRequest）
+    unit_id: str                      # 工作单元
+    turn_id: str                      # ContentRevision（内容轮）
+    attempt_id: str                   # ProviderAttempt
+    response_sha256: str              # attempt 级耐久响应 blob 引用
+    request_fingerprint: str          # ledger 行的请求指纹（成本聚合键）
 
 
 class DurableAnswer(NamedTuple):
@@ -339,7 +264,6 @@ class DurableAnswer(NamedTuple):
     attempts_max: int
     system: str = ''
     user: str = ''
-    historical: dict | None = None
 
     @property
     def text(self) -> str | None:
@@ -355,16 +279,11 @@ class DurableAnswer(NamedTuple):
         return self.adoption_ref({'system': self.system, 'user': self.user})
 
     def adoption_ref(self, prompts: dict[str, str]) -> AdoptionRef:
-        # 历史采用没有本根 attempt（`AdoptionRef` 契约）：`self.attempt_id` 是源根账里的
-        # 行，来源账拿它去本根成本账聚合用量必然缺行（`ProvenanceRefused`），免费恢复整条
-        # 作废。历史实付留在源根账内，本根只有 `_record_adoption` 那一行零 token 的
-        # cached 行；源 attempt 的审计链仍在 `historical['attempt_id']`。
-        attempt_id = '' if self.historical is not None else self.attempt_id
         return AdoptionRef(
             owner=self.owner, model=self.model, prompts=dict(prompts),
             sid=self.sid, request_sha256=self.request_sha256, unit_id=self.unit_id,
-            turn_id=self.turn_id, attempt_id=attempt_id,
-            response_sha256=self.response_sha256, historical=self.historical)
+            turn_id=self.turn_id, attempt_id=self.attempt_id,
+            response_sha256=self.response_sha256, request_fingerprint=self.request_sha256)
 
 
 def _stage_of(node_id: str) -> str:
@@ -387,11 +306,8 @@ def semantic_owner_unit(owner: str) -> tuple[str, str]:
     解析：别名表 → 节点 owner 末段 → `NODES` 的 `str06.` 命名空间，hit 不到
     就关闭式上抛，不猜一个节点记账。
 
-    节点内窄调用 owner（`name_variants`／`cross_cause`，CS-S 1c／Phase 2，T-3 不增
-    节点）归属所在节点，但**独占一个工作单元**（scope＝`book:<owner>`，登记表
-    `contracts/invariants.py::NARROW_OWNER_UNITS`）：与主调用共用单元账会让后一个
-    ask 取轮时把前一个已验收未封存的首答记成 `superseded_unadopted`，并瓜分同一份
-    内容额度。owner 字符串同时进请求身份，主／窄请求互不混用。
+    只有显式登记的独立窄调用可占用额外scope；当前登记为空，修订沿用原owner。
+    未登记owner在预算预留和授权之外先拒绝，不能借旧名称取得独立付费额度。
     """
     narrow = NARROW_OWNER_UNITS.get(owner)
     if narrow is not None:
@@ -399,6 +315,9 @@ def semantic_owner_unit(owner: str) -> tuple[str, str]:
     match = re.fullmatch(r'ch(\d+)', owner)
     if match:
         return 'str06.stage2.chapters', f'chapter:{int(match.group(1))}'
+    match = re.fullmatch(r'plan_ch(\d+)', owner)
+    if match:
+        return 'str06.stage4.chapters', f'chapter:{int(match.group(1))}'
     match = re.fullmatch(r'body_ch(\d+)', owner)
     if match:
         return 'str06.stage5.body', f'chapter:{int(match.group(1))}'
@@ -461,11 +380,15 @@ class PaidRequestSession:
     def __init__(self, repository: Str06Repository, ledger: CostLedger,
                  transport: Transport, *, yes: bool = False, allow_source_export: bool = False,
                  provider: str, book_call_ceiling: int | None = None, sid: str = '',
-                 adopt_roots: tuple[Path, ...] = (),
                  retry_policy: TransportRetryPolicy | None = None):
         if ledger.path is None:
             raise ValueError('付费请求边界需要持久化成本账')
         self.repository, self.ledger, self.transport = repository, ledger, transport
+        # 冻结真实执行代码；契约标签不能冒充成本账的代码来源。
+        self.code = (repository.context.code if repository.context is not None
+                     else prov.code_version())
+        if not isinstance(self.code, str) or not self.code:
+            raise ValueError('付费请求边界需要明确代码身份')
         self.yes, self.allow_source_export, self.provider = yes, allow_source_export, provider
         self.book_call_ceiling = book_call_ceiling
         # 账本唯一落点 <base>/_service/ledger.jsonl ⇒ base 取其两级父目录。
@@ -479,9 +402,6 @@ class PaidRequestSession:
         self.agent_run_id, self.agent_epoch_id = (
             commander if commander is not None else ('', ''))
         self.candidate_session_run_id = ledger.parent_run_id
-        # 源根证据路径（工作单元目录等）按绝对路径比对；相对的 `--adopt-root` 在这里
-        # 一次转绝对（与 `work_units._safe` 同口径，不解析符号链接）。
-        self.adopt_roots = tuple(Path(root).absolute() for root in adopt_roots)
         # 未送达重试：首发＋最多 3 次，退避 2/4/8 秒（str06.md 失败表）。
         self.retry_policy = retry_policy or TransportRetryPolicy(
             max_retries=WORK_UNIT_MAX_DELIVERY_ATTEMPTS - 1, backoff_base=2.0)
@@ -496,7 +416,7 @@ class PaidRequestSession:
     # ── Runtime 主口：一次耐久外发 ──────────────────────────────────────────
 
     def send(self, owner: str, request: ChatRequest) -> DurableAnswer:
-        """一次内容请求：免费采用 → 历史采用 → 授权 → 轮次 → 外发 → 耐久。
+        """一次内容请求：同请求免费重放 → 授权 → 轮次 → 外发 → 耐久。
 
         不接收任何业务回调。返回的 `DurableAnswer` 是耐久响应引用；空回答
         （``text is None``）同样留证并由调用方决定救回/重试。未送达的传输失败
@@ -522,10 +442,6 @@ class PaidRequestSession:
                 self._reuse(owner, request, identity, unit, reservation,
                             payload, attempt_id, response_sha),
                 request, node, scope)
-        # ② 登记的显式历史采用（F7a；同请求身份行为不变）。
-        adopted = self._adopted(owner, request, identity)
-        if adopted is not None:
-            return self._guard_truncated(adopted, request, node, scope)
         # ③ 授权闸（缓存先于授权拒绝；未授权停在该 owner）。
         if not self.yes or not self.allow_source_export:
             raise PurchaseRequired(owner)
@@ -539,7 +455,7 @@ class PaidRequestSession:
 
         原响应已按 attempt 耐久留证，ledger 行带 finish_reason 与完整 usage
         （reasoning 与正文 token 如实在账、unknown 不洗成零）；不自动重试、
-        不加预算。缓存命中与历史采用的截断响应同样停止——修复节点设计
+        不加预算。同请求免费重放的截断响应同样停止——修复节点设计
         （协议／prompt 变化）会换请求身份，不会读回同一截断壳再付费。
         """
         if answer.finish_reason != 'length':
@@ -781,24 +697,33 @@ class PaidRequestSession:
 
     def record_acceptance(self, answer: DurableAnswer, mode: str, *, parse: str,
                           errors: tuple[str, ...] | list[str] = (),
-                          salvage: str = 'none', accepted: bool) -> str:
+                          salvage: str = 'none', accepted: bool,
+                          response_kind: str = 'result') -> str:
         """AcceptanceRecord：接受分项按 attempt 落证（语义恒 unver）。
 
-        历史／wire 采用没有本根工作单元内容轮（``turn_id`` 为空），不在本根
-        落接受记录——接受事实由调用方的修订记录与 CommitBundle 承载。
+        每次接受必须绑定当前本根的内容轮与尝试；免费重放保留原始身份。
         """
-        if not answer.turn_id:
-            return ''
         node, scope = semantic_owner_unit(answer.owner)
+        if not answer.turn_id or not answer.attempt_id:
+            raise _execution_error('接受记录缺少当前内容轮或尝试身份',
+                code='acceptance_identity', node=node, item=scope, phase='accept')
         record = AcceptanceRecordV1(
             node=node, scope=scope, owner=answer.owner, turn_id=answer.turn_id,
             attempt_id=answer.attempt_id, request_sha256=answer.request_sha256,
             mode='json' if mode == 'json' else 'text', parse=parse,
+            response_kind=response_kind,
             salvage='reasoning' if salvage == 'reasoning' else 'none',
             errors=tuple(errors), accepted=accepted, created_at=int(time.time()))
         unit = self._unit_for(answer.owner)
-        return unit.save_acceptance(answer.turn_id, answer.attempt_id,
-                                    record.model_dump(mode='json'))
+        result = unit.save_acceptance(answer.turn_id, answer.attempt_id,
+                                      record.model_dump(mode='json'))
+        if (accepted and salvage == 'reasoning' and not (answer.content or '').strip()
+                and unit.turn(answer.turn_id).state == 'reserved'):
+            # 救回只采用原响应里的完整 reasoning；不改原始网络结果、attempt
+            # 终态或成本账。保存同一响应为轮级证据，让重启可据接受记录免费重放。
+            unit.save_response(answer.turn_id,
+                unit.attempt_request_payload(answer.turn_id, answer.attempt_id))
+        return result
 
     # ── 正式设施：工作单元与轮次收口 ────────────────────────────────────────
 
@@ -833,7 +758,7 @@ class PaidRequestSession:
         self.ledger.record(
             node=node, sid=self.sid, model=(response.model if response is not None
                                             else None) or request.model,
-            request_model=request.model, code=STR06_RC_VERSION,
+            request_model=request.model, code=self.code,
             attempt=attempt_no, max_attempts=WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
             will_retry=will_retry, backoff_ms=backoff_ms,
             cached=False, cache_policy='attempt', purpose=owner,
@@ -859,7 +784,7 @@ class PaidRequestSession:
             self.ledger.record(
                 node=semantic_owner_unit(owner)[0], sid=self.sid,
                 model=response.get('model') or request.model,
-                request_model=request.model, code=STR06_RC_VERSION,
+                request_model=request.model, code=self.code,
                 attempt=1, max_attempts=WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
                 will_retry=False, cached=False, cache_policy='attempt',
                 purpose=owner, attempt_id=original_attempt,
@@ -871,1004 +796,18 @@ class PaidRequestSession:
         self.ledger.record(
             node=node, sid=self.sid, model=(payload.get('response') or {}).get('model')
             or request.model,
-            request_model=request.model, code=STR06_RC_VERSION,
+            request_model=request.model, code=self.code,
             attempt=1, max_attempts=1, will_retry=False,
             cached=True, cache_policy='request-identity', purpose=owner,
             attempt_id=uuid.uuid4().hex, request_fingerprint=identity, outcome='ok',
             prompt_tokens=0, completion_tokens=0, reasoning_tokens=0)
 
-    # ── 显式历史采用（F7a-3，行为不变） ─────────────────────────────────────
-
-    def _adopted(self, owner: str, request: ChatRequest, identity: str) -> DurableAnswer | None:
-        """登记的显式历史采用（F7a-3）：从注册源根取同请求身份的已购结果。
-
-        逐个注册源核对四件事，任一不符**明确阻断**（不静默跳过、不补购）：
-        ① 请求身份逐字相等；② 响应字节完整（content_sha256）；③ 原状态为
-        answered；④ 原成本关联存在——源根 ledger 里有同 attempt_id＋同
-        request_fingerprint 的真实付费行（付费状态未知 = 拒绝采用）。
-        采用不复制响应字节进本根（不冒充 cache hit）：本根只落修订记录
-        （ContentRevision 层）与一行零 token 的 cached ledger 行，历史实付留在
-        源根账内，不重复计费。
-        """
-        rel = f'runtime/request_{identity}.json'
-        node, scope = semantic_owner_unit(owner)
-        for root in self.adopt_roots:
-            source = root / rel
-            if not source.is_file():
-                continue
-            row = Str06Repository.read_external(source)
-            if row.get('identity') != identity:
-                raise _execution_error(
-                    f'{owner} 采用源 {root} 的请求身份损坏，拒绝采用或重购',
-                    code='adoption_identity', node=node, item=scope,
-                    context={'source_root': str(root)})
-            if row.get('status') != 'answered':
-                raise _execution_error(
-                    f'{owner} 采用源 {root} 的原请求为 {row.get("status")}；'
-                    '付费状态未知，拒绝采用',
-                    code='adoption_status', node=node, item=scope,
-                    context={'source_root': str(root), 'status': row.get('status')})
-            if digest(row.get('content')) != row.get('content_sha256'):
-                raise _execution_error(
-                    f'{owner} 采用源 {root} 的已购响应内容损坏，拒绝采用或重购',
-                    code='adoption_content', node=node, item=scope,
-                    context={'source_root': str(root)})
-            rows, partial = read_cost_snapshot(root.parent)
-            if partial:
-                raise _execution_error(
-                    f'采用源 {root} 的成本账有未提交尾，先恢复再采用',
-                    code='adoption_ledger_tail', node=node, item=scope,
-                    context={'source_root': str(root)})
-            original = [r for r in rows
-                        if r.get('attempt_id') == row.get('attempt_id')
-                        and r.get('request_fingerprint') == identity]
-            if len(original) != 1 or original[0].get('cached') or \
-                    original[0].get('outcome') != 'ok':
-                raise _execution_error(
-                    f'{owner} 采用源 {root} 缺原成本关联（attempt_id＋指纹无唯一'
-                    '真实付费行）；付费状态未知，拒绝采用',
-                    code='adoption_cost_link', node=node, item=scope,
-                    context={'source_root': str(root)})
-            historical = {
-                'owner': owner, 'mode': 'historical-adoption',
-                'source_root': str(root.resolve()), 'source_rel': rel,
-                'sha256': Str06Repository.file_sha256(source),
-                'identity': identity, 'attempt_id': row['attempt_id'],
-                'provider': row.get('provider'), 'model': row.get('model'),
-                'historical_usage': {
-                    'prompt_tokens': original[0].get('prompt_tokens'),
-                    'completion_tokens': original[0].get('completion_tokens'),
-                    'reasoning_tokens': original[0].get('reasoning_tokens')},
-                'new_paid_calls': 0, 'cost_link': 'ledger-row', 'errors': []}
-            self._write_revision(owner, {
-                'owner': owner,
-                'kind': 'historical_adoption',
-                'mode': 'historical-adoption',
-                'request_sha256': identity,
-                'attempt_id': row['attempt_id'],
-                'model': row.get('model'),
-                'source_root': str(root.resolve()), 'source_rel': rel,
-                'source_sha256': Str06Repository.file_sha256(source),
-                'cost_link': 'ledger-row',
-                'historical_usage': historical['historical_usage'],
-                'new_paid_calls': 0,
-                'created_at': int(time.time())})
-            self._record_adoption(owner, request, identity, row)
-            return DurableAnswer(
-                owner=owner, request_sha256=identity, sid=self.sid,
-                unit_id=self._unit_for(owner).unit_id,
-                turn_id='', ordinal=0, attempt_id=row['attempt_id'],
-                response_sha256='', content=row.get('content'),
-                reasoning=row.get('reasoning'), finish_reason=row.get('finish_reason'),
-                usage=row.get('usage'), model=row.get('model') or request.model,
-                cached=True, attempts_used=0,
-                attempts_max=WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
-                system=request.system, user=request.user, historical=historical)
-        # R8a-6：同请求身份在源根工作单元账里的已购事实（agent 流不落
-        # runtime/request_*；证据三方绑定见 _work_unit_evidence）。
-        for root in self.adopt_roots:
-            evidence = _work_unit_evidence(root, owner, identity)
-            if evidence is None:
-                continue
-            response = evidence['payload'].get('response') or {}
-            cost = evidence['cost_row']
-            historical = {
-                'owner': owner, 'mode': 'historical-adoption',
-                'source_root': str(root.resolve()),
-                'source_rel': evidence['blob_rel'],
-                'identity': identity,
-                'attempt_id': evidence['attempt'].attempt_id,
-                'provider': cost.get('provider'), 'model': response.get('model'),
-                'historical_usage': {
-                    'prompt_tokens': cost.get('prompt_tokens'),
-                    'completion_tokens': cost.get('completion_tokens'),
-                    'reasoning_tokens': cost.get('reasoning_tokens')},
-                'new_paid_calls': 0, 'cost_link': 'ledger-row', 'errors': []}
-            self._write_revision(owner, {
-                'owner': owner,
-                'kind': 'historical_adoption',
-                'mode': 'historical-adoption',
-                'request_sha256': identity,
-                'attempt_id': evidence['attempt'].attempt_id,
-                'model': response.get('model'),
-                'source_root': str(root.resolve()),
-                'source_rel': evidence['blob_rel'],
-                'cost_link': 'ledger-row',
-                'historical_usage': historical['historical_usage'],
-                'new_paid_calls': 0,
-                'created_at': int(time.time())})
-            self._record_adoption(owner, request, identity, {
-                'status': 'answered', 'model': response.get('model'),
-                'provider': cost.get('provider'),
-                'content': response.get('content'),
-                'reasoning': response.get('reasoning'),
-                'finish_reason': response.get('finish_reason'),
-                'usage': response.get('usage'),
-                'attempt_id': evidence['attempt'].attempt_id})
-            return DurableAnswer(
-                owner=owner, request_sha256=identity, sid=self.sid,
-                unit_id=self._unit_for(owner).unit_id,
-                turn_id='', ordinal=0, attempt_id=evidence['attempt'].attempt_id,
-                response_sha256='', content=response.get('content'),
-                reasoning=response.get('reasoning'),
-                finish_reason=response.get('finish_reason'),
-                usage=response.get('usage'), model=response.get('model') or request.model,
-                cached=True, attempts_used=0,
-                attempts_max=WORK_UNIT_MAX_DELIVERY_ATTEMPTS,
-                system=request.system, user=request.user, historical=historical)
-        return None
-
-    def _write_revision(self, owner: str, record: dict) -> None:
-        """ContentRevision 记录（取代 ``runtime/adopt_<owner>.json`` 写路）。
-
-        幂等（I-30/I-31）：同一采用事实重放不重写盘上记录——除建档时刻
-        `created_at` 外逐字段相等即视为同一实体，保留首次建档字节；不同采用
-        事实（换源根／换 attempt）才覆盖重记。记录损坏则抛错暴露，不静默覆盖
-        证据（I-34）。
-        """
-        rel = f'runtime/revisions/{owner}.json'
-        path = self.repository.path(rel)
-        if path.is_file():
-            existing = json.loads(path.read_text(encoding='utf-8'))
-            stable = {k: v for k, v in record.items() if k != 'created_at'}
-            prior = {k: v for k, v in existing.items() if k != 'created_at'}
-            if prior == stable:
-                return
-        self.repository.write(rel, record)
-
-    def _record_adoption(self, owner, request, identity, row) -> None:
-        """采用在候选根账内只记一行零 token 的 cached 行（新 attempt_id）。
-
-        不走缓存重放分支：那一条服务本根已购响应的免费重放，会把历史 token
-        抄进候选根账——同一批 token 两处各声称一次。
-        """
-        node, _scope = semantic_owner_unit(owner)
-        self.ledger.record(
-            node=node, sid=self.sid, model=row.get('model', request.model),
-            request_model=request.model, code=STR06_RC_VERSION, attempt=1, max_attempts=1,
-            will_retry=False,
-            cached=True, cache_policy='historical-adoption', purpose=owner,
-            attempt_id=uuid.uuid4().hex,
-            request_fingerprint=identity,
-            outcome='ok' if row.get('status') == 'answered' else 'error',
-            prompt_tokens=0, completion_tokens=0, reasoning_tokens=0)
-
-    def bind_wire_adoption(self, owner: str, identity: str, wire_path: Path, *,
-                           allow_patch: bool = False,
-                           previous_patch_sha256: str | None = None) -> dict:
-        """wire 采用的身份／成本绑定（F7a-3）：返回并入采用记录的字段。
-
-        证据分三轮扫描，逐档下降但都如实登记：
-        · 第一轮（`ledger-row`）：任一注册源根有同请求身份的已购行，成本关联
-          唯一且真实；wire 字节与其响应内容相等——身份、响应、成本三方绑定；
-        · 第二轮（`ledger-row`，R8a-6）：源根**工作单元账**的耐久证据（请求
-          blob＋attempt 响应＋按 attempt_id 关联的成本行）——agent 流购买不落
-          `runtime/request_<identity>.json`，它的已购事实只在这里（canary
-          20260929b 的 owner patch 因此被迫 unverified）；
-        · 第三轮（`batch-documented`）：源根 `adopt_<owner>.json` 记录与本 wire
-          字节一致（采用链可验），原购买根的逐请求账未持久（F2b 批次证据），
-          成本只到批次口径；
-        · 都没有（`unverified`）：仅形状校验，采用记录如实标注。
-        `allow_patch` 接受显式 owner patch 链：调用方已核验 patch note 的基线与
-        当前应用身份（修订来源保留）。内容未变的跨身份免费重验也属于显式采用，
-        不能因 wire 等于原回答而丢掉这项声明。不同版本接续须
-        由调用方先核验上一份耐久修订及当前正式产物，传入 previous_patch_sha256
-        精确匹配源根的旧采用记录；历史归档由 stage_revision 再次复验后执行。
-        无上述证明时，已有采用记录仍须与本 wire 字节相符。
-        """
-        wire_sha = Str06Repository.file_sha256(wire_path)
-        for root in self.adopt_roots:
-            source = root / 'runtime' / f'request_{identity}.json'
-            if not source.is_file():
-                continue
-            row = Str06Repository.read_external(source)
-            if row.get('identity') != identity:
-                raise ValueError(f'{owner} 采用源 {root} 的请求身份损坏，拒绝采用')
-            if row.get('status') != 'answered':
-                raise ValueError(
-                    f'{owner} 采用源 {root} 的原请求为 {row.get("status")}；'
-                    '付费状态未知，拒绝采用')
-            if digest(row.get('content')) != row.get('content_sha256'):
-                raise ValueError(f'{owner} 采用源 {root} 的已购响应内容损坏，拒绝采用')
-            rows, partial = read_cost_snapshot(root.parent)
-            if partial:
-                raise ValueError(f'采用源 {root} 的成本账有未提交尾，先恢复再采用')
-            original = [r for r in rows
-                        if r.get('attempt_id') == row.get('attempt_id')
-                        and r.get('request_fingerprint') == identity]
-            if len(original) != 1 or original[0].get('cached') or                     original[0].get('outcome') != 'ok':
-                raise ValueError(
-                    f'{owner} 采用源 {root} 缺原成本关联；付费状态未知，拒绝采用')
-            if _same_json_payload(wire_path, row.get('content') or ''):
-                return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
-                        **({'owner_patch': True} if allow_patch else {}),
-                        'source_root': str(root.resolve()),
-                        'source_rel': f'runtime/request_{identity}.json',
-                        'identity': identity, 'attempt_id': row['attempt_id'],
-                        'provider': row.get('provider'), 'model': row.get('model'),
-                        'historical_usage': {
-                            'prompt_tokens': original[0].get('prompt_tokens'),
-                            'completion_tokens': original[0].get('completion_tokens'),
-                            'reasoning_tokens': original[0].get('reasoning_tokens')}}
-            recorded = self._adopt_record(root, owner)
-            if allow_patch and (recorded is None or recorded.get('sha256') == wire_sha
-                                or previous_patch_sha256 is not None
-                                and recorded.get('sha256') == previous_patch_sha256):
-                return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
-                        'owner_patch': True,
-                        'source_root': str(root.resolve()),
-                        'source_rel': f'runtime/request_{identity}.json',
-                        'identity': identity, 'attempt_id': row['attempt_id'],
-                        'provider': row.get('provider'), 'model': row.get('model'),
-                        'historical_usage': {
-                            'prompt_tokens': original[0].get('prompt_tokens'),
-                            'completion_tokens': original[0].get('completion_tokens'),
-                            'reasoning_tokens': original[0].get('reasoning_tokens')}}
-            if recorded is None or recorded.get('sha256') != wire_sha:
-                raise ValueError(
-                    f'{owner} wire 与采用源 {root} 的已购响应内容不一致，且无匹配的 '
-                    'owner patch 采用链，拒绝采用')
-        # R8a-6 第二档（work-unit 耐久证据）：agent 流购买不落
-        # runtime/request_<identity>.json，同请求身份的已购事实在工作单元账里
-        # （请求 blob＋attempt 响应＋按 attempt_id 关联的成本行）——三方绑定
-        # 等价 ledger-row 档；wire 不一致仍走 owner patch 链或显式拒。
-        for root in self.adopt_roots:
-            evidence = _work_unit_evidence(root, owner, identity)
-            if evidence is None:
-                continue
-            response = evidence['payload'].get('response') or {}
-            cost = evidence['cost_row']
-            usage = {'prompt_tokens': cost.get('prompt_tokens'),
-                     'completion_tokens': cost.get('completion_tokens'),
-                     'reasoning_tokens': cost.get('reasoning_tokens')}
-            if _same_json_payload(wire_path, response.get('content') or ''):
-                return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
-                        **({'owner_patch': True} if allow_patch else {}),
-                        'source_root': str(root.resolve()),
-                        'source_rel': evidence['blob_rel'],
-                        'identity': identity,
-                        'attempt_id': evidence['attempt'].attempt_id,
-                        'provider': cost.get('provider'),
-                        'model': response.get('model'),
-                        'historical_usage': usage}
-            recorded = self._adopt_record(root, owner)
-            if allow_patch and (recorded is None or recorded.get('sha256') == wire_sha
-                                or previous_patch_sha256 is not None
-                                and recorded.get('sha256') == previous_patch_sha256):
-                return {'mode': 'historical-adoption', 'cost_link': 'ledger-row',
-                        'owner_patch': True,
-                        'source_root': str(root.resolve()),
-                        'source_rel': evidence['blob_rel'],
-                        'identity': identity,
-                        'attempt_id': evidence['attempt'].attempt_id,
-                        'provider': cost.get('provider'),
-                        'model': response.get('model'),
-                        'historical_usage': usage}
-            if recorded is None or recorded.get('sha256') != wire_sha:
-                raise ValueError(
-                    f'{owner} wire 与采用源 {root} 的工作单元已购响应内容不一致，'
-                    '且无匹配的 owner patch 采用链，拒绝采用')
-        for root in self.adopt_roots:
-            recorded = self._adopt_record(root, owner)
-            if recorded is not None and recorded.get('sha256') == wire_sha:
-                return {'mode': 'historical-adoption', 'cost_link': 'batch-documented',
-                        'source_root': str(root.resolve()),
-                        'source_rel': f'runtime/adopt_{owner}.json',
-                        'adoption_chain_verified': True}
-        return {'mode': 'wire-adoption', 'cost_link': 'unverified'}
-
-    @staticmethod
-    def _adopt_record(root: Path, owner: str) -> dict | None:
-        """读源根的修订／采用记录：新形状 `runtime/revisions/<owner>.json` 优先，
-        旧根的 `runtime/adopt_<owner>.json` 按只读证据继续可读（F7a 历史采用）。"""
-        path = root / 'runtime' / 'revisions' / f'{owner}.json'
-        if not path.is_file():
-            path = root / 'runtime' / f'adopt_{owner}.json'
-        if not path.is_file():
-            return None
-        return Str06Repository.read_external(path)
-
-    def _record_adoption(self, owner, request, identity, row) -> None:
-        """采用在候选根账内只记一行零 token 的 cached 行（新 attempt_id）。
-
-        不走缓存重放分支：那一条服务本根已购响应的免费重放，会把历史 token
-        抄进候选根账——同一批 token 两处各声称一次。
-        """
-        node, _scope = semantic_owner_unit(owner)
-        self.ledger.record(
-            node=node, sid=self.sid, model=row.get('model', request.model),
-            request_model=request.model, code=STR06_RC_VERSION, attempt=1, max_attempts=1,
-            will_retry=False,
-            cached=True, cache_policy='historical-adoption', purpose=owner,
-            attempt_id=uuid.uuid4().hex,
-            request_fingerprint=identity,
-            outcome='ok' if row.get('status') == 'answered' else 'error',
-            prompt_tokens=0, completion_tokens=0, reasoning_tokens=0)
-
-    # ── CS-H H1b：免费沿用的采用凭证（carried_forward） ──────────────────────
-
-    def baseline_ref(self, owner: str, attempt: BaselineAttempt) -> AdoptionRef:
-        """已购候选 attempt 的显式引用（CS-H H2 带基底起步的窄返修）。
-
-        窄返修的基底 wire 由已购候选产生，它的 attempt 行仍在本根账里：这里
-        **不新记任何账行**（不重复计费），只从工作单元账核验 ok 响应证据与生成
-        事实（model、prompts 取原请求工作包），返回供 provenance 展开的引用——
-        成本链按 attempt_id 精确聚合（I-17）。证据不闭合即显式拒绝（I-34），
-        不静默丢基座的成本账。
-        """
-        node, scope = semantic_owner_unit(owner)
-        unit = self._unit_for(owner)
-        ledger = unit._read()
-        turn = next((t for t in ledger.turns if t.turn_id == attempt.turn_id
-                     and t.request_sha256 == attempt.request_sha256), None)
-        if turn is None:
-            raise _execution_error(
-                f'{owner} 窄返修基底 attempt 的内容轮不属于原请求身份，拒绝起步',
-                code='carried_forward_turn', node=node, item=scope, phase='accept',
-                context={'turn_id': attempt.turn_id,
-                         'baseline_request_sha256': attempt.request_sha256})
-        found = next((a for a in turn.attempts
-                      if a.attempt_id == attempt.attempt_id and a.outcome == 'ok'
-                      and a.response_sha256 == attempt.response_sha256), None)
-        if found is None:
-            raise _execution_error(
-                f'{owner} 窄返修基底 attempt 无 ok 响应证据，拒绝起步',
-                code='carried_forward_attempt', node=node, item=scope, phase='accept',
-                context={'turn_id': attempt.turn_id, 'attempt_id': attempt.attempt_id})
-        try:
-            payload = unit.attempt_request_payload(attempt.turn_id, attempt.attempt_id)
-        except WorkUnitRefused as exc:
-            raise _execution_error(
-                f'{owner} 窄返修基底的响应证据不可读：{exc}',
-                code='carried_forward_request_payload', node=node, item=scope,
-                phase='accept', context={'turn_id': attempt.turn_id}) from exc
-        messages = (payload.get('request_payload') or {}).get('messages') or []
-        prompts = {role: next((m.get('content') or '' for m in messages
-                               if m.get('role') == role), '')
-                   for role in ('system', 'user')}
-        model = (payload.get('response') or {}).get('model') or ''
-        return AdoptionRef(
-            owner=owner, model=model, prompts=prompts, sid=self.sid,
-            request_sha256=attempt.request_sha256, unit_id=unit.unit_id,
-            turn_id=attempt.turn_id, attempt_id=attempt.attempt_id,
-            response_sha256=attempt.response_sha256,
-            request_fingerprint=attempt.request_sha256)
-
-    def adopt_carried_forward(self, owner: str, request: ChatRequest, identity: str, *,
-                              baseline_request_sha256: str, turn_id: str, attempt_id: str,
-                              response_sha256: str, new_paid_calls: int = 0) -> AdoptionRef:
-        """把**本根已购**候选免费沿用到当前请求身份（RC-50～52）。
-
-        与新购/缓存重放的分界：候选生成时的请求身份与当前身份不同（上游条目未变
-        或称谓规范形相等、当前输入下完整预检全绿），所以不重购、也不冒充同身份
-        缓存命中。核验三件事后才给采用引用（不静默降档，I-34）：① 原 attempt 在
-        本根工作单元账里是 ok 且有响应证据；② 响应 blob 摘要与 attempt 记录一致；
-        ③ 原 attempt 在成本账里有唯一真实付费行——成本链 ``ledger-row`` 因此指向
-        原 attempt（provenance 按 attempt_id 精确聚合），本根只记一行零 token 的
-        cached 行（``cache_policy='carried-forward'``）。返回的引用 ``attempt_id``
-        是原 attempt，供 CommitBundle 的采用证据与成本聚合使用。
-        """
-        node, scope = semantic_owner_unit(owner)
-        unit = self._unit_for(owner)
-        ledger = unit._read()
-        turn = next((t for t in reversed(ledger.turns)
-                     if t.turn_id == turn_id and t.request_sha256 == baseline_request_sha256), None)
-        if turn is None:
-            raise _execution_error(
-                f'{owner} 沿用的候选内容轮不属于原请求身份，拒绝免费采用',
-                code='carried_forward_turn', node=node, item=scope, phase='accept',
-                context={'turn_id': turn_id, 'baseline_request_sha256': baseline_request_sha256})
-        attempt = next((a for a in reversed(turn.attempts)
-                        if a.attempt_id == attempt_id and a.outcome == 'ok'
-                        and a.response_sha256 == response_sha256), None)
-        if attempt is None:
-            raise _execution_error(
-                f'{owner} 沿用的候选 attempt 无 ok 响应证据，拒绝免费采用',
-                code='carried_forward_attempt', node=node, item=scope, phase='accept',
-                context={'attempt_id': attempt_id, 'turn_id': turn_id})
-        payload = unit.attempt_request_payload(turn_id, attempt_id)
-        if payload.get('request_payload') is None:
-            raise _execution_error(
-                f'{owner} 沿用的候选缺原请求工作包，拒绝免费采用',
-                code='carried_forward_request_payload', node=node, item=scope,
-                phase='accept', context={'attempt_id': attempt_id})
-        rows, partial = read_cost_snapshot(self.base)
-        if partial:
-            raise _execution_error('成本账有未提交尾，拒绝追加或采用',
-                                   code='ledger_tail', node=node, item=owner, phase='reserve')
-        original = [r for r in rows if r.get('attempt_id') == attempt_id
-                    and r.get('request_fingerprint') == baseline_request_sha256]
-        if len(original) != 1 or original[0].get('cached') or original[0].get('outcome') != 'ok':
-            raise _execution_error(
-                f'{owner} 沿用的候选缺原成本关联（attempt_id＋指纹无唯一真实付费行）；'
-                '付费状态未知，拒绝采用', code='carried_forward_cost_link',
-                node=node, item=scope, phase='accept',
-                context={'attempt_id': attempt_id})
-        if new_paid_calls:
-            raise _execution_error(
-                '免费沿用不得声称新付费调用', code='carried_forward_paid_calls',
-                node=node, item=scope, phase='accept',
-                context={'new_paid_calls': new_paid_calls})
-        model = (payload.get('response') or {}).get('model') or request.model
-        self.ledger.record(
-            node=node, sid=self.sid, model=model, request_model=request.model,
-            code=STR06_RC_VERSION, attempt=1, max_attempts=1, will_retry=False,
-            cached=True, cache_policy='carried-forward', purpose=owner,
-            attempt_id=uuid.uuid4().hex, request_fingerprint=identity, outcome='ok',
-            prompt_tokens=0, completion_tokens=0, reasoning_tokens=0)
-        return AdoptionRef(
-            owner=owner, model=model, prompts={'system': request.system, 'user': request.user},
-            sid=self.sid, request_sha256=baseline_request_sha256,
-            unit_id=unit.unit_id, turn_id=turn_id, attempt_id=attempt_id,
-            response_sha256=response_sha256, request_fingerprint=baseline_request_sha256)
-
-
-def _decode_json(content: str) -> tuple[Any | None, str | None]:
-    """响应 JSON 解码（唯一实现）：重复键、围栏、顶层形状都在这里判定。"""
-    try:
-        data = json.JSONDecoder(object_pairs_hook=_unique).decode(
-            normalize_json_text(content))
-    except (ValueError, TypeError, KeyError) as exc:
-        return None, str(exc)
-    return data, None
-
-
-def accept_json_answer(answer: DurableAnswer,
-                       validate) -> tuple[dict | None, list[str], dict]:
-    """解析一次已交付响应并按 D5 从 reasoning 救回空回答（纯函数，无副作用）。
-
-    救回段**整段过同一套解析与校验**，不过即视为救回失败。返回
-    ``(data, errors, acceptance_fields)``：``data`` 非空即被采纳；
-    ``acceptance_fields`` 是 AcceptanceRecord 的分项字段（parse/salvage/errors）。
-    """
-    fields: dict = {'mode': 'json', 'salvage': 'none', 'errors': ()}
-    content = answer.content or ''
-    data, decode_error = _decode_json(content)
-    if data is None and not content.strip() and (answer.reasoning or '').strip():
-        # D5：JSON 调用空回答先免费从 reasoning 救回（实测 DeepSeek 会把整段
-        # 答案写进 reasoning 而 content 返空）。
-        data, decode_error = _decode_json(answer.reasoning)
-        fields['salvage'] = 'reasoning'
-    errors: list[str] = []
-    if data is not None:
-        if isinstance(data, dict):
-            errors = list(validate(data))
-            if errors:
-                data = None   # 校验不过即未采纳（救回段同一套闸，不得放行）
-        else:
-            data, errors = None, [ValidationIssue(
-                '顶层必须为 object', code='answer_shape', location=('answer',), owner='runtime')]
-    if data is None and not errors:
-        # 整份出口闭集（CS-H H2，RC-59）：回答无法解码／顶层形状失败是**唯一**
-        # 可退整份修订的 JSON 侧原因；按码登记（`PATCH_ROUTES['answer_shape']`），
-        # 无进展判定与规则码枚举测试据此识别它，不靠解析展示文案。
-        errors = [ValidationIssue(f'响应解码/形状失败：{decode_error}',
-                                  code='answer_shape', location=('answer',),
-                                  owner='runtime')]
-    # parse 分项按**线上交付**判定：交付了内容而解析/校验失败是 'failed'
-    # （确定性缺陷免费修复，不重购）；线上交付为空（救回也未过闸）是 'empty'
-    # ——wire 层失败，D5 同轮重试的判据。
-    fields['parse'] = 'ok' if data is not None else (
-        'empty' if not content.strip() else 'failed')
-    fields['errors'] = tuple(errors)
-    return data, list(errors), fields
-
-
-class PatchTarget(NamedTuple):
-    """一个可条目级返修的失败点：wire 内 JSON 路径＋该条目的错误（CS-patch，
-    2026-10-03）。路径指向**最小可替换单元**（如一条 effect／一个 beat），
-    由 owner 的 locate 与其验收闸同源派生（判据 25：定位与判定同一把尺）。
-
-    ``optional``（CS-H H1b，RC-58）：可选目标——责任位置须由模型决定时给出
-    候选闭集，回答只覆盖它选中的子集即合法（如上游新增义务时在给定拍闭集里
-    选承载位）；缺省 False＝必须逐条替换。
-    """
-
-    path: tuple[str | int, ...]
-    issues: tuple[str, ...]
-    optional: bool = False
-
-
-def normalize_patch_targets(targets: Sequence[PatchTarget]) -> list[PatchTarget]:
-    """合成复核与错误定位目标后收口为无重叠的替换集合（R-5.5）。
-
-    只折叠集合中已经授权的父路径，不新建编辑范围；父目标承接全部子问题，
-    任一被合并目标必选则父目标必选。按首次涉及该父路径的顺序返回，输入不变。
-    定位器各自无重叠并不足够：两个合法集合合并后仍可能出现整拍与 know 子项，
-    父替换合法省略可选字段时会令后续子替换失效，因此在请求组装前统一收口。
-    """
-    requested = {target.path for target in targets}
-    grouped: dict[tuple[str | int, ...], list[PatchTarget]] = {}
-    for target in targets:
-        outer = next((target.path[:length] for length in range(len(target.path) + 1)
-                      if target.path[:length] in requested), target.path)
-        grouped.setdefault(outer, []).append(target)
-    return [PatchTarget(
-        path=path,
-        issues=tuple(dict.fromkeys(issue for target in items for issue in target.issues)),
-        optional=all(target.optional for target in items))
-        for path, items in grouped.items()]
-
-
-class BaselineAttempt(NamedTuple):
-    """起步基底的生产 attempt 坐标（CS-H H2 带基底起步；本根账内寻址）。
-
-    窄返修的基底是已购候选的整份 wire，它的 attempt 行仍在本根成本账里——
-    成本链按 ``attempt_id`` 精确聚合（I-17），不因返修双计或丢失。
-    """
-
-    turn_id: str
-    attempt_id: str
-    response_sha256: str
-    request_sha256: str
-
-
-class PatchBaseline(NamedTuple):
-    """带基底起步（CS-H H2，RC-57 D 表「基底是 owner 已发布版本的修订对照
-    wire」）：条目返修不从**整份新请求**开始，而是从本节点已发布／已购候选的
-    整份 wire 开始。
-
-    ``wire`` 是起步基底；``digest`` 是它的候选摘要（SHA-256），随窄请求下发给
-    模型核对（「核对基底候选摘要」）——模型修错了版本时合并闸按路径存在性拒绝；
-    ``attempt`` 非空时 `ask_json` 经 ``PaidRequestSession.baseline_ref`` 把它解析
-    成显式引用展开进 provenance（成本按各 attempt 行精确聚合）。
-    """
-
-    wire: dict
-    digest: str
-    summary: str = ''
-    attempt: BaselineAttempt | None = None
-
-
-class NarrowPatchRequest(NamedTuple):
-    """窄返修请求的四块材料（RC-57 输入行）：协议规则＋依赖切片＋合法取值。
-
-    失败条目由 ``PatchTarget`` 携带（路径＋当前值＋问题），不进这里。**整份
-    原请求与前序材料全文不进窄请求**——请求规模只与失败条目及其依赖挂钩，不随
-    全书义务清单、身份投影与已发布产物全文增长（M3 返修宽度；本根 Design
-    修订轮 35,434 输入／29,102 输出的对照见 REQUIREMENTS CS-H H2 判据⑤）。
-    """
-
-    rules: str          #: 协议规则：wire 协议字面量、字段契约与输出格式
-    dependency: str     #: 依赖切片：只带必要的事实与状态（ JSON 文本）
-    legal_values: str   #: 合法取值：可引用闭集（char_id／ob／know ref／kf…）
-    wire_schema: dict | None = None  #: 与首次请求同源的完整 schema，仅用于派生替换子 schema
-
-
-@dataclass(frozen=True)
-class PatchPlan:
-    """一次返修的冻结权限：基底、无重叠目标及对应子 schema。
-
-    schema 保存为 JSON 字节等价字符串，避免切片或 prompt 组装修改已冻结权限。
-    计划只证明必要结构操作可表达；语义正确性仍由合并后的完整 owner 验收决定。
-    """
-
-    baseline_sha256: str
-    targets: tuple[PatchTarget, ...]
-    replacement_schemas: tuple[tuple[str, str], ...] = ()
-    shape_diagnostics: tuple[str, ...] = ()
-
-
-class PatchPlanningError(ValueError):
-    """尚未外发的计划不能覆盖诊断或表达必要操作，属于工程失败。"""
-
-
-def _replacement_validator(schema_json: str):
-    """执行下发的同一份JSON Schema；只在模型条目返修边界加载依赖。"""
-    try:
-        from jsonschema import Draft202012Validator, SchemaError
-    except ImportError as exc:
-        raise PatchPlanningError('模型执行环境缺少jsonschema，请安装项目llm依赖') from exc
-    schema = json.loads(schema_json)
-    try:
-        Draft202012Validator.check_schema(schema)
-    except SchemaError as exc:
-        raise PatchPlanningError(f'替换子schema不可执行：{exc.message}') from exc
-    return Draft202012Validator(schema)
-
-
-def prepare_patch_plan(wire: dict, targets: Sequence[PatchTarget], *,
-                       errors: Sequence[str] = (), wire_schema: dict | None = None) -> PatchPlan:
-    """纯函数：先验证结构可修性，再冻结用于请求和接受的同一份范围。
-
-    owner 提供语义范围，runtime 不从字段名推测迁移；诊断的 replace_path 是
-    schema 派生的结构下界，任何授权目标都必须包含它，不能停在非法键本身。
-    """
-    from novel.core.repair import schema_at_path
-
-    normalized = tuple(normalize_patch_targets(targets))
-    if not isinstance(wire, dict) or not normalized:
-        raise PatchPlanningError('条目返修需要对象基底与非空替换目标')
-    covered = {validation_identity(issue) for target in normalized for issue in target.issues}
-    if any(validation_identity(issue) not in covered for issue in errors):
-        raise PatchPlanningError('修复计划未覆盖全部校验问题')
-    schemas: list[tuple[str, str]] = []
-    checked_schemas: set[str] = set()
-    for target in normalized:
-        path = target.path
-        if not path or any(type(part) not in (str, int) or part == ''
-                           or (type(part) is int and part < 0) for part in path):
-            raise PatchPlanningError(f'不合法的替换目标 {path!r}')
-        try:
-            _walk_path(wire, path)
-        except KeyError as exc:
-            if not (len(path) == 1 and isinstance(path[0], str)):
-                raise PatchPlanningError(f'替换目标不存在：{path!r}') from exc
-        if wire_schema is not None:
-            try:
-                schema = schema_at_path(wire_schema, path)
-            except ValueError as exc:
-                raise PatchPlanningError(f'替换目标不属于当前 wire 契约：{path!r}') from exc
-            encoded = json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-            if encoded not in checked_schemas:
-                _replacement_validator(encoded)
-                checked_schemas.add(encoded)
-            schemas.append((format_json_path(path), encoded))
-    diagnostics: list[str] = []
-    for issue in errors:
-        for problem in getattr(issue, 'context', {}).get('shape_errors', ()):
-            structural = problem.get('replace_path')
-            if structural is None or not structural or wire_schema is None:
-                raise PatchPlanningError('形状诊断缺少可执行的 schema 替换范围')
-            structural = tuple(structural)
-            if not any(structural[:len(target.path)] == target.path
-                       and len(target.path) <= len(structural) for target in normalized):
-                raise PatchPlanningError(
-                    f'替换范围无法修复 {problem.get("error_type")}：'
-                    f'{problem.get("issue_path")}，至少须覆盖 {structural!r}')
-            encoded = json.dumps(problem, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-            if encoded not in diagnostics:
-                diagnostics.append(encoded)
-    return PatchPlan(digest(wire), normalized, tuple(schemas), tuple(diagnostics))
-
-
-#: owner 声明的窄请求组装协议：``(base_wire, targets) -> NarrowPatchRequest``。
-#: 纯函数、确定性的，与该 owner 的验收闸同源派生（Design 的依赖切片由
-#: `novel/stages/stage4/slim.py::design_patch_slice` 提供）。为 None 时
-#: `patch_user_prompt` 保持 CS-patch 宽形状（原请求作固定前缀）。
-NarrowContext = Callable[[dict, list[PatchTarget]], NarrowPatchRequest]
-
-
-#: owner 声明的条目定位协议：``(wire_dict, errors) -> [(path, issues), …] 或
-#: None``——条目用裸元组（stage 包不 import 本模块也能声明协议；分层规则禁
-#: stage2 依赖 novel.llm）。None 交 owner 的正式路由；Design／Hook 局部问题
-#: 无法定位属于规划缺陷，只有登记 whole_answer 的问题才走整份出口。
-#: 返回的条目必须**覆盖全部** errors，否则 ask_json 拒绝进入条目返修
-#: （不静默漏项）。纯函数、确定性——与该 owner 的验收闸同源派生。
-#: 第三元素 ``True``（CS-H H2，RC-58）＝可选目标闭集条目：责任位置须由模型
-#: 决定（`PATCH_ROUTES` 登记 ``optional`` 的规则码），模型只覆盖选中的子集
-#: （至少一个），回答路径必须落在闭集内。
-PatchLocate = Callable[[dict, list[str]], 'list[tuple[tuple[str | int, ...], list[str]]] | list[tuple[tuple[str | int, ...], list[str], bool]] | None']
-
-
-class PatchedAnswer(NamedTuple):
-    """条目级返修的合并采用：基底整份回答＋各 patch 轮回答。
-
-    产物内容＝基底 wire 经 patch 值替换后的合并结果（compiler 确定性合成，
-    I-15）；`refs` 展开为多引用进 provenance／CommitBundle（成本按各 attempt
-    行精确聚合，B1 纪律不变）。``.ref`` 取最后一环，供单引用消费面兜底。
-
-    ``base`` 可为 None（带基底起步且调用方只给了 wire 与摘要时）；`extra_refs`
-    是基底 attempt 的显式引用（CS-H H2 窄复核沿用：合并产物的事实与成本由基底
-    attempt 与 patch 轮共同承载，经 `adoption_refs` 展开进 provenance）。
-    """
-
-    base: DurableAnswer | None
-    patches: tuple[DurableAnswer, ...]
-    extra_refs: tuple[AdoptionRef, ...] = ()
-
-    @property
-    def answers(self) -> tuple[DurableAnswer, ...]:
-        return tuple(a for a in (self.base, *self.patches) if a is not None)
-
-    @property
-    def ref(self) -> AdoptionRef:
-        return (self.patches[-1] if self.patches else self.base).ref
-
-    @property
-    def adoption_refs(self) -> tuple[AdoptionRef, ...]:
-        """provenance 展开：基底 attempt 引用＋各轮回答引用（按贡献顺序）。"""
-        refs = list(self.extra_refs)
-        refs.extend(answer.ref for answer in self.answers)
-        return tuple(refs)
-
-
-def format_json_path(path: tuple[str | int, ...]) -> str:
-    """JSON 路径 → 请求/响应用的字符串形式（``beats[1].effects[0]``）。"""
-    out = ''
-    for part in path:
-        out += f'[{part}]' if isinstance(part, int) else (f'.{part}' if out else str(part))
-    return out
-
-
-def _walk_path(document, path: tuple[str | int, ...]):
-    """沿路径取值；任何一级不存在/类型不符即抛 KeyError（不猜、不创建）。"""
-    node = document
-    for part in path:
-        if isinstance(part, int):
-            if not isinstance(node, list) or not 0 <= part < len(node):
-                raise KeyError(format_json_path(path))
-            node = node[part]
-        else:
-            if not isinstance(node, dict) or part not in node:
-                raise KeyError(format_json_path(path))
-            node = node[part]
-    return node
-
-
-def _merge_patches(wire: dict, patches: list[tuple[tuple[str | int, ...], Any]]) -> dict:
-    """wire 深拷贝后按路径替换条目值（patch 合并的唯一实现）。路径在合并版
-    上不再有效即抛 KeyError——模型改动了结构的 patch 整体拒绝。
-
-    例外（CS-H H3）：**顶层可选键缺失**时允许补建（值＝完整替换对象，如
-    `expression_overrides` 数组——keep 语句泄漏的修复入口是追加 override，wire
-    缺省省略该键）。嵌套路径不享受该例外：中途缺键仍是坏路径。"""
-    merged = json.loads(json.dumps(wire, ensure_ascii=False))
-    for path, value in patches:
-        parent = _walk_path(merged, path[:-1]) if path else merged
-        try:
-            _walk_path(merged, path)     # 存在性先行：坏路径不落半份合并
-        except KeyError:
-            if not (len(path) == 1 and isinstance(path[0], str) and path[0] not in merged):
-                raise
-        parent[path[-1]] = json.loads(json.dumps(value, ensure_ascii=False))
-    return merged
-
-
-_REVISION_BOUNDARY = ('以原请求声明的权威输入为准，只纠正本单位输出中的错误观察或选择；'
-                      '原文及只读上游不可改写，不得扩展原请求授权的事实与输出范围。')
-
-#: 窄请求的段标题（测试与读日志按此识别窄形状；与宽形状的「原请求在前」互斥）。
-NARROW_SECTION = '【窄返修】'
-
-
-def patch_user_prompt(base_user: str, targets: list[PatchTarget],
-                      wire: dict, *, narrow: NarrowPatchRequest | None = None,
-                      baseline: PatchBaseline | None = None,
-                      plan: PatchPlan | None = None,
-                      revision_rules: str = _REVISION_BOUNDARY) -> str:
-    """条目返修轮的 user 面。
-
-    窄形状（CS-H H2，RC-57；``narrow`` 给出）：**不带整份原请求**，只带协议
-    规则、失败条目、依赖切片与合法取值；带基底起步时附基底候选摘要（模型据此
-    核对自己修的是哪一版）。请求规模只与失败条目及其依赖挂钩。
-
-    宽形状（``narrow`` 为 None，CS-patch 原路径）：原始请求原样在前（固定前缀
-    命中供应商缓存，且模型保有源文与协议上下文），返修要求与失败条目追加在后
-    （可变后缀，与 revision_user_prompt 同一缓存纪律）。
-    """
-
-    def _item_json(path: tuple[str | int, ...]) -> str:
-        try:
-            return json.dumps(_walk_path(wire, path), ensure_ascii=False)
-        except KeyError:
-            if len(path) == 1 and path[0] not in wire:
-                return '（字段缺省；按契约补建完整值，缺省不等于 null）'
-            raise
-
-    if plan is not None and (plan.baseline_sha256 != digest(wire)
-                             or tuple(targets) != plan.targets):
-        raise PatchPlanningError('prompt 的基底或目标与冻结修复计划不一致')
-
-    required = '\n'.join(
-        f'- 路径 {format_json_path(t.path)}：当前值 {_item_json(t.path)}；'
-        f'问题：{"；".join(t.issues)}'
-        for t in targets if not t.optional)
-    # 窄形状的可选目标不带「当前值」：闭集的当前值已随依赖切片（目标拍所在场
-    # 全文）送达，逐拍内联会把整份 wire 在请求里写两遍（M3 返修宽度）。
-    optional = '\n'.join(
-        (f'- 路径 {format_json_path(t.path)}：当前值 {_item_json(t.path)}；'
-         f'问题：{"；".join(t.issues)}' if narrow is None else
-         f'- 路径 {format_json_path(t.path)}：问题：{"；".join(t.issues)}（当前值见依赖切片）')
-        for t in targets if t.optional)
-    lines = ['【条目返修】上一版仅以下条目未通过机械校验，只替换这些条目。'
-             if required else '【条目返修】以下条目经免费判定须复核，只替换这些条目。',
-             '输出 JSON：{"patches": [{"path": "路径", "value": 该条目的完整替换}, …]}。',
-             '路径字符串原样照抄；不得改动未列出条目。']
-    lines.append('报错位置仅供诊断；编辑权限只取下面列出的替换路径。提交完整合法对象，'
-                 '省略非法键才能删除它，空数组或 null 不表示删键。上下文材料不授予编辑权；'
-                 '候选中的额外内容是否需要保留，由你依据正式规则决定，不照抄到非法位置。')
-    if plan is not None:
-        lines.append(f'【当前候选】sha256:{plan.baseline_sha256}；'
-                     '本轮替换仅适用于这一版候选。')
-    if required:
-        lines.append('必须逐条覆盖下面列出的全部路径，不得新增路径、不得改动未列出条目。')
-    if optional:
-        lines.append('下面是可选目标闭集：只对你选中的承载位给替换，未选中不给；'
-                     '至少覆盖一个。若同一可选问题已经附在必选替换目标中，可只在该必选目标内'
-                     '解决，不必另选无关条目；合并后仍须完整验收。')
-    if plan is not None and plan.replacement_schemas:
-        # 多个场／状态行通常共用相同子schema。只索引一次完整定义，避免错误数
-        # 增长时把同一份分支约束反复发送；每个schema仍是含所需$defs的独立文档。
-        identifiers: dict[str, str] = {}
-        schemas: dict[str, dict] = {}
-        schema_targets = []
-        for path, schema in plan.replacement_schemas:
-            identifier = identifiers.setdefault(schema, f'unit{len(identifiers) + 1}')
-            schemas.setdefault(identifier, json.loads(schema))
-            schema_targets.append({'path': path, 'schema_id': identifier})
-        lines.append('【替换目标 Schema】每个目标按schema_id查schemas；每份schema独立解释：\n'
-                     + json.dumps({'targets': schema_targets, 'schemas': schemas},
-                                  ensure_ascii=False, separators=(',', ':')))
-    if plan is not None and plan.shape_diagnostics:
-        lines.append('【结构诊断】以下路径是故障证据，不能替代授权目标：\n'
-                     + json.dumps([json.loads(problem) for problem in plan.shape_diagnostics],
-                                  ensure_ascii=False, separators=(',', ':')))
-    if narrow is None:
-        prompt = (base_user
-                  + '\n\n' + '\n'.join(lines) + '\n'
-                  + revision_rules + '\n'
-                  + (required if required else optional)
-                  + (('\n' + optional) if required and optional else ''))
-        return prompt
-    # 窄形状：四块材料（协议规则＋失败条目＋依赖切片＋合法取值），原请求不带。
-    sections = [NARROW_SECTION,
-                '\n'.join(lines),
-                '【协议规则】\n' + narrow.rules,
-                '【合法取值】\n' + narrow.legal_values,
-                '【依赖切片】只含上面条目必需的事实与状态，不是整份输入：\n' + narrow.dependency,
-                revision_rules]
-    if baseline is not None:
-        summary = f'（{baseline.summary}）' if baseline.summary else ''
-        historical = plan is not None and baseline.digest != plan.baseline_sha256
-        sections.insert(1, ('【历史起步基底】' if historical else '【基底】')
-                           + 'owner 已发布版本的修订对照 wire，'
-                           + f'摘要 sha256:{baseline.digest}{summary}；'
-                           + ('该摘要仅说明来源，本轮替换以当前候选摘要为准。' if historical else
-                              '请核对你在修的就是这一版。'))
-    sections.append(required if required else optional)
-    if required and optional:
-        sections.append(optional)
-    return '\n'.join(sections)
-
-
-def accept_patch_answer(answer: DurableAnswer, targets: list[PatchTarget],
-                        wire: dict, validate, *, baseline: PatchBaseline | None = None,
-                        plan: PatchPlan | None = None,
-                        ) -> tuple[dict | None, bool, dict]:
-    """patch 轮回答的接受闸（与 accept_json_answer 同一纪律的条目版）。
-
-    形状闸：顶层 ``{"patches":[...]}``；非可选 path 必须与请求的目标**逐一对应**
-    （全覆盖、无多余、无重复），可选 path（闭集承载位）允许只覆盖选中的子集、
-    但至少覆盖一个；``baseline`` 给出时先核对基底候选摘要（调用方传入的 wire
-    与声明的起步基底必须是同一版——修错版本的 patch 不合并）；随后合并进 wire
-    并过**同一套 owner 校验**。返回 ``(合并版或 None, 是否采纳, acceptance_fields)``
-    ——形状/合并失败时合并版为 None（调用方退整份修订）；合并版产出但校验不过时
-    **仍返回合并版**（它是当前最好的全文，供下一轮整份修订作「上一版」，错误
-    如实进无进展判定）。
-    """
-    fields: dict = {'mode': 'json', 'salvage': 'none', 'errors': ()}
-    if plan is not None and (plan.baseline_sha256 != digest(wire)
-                             or tuple(targets) != plan.targets):
-        raise PatchPlanningError('接受回答时的基底或目标与冻结修复计划不一致')
-    if baseline is not None and digest(wire) != baseline.digest:
-        fields['parse'], fields['errors'] = 'failed', (ValidationIssue(
-            f'patch 基底与声明的候选摘要不一致（声明 {baseline.digest[:12]}…，'
-            f'实得 {digest(wire)[:12]}…）；拒绝合并，交回派或整份复核',
-            code='patch_shape', location=('patches', 'baseline'), owner='runtime'),)
-        return None, False, fields
-    content = answer.content or ''
-    data, decode_error = _decode_json(content)
-    if data is None and not content.strip() and (answer.reasoning or '').strip():
-        data, decode_error = _decode_json(answer.reasoning)
-        fields['salvage'] = 'reasoning'
-    if (plan is not None and isinstance(data, dict)
-            and 'patches' not in data):
-        # 窄请求收到整份回答也不能绕过权限：只提取已授权目标，范围外必须原样。
-        try:
-            extracted = [(target.path, _walk_path(data, target.path)) for target in targets]
-            projected = _merge_patches(wire, extracted)
-        except (KeyError, TypeError, ValueError):
-            projected = None
-        if projected is None or digest(projected) != digest(data):
-            fields['parse'], fields['errors'] = 'failed', (ValidationIssue(
-                '整份回答改动了冻结修复计划以外的内容，拒绝采用',
-                code='patch_shape', location=('patches', 'scope'), owner='runtime'),)
-            return None, False, fields
-        data = {'patches': [{'path': format_json_path(path), 'value': value}
-                            for path, value in extracted]}
-    if not isinstance(data, dict) or not isinstance(data.get('patches'), list):
-        fields['parse'] = 'ok' if data is not None else (
-            'empty' if not content.strip() else 'failed')
-        fields['errors'] = (ValidationIssue(
-            f'patch 形状失败：期望 {{"patches": [...]}}，'
-            f'实得 {decode_error or type(data).__name__}',
-            code='patch_shape', location=('patches',), owner='runtime'),)
-        return None, False, fields
-    requested = {format_json_path(t.path): t.path for t in targets}
-    required = {format_json_path(t.path) for t in targets if not t.optional}
-    optional = {format_json_path(t.path) for t in targets if t.optional}
-    mandatory_issues = {validation_identity(issue) for target in targets if not target.optional
-                        for issue in target.issues}
-    optional_needs_selection = any(
-        validation_identity(issue) not in mandatory_issues
-        for target in targets if target.optional for issue in target.issues)
-    seen: set[str] = set()
-    resolved: list[tuple[tuple[str | int, ...], Any]] = []
-    errors: list[str] = []
-    for entry in data['patches']:
-        if not isinstance(entry, dict) or 'path' not in entry or 'value' not in entry:
-            errors.append(ValidationIssue(
-                f'patch 条目形状失败：须含 path 与 value——{entry!r}',
-                code='patch_shape', location=('patches', len(resolved)),
-                owner='runtime'))
-            continue
-        path_str = str(entry['path'])
-        if path_str not in requested:
-            errors.append(ValidationIssue(
-                f'patch 含未请求的路径 {path_str!r}（只替换列出的失败条目）',
-                code='patch_shape', location=('patches', len(resolved)),
-                owner='runtime'))
-            continue
-        if path_str in seen:
-            errors.append(ValidationIssue(
-                f'patch 路径 {path_str!r} 重复提交',
-                code='patch_shape', location=('patches', len(resolved)),
-                owner='runtime'))
-            continue
-        seen.add(path_str)
-        resolved.append((requested[path_str], entry['value']))
-    errors.extend(ValidationIssue(
-        f'缺少路径 {p!r} 的替换条目', code='patch_shape',
-        location=('patches', 'missing', p), owner='runtime')
-        for p in sorted(required - seen))
-    if optional and optional_needs_selection and not (optional & seen):
-        errors.append(ValidationIssue(
-            '可选目标闭集一个都没有选定承载位（至少覆盖一个）',
-            code='patch_shape', location=('patches', 'optional'), owner='runtime'))
-    if not errors and plan is not None and plan.replacement_schemas:
-        schema_by_path = dict(plan.replacement_schemas)
-        validators: dict[str, Any] = {}
-        for index, (path, value) in enumerate(resolved):
-            encoded = schema_by_path[format_json_path(path)]
-            if encoded not in validators:
-                validators[encoded] = _replacement_validator(encoded)
-            for error in validators[encoded].iter_errors(value):
-                errors.append(ValidationIssue(
-                    f'替换目标 {format_json_path(path)} 的值不符合下发子schema：{error.message}',
-                    code='patch_shape', location=('patches', index, 'value',
-                                                 *error.absolute_path, error.validator),
-                    owner='runtime'))
-    if errors:
-        fields['parse'], fields['errors'] = 'failed', tuple(errors)
-        return None, False, fields
-    try:
-        merged = _merge_patches(wire, resolved)
-    except (KeyError, TypeError, ValueError) as exc:
-        fields['parse'], fields['errors'] = 'failed', (ValidationIssue(
-            f'patch 合并失败：{exc}', code='patch_shape',
-            location=('patches', 'merge'), owner='runtime'),)
-        return None, False, fields
-    merged_errors = list(validate(merged))
-    fields['parse'] = 'ok' if not merged_errors else 'failed'
-    fields['errors'] = tuple(merged_errors)
-    return merged, not merged_errors, fields
 
 
 def revision_user_prompt(base_user: str, previous_answer: str,
                          issues: list[str], *,
                          previous_is_canonical: bool = False,
-                         revision_rules: str = _REVISION_BOUNDARY) -> str:
+                         revision_rules: str = "只修订本工作单元内明确定位的问题；不得改变其它条目语义。") -> str:
     """修订内容轮的 user 面：原请求＋上一版＋typed 问题（R3 裁决 1）。
 
     形状照 `novel/stages/stage5/body.py::write_chapter` 的重写循环：同一份原始
@@ -1888,418 +827,23 @@ def revision_user_prompt(base_user: str, previous_answer: str,
             + '\n请输出修正后的完整回答（同一协议与输出格式）。')
 
 
-def ask_json(session: PaidRequestSession, owner: str, request: ChatRequest,
-             validate, patch: PatchLocate | None = None, *,
-             revision_rules: str = _REVISION_BOUNDARY,
-             review_targets: Sequence[PatchTarget] | None = None,
-             baseline: PatchBaseline | None = None,
-             narrow: NarrowContext | None = None) -> tuple[dict, Any]:
-    """JSON 语义调用的接受循环（调用方组合；Runtime 本体不收业务回调）。
-
-    耐久响应 → 解析 → D5 救回 → 校验；**非空但不过闸**时按条目级返修优先、
-    整份修订按owner登记出口执行：owner 提供 `patch` 定位且全部错误
-    可定位时，只把失败条目发回（原请求作固定前缀，输出仅替换条目），合并版
-    过同一套校验即采纳——返修成本从「整份×轮数」降到「失败条目×轮数」；
-    Design／Hook定位不了即停，patch形状失败只按登记出口处置；其它owner沿用自身
-    定位协议。合并仍失败但根因任务集不重复则继续
-    返修。patch 与整份请求各占一次 `OWNER_REVISION_MAX_ROUNDS` 额度。patch
-    轮收到整份回答（RC-29）先证明范围外内容未变，再按冻结目标提取替换并完整校验；
-    不因回答是整份对象而绕过条目权限。
-    **无进展按根因**（CS-H H2，RC-59）：owner 的验收反馈按根因聚合成任务
-    （`stage4/preflight.py::DesignInspection.feedback`：同一规则码的多处命中是
-    一个任务并附受影响位置），本循环以**任务身份**（规则码＋责任面＋受影响位置
-    集合，`validation_identity`）判定进展——候选字节变化（换了内容、换了句柄
-    仍在同一处失败）不算进展；任务集严格缩小是进展，重复即停。采纳返回
-    ``(data, answer)``：整份路径 `answer` 是 `DurableAnswer`；patch 路径是
-    `PatchedAnswer`（基底＋patch 轮多引用，经 `_as_adoption_refs` 展开进
-    provenance／CommitBundle）。空回答仍走 D5 同轮付费重试。崩溃/重跑按请求身份
-    免费重放：各轮已购回答都会命中，停止结论不重复计费；**回派与重入不重置任何
-    额度**——`seen_heads` 只随本节点本次接受循环累积，上游回派、节点重入都不
-    清零。
-
-    ``review_targets``（CS-H H1b，RC-51）：免费判定要求窄复核的目标（上游条目
-    变化/删除的承载拍、新增条目的可选目标闭集）。首轮校验**已通过**时也据此发
-    一轮条目返修（允许原值不变）；校验未通过时与错误定位的目标合并进同一轮。
-    该轮同样占一次 `OWNER_REVISION_MAX_ROUNDS` 额度（返修轮计入内容轮），不
-    新建第二套返修协议。
-
-    ``baseline``（CS-H H2，RC-57 带基底起步）：条目返修从 **owner 已发布版本的
-    修订对照 wire** 开始，不发整份首轮请求——免费判定已完整预检过该基底时
-    （窄复核沿用），整份新购不再发生。该模式必须给出 `review_targets`（没有
-    复核目标就没有发起理由）；基底的验收错误与复核目标合并进同一轮条目返修。
-    ⚠ 不得为「基底自身预检未过、上游没变」的重入给无目标的起步：那会让每次重启
-    都重新买一轮并重置修订额度（回派与重入不重置任何额度）——该情形走普通接受
-    循环，同请求身份免费重放已购回答。
-
-    ``narrow``（CS-H H2，RC-57 窄输入）：owner 声明的窄请求组装
-    （协议规则＋依赖切片＋合法取值）。给出时 patch 轮**不带整份原请求**与前序
-    材料全文，只带失败条目及其依赖（`patch_user_prompt` 窄形状）。
-    """
-    base_user = request.user
-    if baseline is not None:
-        if not review_targets:
-            raise ValueError('带基底起步的条目返修必须给出窄复核目标（review_targets）；'
-                             '没有复核目标时不发起请求')
-        if digest(baseline.wire) != baseline.digest:
-            # 基底声明自洽性（调用方 bug 即时红）：不拿着对不上的摘要起步。
-            raise ValueError('PatchBaseline.digest 与 wire 不一致（声明 '
-                             f'{baseline.digest[:12]}…，实得 {digest(baseline.wire)[:12]}…）')
-    answer: DurableAnswer | None = None if baseline is not None else session.send(owner, request)
-    revisions = 0
-    seen_heads: list[frozenset[str]] = []
-    targets: list[PatchTarget] | None = None
-    plan: PatchPlan | None = None
-    wire_dict: dict | None = baseline.wire if baseline is not None else None
-    base_answer = answer
-    patches: list[DurableAnswer] = []
-    force_full = False
-    pending_review: list[PatchTarget] = list(review_targets or ())
-    previous = (json.dumps(baseline.wire, ensure_ascii=False, indent=1)
-                if baseline is not None else '')
-    # 带基底起步：基底 attempt 的显式引用（不新记账行；证据不闭合即拒绝起步）。
-    baseline_refs: tuple[AdoptionRef, ...] = ()
-    if baseline is not None and baseline.attempt is not None:
-        baseline_refs = (session.baseline_ref(owner, baseline.attempt),)
-
-    def _result(data):
-        """采纳返回：整份路径是 `DurableAnswer`；条目返修是 `PatchedAnswer`
-        （基底引用＋patch 轮多引用，经 `_as_adoption_refs` 展开进 provenance）。"""
-        if not patches and baseline is None:
-            return answer
-        return PatchedAnswer(base=base_answer, patches=tuple(patches),
-                             extra_refs=baseline_refs)
-
-    def _no_progress_stop(errs: list[str], adopted_answer):
-        """无进展即停（RC-59，按根因）：同一输入下同一根因任务仍在即无进展。
-
-        任务身份由 `validation_identity` 给；owner 的反馈已把同一规则码的多处
-        命中聚合成一个任务（附受影响位置），因此换内容、换句柄仍在同一处失败
-        （候选字节变化）不算进展；不同任务此消彼长仍允许继续（严格缩小是进展）。
-        任务集重复或回到此前集合即停。
-        """
-        # 任务身份（`validation_identity`）：owner 已把同一根因的多处命中聚合
-        # 成一个 carrier，身份与文案/候选字节无关；不同未决任务不因相同前缀被折成一个。
-        heads = sorted(validation_identity(e) for e in errs)
-        current = frozenset(heads)
-        if not (current and current in seen_heads):
-            return current
-        node, scope = semantic_owner_unit(owner)
-        stop = ValidationStop(
-            f'{owner} 校验失败：节点内校验重问后无进展'
-            '（同一根因任务在两轮仍在——持续重现的失败多为契约或'
-            '校验器缺陷，整份重写修不动，即停不无限付费）；原响应已按 '
-            'attempt 留证，剩余修复走 owner patch、契约修订或人工重跑：'
-            f'{errs}',
-            code='validation_no_progress', stage=_stage_of(node), node=node,
-            item=scope, phase='accept',
-            context={'owner': owner, 'rounds': revisions,
-                     'max_rounds': OWNER_REVISION_MAX_ROUNDS,
-                     'issues': list(errs), 'issue_locations': heads})
-        stop.adoption = adopted_answer
-        raise stop
-
-    while True:
-        try:
-            if answer is None:
-                # 带基底起步（RC-57）：基底是 owner 已发布版本的修订对照 wire，
-                # 不发整份请求；按同一套 validate 取其当前验收结果，组织条目返修。
-                baseline_errors = list(validate(wire_dict))
-                data, errors, fields = None, baseline_errors, {
-                    'mode': 'json', 'salvage': 'none', 'errors': tuple(baseline_errors)}
-            elif targets is not None:
-                merged, passed, fields = accept_patch_answer(
-                    answer, targets, wire_dict, validate,
-                    baseline=baseline if not patches else None, plan=plan)
-                data = merged if passed else None
-                errors = list(fields['errors'])
-                if merged is not None:
-                    wire_dict = merged
-                    patches.append(answer)
-                else:
-                    force_full = True
-            else:
-                data, errors, fields = accept_json_answer(answer, validate)
-                base_answer, patches = answer, []
-                previous = (answer.content or '').strip() or (answer.reasoning or '').strip()
-                decoded, _decode_err = _decode_json(previous)
-                wire_dict = decoded if isinstance(decoded, dict) else None
-        except UpstreamOwned as routed:
-            # 回答已耐久且问题归上游：不接受、不在节点内再问；留一条如实的接受记录后上抛。
-            # 带基底起步没有本轮回答（基底的问题归上游时同样如实上抛，不记接受）。
-            if answer is not None:
-                salvaged = not (answer.content or '').strip() and bool((answer.reasoning or '').strip())
-                session.record_acceptance(answer, 'json', parse='failed', errors=routed.errors,
-                                          salvage='reasoning' if salvaged else 'none', accepted=False)
-            raise
-        if answer is not None:
-            session.record_acceptance(answer, fields['mode'], parse=fields['parse'],
-                                      errors=fields['errors'],
-                                      salvage=fields['salvage'],
-                                      accepted=data is not None)
-        if data is not None and not pending_review:
-            return data, _result(data)
-        if answer is not None and data is None and not (answer.cached or fields['parse'] != 'empty'):
-            # D5：空回答救回失败——同一内容轮内付费重试（占尝试额度，如实计费）。
-            answer = session.send(owner, request)
-            continue
-        # 校验未过，或免费判定（上游差异）要求一轮窄复核：有界修订轮（允许原值
-        # 不变）。同一轮内合并窄复核目标与错误定位目标，不新建返修协议（I-35）。
-        adoption = (PatchedAnswer(base=base_answer, patches=tuple(patches),
-                                  extra_refs=baseline_refs)
-                    if (patches or baseline is not None) else base_answer)
-        current = _no_progress_stop(list(errors), adoption)
-        node, scope = semantic_owner_unit(owner)
-        heads = sorted(validation_identity(e) for e in errors)
-        stop_context = {'owner': owner, 'rounds': revisions,
-                        'max_rounds': OWNER_REVISION_MAX_ROUNDS,
-                        'issues': list(errors), 'issue_locations': heads}
-        if revisions >= OWNER_REVISION_MAX_ROUNDS:
-            stop = ValidationStop(
-                f'{owner} 校验失败：节点内校验重问轮（≤{OWNER_REVISION_MAX_ROUNDS}）'
-                '已耗尽仍不过闸，停止；原响应已留证，剩余修复走 owner patch 或人工'
-                f'重跑：{errors}', code='validation_rounds_exhausted',
-                stage=_stage_of(node), node=node, item=scope, phase='accept',
-                context=stop_context)
-            stop.adoption = adoption
-            raise stop
-        revisions += 1
-        if current:
-            seen_heads.append(current)
-        if patches:
-            previous = json.dumps(wire_dict, ensure_ascii=False, indent=1)
-        round_targets: list[PatchTarget] = list(pending_review)
-        pending_review = []
-
-        def plan_stop(reason: str):
-            stop = ValidationStop(
-                f'{owner} 返修规划失败，未发起下一次请求：{reason}',
-                code='repair_plan_invalid', stage=_stage_of(node), node=node,
-                item=scope, phase='accept',
-                context={**stop_context, 'reason': reason})
-            stop.adoption = adoption
-            raise stop
-
-        # 路由登记是 Stage4 的唯一策略源；不能因碰巧有路径绕过 stop/whole_answer。
-        # 其它 owner 的定位契约仍由各自声明，不能套用 Stage4 的规则码名册。
-        strict_routes = owner in ('design', 'hook_design')
-        routes = [PATCH_ROUTES.get(getattr(error, 'code', None)) for error in errors]
-        if strict_routes and any(route is None or route == 'stop' for route in routes):
-            plan_stop('规则未登记或没有本节点可编辑面：'
-                      + repr([getattr(error, 'code', None) for error in errors]))
-        whole_answer = force_full or (strict_routes and 'whole_answer' in routes)
-        if whole_answer:
-            round_targets = []
-        if patch is not None and wire_dict is not None and not whole_answer and errors:
-            located = patch(wire_dict, list(errors))
-            # 定位器须覆盖全部问题，不能通过局部修复静默丢掉其它失败
-            # （条目可能是二元组或带可选目标标志的三元组，按下标取）。
-            if located and {e for entry in located for e in entry[1]} == set(errors):
-                for entry in located:
-                    path, issues = tuple(entry[0]), entry[1]
-                    optional = bool(entry[2]) if len(entry) > 2 else False
-                    round_targets.append(PatchTarget(
-                        path=path, issues=tuple(issues), optional=optional))
-            elif strict_routes:
-                plan_stop('条目定位器未给出覆盖全部问题的合法编辑范围')
-        # 复核目标与定位器结果各自合法，合成后仍须折叠同路径及祖孙路径；
-        # 必选子项的问题并入完整父项，不能靠响应顺序或容忍缺键掩盖冲突。
-        targets = normalize_patch_targets(round_targets) or None
-        plan = None
-        force_full = False
-        if targets:
-            try:
-                frozen_targets, frozen_digest = tuple(targets), digest(wire_dict)
-                narrow_context = narrow(wire_dict, targets) if narrow is not None else None
-                if tuple(targets) != frozen_targets or digest(wire_dict) != frozen_digest:
-                    raise PatchPlanningError('依赖切片修改了候选或替换权限')
-                plan = prepare_patch_plan(
-                    wire_dict, targets, errors=errors,
-                    wire_schema=narrow_context.wire_schema if narrow_context is not None else None)
-            except (PatchPlanningError, KeyError, TypeError, ValueError) as exc:
-                plan_stop(str(exc))
-            targets = list(plan.targets)
-            next_user = patch_user_prompt(base_user, targets, wire_dict,
-                                          narrow=narrow_context, baseline=baseline, plan=plan,
-                                          revision_rules=revision_rules)
-        else:
-            if strict_routes and not whole_answer:
-                plan_stop('没有可执行条目计划，且不属于整份出口闭集')
-            next_user = revision_user_prompt(base_user, previous, list(errors),
-                                             revision_rules=revision_rules)
-        request = ChatRequest(
-                model=request.model, system=request.system,
-                user=next_user,
-                reasoning_effort=request.reasoning_effort, thinking=request.thinking,
-                json_mode=request.json_mode, max_tokens=request.max_tokens,
-                temperature=request.temperature, sampling_nonce=request.sampling_nonce)
-        answer = session.send(owner, request)
-
-
-def ask_text_once(session: PaidRequestSession,
-                  owner: str, request: ChatRequest,
-                  validate: Callable[[str], Sequence[str]] | None = None,
-                  ) -> tuple[str | None, list[str], DurableAnswer]:
-    """文本语义调用的一次耐久应答：空回答计失败 attempt，由调用方同轮重发。
-
-    ``validate`` 是该文本节点的机械校验（判据仍是 stage 的纯函数，Runtime 不识别规则）：
-    给出时，非空回答的校验错误进入接受记录（``accepted=false``、``parse='failed'``），
-    返回的错误列表即这些错误——此前只看「回答非空」就记 ``accepted=true``，被机械闸拒绝
-    的首稿也被记成已接受（RC-54）。不给 validate 时保持原语义（只判空）。
-    """
-    answer = session.send(owner, request)
-    text = answer.text
-    errors = [] if text is not None else ['响应为空']
-    parse = 'ok' if text is not None else 'empty'
-    if text is not None and validate is not None:
-        errors = [str(error) for error in validate(text)]
-        parse = 'failed' if errors else 'ok'
-    session.record_acceptance(answer, mode='text', parse=parse, errors=tuple(errors),
-                              accepted=text is not None and not errors)
-    return text, errors, answer
-
-
 def _content_sha256(content: str | None) -> str | None:
     if content is None:
         return None
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
-def _work_unit_evidence(root: Path, owner: str, identity: str) -> dict | None:
-    """源根工作单元的耐久采用证据（R8a-6）：请求 blob＋attempt 响应＋成本行。
-
-    agent 流的购买不落 ``runtime/request_<identity>.json``——同请求身份的
-    已购事实完整留在源根的工作单元账里：turn（``request_sha256``）→ ok
-    attempt（``request_fingerprint``＋响应 blob）→ 源 base 成本账里按
-    attempt_id 关联的唯一真实付费行。三方齐全返回证据字典；**该身份在源根
-    没有轮**返回 None（交下一档）；账损坏（blob 摘要漂移、请求工作包缺失、
-    成本账有尾）显式拒绝——不静默降档（I-34）。
-    """
-    node, scope = semantic_owner_unit(owner)
-    source_base = root.parent
-    source_sid = root.name.replace('/', '_')
-    if workflow_manifest(source_base) is None:
-        return None
-    unit = WorkUnitBudget(source_base, source_sid, node, 'executor', scope, read_only=True)
-    ledger = unit._read()
-    turn = next((t for t in reversed(ledger.turns)
-                 if t.request_sha256 == identity), None)
-    if turn is None or turn.request_payload_sha256 is None:
-        return None
-    attempt = next((a for a in reversed(turn.attempts)
-                    if a.request_fingerprint == identity and a.outcome == 'ok'
-                    and a.response_sha256), None)
-    if attempt is None:
-        return None
-    blob_path = unit.directory / f'{attempt.response_sha256}.json'
-    # 复用工作单元的快照读面：它核摘要、unit/turn 身份并支持 Windows
-    # 扩展长度路径。普通 Path.is_file/read_text 会把 >MAX_PATH 的真实 blob
-    # 误判成缺失；不能因此要求重购或绕过证据核验。
-    try:
-        request_payload = unit.request_payload(turn.turn_id)
-    except WorkUnitRefused as exc:
-        raise ValueError(
-            f'{owner} 采用源 {root} 的工作单元请求工作包缺失或损坏（账损坏），拒绝采用') from exc
-    try:
-        payload = unit.attempt_request_payload(turn.turn_id, attempt.attempt_id)
-    except WorkUnitRefused as exc:
-        raise ValueError(
-            f'{owner} 采用源 {root} 的工作单元响应证据身份漂移或缺失，拒绝采用') from exc
-    rows, partial = read_cost_snapshot(source_base, readonly=True)
-    if partial:
-        raise ValueError(f'采用源 {root} 的成本账有未提交尾，先恢复再采用')
-    original = [r for r in rows
-                if r.get('attempt_id') == attempt.attempt_id
-                and r.get('request_fingerprint') == identity]
-    if len(original) != 1 or original[0].get('cached') \
-            or original[0].get('outcome') != 'ok':
-        raise ValueError(
-            f'{owner} 采用源 {root} 缺原成本关联（attempt_id＋指纹无唯一'
-            '真实付费行）；付费状态未知，拒绝采用')
-    if (payload.get('request_payload') != request_payload
-            or original[0].get('request_model') != request_payload.get('model')
-            or original[0].get('response_sha256') != _content_sha256(payload.get('response', {}).get('content'))):
-        raise ValueError(f'{owner} 已购请求工作包与成本身份不一致，拒绝采用')
-    return {'unit': unit, 'turn': turn, 'attempt': attempt, 'payload': payload,
-            'cost_row': original[0], 'blob_rel': blob_path.relative_to(
-                source_base).as_posix()}
-
-
-
-def purchased_baseline(root: Path, owner: str, identity: str) -> dict:
-    """只读核验请求、响应、ledger 三方；无同身份真实购买时明确拒绝。"""
-    try:
-        return _purchased_baseline(root, owner, identity)
-    except (ValueError, OSError) as exc:
-        node, scope = semantic_owner_unit(owner)
-        raise RevisionEvidenceStop(str(exc), code='revision_evidence_invalid', stage=_stage_of(node),
-                                   node=node, item=scope, phase='accept',
-                                   context={'owner': owner, 'baseline_request_sha256': identity}) from exc
-
-
-def _purchased_baseline(root: Path, owner: str, identity: str) -> dict:
-    evidence = _work_unit_evidence(root, owner, identity)
-    if evidence is not None:
-        return {'identity': identity,
-                'content': evidence['payload']['response'].get('content') or '',
-                'response_sha256': evidence['attempt'].response_sha256,
-                'source_root': str(root), 'attempt_id': evidence['attempt'].attempt_id}
-    path = root / 'runtime' / f'request_{identity}.json'
-    if not path.is_file():
-        raise ValueError(f'{owner} 没有当前请求身份的已购基线，拒绝修订')
-    row = Str06Repository.read_external(path)
-    rows, tail = read_cost_snapshot(root.parent, readonly=True)
-    paid = [r for r in rows if r.get('attempt_id') == row.get('attempt_id')
-            and r.get('request_fingerprint') == identity and not r.get('cached')
-            and r.get('outcome') == 'ok']
-    if (tail or len(paid) != 1 or row.get('identity') != identity
-            or row.get('status') != 'answered'
-            or digest(row.get('content')) != row.get('content_sha256')
-            or paid[0].get('response_sha256') != _content_sha256(row.get('content'))):
-        raise ValueError('已购基线身份、响应或成本证据不闭合')
-    return {'identity': identity, 'content': row['content'],
-            'response_sha256': digest(row['content']),
-            'source_root': str(root), 'attempt_id': row['attempt_id']}
-
-def _same_json_payload(path: Path, content: str) -> bool:
-    """wire 文件与已购响应内容是否同一份 JSON 载荷（语义相等，不管序列化）。"""
-    try:
-        return Str06Repository.read_external(path) == json.loads(content)
-    except (ValueError, OSError):
-        return False
-
-
-def _unique(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f'响应 JSON 重复键：{key}')
-        result[key] = value
-    return result
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 二、候选运行上下文：身份、来源账与 provenance 铸造
-# ═════════════════════════════════════════════════════════════════════════════
-
 def _as_adoption_refs(ref) -> tuple[AdoptionRef, ...]:
-    """显式引用归一化：接受 `AdoptionRef`、自带 prompt 原文的 `DurableAnswer`，
-    或条目返修的 `PatchedAnswer`（展开为基底＋各 patch 轮的多引用——CS-patch：
-    合并产物的事实与成本由全部贡献回答共同承载，B1 精确 attempt 聚合不变）。
-    """
-    if isinstance(ref, PatchedAnswer):
-        return ref.adoption_refs
     if isinstance(ref, DurableAnswer):
-        return (ref.ref,)
+        ref = ref.ref
+    if not isinstance(ref, AdoptionRef):
+        raise TypeError('正式采用只接受当前本根的真实耐久响应引用')
+    if not all((ref.owner, ref.model, ref.sid, ref.request_sha256, ref.unit_id,
+                ref.turn_id, ref.attempt_id, ref.response_sha256, ref.request_fingerprint)):
+        raise ProvenanceRefused('正式采用必须绑定当前本根的完整请求、内容轮和响应身份')
+    if ref.request_sha256 != ref.request_fingerprint:
+        raise ProvenanceRefused('正式采用的请求身份与成本账请求指纹不一致')
     return (ref,)
-
-
-def _as_adoption_ref(ref) -> AdoptionRef:
-    """单引用消费面（ask_text／旧路径）：`PatchedAnswer` 取最后一环。"""
-    if isinstance(ref, PatchedAnswer):
-        return ref.ref
-    if isinstance(ref, DurableAnswer):
-        return ref.ref
-    return ref
 
 
 class CandidateRunContext:
@@ -2495,8 +1039,7 @@ class CandidateRunContext:
                 owner=ref.owner, node=semantic_owner_unit(ref.owner)[0],
                 request_sha256=ref.request_sha256, unit_id=ref.unit_id,
                 turn_id=ref.turn_id, attempt_id=ref.attempt_id,
-                response_sha256=ref.response_sha256, model=ref.model or 'unknown',
-                historical=ref.historical, patch=ref.patch) for ref in refs),
+                response_sha256=ref.response_sha256, model=ref.model) for ref in refs),
             outputs=(outputs if outputs is not None
                      else (CommitOutputRef(key=rel, sha256=artifact_sha256),)),
             run_id=run_id, created_at=created_at, seal='0' * 64)
@@ -2511,6 +1054,8 @@ def workflow_to_disk(workflow: CandidateWorkflow) -> dict:
     return {'epoch': dict(workflow.epoch._asdict()),
             'contract_identity': workflow.contract_identity,
             'source_identity': workflow.source_identity,
+            'source_root_sha1': workflow.source_root_sha1,
+            'source_content_sha256': workflow.source_content_sha256,
             'created_at': workflow.created_at}
 
 
@@ -2524,7 +1069,7 @@ def workflow_from_disk(data: Any) -> CandidateWorkflow:
     """
     if not isinstance(data, dict) or not isinstance(data.get('epoch'), dict):
         raise ProvenanceRefused('候选 workflow 记录形状损坏')
-    missing = [key for key in ('contract_identity', 'source_identity', 'created_at')
+    missing = [key for key in ('contract_identity', 'source_identity', 'source_root_sha1', 'source_content_sha256', 'created_at')
                if key not in data]
     if missing:
         raise ProvenanceRefused(f'候选 workflow 记录形状损坏：缺键 {missing}')
@@ -2536,31 +1081,26 @@ def workflow_from_disk(data: Any) -> CandidateWorkflow:
     return CandidateWorkflow(epoch=epoch,
                              contract_identity=data['contract_identity'],
                              source_identity=data['source_identity'],
+                             source_root_sha1=data['source_root_sha1'],
+                             source_content_sha256=data['source_content_sha256'],
                              created_at=data['created_at'])
 
 
 def init_or_resume_candidate_workflow(
-        *, repository, base, code: str, root_sha1: str, source_identity: str,
+        *, repository, base, code: str, root_sha1: str, source_identity: str, source_content_sha256: str,
         task_id: str, configured_model: str = '', created_at: int,
         readonly: bool = False) -> tuple[CandidateWorkflow, CandidateRunContext]:
-    """候选根的 workflow 身份生命周期（F7a-2；F7a-3 的历史采用建立在同一记录上）。
+    """当前根的workflow身份生命周期：相同请求可恢复，源或契约漂移必须新根重建。
 
     · 无记录：首开 epoch（`initial`）并落盘记录；
     · 记录有效且代码未漂移：**原 epoch 原样复用**——身份未漂移不开新 epoch，
       累计的整书额度与工作单元账跨调用连续（Q-10）；
     · 代码漂移：按 `code_drift` 滚动 epoch（parent 会话不变），重写记录；
-    · 契约表漂移：先阻断，已登记变化经 `contract-upgrade` 免费计划与显式应用
-      开新 epoch；未登记变化仍拒绝。源身份变化不能借升级绕过。
+    · 契约或源身份漂移：拒绝当前根，旧根原字节归档，产物在新根重新生成。
 
     ledger 以 epoch 的 `session_run_id` 为 parent：每次 CLI 调用是新 run，
     epoch 是稳定窗口，与正式 AgentRun 的 run／parent 分工同构。
     """
-    if repository.path(paths.CONTRACT_UPGRADE_PENDING_REL).exists():
-        raise UpgradeRefused(
-            '同根契约升级尚未完成；请重放 contract-upgrade 原计划，'
-            '尚未开始归档的恢复日志也可显式放弃（--abort-pending），禁止节点执行',
-            hint='novel.cli contract-upgrade <sid> --base <Output> --apply ... '
-                 '（同一 subject）或 --abort-pending')
     try:
         record = workflow_from_disk(repository.read(WORKFLOW_REL))
     except FileNotFoundError:
@@ -2570,11 +1110,13 @@ def init_or_resume_candidate_workflow(
             code_version=code, task_id=task_id,
             session_run_id=uuid.uuid4().hex, created_at=created_at)
         workflow = open_candidate_workflow(
-            epoch=epoch, source_identity=source_identity, created_at=created_at)
+            epoch=epoch, source_identity=source_identity, source_root_sha1=root_sha1,
+            source_content_sha256=source_content_sha256, created_at=created_at)
         repository.write(WORKFLOW_REL, workflow_to_disk(workflow))
     else:
         problems = check_candidate_workflow(record, code_version=code)
-        if record.source_identity != source_identity:
+        if (record.source_identity != source_identity or record.source_root_sha1 != root_sha1
+                or record.source_content_sha256 != source_content_sha256):
             problems.append(
                 '源输入身份与根初始化时不一致：旧根的已购采用不覆盖新输入，'
                 '请用独立候选根重建，不原地升级')
@@ -2614,12 +1156,7 @@ def init_or_resume_candidate_workflow(
 # import `contracts.schema` 包体（那会成环）⇒ 摘要算法落在消费侧，与
 # `open_candidate_epoch` 等调用方同模块。
 #
-# 【身份必须逐字复算 F7e 冻结基线】盘上 `runtime/candidate_workflow.json` 记的
-# 正是 `04b6fb22…` 那个 SHA-256；算法一漂移，全部既有候选根都会被
-# `check_candidate_workflow` 判「契约表已漂移」而拒绝消费已购证据——那是行为
-# 变化，不是搬家。因此：凡激活表没有的格（免费节点的 `session_scope`、
-# `assemble` 的 `owner`）按 `STR06_NODE_IDENTITY_EXTRAS` 补齐，其余一律现取。
-# ═════════════════════════════════════════════════════════════════════════════
+# 身份只由现役登记计算；不为旧根补齐历史身份。
 
 def _family_key(rel: str) -> str:
     for key, family in STR06_PATH_FAMILIES.items():
@@ -2636,7 +1173,6 @@ def _writer_of(rel: str) -> str:
 
 
 def _node_identity(node_id: str, node) -> dict:
-    extra = STR06_NODE_IDENTITY_EXTRAS.get(node_id, {})
     return {
         'stage': node.stage, 'owner': candidate_node_owner(node_id),
         'paid': node.paid,
@@ -2646,7 +1182,7 @@ def _node_identity(node_id: str, node) -> dict:
         'flags': list(node.flags), 'paid_flags': list(node.paid_flags),
         'lifecycle': {
             'unit_kind': node.lifecycle.unit_kind,
-            'session_scope': extra.get('session_scope', node.lifecycle.session_scope),
+            'session_scope': node.lifecycle.session_scope,
             'executor_content_limit': node.lifecycle.executor_content_limit,
             'recovery_entries': list(node.lifecycle.recovery_entries)},
     }
@@ -2669,7 +1205,7 @@ def candidate_contract_identity() -> str:
     """候选契约表的确定性身份：节点表 + 产物表 + RC 版式的 SHA-256。
 
     表内任何一行变化都会改变它——候选根初始化时记档，之后复校；
-    漂移即拒绝消费旧根的采用结论（F7a-3 的阻断条件之一）。
+    漂移即拒绝当前根的采用结论，不从旧输出补齐当前契约身份。
     """
     return digest({
         'rc': STR06_RC_VERSION,
@@ -2753,14 +1289,15 @@ def roll_candidate_epoch(prev: CandidateEpoch, *, reason: str, code_version: str
 
 
 def open_candidate_workflow(*, epoch: CandidateEpoch, source_identity: str,
-                            created_at: int) -> CandidateWorkflow:
+                            source_root_sha1: str, source_content_sha256: str, created_at: int) -> CandidateWorkflow:
     """在候选根初始化 workflow 身份记录（调用方负责落盘与路径）。"""
     _validate_epoch(epoch)
     if not re.fullmatch(r'[0-9a-f]{64}', source_identity):
         raise ValueError('source_identity 必须是 64 位十六进制（完整字节 SHA-256）')
     return CandidateWorkflow(epoch=epoch,
                              contract_identity=candidate_contract_identity(),
-                             source_identity=source_identity, created_at=created_at)
+                             source_identity=source_identity, source_root_sha1=source_root_sha1,
+                             source_content_sha256=source_content_sha256, created_at=created_at)
 
 
 def check_candidate_workflow(record: CandidateWorkflow, *,
@@ -2781,9 +1318,11 @@ def check_candidate_workflow(record: CandidateWorkflow, *,
     current = candidate_contract_identity()
     if record.contract_identity != current:
         problems.append('候选契约表已漂移：根初始化时的表身份与当前不一致，'
-                        '需按 contract_drift 滚动 epoch 并重新对账')
+                        '当前契约须在新根重新生成')
     if record.epoch.code_version != code_version:
         problems.append('代码身份漂移：需按 code_drift 滚动 epoch 后再续跑')
-    if not re.fullmatch(r'[0-9a-f]{64}', record.source_identity):
+    if (not re.fullmatch(r'[0-9a-f]{64}', record.source_identity)
+            or not re.fullmatch(r'[0-9a-f]{40}', record.source_root_sha1)
+            or not re.fullmatch(r'[0-9a-f]{64}', record.source_content_sha256)):
         problems.append('源输入身份缺失或损坏：拒绝采用旧根结果')
     return problems

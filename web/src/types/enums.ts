@@ -50,6 +50,7 @@ export interface EnumJobKind {
 }
 
 export interface EnumsResponse {
+  pipeline_steps: string[]
   job_kinds: Record<string, EnumJobKind>
   actions: EnumAction[]
   /**

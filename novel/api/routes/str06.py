@@ -23,10 +23,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from contracts.schema.api import (
-    Str06BlueprintView, Str06CandidateList, Str06CharactersView, Str06ChapterView,
-    Str06DeliveryView, Str06DesignView, Str06HookView, Str06IrNavView,
-    Str06NamingView, Str06RunView,
+    StoryArtifactView, Str06CandidateList, Str06DeliveryView, Str06RunView,
 )
+
 from novel.api.deps import get_base
 from novel.errors import UpstreamMissing
 from novel.views import str06 as views
@@ -56,56 +55,30 @@ def get_run(candidate: str, base: str = Depends(get_base)) -> Str06RunView:
     return views.run_view(base, candidate)
 
 
-@router.get('/{candidate}/characters', response_model=Str06CharactersView)
-def get_characters(candidate: str, base: str = Depends(get_base)) -> Str06CharactersView:
-    """Characters v6：人物条目（称谓时间窗）与源名称结构。"""
+@router.get('/{candidate}/source-story', response_model=StoryArtifactView)
+def get_source_story(candidate: str, base: str = Depends(get_base)) -> StoryArtifactView:
     _require_candidate(base, candidate)
-    return views.characters_view(base, candidate)
+    return views.source_story_view(base, candidate)
 
 
-@router.get('/{candidate}/blueprint', response_model=Str06BlueprintView)
-def get_blueprint(candidate: str, base: str = Depends(get_base)) -> Str06BlueprintView:
-    """Blueprint v17：世界约束、逐章 beats 与因果边。"""
+@router.get('/{candidate}/target-story', response_model=StoryArtifactView)
+def get_target_story(candidate: str, base: str = Depends(get_base)) -> StoryArtifactView:
     _require_candidate(base, candidate)
-    return views.blueprint_view(base, candidate)
+    return views.target_story_view(base, candidate)
 
 
-@router.get('/{candidate}/design', response_model=Str06DesignView)
-def get_design(candidate: str, base: str = Depends(get_base)) -> Str06DesignView:
-    """graph／binding：场景驱动与导演说明、章目的、Hook 选择与 Binding 条目。"""
-    _require_candidate(base, candidate)
-    return views.design_view(base, candidate)
-
-
-@router.get('/{candidate}/ir', response_model=Str06IrNavView)
-def get_ir(candidate: str, base: str = Depends(get_base)) -> Str06IrNavView:
-    """WriterBookIR 导航：章预算、章目的、逐场摘要行与称谓释放位置表。"""
-    _require_candidate(base, candidate)
-    return views.ir_nav_view(base, candidate)
-
-
-@router.get('/{candidate}/chapters/{ordinal}', response_model=Str06ChapterView)
-def get_chapter(ordinal: int, candidate: str,
-                base: str = Depends(get_base)) -> Str06ChapterView:
-    """一章的正文与章级回执（机械范围、语义未评、篇幅披露）。"""
+@router.get('/{candidate}/chapters/{ordinal}', response_model=StoryArtifactView)
+def get_chapter(ordinal: int, candidate: str, base: str = Depends(get_base)) -> StoryArtifactView:
     _require_candidate(base, candidate)
     if ordinal < 1:
         raise HTTPException(status_code=400, detail='章序必须从 1 开始')
     return views.chapter_view(base, candidate, ordinal)
 
 
-@router.get('/{candidate}/hook', response_model=Str06HookView)
-def get_hook(candidate: str, base: str = Depends(get_base)) -> Str06HookView:
-    """Hook 成文与机械回执。"""
+@router.get('/{candidate}/hook', response_model=StoryArtifactView)
+def get_hook(candidate: str, base: str = Depends(get_base)) -> StoryArtifactView:
     _require_candidate(base, candidate)
     return views.hook_view(base, candidate)
-
-
-@router.get('/{candidate}/naming', response_model=Str06NamingView)
-def get_naming(candidate: str, base: str = Depends(get_base)) -> Str06NamingView:
-    """NameMap v5：交付变换契约的只读投影。"""
-    _require_candidate(base, candidate)
-    return views.naming_view(base, candidate)
 
 
 @router.get('/{candidate}/delivery', response_model=Str06DeliveryView)
@@ -142,11 +115,12 @@ def get_book(candidate: str, download: bool = Query(default=False),
     同一条命名规则不该有两个落点（`R-11.4`）。
     """
     _require_candidate(base, candidate)
-    path = views.final_text_path(base, candidate)
-    if path is None:
+    delivery = views.final_text_delivery(base, candidate)
+    if delivery is None:
         raise UpstreamMissing(
             f'候选根 {candidate} 还没有成书文件',
             hint='跑到 stage7 assemble 且 manifest 提交后才有成书；'
                  '用 /delivery 看就绪状态')
-    headers = _download_headers(path.name) if download else None
-    return PlainTextResponse(path.read_text(encoding='utf-8'), headers=headers)
+    filename, verified_text = delivery
+    headers = _download_headers(filename) if download else None
+    return PlainTextResponse(verified_text, headers=headers)

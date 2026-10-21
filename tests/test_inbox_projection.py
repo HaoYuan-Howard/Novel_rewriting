@@ -134,18 +134,18 @@ def test_missing_blueprint_projection_inbox_points_only_to_free_materialization(
     from novel.orchestrator import inbox_projection as I
     assert not hasattr(I, '_stage2_projection_recovery_items')
 
-    from contracts.artifacts import STR06_STAGE2_BLUEPRINTS, RETIRED_ARTIFACT_PATHS
+    from contracts.story_paths import SOURCE_STORY
     from novel import paths
 
-    invalid = paths.invalid_of(STR06_STAGE2_BLUEPRINTS)
-    store = _InvalidStore(present={STR06_STAGE2_BLUEPRINTS, invalid}, versions={})
+    invalid = paths.invalid_of(SOURCE_STORY)
+    store = _InvalidStore(present={SOURCE_STORY, invalid}, versions={})
     rows = I._invalid_items(store, 'stage2')
     assert len(rows) == 1 and rows[0].kind == 'rejected'
     # 恢复文案不许指旧链节点的提升路，也不许暗示一次新的付费抽取。
     assert '没有可执行的 INVALID 提升入口' in rows[0].how
     assert '--revalidate' not in rows[0].how
     assert 'stage2.characters' not in rows[0].how
-    assert RETIRED_ARTIFACT_PATHS['stage2.blueprint_character_projection']
+    assert rows[0].rule == 'str06.stage2.compile'
 
 
 def test_old_blueprint_has_no_separate_migration_inbox():
@@ -156,11 +156,11 @@ def test_old_blueprint_has_no_separate_migration_inbox():
 
 def test_unknown_input_invalid_cannot_suppress_normal_validation_inbox():
     """来源未知仍展示人工复验；是否可提升由 producer 判定。"""
-    from contracts.artifacts import STR06_STAGE2_BLUEPRINTS
+    from contracts.story_paths import SOURCE_STORY
     from novel import paths
     from novel.orchestrator import inbox_projection as I
 
-    invalid_rel = paths.invalid_of(STR06_STAGE2_BLUEPRINTS)
+    invalid_rel = paths.invalid_of(SOURCE_STORY)
 
     class Store:
         @staticmethod
@@ -247,7 +247,7 @@ def test_the_fallback_how_only_names_commands_that_can_actually_be_built():
     checked = 0
     for stage in STAGES:
         text = _human_how(stage)
-        named = _re.findall(r'`([a-z0-9]+\.[a-z-]+) (--[a-z-]+)`', text)
+        named = _re.findall(r'`([a-z0-9_]+(?:\.[a-z0-9_]+){1,2}) (--[a-z-]+)`', text)
         for node, flag in named:
             flags = [flag, placeholder_for(flag)] if flag in VALUED_FLAGS else [flag]
             build_argv(node, 'SID', flags, base='.', placeholders=True)
@@ -279,8 +279,8 @@ def test_verification_rows_are_disclosure_not_blocking():
     classified = I._classify(item)
     assert classified.delivery_effect == 'disclosure'
     blocking = I._classify(InboxItem(
-        kind='invalid', stage='stage6', chapter=None,
-        rule='stage6.hook', what='INVALID', how='auto revalidate'))
+        kind='invalid', stage='stage4', chapter=None,
+        rule='str06.stage4.hook_compile', what='INVALID', how='auto revalidate'))
     assert blocking.delivery_effect == 'blocking'
 
 
@@ -309,17 +309,17 @@ class _InvalidStore:
 
 def test_invalid_row_never_invents_a_promotion_command_nor_reads_schema_version():
     """现役节点没有 INVALID 提升入口：恢复说明如实写明，不得拼出不存在的命令。"""
-    from contracts.artifacts import STR06_STAGE2_BLUEPRINTS
+    from contracts.story_paths import SOURCE_STORY
     from novel import paths
     from novel.orchestrator import inbox_projection as I
 
-    invalid = paths.invalid_of(STR06_STAGE2_BLUEPRINTS)
+    invalid = paths.invalid_of(SOURCE_STORY)
     store = _InvalidStore(
-        present={STR06_STAGE2_BLUEPRINTS, invalid}, versions={},
+        present={SOURCE_STORY, invalid}, versions={},
         refuse_version_read=True)
     rows = I._invalid_items(store, 'stage2')
     assert len(rows) == 1 and rows[0].kind == 'rejected'
-    assert rows[0].rule == 'str06.stage2.compile'  # B2：Blueprint 的 writer 是 compile（D9）
+    assert rows[0].rule == 'str06.stage2.compile'  # SourceStory唯一发布者。
     assert '_rounds/' in rows[0].how
     # 新链无 --revalidate 提升口：how 必须明说不存在入口，而不是拼假命令。
     assert '没有可执行的 INVALID 提升入口' in rows[0].how
@@ -340,14 +340,14 @@ def test_every_human_only_row_offers_something_the_operator_can_actually_run():
     # 语料此刻没有 human_only 是合法盘面，不应把偶然有行当作契约。
     # 用可控报告直接验证生产路径。
     finding = SimpleNamespace(
-        wontfix=None, unresolved_rounds=0, owner='stage6', detail='候选需人工判断')
+        wontfix=None, unresolved_rounds=0, owner='stage4', detail='局部表达语义需人工判断')
     line = SimpleNamespace(
         status='hit', sev='info', remediation='human', fix=None,
-        rule='hook_candidate_contradiction', findings=[finding])
-    rows = I._report_items(SimpleNamespace(rules=[line]), 'stage6')
+        rule='target_expression_review', findings=[finding])
+    rows = I._report_items(SimpleNamespace(rules=[line]), 'stage4')
     assert len(rows) == 1 and rows[0].kind == 'human_only'
     for item in rows:
-        for node, flag in _re.findall(r'`([a-z0-9]+\.[a-z-]+) (--[a-z-]+)`', item.how):
+        for node, flag in _re.findall(r'`([a-z0-9_]+(?:\.[a-z0-9_]+){1,2}) (--[a-z-]+)`', item.how):
             spec = NODES.get(node)
             assert spec is not None, f'{item.rule} 指向不存在的节点 {node}'
             assert flag in spec.flags, f'{item.rule} 指的 {node} {flag} 不在该节点的 flags 里'
@@ -361,13 +361,14 @@ def test_a_hard_local_hit_with_a_fix_route_is_repairable_not_human_only():
     from novel.orchestrator import inbox_projection as I
 
     fix = SimpleNamespace(
-        node='stage2.global', flags=['--apply-edit', 'stage2/global_edit.json'],
+        node='str06.stage4.hook_compile', flags=[],
         paid=False, available=True, unavailable_reason=None)
     finding = SimpleNamespace(
-        wontfix=None, unresolved_rounds=0, owner='stage2', detail='设定字段可确定性修复')
+        wontfix=None, unresolved_rounds=0, owner='stage4', detail='已接受HookPlan可确定性重建缺失章包')
     line = SimpleNamespace(
         status='hit', sev='hard', remediation='deterministic', fix=fix,
-        rule='global_field_repair', findings=[finding])
-    rows = I._report_items(SimpleNamespace(rules=[line]), 'stage2')
+        rule='hook_packet_materialization', findings=[finding])
+    rows = I._report_items(SimpleNamespace(rules=[line]), 'stage4')
     assert len(rows) == 1 and rows[0].kind == 'repairable'
-    assert '`stage2.global --apply-edit stage2/global_edit.json`' in rows[0].how
+    assert 'str06.stage4.hook_compile' in rows[0].how
+    assert '--apply-edit' not in rows[0].how

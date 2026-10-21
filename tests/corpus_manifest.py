@@ -19,7 +19,7 @@ from contracts.schema import (  # noqa: E402
 )
 from contracts.schema.corpus import (  # noqa: E402
     BOOK_TEMPLATE_REL, CURRENT_CORPUS_BOOKS, CURRENT_CORPUS_PAID_NODES,
-    ENVELOPE_LESS_JSON_RELS, corpus_command_dispatch,
+    ENVELOPE_LESS_JSON_RELS, corpus_command_dispatch, runtime_evidence_rel,
 )
 from novel.llm.ledger import LEDGER_REL  # noqa: E402
 from novel.paths import book_txt_rel, derive_source_meta  # noqa: E402
@@ -39,7 +39,14 @@ def _byte_artifacts(book: Path, chapters: int) -> tuple[tuple[str, str], ...]:
         pairs.append((f'stage5/body/ch{ordinal:02d}.txt',
                       f'stage5/body/ch{ordinal:02d}.txt'))
     pairs.append(('stage5/hook/hook.txt', 'stage5/hook/hook.txt'))
-    pairs.append((book_txt_rel(book), BOOK_TEMPLATE_REL))
+    from contracts.schema.story_prose import FinalManifest
+    manifest = book / 'stage7/final/delivery_manifest.json'
+    if manifest.is_file():
+        payload = {k: v for k, v in _json(manifest).items() if k != '_provenance'}
+        final_rel = f'stage7/final/{FinalManifest.model_validate(payload).title}_rewriting.txt'
+    else:
+        final_rel = book_txt_rel(book)
+    pairs.append((final_rel, BOOK_TEMPLATE_REL))
     return tuple(pairs)
 _TOKEN_COLUMNS = (
     'prompt_tokens', 'prompt_cache_hit_tokens', 'prompt_cache_miss_tokens',
@@ -80,7 +87,7 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
             continue
         for path in sorted(stage.rglob('*.json')):
             rel = path.relative_to(book).as_posix()
-            if rel in ENVELOPE_LESS_JSON_RELS:
+            if rel in ENVELOPE_LESS_JSON_RELS or runtime_evidence_rel(rel):
                 # 无信封派生 JSON：照样逐字节计账（封闭集合），不要求模型版本，
                 # 也不做模型 decode——内容即事实。
                 raw_bytes = path.read_bytes()
@@ -100,16 +107,23 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
                 raw = json.loads(raw_bytes.decode('utf-8'))
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise ValueError(f'{book.name}/{rel}: JSON/UTF-8 损坏：{exc}') from exc
-            marker = raw.get('_schema_version') if isinstance(raw, dict) else None
-            if (isinstance(marker, bool) or not isinstance(marker, int)
-                    or marker != spec.current_version):
+            key = 'contract_version' if isinstance(spec.current_version, str) else '_schema_version'
+            marker = raw.get(key) if isinstance(raw, dict) else None
+            if type(marker) is not type(spec.current_version) or marker != spec.current_version:
                 raise ValueError(
-                    f'{book.name}/{rel}: raw _schema_version={marker!r}，'
+                    f'{book.name}/{rel}: raw {key}={marker!r}，'
                     f'必须直接等于 registry current v{spec.current_version}。'
                     f'盘面清点要的是**盘上那个数字**，不是解码器愿意接受的那个；'
                     f'⇒ 这份产物不是现役 producer 产的，要从 producer 重跑重建'
                     f'（本仓没有迁移机制，不给旧 JSON 手补版本号冒充当前产地）')
             decoded = decode_artifact(rel, raw)
+            if isinstance(spec.current_version, str) and '/_rounds/' not in rel and '.INVALID.' not in rel:
+                from novel.store import Str06Repository
+                from tests.corpus import freshness_of
+                Str06Repository(book).check_model(rel)
+                report = freshness_of(book, rel)
+                if report.state != 'fresh':
+                    raise ValueError(f'{book.name}/{rel}: 当前来源未闭合 {report.state}/{report.reason}')
             payload = spec.model.model_validate(decoded.payload).model_dump(
                 by_alias=True, mode='json')
             entries.append(CorpusArtifactEntry(
@@ -120,7 +134,7 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
             payloads[rel] = payload
             if isinstance(payload, dict):
                 code = payload.get('code')
-                provenance = payload.get('_provenance')
+                provenance = raw.get('_provenance')
                 if isinstance(code, str) and code:
                     codes.add(code)
                 if isinstance(provenance, dict) and isinstance(provenance.get('code'), str):
@@ -131,7 +145,8 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
                     if isinstance(top_code, str) and top_code:
                         codes.add(top_code)
     main = payloads.get('stage1/main_text.json')
-    chapters = len(main) if isinstance(main, list) else 0
+    snapshot = _json(book / 'runtime/source_snapshot.json') if (book / 'runtime/source_snapshot.json').is_file() else {}
+    chapters = len(main) if isinstance(main, list) else len(snapshot.get('chapters', []))
     for disk_rel, manifest_rel in _byte_artifacts(book, chapters):
         path = book / Path(disk_rel)
         if path.is_file():
@@ -143,6 +158,10 @@ def _artifact_inventory(book: Path) -> tuple[list[CorpusArtifactEntry], dict[str
                 schema_version=None,
                 sha256=_sha256_bytes(raw_bytes),
             ))
+    if (book / 'stage7/final/delivery_manifest.json').is_file():
+        from novel.views.str06 import final_text_delivery
+        if final_text_delivery(book.parent, book.name) is None:
+            raise ValueError(f'{book.name}: 当前交付来源、章包与最终字节未闭合')
     entries.sort(key=lambda item: item.rel)
     return entries, payloads, codes
 
@@ -311,7 +330,7 @@ def build_manifest(
         for node in CURRENT_CORPUS_PAID_NODES
     ]
     return CorpusManifest(
-        manifest_version=1,
+        manifest_version=2, contract_version='story-v1',
         generated_at=datetime.now(timezone.utc).isoformat(timespec='seconds'),
         code_identity=code,
         artifact_inventory_sha256=inventory_sha,

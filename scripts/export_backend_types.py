@@ -22,6 +22,7 @@ from contracts import invariants  # noqa: E402
 _SPECS = (
     ('FRESHNESS', 'FRESHNESS', 'Freshness'),
     ('ARTIFACT_DISPLAY', 'ARTIFACT_DISPLAY', 'FreshnessDisplay'),
+    ('STORY_ARTIFACT_STATUS', 'STORY_ARTIFACT_STATUS', 'StoryArtifactStatus'),
     ('BADGE', 'BADGES', 'Badge'),
     ('SEVERITY', 'SEVERITIES', 'Severity'),
     ('JOB_STATE', 'JOB_STATES', 'JobState'),

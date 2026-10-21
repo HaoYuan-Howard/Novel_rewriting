@@ -111,7 +111,7 @@ def _manifest_raw() -> dict:
         'artifacts': book['artifacts'],
     } for book in books]
     return {
-        'manifest_version': 1,
+        'manifest_version': 2, 'contract_version': 'story-v1',
         'generated_at': '2026-08-16T00:00:00Z',
         'code_identity': 'code',
         'artifact_inventory_sha256': corpus_manifest._canonical_sha256(inventory),
@@ -121,60 +121,22 @@ def _manifest_raw() -> dict:
     }
 
 
-def test_current_corpus_tracks_both_paid_stage4_phases_and_their_outputs():
-    """冻结语料清单是两本书硬验收的身份集，刻意不自动跟随新增付费节点。
-
-    STR-06 B2 五节点重建后现役付费面是 11 个 `str06.` 节点（Stage2 四个观察
-    owner）；CS-3 bind 退役后 10 个。冻结清单同步翻新链坐标；冻结书盘在新链下按 `legacy_incompatible`
-    拒读，current-schema corpus 验收等语料重生成批次（REQUIREMENTS「本轮范围
-    外」），本测试锁的是**坐标不漂移**。
-    """
-    assert CURRENT_CORPUS_PAID_NODES == tuple(
-        node for node, spec in NODES.items() if spec.paid)
-    assert tuple(
-        node for node in CURRENT_CORPUS_PAID_NODES if NODES[node].stage == 'stage4'
-    ) == ('str06.stage4.naming', 'str06.stage4.preserve',
-          'str06.stage4.body_design', 'str06.stage4.hook_design')
-    # 2 书 × 10 付费节点 = 20 条 production dispatch。
-    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 20
+def test_current_corpus_tracks_all_current_owners_and_outputs():
+    assert CURRENT_CORPUS_PAID_NODES == tuple(node for node, spec in NODES.items() if spec.paid)
+    assert len(CURRENT_CORPUS_BOOKS) * len(CURRENT_CORPUS_PAID_NODES) == 22
+    from contracts.story_paths import STORY_ARTIFACTS
     required = required_current_corpus_artifacts(17)
-    assert 'stage2/characters/characters.json' in required
-    assert 'stage1/hook_copy.json' not in required, 'hook_copy 随旧链退役，不再是必备面'
-    # B2 五节点：书级观察 owner 三份与逐章观察进必备面；联合抽取派生输入退役。
-    assert {'stage2/observations/book.json', 'stage2/observations/names.json',
-            'stage2/observations/associate.json',
-            'stage2/observations/ch01.json'} <= required
-    assert 'stage2/compiled/book_extraction.json' not in required
-    assert 'stage2/compiled/input_snapshots.json' not in required
-
-    stage4_paid_outputs = {
-        rel
-        for node in ('str06.stage4.naming', 'str06.stage4.preserve',
-                     'str06.stage4.body_design', 'str06.stage4.hook_design')
-        for rel in NODES[node].produces
-    }
-    assert stage4_paid_outputs == {
-        'stage4/naming/name_map.json',
-        'runtime/preserve_checkpoint.json',
-        'stage4/grounding/reconstruction_brief.json',
-        'stage4/design/body_design.json',
-        'stage4/grounding/semantic_binding.json',
-        'stage4/design/presentation_graph.json',
-    }
-    for _sid, chapters in CURRENT_CORPUS_BOOKS:
-        assert stage4_paid_outputs <= required_current_corpus_artifacts(chapters)
-    # 免费编译/交付面也必须在必备集里（成功 run 的完整表面）。
-    free_outputs = {
-        rel for node in ('str06.stage4.compile', 'str06.stage7.assemble')
-        for rel in NODES[node].produces
-    } - {'stage7/final/delivery_manifest.json'}
-    assert free_outputs <= required_current_corpus_artifacts(17)
+    assert 'stage1/hook_copy.json' in required
+    for template in STORY_ARTIFACTS:
+        concrete = template.format(nn='01') if '{nn}' in template else template
+        assert concrete in required
+    assert 'stage2/characters/characters.json' not in required
 
 
 @pytest.mark.parametrize('rel', [
-    'stage4/design/body_design.json',
-    'stage4/grounding/semantic_binding.json',
-    'runtime/preserve_checkpoint.json',
+    'stage4/drafts/book.json',
+    'stage4/story/preservation.json',
+    'stage4/drafts/ch01.json',
 ])
 def test_manifest_rejects_a_missing_stage4_intermediate(rel):
     raw = _manifest_raw()
@@ -513,12 +475,12 @@ def test_inventory_refuses_a_raw_non_current_version(tmp_path):
     这条的语义变成「raw marker 必须直接等于 current」，仍然值钱：
     盘面清点要的是**盘上那个数字**，不是解码器愿意接受的那个数字。
     """
-    rel = 'stage2/observations/book.json'
+    rel = 'stage1/main_text.json'
     spec = artifact_spec(rel)
     assert spec is not None
 
     book = tmp_path / 'book_123'
-    target = book / 'stage2' / 'observations' / 'book.json'
+    target = book / 'stage1' / 'main_text.json'
     target.parent.mkdir(parents=True)
     # raw marker 检查先于 payload 解码，形状无关；故意给非 current 版本号。
     target.write_text(json.dumps({
@@ -798,10 +760,9 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
                 'tests/test_api_edits.py',
             'tests/test_api_screens.py',
             'tests/test_api_http.py',
-            'tests/test_str06_views.py',
-            'tests/test_str06_candidates.py',
-            'tests/test_str06_cli_dispatch.py',
-            'tests/test_str06_contracts.py',
+            'tests/test_story_api.py',
+            'tests/test_story_entry.py',
+            'tests/test_story_runtime.py',
         ],
         cwd=root,
         env=env,
@@ -819,13 +780,10 @@ def test_default_collection_keeps_schema_gates_and_carrier_regressions(
         'test_an_unknown_book_is_404_on_every_screen',
         'test_an_illegal_sid_is_400_because_the_client_sent_it',
         'test_a_non_integer_ordinal_is_422_from_the_carrier',
-        # str06 候选契约与只读面。
-        'test_candidate_table_is_now_the_production_registry',
-        'test_views_cover_the_whole_delivered_chain',
-        'test_half_run_candidate_keeps_present_and_missing_apart',
-        # CLI 分流与守卫。
-        'test_cmd_run_routes_str06_nodes_before_legacy_preconditions',
-        'test_str06_paid_run_still_requires_yes',
+        'test_current_artifacts_and_download_survive_service_restart',
+        'test_missing_invalid_and_changed_revision_are_distinct',
+        'test_current_cli_reaches_stage2_from_new_source_without_buying',
+        'test_empty_answer_does_not_occupy_request_identity',
     )
     missing = [node for node in default_nodes if node not in result.stdout]
     assert not missing, (
@@ -903,3 +861,40 @@ def test_require_corpus_rejects_zero_corpus_tests_even_if_skip_list_matches(monk
         config=Config(), exitstatus=pytest.ExitCode.OK, items=[])
     hooks.pytest_sessionfinish(session, int(pytest.ExitCode.OK))
     assert session.exitstatus == pytest.ExitCode.TESTS_FAILED
+
+
+def test_current_story_inventory_validates_actual_seals_and_final_bytes(tmp_path):
+    from tests.story_facilities import make_pipeline
+    case = make_pipeline(tmp_path)
+    case.run()
+    before = {p.relative_to(case.root).as_posix(): p.read_bytes()
+              for p in case.root.rglob('*') if p.is_file()}
+    entries, payloads, codes = corpus_manifest._artifact_inventory(case.root)
+    assert payloads['stage2/story/source_story.json']['contract_version'] == 'story-v1'
+    assert any(e.rel == BOOK_TEMPLATE_REL for e in entries)
+    assert any(e.schema_version == 'story-v1' for e in entries)
+    assert all('三层样书' not in e.rel for e in entries)
+    assert codes
+    after = {p.relative_to(case.root).as_posix(): p.read_bytes()
+             for p in case.root.rglob('*') if p.is_file()}
+    assert after == before
+    body = case.root / 'stage5/body/ch02.txt'
+    body.write_bytes(body.read_bytes() + '篡改'.encode('utf8'))
+    from novel.errors import TerminalState
+    with pytest.raises((ValueError, TerminalState)):
+        corpus_manifest._artifact_inventory(case.root)
+
+
+def test_corpus_associate_empty_branch_does_not_force_paid_call():
+    raw = _manifest_raw()
+    rows = [row for row in _rows() if row['node'] != 'str06.stage2.associate']
+    for book in raw['books']:
+        book['ledger'] = corpus_manifest._ledger_summary(rows, book['sid']).model_dump(mode='json')
+    CorpusManifest.model_validate(raw)
+
+
+def test_corpus_old_manifest_is_refused_without_migration():
+    raw = _manifest_raw()
+    raw['manifest_version'] = 1
+    with pytest.raises(ValidationError):
+        CorpusManifest.model_validate(raw)

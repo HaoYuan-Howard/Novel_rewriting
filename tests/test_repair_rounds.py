@@ -40,7 +40,8 @@ def _make_base(tmp_path):
                         'node': 'str06.stage2.chapters', 'scope': 'chapter:1',
                         'request_sha256': request,
                         'owner': 'ch01', 'turn_id': turn.turn_id, 'attempt_id': name,
-                        'mode': 'json', 'parse': 'ok' if accepted else 'failed',
+                        'mode': 'json', 'response_kind': 'result',
+                        'parse': 'ok' if accepted else 'failed',
                         'salvage': 'none', 'errors': errors, 'accepted': accepted,
                         'created_at': at})
         if accepted:

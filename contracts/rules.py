@@ -21,8 +21,8 @@ from typing import Final, Literal
 
 from contracts.invariants import CHECK_KIND, OWNER, SEVERITY, WHO_CHECKS_RULE
 
-#: ⚠ 比 `WHO_CHECKS` 少四个（`CARRIER`/`STRUCTURAL`/`DELEGATED`/`N_A`）——
-#: **一条判据的存在本身就否定了那四个**。取值面与理由的唯一落点在 `invariants.WHO_CHECKS`。
+#: 通用规则注册域独立于当前文档使用域。判据不能声称只由载体、结构或转授承担。
+#: 取值面与理由的唯一落点在 `invariants.WHO_CHECKS_RULE`。
 WhoChecks = Literal['HARD', 'INFO', 'GATE', 'METRIC', 'HUMAN']
 RepairBucket = Literal['UNIQUE', 'FREE', 'NONE']
 

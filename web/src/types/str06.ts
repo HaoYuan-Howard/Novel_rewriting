@@ -1,165 +1,121 @@
-/**
- * STR-06 候选链只读监控面的前端类型（F7d）。
- *
- * 与 `contracts/schema/str06/api.py` 的响应模型一一对应；候选链在 F8 激活前
- * 不进现役产品面，这一层也不伪装成已切换——页面顶部常驻「候选链」标注。
- *
- * 两条纪律随类型一起搬过来：
- *  · 没有 badge / passed / counts：判定只有现役 check 报告与回执的机械项名单；
- *  · present=false 与「合法空值」是两件事：半程候选根用 present 表达，空数组
- *    只在盘上真的有空列表时出现。
- */
+/** 当前 story-v1 三层只读监控；旧 Characters/Blueprint/Design/IR API 已退出。 */
+import type { StoryArtifactStatus } from './backend.generated'
 
-/** 一个称谓的时间窗（源事实）：从 from_chapter 起可解析到该人物。 */
-export interface Str06SurfaceWindow {
-  surface: string
-  from_chapter: number
-  until_chapter: number | null
+export interface StoryArtifactView<T> {
+  candidate_id: string
+  revision: string
+  status: StoryArtifactStatus
+  data: T | null
+  errors: string[]
 }
 
-export interface Str06Character {
-  char_id: string
-  canonical: string
-  surfaces: Str06SurfaceWindow[]
+export interface StoryState {
+  subject_ids: string[]
+  dimension: string
+  qualifier: string
+  value: string | null
+  op: 'set' | 'unset' | 'unknown'
+  modality: string
 }
 
-export interface Str06NameStructure {
-  families: Record<string, string>
-  people: Record<string, Record<string, unknown>>
+export interface SourceStoryData {
+  contract_version: 'story-v1'
+  source_identity: string
+  entities: Record<string, { kind: string; label: string; surfaces: { literal: string; evidence_refs: string[] }[] }>
+  events: Record<string, { chapter_ordinal: number; order: number; summary: string; participants: string[]; scene_boundary: string; temporal: { frame: string; anchor_event: string | null }; evidence_refs: string[] }>
+  propositions: Record<string, { statement: string; entity_refs: string[]; world_status: string; evidence_refs: string[] }>
+  knowledge_updates: { update_id: string; holder: string; proposition_ref: string; mode: string; polarity: string; at: string; supersedes: string[]; evidence_refs: string[] }[]
+  exposures: { event_ref: string; proposition_ref: string; mode: string; evidence_refs: string[] }[]
+  state_slots: Record<string, { subjects: string[]; aspect: string; focus: string }>
+  state_updates: { slot_ref: string; op: string; value: string | null; at: string; effective_time: string; modality: string; persistence: string }[]
+  causal_links: { from_event: string; to_event: string; kind: string; support: string; evidence_refs: string[] }[]
+  threads: Record<string, { question: string; updates: { event_ref: string; op: string; resolution: string | null }[] }>
+  world_rules: Record<string, { kind: string; statement: string; evidence_refs: string[] }>
+  expression: { person: string; focalizers: string[]; statement: string; mechanisms: string[] }
+  conflicts: { kind: string; statement: string; status: string; source_refs: string[] }[]
+  evidence: Record<string, { chapter_ordinal: number; paragraph_ordinal: number; text: string }>
 }
 
-export interface Str06CharactersView {
-  present: boolean
-  contract_version: string | null
-  characters: Str06Character[]
-  name_structure: Str06NameStructure | null
+export interface TargetStoryData {
+  contract_version: 'story-v1'
+  source_chapter_count: number
+  total_length_budget: number
+  premise: string
+  narration: string
+  style: string
+  character_voices: Record<string, string>
+  world_rules: { rule_id: string; statement: string }[]
+  propositions: Record<string, { statement: string; status: string }>
+  initial_state: StoryState[]
+  initial_knowledge: { holder: string; proposition_ref: string; mode: string }[]
+  initial_displays: Record<string, string>
+  names: Record<string, { entity_id: string; primary: string; surfaces: Record<string, string> }>
+  character_arcs: { entity_ref: string; starting_position: string; pressure: string; choice: string; event_refs: string[]; end_position: string }[]
+  chapters: { chapter_ordinal: number; purpose: string; event_refs: string[]; entry: string; exit: string; length_budget: number }[]
+  events: { event_id: string; summary: string; trigger: string; choice: string; result: string; temporal_frame: string; requires: string[]; after: string[] }[]
 }
 
-export interface Str06BlueprintBeat {
-  beat_id: string
-  event: string
-  participants: string[]
-  effects: Record<string, unknown>[]
-  /** v13：认知转移（命题＋持有者＋模式），取代 reveals */
-  cognition: Record<string, unknown>[]
-  /** v13：悬念转移（open/close） */
-  loops: Record<string, unknown>[]
-  scene_boundary: string | null
-  temporal_mode: string | null
-}
-
-export interface Str06BlueprintChapter {
-  chapter: number
-  beats: Str06BlueprintBeat[]
-  /** v13：compiler 生成的场景分段（跨章场景在续章同样出现） */
-  scenes: Record<string, unknown>[]
-  causal_edges: Record<string, unknown>[]
-}
-
-export interface Str06BlueprintView {
-  present: boolean
-  world_constraints: Record<string, unknown>[]
-  chapters: Str06BlueprintChapter[]
-}
-
-export interface Str06DesignScene {
-  scene_id: string
-  driver: Record<string, string>
-  realization_brief: string
-  pov: string
-  voice: string
-  avoid: string[]
-  beats: Record<string, unknown>[]
-}
-
-export interface Str06DesignChapter {
+export interface ChapterPacketData {
+  contract_version: 'story-v1'
   chapter_ordinal: number
-  purpose: string
-  scene_ids: string[]
-}
-
-export interface Str06DesignHook {
-  person: string
-  focalizers: string[]
-  materials: string[]
-  concealed: string[]
-  forbidden_reveals: number
-  design_brief: string
-}
-
-export interface Str06DesignBinding {
-  obligations: number
-  entries: Record<string, unknown>[]
-  unbound: string[]
-}
-
-export interface Str06DesignView {
-  present: boolean
-  graph_id: string | null
-  scenes: Str06DesignScene[]
-  chapters: Str06DesignChapter[]
-  hook: Str06DesignHook | null
-  binding: Str06DesignBinding | null
-}
-
-export interface Str06IrChapter {
-  chapter_ordinal: number
-  purpose: string
+  source_chapter_count: number
   length_budget: number
-  scene_ids: string[]
-  scene_lines: string[]
+  min_chars: number
+  max_chars: number
+  participants: string[]
+  names: Record<string, string>
+  entry_state: string[]
+  exit_state: string[]
+  actions: string[]
+  must_realize: string[]
+  must_respect: string[]
+  continuity: string[]
+  creative_guidance: string[]
+  background: string[]
+  guard_only: string[]
 }
 
-export interface Str06IrNavView {
-  present: boolean
-  book_title: string
-  target_chapter_count: number | null
-  total_length_budget: number | null
-  length_band_low: number | null
-  length_band_high: number | null
-  chapters: Str06IrChapter[]
-  release_schedule: Record<string, unknown>[]
+export type HookPacketData = Omit<ChapterPacketData,
+  'chapter_ordinal' | 'source_chapter_count' | 'participants' | 'entry_state' | 'exit_state' | 'actions'>
+
+export interface StoryProseReceipt {
+  contract_version: 'story-v1'
+  kind: 'body' | 'hook'
+  chapter_ordinal: number | null
+  packet_sha256: string
+  prior_tail_sha256: string
+  original_prior_tail_sha256: string
+  body_sha256: string
+  original_body_sha256: string
+  request_id: string
+  response_id: string
+  provider: string
+  model: string
+  system_sha256: string
+  user_sha256: string
+  finish_reason: string
+  mechanical: string
+  semantic: 'unver'
+  patches: { request_id: string; response_id: string; base_body_sha256: string; result_body_sha256: string; changed_handles: string[] }[]
 }
 
-export interface Str06ChapterReceipt {
-  status: string
-  mechanical_checks: string[]
-  semantic: string
-  length: Record<string, number>
-  length_disclosed: boolean
-  request_identity: string
-  protocol_version: string
-  renderer_version: string
-  validator_version: string
+export interface StoryChapterData {
+  chapter_ordinal: number
+  packet: ChapterPacketData | null
+  body: string | null
+  receipt: StoryProseReceipt | null
 }
 
-export interface Str06ChapterView {
-  ordinal: number
-  present: boolean
-  prose: string | null
-  receipt: Str06ChapterReceipt | null
+export interface StoryHookData {
+  packet: HookPacketData | null
+  body: string | null
+  receipt: StoryProseReceipt | null
 }
 
-export interface Str06HookView {
-  present: boolean
-  prose: string | null
-  receipt: Record<string, unknown> | null
-}
-
-export interface Str06NamingEntry {
-  char_ref: string
-  family: string
-  given: string | null
-  full: string
-  aliases: Record<string, string>
-  keep_reason: string | null
-}
-
-export interface Str06NamingView {
-  present: boolean
-  entries: Str06NamingEntry[]
-}
-
+export type Str06SourceStoryView = StoryArtifactView<SourceStoryData>
+export type Str06TargetStoryView = StoryArtifactView<TargetStoryData>
+export type Str06ChapterView = StoryArtifactView<StoryChapterData>
+export type Str06HookView = StoryArtifactView<StoryHookData>
 export interface Str06DeliveryChapter {
   chapter_ordinal: number
   prose_sha256: string | null
@@ -173,7 +129,7 @@ export interface Str06DeliveryView {
   final_text_sha256: string | null
   chapters: Str06DeliveryChapter[]
   length_reading: Record<string, number> | null
-  /** rc26: 疑似旧名残留/提前揭名定位报告计数（不阻断、不购返修；明细在 runtime 审计面） */
+  /** 后端当前交付读数；空值保持未提供，不由界面补造。 */
   name_residue: Record<string, Record<string, number>> | null
   disclosure: string | null
 }
@@ -296,6 +252,8 @@ export interface Str06OwnerIssuesView {
 }
 
 export interface Str06RunView {
+  contract_version: 'story-v1'
+  revision: string
   candidate: string
   present: boolean
   status: string | null

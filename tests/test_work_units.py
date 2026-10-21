@@ -6,7 +6,7 @@ import pytest
 
 from novel.work_units import (
     WorkUnitBudget, WorkUnitBudgetExhausted, WorkUnitRefused,
-    historical_unit_ledger, initialize_workflow, list_unit_views,
+    initialize_workflow, list_unit_views, readonly_budget,
 )
 
 
@@ -50,7 +50,7 @@ def test_saved_rejection_evidence_refuses_tampered_blobs(tmp_path):
         unit.latest_feedback()
 
 
-@pytest.mark.parametrize('kind', ['mechanical', 'history_adopted', 'cached'])
+@pytest.mark.parametrize('kind', ['mechanical', 'cached'])
 def test_free_processing_records_source_without_spending_or_reissuing_budget(tmp_path, kind):
     budget = WorkUnitBudget(tmp_path, '42', 'str06.stage5.body', scope='chapter:1')
     values = dict(run_id='free-producer', input_sha256=sha('actual-input'),
@@ -70,6 +70,22 @@ def test_free_processing_records_source_without_spending_or_reissuing_budget(tmp
     assert view['processing']['reason'] == 'wire_result_unknown'
     assert view['content_used'] == 1
     assert len(budget._read().processing) == 2
+
+
+def test_retired_history_processing_is_rejected_without_writing_or_reissuing_budget(tmp_path):
+    from pydantic import ValidationError
+    from contracts.schema.workflow import WorkUnitLedgerV3
+    budget = WorkUnitBudget(tmp_path, '42', 'str06.stage5.body', scope='chapter:1')
+    before = {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    legacy = dict(run_id='retired-source', input_sha256=sha('input'),
+                  kind='history_adopted', evidence_sha256=sha('old-source'))
+    with pytest.raises(ValidationError):
+        budget.note_processing(**legacy)
+    with pytest.raises(ValidationError):
+        WorkUnitLedgerV3.model_validate({**budget._read().model_dump(mode='json'),
+            'processing': [{'processing_id': sha('old-processing'), **legacy}]})
+    assert {p.relative_to(tmp_path): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()} == before
+    assert budget.used == 0 and budget.remaining == 4
 
 
 @pytest.mark.parametrize('damage', ['task', 'path', 'receipt'])
@@ -441,22 +457,14 @@ def test_old_stage2_ledger_rewrite_cannot_reset_current_work_unit(tmp_path):
         assert unit.used == 4
 
 
-def test_retired_node_unit_is_read_only_through_historical_entry(tmp_path):
-    """命名前移批：退役节点（旧 str06.stage7.naming）的工作单元只读可查。
-
-    历史轮次与成本继续计入整书账（I-17）；退役节点不在现役 NODES——不能
-    执行、不能授权、不能改历史身份，只读入口集中在
-    `historical_unit_ledger`（删除条件见 REQUIREMENTS）。
-    """
+def test_retired_node_has_no_runtime_ledger_adoption_entry(tmp_path):
+    """旧节点账保留原字节，当前运行时不提供历史解码或执行通道。"""
     unit = WorkUnitBudget(tmp_path, '42', 'str06.stage4.body_design', 'executor', 'book')
     unit.reserve(sha('r'), run_id='run-1')
-    unit_id = unit.unit_id
-    # 退役节点构造只读预算：现役入口关闭式拒绝（禁执行/授权）。
+    original = unit.path.read_bytes()
     with pytest.raises(WorkUnitRefused, match='未登记的工作单元节点'):
-        WorkUnitBudget(tmp_path, '42', 'str06.stage7.naming', 'executor', 'book',
-                       read_only=True)
-    # 历史入口照读现役单元的账（集中读取不挑节点）。
-    ledger = historical_unit_ledger(tmp_path, '42', unit_id)
-    assert ledger.node == 'str06.stage4.body_design' and len(ledger.turns) == 1
-    with pytest.raises(FileNotFoundError):
-        historical_unit_ledger(tmp_path, '42', '0' * 64)
+        WorkUnitBudget(tmp_path, '42', 'str06.stage7.naming', 'executor', 'book', read_only=True)
+    assert readonly_budget(tmp_path, '42', unit.unit_id)._read().node == unit.identity['node']
+    assert unit.path.read_bytes() == original
+    import novel.work_units as runtime
+    assert not hasattr(runtime, 'historical_unit_ledger')

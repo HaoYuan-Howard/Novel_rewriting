@@ -34,6 +34,8 @@ CRITERIA = {
     'natural_progression': '自然推进：章间承接、铺垫回收、张力节奏成立；Hook按正式选材与披露边界评价入口效果',
     'local_prose_coherence': '局部文笔连贯：句段自然具体、衔接清楚，不重复交代或写成导演说明',
 }
+GOLDEN_VERSION = 3
+STORY_VERSION = 'story-v1'
 
 
 class Strict(BaseModel):
@@ -48,7 +50,8 @@ class Source(Strict):
 
 
 class Manifest(Strict):
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3]
+    story_contract_version: Literal['story-v1']
     source_root: Text
     output_root: Text
     code_version: Text
@@ -103,7 +106,8 @@ class BookReview(Strict):
 
 
 class Review(Strict):
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3]
+    story_contract_version: Literal['story-v1']
     manifest_sha256: Sha256
     snapshot_sha256: Sha256
     reviewer: str = ''
@@ -164,14 +168,16 @@ def freeze(root: Path, output: Path, profiles: PipelineAgentProfiles,
         raise ValueError('首次生成必须使用空输出根；不采用旧结果')
     books = inventory(root)
     if baseline is not None:
-        if baseline.get('state') != 'pass' or baseline.get('schema_version') != 2:
-            raise ValueError('基线必须是v2六维已通过评价；旧评价须对现有成书重新评阅，不必重生成')
+        if (baseline.get('state') != 'pass' or baseline.get('schema_version') != GOLDEN_VERSION
+                or baseline.get('story_contract_version') != STORY_VERSION):
+            raise ValueError('基线必须是v3/story-v1六维已通过评价；旧契约报告不转换')
         if set(baseline['snapshot']['books']) != {book.sid for book in books}:
             raise ValueError('基线书目不匹配')
         for book in books:
             if baseline['snapshot']['books'][book.sid]['source_sha256'] != book.sha256:
                 raise ValueError('基线源版本不匹配')
-    result = Manifest(source_root=str(root.resolve()), output_root=str(output.resolve()),
+    result = Manifest(schema_version=GOLDEN_VERSION, story_contract_version=STORY_VERSION,
+                      source_root=str(root.resolve()), output_root=str(output.resolve()),
                       code_version=prov.code_version(), profiles=profiles,
                       books=books, criteria=CRITERIA, baseline=baseline)
     validate_baseline(result)
@@ -187,11 +193,10 @@ def validate_sources(manifest: Manifest) -> None:
 def validate_baseline(manifest: Manifest) -> None:
     if manifest.baseline is None:
         return
-    from novel.orchestrator.state import readonly_ctx
-    from novel.store import ArtifactStore
     prior = manifest.baseline
-    if prior.get('schema_version') != 2:
-        raise ValueError('旧质量评价不自动迁移；须按v2六维重评现有成书')
+    if (prior.get('schema_version') != GOLDEN_VERSION
+            or prior.get('story_contract_version') != STORY_VERSION):
+        raise ValueError('旧质量评价不自动迁移；只接受v3/story-v1基线')
     snapshot = prior['snapshot']
     review = Review.model_validate(prior['review'])
     if (prior['state'] != 'pass' or snapshot['engineering_state'] != 'pass'
@@ -211,21 +216,23 @@ def validate_baseline(manifest: Manifest) -> None:
         book = paths.resolve_novel_dir(snapshot['output_root'], source.sid)
         # 基线恒等是**字节**校验：直接读盘上成书（新链成书 rel 是三级
         # `stage7/final/<title>_rewriting.txt`，不走两级来源账键的读口）。
-        text = (book / paths.book_txt_rel(book)).read_text(encoding='utf-8')
-        if _sha(text.encode()) != row['output_sha256']:
+        raw = (book / paths.book_txt_rel(book)).read_bytes()
+        raw.decode('utf-8')
+        if _sha(raw) != row['output_sha256']:
             raise ValueError('基线成书字节已经改变')
 
 
 def capture_execution(manifest: Manifest, book: Path, run_ids: list[str]) -> dict[str, Any]:
-    """读取请求账与耐久采用证据；自动、人工、历史采用分别披露，不改运行根。"""
+    """只读当前请求/响应与封存证据；未知或退役来源不能冒充自动完成。"""
     from novel.llm.ledger import read_cost_snapshot
     from novel.llm.paid_requests import commit_bundles
     from novel.llm.usage_audit import audit_usage
     from novel.work_units import list_unit_views, readonly_budget, read_book_budget
-    from contracts.schema.workflow import OwnerIssueFileV3
+    from novel.story_metrics import story_metrics
     base = Path(manifest.output_root)
+    sid = paths.derive_source_meta(book.name)[0]
     rows, tail = read_cost_snapshot(base, readonly=True)
-    paid = [r for r in rows if r.get('sid') == book.name and not r.get('cached')]
+    paid = [r for r in rows if r.get('sid') == sid and not r.get('cached')]
     profile_checks = []
     for row in paid:
         expected = manifest.profiles.executor_overrides.get(
@@ -234,42 +241,55 @@ def capture_execution(manifest: Manifest, book: Path, run_ids: list[str]) -> dic
             and row.get('reasoning_effort') == expected.reasoning_effort
             and row.get('thinking') is (expected.thinking_mode == 'on'))
     interventions = []
-    attempts = set()
-    units = list_unit_views(base, book.name) or ()
+    attempts = {}
+    invalid = []
+    units = list_unit_views(base, sid) or ()
     for view in units:
-        unit = readonly_budget(base, book.name, view['unit_id'])
+        unit = readonly_budget(base, sid, view['unit_id'])
         ledger = unit._read()
         if ledger.grants:
             interventions.append({'kind': 'manual_budget_grant', 'unit_id': ledger.unit_id})
         for turn in ledger.turns:
-            attempts.update((a.attempt_id, a.request_fingerprint) for a in turn.attempts)
+            for attempt in turn.attempts:
+                key = (attempt.attempt_id, attempt.request_fingerprint)
+                if key in attempts:
+                    invalid.append('duplicate_unit_attempt')
+                attempts[key] = (ledger.unit_id, turn.turn_id, attempt.response_sha256)
             if turn.attempts and turn.agent_run_id not in run_ids:
                 interventions.append({'kind': 'outside_frozen_agent', 'turn_id': turn.turn_id})
-    budget = read_book_budget(base, book.name)
+    budget = read_book_budget(base, sid)
     if budget is not None and budget.grants:
         interventions.append({'kind': 'manual_book_budget_grant'})
     bundles = commit_bundles(book)
     adoptions = [adoption for bundle in bundles for adoption in bundle.adoptions]
-    for bundle in bundles:
-        for adoption in bundle.adoptions:
-            if adoption.patch or not adoption.turn_id or adoption.historical:
-                interventions.append({'kind': 'manual_or_historical_adoption',
-                                      'owner': adoption.owner,
-                                      'request_sha256': adoption.request_sha256})
-    for path in sorted((book / 'runtime' / 'issues').glob('*.json')):
-        # 新冻结运行只能使用现役版本；旧账不通过猜测获得自动完成资格。
-        issue = OwnerIssueFileV3.model_validate_json(path.read_text(encoding='utf-8'))
-        if issue.corrections:
-            interventions.append({'kind': 'manual_issue_correction', 'owner': issue.owner})
-    audit = audit_usage(base, book.name)
+    for adoption in adoptions:
+        key = (adoption.attempt_id, adoption.request_sha256)
+        proof = (adoption.unit_id, adoption.turn_id, adoption.response_sha256)
+        if not all(proof) or attempts.get(key) != proof:
+            invalid.append('adoption_not_bound_to_current_attempt')
+    # 旧回派/人工更正不进入解码或采用；只识别退役表面并拒绝自动证明。
+    if any((book / 'runtime' / 'issues').glob('*.json')):
+        invalid.append('retired_issue_surface')
+    audit = audit_usage(base, sid)
+    metrics = story_metrics(base, sid)
     paid_keys = [(r.get('attempt_id'), r.get('request_fingerprint')) for r in paid]
     proved = (bool(paid and units and run_ids and adoptions)
-              and len(set(paid_keys)) == len(paid_keys) and set(paid_keys) == attempts
-              and all((a.attempt_id, a.request_sha256) in attempts for a in adoptions)
-              and not tail and not audit['evidence_errors'])
+              and len(set(paid_keys)) == len(paid_keys) and set(paid_keys) == set(attempts)
+              and not tail and not audit['evidence_errors'] and not invalid)
     return {'request_profiles_current': bool(profile_checks) and all(profile_checks),
-            'automation': 'assisted' if interventions else 'pass' if proved else 'unver',
-            'interventions': interventions, 'usage': audit}
+            'automation': ('assisted' if interventions else 'pass') if proved else 'unver',
+            'interventions': interventions, 'invalid_execution_evidence': invalid,
+            'usage': audit, 'first_answer_metrics': metrics}
+
+
+def accepted_output_bytes(book: Path) -> bytes:
+    """与真实下载共用当前包/回执/最终manifest证明，返回已核验原字节。"""
+    from novel.views.str06 import final_text_delivery
+    delivered = final_text_delivery(book.parent, book.name)
+    if delivered is None:
+        raise ValueError('当前story-v1交付尚未齐备')
+    _filename, text = delivered
+    return text.encode('utf-8')
 
 
 def capture_book(manifest: Manifest, source: Source) -> dict[str, Any]:
@@ -307,15 +327,7 @@ def capture_book(manifest: Manifest, source: Source) -> dict[str, Any]:
         result['delivery_state'] = outcome.state
         main, _ = store.read_own(MainText, STAGE1_MAIN_TEXT)
         result['chapter_ordinals'] = [chapter.chapter_ordinal for chapter in main.root]
-        # F8c：旧 `novel.stages.stage7.assemble.read_current_book` 随旧链退役。
-        # 新链成书由 str06.stage7.assemble 写 `stage7/final/<书名>_rewriting.txt`
-        # （`novel/paths.py::book_txt_rel` 是唯一权威 rel；三级路径不进来源账，
-        # 生产下载面同样按盘上路径直读，见 `novel/api/routes/str06.py::get_book`），
-        # 就绪记录是同一节点**最后提交**的 `stage7/final/delivery_manifest.json`。
-        # ⇒ 与 `validate_baseline` 同一把尺子：按盘上路径直读当前成书字节；
-        #   文件缺席照旧记 error，不把「盘上有 txt」冒充可交付。
-        text = (book / paths.book_txt_rel(book)).read_text(encoding='utf-8')
-        result['output_sha256'] = _sha(text.encode('utf-8'))
+        result['output_sha256'] = _sha(accepted_output_bytes(book))
         if surface != read_surface_seal(base, source.sid, code=code):
             raise ValueError('收集过程中盘面变化')
         result['surface_sha256'] = surface
@@ -340,13 +352,15 @@ def collect(manifest: Manifest) -> dict[str, Any]:
     automatic = ('incomplete' if not engineering else
                  'assisted' if any(row.get('automation') == 'assisted' for row in books.values()) else
                  'pass' if all(row.get('automation') == 'pass' for row in books.values()) else 'unver')
-    return dict(schema_version=2, manifest_sha256=digest(manifest), code_current=code_current,
+    return dict(schema_version=GOLDEN_VERSION, story_contract_version=STORY_VERSION,
+                manifest_sha256=digest(manifest), code_current=code_current,
                 output_root=manifest.output_root,
                 engineering_state='pass' if engineering else 'fail', automatic_state=automatic, books=books)
 
 
 def review_template(manifest: Manifest, snapshot: dict[str, Any]) -> Review:
-    return Review(manifest_sha256=digest(manifest), snapshot_sha256=digest(snapshot),
+    return Review(schema_version=GOLDEN_VERSION, story_contract_version=STORY_VERSION,
+                  manifest_sha256=digest(manifest), snapshot_sha256=digest(snapshot),
                   books={sid: BookReview(output_sha256=row['output_sha256'],
                          baseline_comparison='unver' if manifest.baseline else 'first_acceptance',
                          findings={key: QualityJudgment(state='unver') for key in CRITERIA})
@@ -354,15 +368,16 @@ def review_template(manifest: Manifest, snapshot: dict[str, Any]) -> Review:
 
 
 def evaluate(manifest: Manifest, snapshot: dict[str, Any], review: Review) -> dict[str, Any]:
-    if snapshot.get('schema_version') != 2:
-        raise ValueError('旧快照须按v2重新收集，不自动迁移评价')
+    if (snapshot.get('schema_version') != GOLDEN_VERSION
+            or snapshot.get('story_contract_version') != STORY_VERSION):
+        raise ValueError('旧快照不转换；只接受v3/story-v1当前收集结果')
     if review.manifest_sha256 != digest(manifest) or snapshot.get('manifest_sha256') != digest(manifest):
         raise ValueError('评价不属于当前冻结清单')
     if review.snapshot_sha256 != digest(snapshot):
         raise ValueError('评价绑定的候选快照已改变')
     current = collect(manifest)  # 免费重验真实消费者；不能仅验证旧报告的自洽哈希。
     if digest(current) != digest(snapshot):
-        raise ValueError('源书、代码、审批或候选产物已变化；请重新收集并审阅')
+        raise ValueError('源书、代码、运行证据或正式产物已变化；请重新收集并审阅')
     if set(review.books) != set(snapshot['books']):
         raise ValueError('评价书目必须精确覆盖冻结清单')
     reviewed = any(f.state != 'unver' for book in review.books.values() for f in book.findings.values())
@@ -391,7 +406,8 @@ def evaluate(manifest: Manifest, snapshot: dict[str, Any], review: Review) -> di
             states.append(finding.state)
     quality = 'fail' if 'fail' in states else 'unver' if 'unver' in states else 'pass'
     result = quality if snapshot['engineering_state'] == 'pass' else 'fail'
-    return dict(schema_version=2, state=result, engineering_state=snapshot['engineering_state'],
+    return dict(schema_version=GOLDEN_VERSION, story_contract_version=STORY_VERSION,
+                state=result, engineering_state=snapshot['engineering_state'],
                 automatic_state=snapshot['automatic_state'],
                 quality_state=quality, baseline_state='provided' if manifest.baseline else 'first_acceptance',
                 manifest_sha256=digest(manifest), snapshot=snapshot, review=review.model_dump(mode='json'))
@@ -411,7 +427,7 @@ def execute(manifest: Manifest, *, yes: bool, egress_authorized: bool) -> dict[s
     runs = []
     for book in manifest.books:
         validate_sources(manifest)
-        # 不手写阶段顺序和审批决定；摄入之后的推进归现役 RunSupervisor。
+        # 不手写阶段顺序和业务状态；摄入之后的推进归现役 RunSupervisor。
         command = [sys.executable, '-B', '-m', 'novel.cli', 'run', 'stage0.remove',
                    '--source', str(Path(manifest.source_root) / book.relative_path), '--base', str(base)]
         ingestion = subprocess.run(command, cwd=ROOT, check=False)

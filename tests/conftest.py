@@ -44,7 +44,6 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_llm_budget_versions.py',
     'tests/test_legacy_work_unit_recovery.py',
     'tests/test_agent.py',
-    'tests/test_str06_product_entry.py',
     'tests/test_runtime_operator.py',
     'tests/test_agent_supervisor.py',
     'tests/test_api_agent.py',
@@ -53,8 +52,7 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_commander_admission.py',
     # 含 agent 线程（test_operator_and_agent_resume_same_root_to_delivery）与真实
     # CLI 子进程（test_cli_subprocess_preview_and_apply_are_free_and_reachable），
-    # 与 test_str06_product_entry 同类：全局 _service 面不得与他模块并行。
-    'tests/test_contract_upgrade.py',
+    # 与 test_story_entry 同类：全局 _service 面不得与他模块并行。
     'tests/test_final_approval_workpacks.py',
     'tests/test_llm.py',
     'tests/test_model_slots.py',
@@ -62,7 +60,9 @@ _SERIAL_TEST_MODULES = frozenset({
     'tests/test_orchestrator_queue.py',
     'tests/test_provider_probe.py',
     'tests/test_stage2_recovery_runs.py',
-    'tests/test_str06_stage2_owners.py',
+    'tests/test_story_runtime.py',
+    'tests/test_story_entry.py',
+    'tests/test_story_facts.py',
     'tests/test_trash.py',
     'tests/test_write_admission.py',
 })

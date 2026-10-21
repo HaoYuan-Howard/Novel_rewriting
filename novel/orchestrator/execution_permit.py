@@ -59,36 +59,13 @@ def _t(*tokens: str) -> frozenset[str]:
 
 _INBOX = queue.WAITING_ON_INBOX
 _RESUME = queue.WAITING_ON_RESUME_DECISION
-#: 新链节点的通用 blocker 面。
-_STR06 = frozenset({_INBOX, _RESUME})
+_RECHECK_BLOCKERS = frozenset({_INBOX, _RESUME})
 
-_W0 = frozenset({_INBOX, _RESUME})
-
-
-#: 首批恢复闭集。这里登记的是**全部 flag token**，不是只登记主操作；
-#: 例如同一个主操作带不同的凭据 flag 就不是同一行。表外组合即使节点 argparse
-#: 暂时能解析，也不能拿到 Commander 执行许可。
-RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = (
-    # ⚠ F8b-3（S-05 deprecation）：旧链恢复旗标族（--revalidate/--apply-edit/
-    # --revise/--recover-* 等）随旧链整层退役——它们的 blocker 只能由旧链
-    # planner 发出，生产入口已拒识。新链的免费复检是节点级 ``--check-only``
-    # （blocked 恢复与零成本重验同一形状）；付费节点的恢复是候选 runner 自身
-    # 续跑（F7c 精确补尾），不经 permit 表发布付费恢复动作。
-    RecoveryRunPolicy('stage0.remove', _t('--check-only'), _W0),
-    RecoveryRunPolicy(
-        'stage1.partition', _t('--check-only'),
-        frozenset({_INBOX, _RESUME}),
-    ),
-    RecoveryRunPolicy('str06.stage2.book', _t('--check-only'), _STR06),
-    RecoveryRunPolicy('str06.stage2.chapters', _t('--check-only'), _STR06),
-    RecoveryRunPolicy('str06.stage2.names', _t('--check-only'), _STR06),
-    RecoveryRunPolicy('str06.stage2.associate', _t('--check-only'), _STR06),
-    RecoveryRunPolicy('str06.stage4.preserve', _t('--check-only'), _STR06),
-    RecoveryRunPolicy('str06.stage4.body_design', _t('--check-only'), _STR06),
-    RecoveryRunPolicy('str06.stage4.hook_design', _t('--check-only'), _STR06),
-    RecoveryRunPolicy('str06.stage5.hook', _t('--check-only'), _STR06),
-    RecoveryRunPolicy('str06.stage5.body', _t('--check-only'), _STR06),
-    RecoveryRunPolicy('str06.stage4.naming', _t('--check-only'), _STR06),
+#: 每个登记check-only的节点都可免费重验；编译与装配同样保留恢复入口。
+#: 其它flags或付费组合不得因节点支持复检而扩大许可。
+RECOVERY_RUN_POLICIES: Final[tuple[RecoveryRunPolicy, ...]] = tuple(
+    RecoveryRunPolicy(node, _t('--check-only'), _RECHECK_BLOCKERS)
+    for node, spec in NODES.items() if '--check-only' in spec.flags
 )
 
 

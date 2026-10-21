@@ -46,7 +46,6 @@ export interface UnitMetrics {
   scope: string
   content_turns: number
   network_retries: number
-  history_adopted: number
   mechanical: number
   cached_processing: number
   usage: UsageSummary

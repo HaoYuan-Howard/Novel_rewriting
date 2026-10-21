@@ -22,104 +22,41 @@ CURRENT_CORPUS_BOOKS: tuple[tuple[str, int], ...] = (
     ('2019402867061048656', 17),
     ('1668963766200045568', 25),
 )
-#: STR-06 现役付费面（`contracts/invariants.py::NODES` 的 11 个付费节点，顺序即
-#: NODES 声明序；B2 五节点重建起 Stage2 是 book／chapters／names／associate 四个
-#: 付费 owner；`str06.stage4.compile`／`str06.stage7.assemble` 结构性禁付，不派发
-#: production dispatch）。冻结清单刻意**不自动跟随**新增付费节点：
-#: `tests/test_corpus_manifest.py` 用「== NODES 全部付费节点」逼每次翻新成为显式决定。
-#: ⚠ 冻结书盘在语料重生成批次（B6 线）前没有新链产物；current-schema corpus
-#: 验收随该批次另行执行（REQUIREMENTS「本轮范围外」），本清单只锁定当期现役坐标。
+#: 当前付费owner闭集；associate可由显式空集合免费完成，不强迫外发。
 CURRENT_CORPUS_PAID_NODES: tuple[str, ...] = (
-    'str06.stage2.book',
-    'str06.stage2.chapters',
-    'str06.stage2.names',
-    'str06.stage2.associate',
-    'str06.stage4.naming',
-    'str06.stage4.preserve',
-    'str06.stage4.body_design',
-    'str06.stage4.hook_design',
-    'str06.stage5.hook',
-    'str06.stage5.body',
+    'str06.stage2.chapters', 'str06.stage2.book', 'str06.stage2.associate',
+    'str06.stage2.names', 'str06.stage4.naming', 'str06.stage4.preserve',
+    'str06.stage4.body_design', 'str06.stage4.chapters', 'str06.stage4.hook_design',
+    'str06.stage5.hook', 'str06.stage5.body',
 )
-
-#: 成书的模板 rel（「记模板、哈希实体」：盘上是 `stage7/<书名>_rewriting.txt`，
-#: 清单不含书名）。必须与 `contracts/artifacts.py` 的现役 rel 逐字一致。
+CONDITIONAL_PAID_NODES = frozenset({'str06.stage2.associate'})
 BOOK_TEMPLATE_REL = 'stage7/final/{title}_rewriting.txt'
+ENVELOPE_LESS_JSON_RELS: frozenset[str] = frozenset()
 
-#: 无信封派生 JSON：新链确定性 compiler 落盘的正式产物，内容即事实、无模型
-#: schema 版本可钉（`_schema_version` 信封只用于登记了 ARTIFACT_SPECS 的模型
-#: 产物）。清单对它们照样逐字节 hash 计账——封闭集合，盘上多出一份未登记
-#: JSON 仍然被 `_artifact_inventory` 拒绝，不因本集合静默放宽。
-#: ⚠ B2（D3）：`stage2/compiled/input_snapshots.json` 随「章观察互不依赖」退役，
-#: 已移出本集合；它在盘上出现就是「未登记 JSON」。
-ENVELOPE_LESS_JSON_RELS: frozenset[str] = frozenset({
-    'stage2/acceptance/fold.json',
-    'stage4/acceptance/guard/compile.json',
-    'stage4/acceptance/guard/report.json',
-    # R2.8 的 WriterPacket 指标（E-6 尾账，2026-09-28 R3 批收口）：audit_only
-    # 派生读数、重算免费，与 guard 两份同族——确定性 compiler 的无信封 JSON。
-    'stage4/acceptance/packet_metrics.json',
-})
+
+def runtime_evidence_rel(rel: str) -> bool:
+    """封闭的当前运行证据家族；只计原字节，不把debug当领域产物。"""
+    fixed = {'runtime/candidate_workflow.json', 'runtime/source_snapshot.json',
+             'runtime/workflow_status.json', 'runtime/cascade_rewinds.json'}
+    prefixes = ('runtime/commit/', 'runtime/issues/', 'runtime/node_status/',
+                'runtime/semantic_candidates/', 'runtime/revision_requests/',
+                'runtime/materials/', 'runtime/source_repairs/')
+    return rel in fixed or any(rel.startswith(prefix) for prefix in prefixes)
 
 
 def required_current_corpus_artifacts(chapters: int) -> frozenset[str]:
-    """Canonical successful Stage0--7 surface for one acceptance book."""
-    fixed = {
-        'stage0/clean_text.txt',
-        # ⚠ 2026-08-22 阶段 C：`machine_snapshot.json` 整份下线，`revisions.json`
-        #   接替它成为本层的唯一 JSON 权威；clean_text 是正文投影。
-        'stage0/revisions.json',
-        # ⚠ `stage1/hook_copy.json` 随旧链退役（F7c 判定：新链 Hook 设计吃目标
-        #   Design 的材料投影，无消费者），不再是一本合格语料书的必备面。
-        'stage1/main_text.json',
-        # B2 五节点（D3/D9）：book／names／associate 三份书级观察 owner 产物；
-        # 逐章观察 `stage2/observations/ch{nn}.json` 在下面按章成对补齐。
-        # 联合抽取的派生输入 `stage2/compiled/{book_extraction,input_snapshots}.json`
-        # 已退役（D3/D9），不在必备面。
-        'stage2/observations/book.json',
-        'stage2/observations/names.json',
-        'stage2/observations/associate.json',
-        # str06.stage2.compile（免费）双真源发布＋fold 读数。
-        'stage2/blueprints/chapter_blueprints.json',
-        'stage2/acceptance/fold.json',
-        'stage2/characters/characters.json',
-        # str06.stage4.preserve（运行时 checkpoint 落在 runtime/ 家族）。
-        'runtime/preserve_checkpoint.json',
-        'stage4/grounding/reconstruction_brief.json',
-        # str06.stage4.body_design／hook_design／bind。
-        'stage4/design/body_design.json',
-        'stage4/design/presentation_graph.json',
-        'stage4/grounding/semantic_binding.json',
-        # str06.stage4.compile（免费）的确定性与 Guard 面。
-        'stage4/compiled/execution_plan.json',
-        'stage4/acceptance/guard/compile.json',
-        'stage4/acceptance/guard/report.json',
-        # R2.8 的 WriterPacket 指标（E-6 尾账，随 R3 批收口）：成功 run 的
-        # 完整表面包含这份 audit_only 派生读数。
-        'stage4/acceptance/packet_metrics.json',
-        'stage4/context/hook/hook.json',
-        'stage4/ir/writer_book_ir.json',
-        # str06.stage5.hook。
-        'stage5/hook/hook.txt',
-        'stage5/hook/receipt.json',
-        # str06.stage4.naming（命名前移批，rc26）。
-        'stage4/naming/name_map.json',
-        # ⚠⚠ **成书这一条登记的是模板 rel，不是盘上那个文件名。**
-        #   盘上它叫 `stage7/<书名>_rewriting.txt`，而本清单**刻意不含书名**
-        #   （本模块 docstring 的 "text-free"；`docs/schema/corpus.md`）——它要能提交进 git。
-        #   把具体文件名写进 `rel` 就会泄漏它承诺不含的东西，而 `CorpusBookEntry`
-        #   里也根本没有书名字段可供校验方复原。
-        #   ⇒ 记模板：「哪一份产物」仍然说得清，sha256 照旧取盘上那份实体的字节。
-        #   `stage7/final/delivery_manifest.json` 是 run 的自述清单（含逐章读数与
-        #   hash），由外层 corpus manifest 承担身份，不重复入册。
-        BOOK_TEMPLATE_REL,
-    }
-    # str06.stage2.chapters（逐章观察）与 str06.stage5.body（正文＋章级机械回执
-    # 成对）：ch01..chNN 连续全覆盖。
-    for ordinal in range(1, chapters + 1):
-        fixed.add(f'stage2/observations/ch{ordinal:02d}.json')
-        fixed.add(f'stage5/body/ch{ordinal:02d}.txt')
-        fixed.add(f'stage5/acceptance/body/ch{ordinal:02d}.json')
+    """成功当前根的完整正式表面，章集合保持源阅读序。"""
+    from contracts.story_paths import STORY_ARTIFACTS, FINAL
+    fixed = {'stage0/clean_text.txt', 'stage0/revisions.json',
+             'stage1/main_text.json', 'stage1/hook_copy.json',
+             'runtime/candidate_workflow.json', 'runtime/source_snapshot.json'}
+    for template in STORY_ARTIFACTS:
+        if '{nn}' in template:
+            fixed.update(template.format(nn=f'{n:02d}') for n in range(1, chapters + 1))
+        elif template == FINAL:
+            fixed.add(BOOK_TEMPLATE_REL)
+        else:
+            fixed.add(template)
     return frozenset(fixed)
 
 
@@ -147,18 +84,18 @@ class CorpusArtifactEntry(StrictModel):
     """One exact output; JSON artifacts additionally pin schema version."""
 
     rel: str = Field(min_length=1, pattern=r'^(?:stage[0-7]|runtime)/')
-    schema_version: int | None
+    schema_version: int | Literal['story-v1'] | None
     sha256: Sha256
 
     @model_validator(mode='after')
     def _json_has_version(self) -> 'CorpusArtifactEntry':
         is_json = self.rel.endswith('.json')
         if is_json != (self.schema_version is not None) and not (
-                is_json and self.rel in ENVELOPE_LESS_JSON_RELS):
+                is_json and (self.rel in ENVELOPE_LESS_JSON_RELS or runtime_evidence_rel(self.rel))):
             raise ValueError(
                 'JSON 产物必须钉 schema_version（无信封派生 JSON 除外）；'
                 '字节产物必须为 null')
-        if self.schema_version is not None and self.schema_version < 1:
+        if type(self.schema_version) is int and self.schema_version < 1:
             raise ValueError('schema_version 必须 >= 1')
         return self
 
@@ -249,7 +186,8 @@ class CorpusBookEntry(StrictModel):
             raise ValueError(
                 'Stage5 formal chapters 必须恰为 canonical ch01..chNN（正文＋章回执成对）')
         expected_nodes = set(CURRENT_CORPUS_PAID_NODES)
-        if set(self.ledger.nodes) != expected_nodes:
+        if (not (expected_nodes - CONDITIONAL_PAID_NODES) <= set(self.ledger.nodes)
+                or not set(self.ledger.nodes) <= expected_nodes):
             raise ValueError(
                 f'ledger.nodes 必须恰好覆盖 {len(expected_nodes)} 个 '
                 f'production dispatch nodes：{sorted(expected_nodes)}')
@@ -293,7 +231,8 @@ class CorpusSkipExpectation(StrictModel):
 class CorpusManifest(StrictModel):
     """Acceptance identity; intentionally contains no title or corpus body text."""
 
-    manifest_version: Literal[1]
+    manifest_version: Literal[2]
+    contract_version: Literal['story-v1']
     generated_at: str = Field(min_length=1)
     code_identity: str = Field(min_length=1)
     artifact_inventory_sha256: Sha256
@@ -341,7 +280,8 @@ class CorpusManifest(StrictModel):
                     f'{sorted(expected_flags)}，实得 {flags}')
         command_nodes = {node for _sid, node in dispatches}
         for book in self.books:
-            if set(book.ledger.nodes) != command_nodes:
+            if (not (command_nodes - CONDITIONAL_PAID_NODES) <= set(book.ledger.nodes)
+                    or not set(book.ledger.nodes) <= command_nodes):
                 raise ValueError(
                     f'ledger.nodes 与 {len(self.commands)} 条 commands 的节点面不一致')
         nodeids = [item.nodeid for item in self.skip_allowlist]

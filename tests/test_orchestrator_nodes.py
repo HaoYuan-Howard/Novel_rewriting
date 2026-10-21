@@ -8,7 +8,7 @@ test_orchestrator_nodes.py —— 四个纯函数：贵贱 · 写不写 · 那�
   · **展示与执行共用同一个 argv 构造函数**（`R-11.8`）——第二个落点会慢慢分家而不出声
   · **「0 成本」不等于「不写盘」**——原型 8 条注释都在说这句，而代码里没有落点
 
-⚠ F8b 载荷：现役 `NODES` 是 stage0.remove／stage1.partition ＋ 11 个 `str06.` 节点；
+现役 `NODES` 是 stage0.remove／stage1.partition ＋ 15 个story节点；
 旧链 14 键随存量解码面删除（关闭式拒识）。旧链节点的旗标面（--revalidate/--apply-edit/--mode 族）
 随节点整体退役——本文件对它们的现役断言一律是「任何现役节点都拒收」。
 """
@@ -47,7 +47,7 @@ def _bare(node: str) -> list[str]:
 
     ⚠ 不是空列表：人工 approve 节点有必填的人工凭据（`NodeSpec.required_flags`），
     少一个就拼不出 argv。想测「默认路径」的那几条要的是**默认跑法**，不是**空 flags**。
-    （F8b 后人工凭据族随旧链退役：现役 13 个节点 `required_flags` 全空，
+    （人工凭据族随旧链退役：现役17个节点 `required_flags` 全空，
     `_bare` 仍走 `missing_required`——它要在必填面重新出现时自动跟上。）
     """
     out: list[str] = []
@@ -103,7 +103,7 @@ EXECUTOR_RUN_CASES = [
     pytest.param(
         node,
         _executor_flags(node, tokens),
-        # 新链 9 个 str06 付费节点全部接受 `--check-only`：默认付费跑写盘，
+    # 当前11个付费节点全部接受 `--check-only`：默认付费跑写盘，
         # builder 一律自动追一条免费复检（判准是「写不写盘」）。
         2,
         id=f'{node}:{"+".join(sorted(tokens)) or "default"}',
@@ -133,7 +133,7 @@ def test_the_matrix_actually_has_rows():
     # 与旧 Stage2/4/5/7 链按非现役节点 legacy_incompatible 通则拒识）。
     # B2 五节点重建（2026-09-27）：
     # Stage2 拆五 owner，11→14。加节点就来改这个数。
-    assert len(NODES) == 15, f'节点数变成 {len(NODES)} 了——是有意加的就来改这个数'
+    assert len(NODES) == 17, f'节点数变成 {len(NODES)} 了——应为stage0/1加15个story节点'
 
 
 # ───────────────────────── 贵贱（R-11.7 · Q-10） ─────────────────────────
@@ -357,7 +357,7 @@ def test_stage4_repair_aggregate_recovery_refuses_all_identity_values(
 @pytest.mark.parametrize(('node', 'flags', 'step_count'), EXECUTOR_RUN_CASES)
 def test_every_profiled_executor_run_has_one_resolved_argv_and_step_snapshot(
         node, flags, step_count):
-    """9 个 str06 付费节点的默认付费组合共用 builder；自动复检追 `--check-only`，
+    """11个付费节点的默认付费组合共用builder；自动复检追 `--check-only`，
     永远不继承 agent/egress。"""
     steps = N.build_steps(
         node, SID, flags, base=BASE,
@@ -468,15 +468,16 @@ def test_executor_runtime_registries_close_over_the_same_nodes():
     # F8b：PROFILED_LLM_RUNS 翻为 11 个 str06. 付费节点（B2 五节点重建后）
     # 的默认（空 flags）跑法；`--check-only` 是免费复检，不在此表。
     expected = set(LLM_EXECUTOR_NODES)
-    assert len(expected) == len(N.PROFILED_LLM_RUNS) == 10
-    assert sum(len(rows) for rows in N.PROFILED_LLM_RUNS.values()) == 10
+    assert len(expected) == len(N.PROFILED_LLM_RUNS) == 11
+    assert sum(len(rows) for rows in N.PROFILED_LLM_RUNS.values()) == 11
     assert set(N.PROFILED_LLM_RUNS) == expected
 
 
 def test_deterministic_compile_and_assemble_are_structurally_unpaid():
-    """三个确定性 compile／assemble 结构性禁付：不在 executor 名单、
+    """四个确定性compile/assemble结构性禁付：不在executor名单、
     `spec.paid=False` 且没有任何能把它们变贵的旗标。"""
-    for node in ('str06.stage2.compile', 'str06.stage4.compile', 'str06.stage7.assemble'):
+    for node in ('str06.stage2.compile', 'str06.stage4.compile',
+                 'str06.stage4.hook_compile', 'str06.stage7.assemble'):
         assert node not in N.PROFILED_LLM_RUNS
         assert NODES[node].paid is False
         assert NODES[node].paid_flags == ()
@@ -685,8 +686,8 @@ def test_a_writing_run_gets_a_follow_up_check():
 def test_the_follow_up_check_criterion_is_writes_not_payment():
     """⭐ **判准是「写不写盘」，不是「花不花钱」** —— 这一格是实测改过的。
 
-    新链没有「免费但写盘」的跑法（免费恢复入口经付费边界落盘），所以
-    追检面收敛为：付费默认路追一条复检；免费纯读路（--check-only）不追。
+    付费生成和确定性免费发布默认均会写盘，因此都追免费复检；
+    纯读路（--check-only）不追。
     谁把「付费且写盘」写回去，免费恢复路就会丢复检——本条钉住方向。
     """
     steps = N.build_steps('str06.stage4.preserve', SID, base=BASE)
@@ -697,10 +698,21 @@ def test_the_follow_up_check_criterion_is_writes_not_payment():
         'str06.stage4.preserve', SID, ['--check-only'], base=BASE)) == 1
 
 
-def test_the_follow_up_check_is_skipped_when_the_node_cannot_take_it():
+def test_the_follow_up_check_is_skipped_when_the_node_cannot_take_it(monkeypatch):
     """⚠ 追一条它拒收的命令，作业会在第二步无缘无故失败——**而第一步已经花过钱了**。"""
-    assert '--check-only' not in NODES['str06.stage4.compile'].flags
+    # 当前所有story节点均有免费复验；用独立登记反例继续保护无桥时不误追检。
+    spec = NODES['str06.stage4.compile']
+    monkeypatch.setitem(NODES, 'str06.stage4.compile', spec._replace(flags=()))
     assert len(N.build_steps('str06.stage4.compile', SID, base=BASE)) == 1
+
+
+def test_current_deterministic_publications_have_free_follow_up_checks():
+    for node in ('str06.stage2.compile', 'str06.stage4.compile',
+                 'str06.stage4.hook_compile', 'str06.stage7.assemble'):
+        steps = N.build_steps(node, SID, base=BASE)
+        assert len(steps) == 2
+        assert not any(step.paid for step in steps)
+        assert '--check-only' in steps[1].argv and not steps[1].writes
 
 
 def test_a_non_writing_run_gets_no_follow_up():
@@ -763,14 +775,14 @@ def test_every_stage_has_a_check_bridge_and_check_node_picks_the_first():
     expected_bridges = {
         'stage0': ('stage0.remove',),
         'stage1': ('stage1.partition',),
-        'stage2': ('str06.stage2.book', 'str06.stage2.chapters',
-                   'str06.stage2.names', 'str06.stage2.associate'),
+        'stage2': ('str06.stage2.chapters', 'str06.stage2.book',
+                   'str06.stage2.associate', 'str06.stage2.names', 'str06.stage2.compile'),
         'stage4': ('str06.stage4.naming', 'str06.stage4.preserve',
-                   'str06.stage4.body_design', 'str06.stage4.hook_design'),
+                   'str06.stage4.body_design', 'str06.stage4.chapters', 'str06.stage4.compile',
+                   'str06.stage4.hook_design', 'str06.stage4.hook_compile'),
         'stage5': ('str06.stage5.hook', 'str06.stage5.body'),
-        # 命名前移批（2026-10-18）：stage7 只剩确定性 assemble（无 --check-only），
-        # 零桥是合法形态——层内只读探测走 `probe_node` 回落该层首节点。
-        'stage7': (),
+        # 确定性assemble也有显式免费复验入口。
+        'stage7': ('str06.stage7.assemble',),
     }
     for stage in sorted(STAGES):
         got = N.check_nodes(stage)

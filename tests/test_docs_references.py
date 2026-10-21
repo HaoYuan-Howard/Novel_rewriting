@@ -18,6 +18,8 @@ test_docs_references.py —— 文档里的**引用**不许悬空。
 from __future__ import annotations
 
 import ast
+import json
+from functools import lru_cache
 import os
 import re
 import subprocess
@@ -47,6 +49,23 @@ def _git_paths(*, tracked_only: bool = False) -> set[str]:
     result = subprocess.run(args, cwd=ROOT, check=True, capture_output=True,
                             text=True, encoding='utf-8')
     return {item for item in result.stdout.split('\0') if item}
+
+
+# 历史裁决引用当时实现；只允许本批明确退役且在冻结Git基线真实存在的路径。
+# 当前规格仍逐条检查当前文件，不能借历史清单放过悬空引用。
+_HISTORICAL_DOCS = frozenset({'docs/DECISIONS.md', 'docs/specs/target_naming_mainline.md'})
+
+@lru_cache(maxsize=1)
+def _historical_retired_paths():
+    inventory = json.loads(Path(ROOT, 'docs/specs/story_retirement_inventory.json').read_text(encoding='utf8'))
+    baseline = inventory['baseline_commit']
+    assert re.fullmatch(r'[0-9a-f]{40}', baseline)
+    result = subprocess.run(['git', 'ls-tree', '-r', '--name-only', baseline], cwd=ROOT,
+        check=True, capture_output=True, text=True, encoding='utf8')
+    tracked = set(result.stdout.splitlines())
+    retired = set(inventory['removed_runtime']) | set(inventory['retired_test_modules'])
+    assert retired <= tracked, '退役清单含冻结Git基线不存在的路径'
+    return retired
 
 
 def _purpose(doc: str) -> str:
@@ -137,6 +156,8 @@ def test_every_referenced_repo_path_exists(doc):
     for path in sorted(set(_PATH.findall(text))):
         if path in _DECLARED_ABSENT:      # 文档明说它不在仓里，见上表
             continue
+        if _rel(doc) in _HISTORICAL_DOCS and path in _historical_retired_paths():
+            continue
         # 目录形（以 / 结尾）与文件形都接受
         full = os.path.join(ROOT, path)
         if not (os.path.exists(full) or os.path.exists(full.rstrip('/'))):
@@ -214,9 +235,9 @@ def _orphans(docs: list[str]) -> set[Path]:
     return targets - reached
 
 
-def _defined_names(path: Path) -> set[str]:
+def _defined_source_names(source: str) -> set[str]:
     names = set()
-    for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+    for node in ast.walk(ast.parse(source)):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             names.add(node.name)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
@@ -226,11 +247,31 @@ def _defined_names(path: Path) -> set[str]:
     return names
 
 
+def _defined_names(path: Path) -> set[str]:
+    return _defined_source_names(path.read_text(encoding='utf-8'))
+
+
+@lru_cache(maxsize=None)
+def _historical_symbol_exists(path: str, symbol: str) -> bool:
+    """历史文档只可引用冻结Git中真实存在的符号，拼错仍然失败。"""
+    if not path.endswith('.py') or not re.fullmatch(r'[A-Za-z0-9_./-]+', path):
+        return False
+    inventory = json.loads(Path(ROOT, 'docs/specs/story_retirement_inventory.json').read_text(encoding='utf8'))
+    result = subprocess.run(['git', 'show', inventory['baseline_commit'] + ':' + path],
+        cwd=ROOT, capture_output=True, text=True, encoding='utf8')
+    if result.returncode != 0:
+        return False
+    defined = _defined_source_names(result.stdout)
+    return all(part in defined for part in symbol.split('(', 1)[0].split('.'))
+
+
 def _missing_symbols(doc: str) -> list[str]:
     missing = []
     defined = {}
     text = Path(doc).read_text(encoding='utf-8')
     for path, symbol in re.findall(r'`([A-Za-z0-9_./-]+\.(?:py|md))::([^`\[\n]+)(?:\[[^`]*\])?`', text):
+        if _rel(doc) in _HISTORICAL_DOCS and _historical_symbol_exists(path, symbol):
+            continue
         full = Path(ROOT) / path
         if not full.is_file():
             full = Path(doc).parent / path

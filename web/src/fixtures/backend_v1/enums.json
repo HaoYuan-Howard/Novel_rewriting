@@ -16,6 +16,11 @@
   "invalid",
   "unreadable"
  ],
+ "story_artifact_status": [
+  "ready",
+  "missing",
+  "invalid"
+ ],
  "overview_verdict": [
   "broken",
   "legacy_incompatible",
@@ -186,8 +191,6 @@
  "who_checks": [
   "HARD",
   "INFO",
-  "GATE",
-  "METRIC",
   "CARRIER",
   "STRUCTURAL",
   "DELEGATED",
@@ -248,7 +251,7 @@
   "disclosure"
  ],
  "free_entries": {
-  "--check-only": "按当前契约免费复检：只允许缓存命中与登记的历史采用，零新购、纯读不写盘；报 FAIL 退出码非零",
+  "--check-only": "按当前契约免费复检：仅本根同请求已购回答重放、确定性重编与重验，零新购；报 FAIL 退出码非零",
   "--dry-run": "只打印将要发出去的东西，不调用、不写盘"
  },
  "paid_flags": {},
@@ -268,16 +271,7 @@
   3,
   4
  ],
- "narrow_owner_units": {
-  "name_variants": [
-   "str06.stage2.names",
-   "book:name_variants"
-  ],
-  "cross_cause": [
-   "str06.stage2.associate",
-   "book:cross_cause"
-  ]
- },
+ "narrow_owner_units": {},
  "stages": [
   "stage0",
   "stage1",
@@ -317,16 +311,18 @@
  "pipeline_steps": [
   "stage0.remove",
   "stage1.partition",
-  "str06.stage2.book",
   "str06.stage2.chapters",
-  "str06.stage2.names",
+  "str06.stage2.book",
   "str06.stage2.associate",
+  "str06.stage2.names",
   "str06.stage2.compile",
   "str06.stage4.naming",
   "str06.stage4.preserve",
   "str06.stage4.body_design",
-  "str06.stage4.hook_design",
+  "str06.stage4.chapters",
   "str06.stage4.compile",
+  "str06.stage4.hook_design",
+  "str06.stage4.hook_compile",
   "str06.stage5.hook",
   "str06.stage5.body",
   "str06.stage7.assemble"
@@ -445,42 +441,8 @@
     "approval_projection": []
    }
   },
-  "str06.stage2.book": {
-   "label": "Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）",
-   "paid": true,
-   "stage": "stage2",
-   "section": "R-2",
-   "flags": [
-    "--check-only"
-   ],
-   "produces": [
-    "stage2/observations/book.json"
-   ],
-   "lifecycle": {
-    "unit_kind": "book",
-    "input_workpack": "正式 Stage1 MainText 章数组（阅读序密集）＋hook_copy 章前文字（e00 证据段）",
-    "generation_mode": "executor",
-    "review_mode": "none",
-    "review_scope": "机械校验自证；语义未审以 unver 披露",
-    "repair_actions": [
-     "stop"
-    ],
-    "repair_owners": [
-     "str06.stage2.book"
-    ],
-    "session_scope": "executor:book",
-    "recovery_entries": [
-     "saved_response",
-     "historical_adoption",
-     "owner_patch"
-    ],
-    "executor_content_limit": 4,
-    "approval_bindings": [],
-    "approval_projection": []
-   }
-  },
   "str06.stage2.chapters": {
-   "label": "Stage2 逐章观察（事件与三类转移；互不依赖，D3）",
+   "label": "逐章源文理解",
    "paid": true,
    "stage": "stage2",
    "section": "R-2",
@@ -492,11 +454,12 @@
    ],
    "lifecycle": {
     "unit_kind": "chapter",
-    "input_workpack": "书级人物表（book 观察）、本章句段与第 1..k-1 章原文、抽取协议",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "机械校验自证；章观察互不依赖，缺失单元恢复不重购已存结果（D3）；逐章失败留证 runtime/chapter_observation_failures.json（「最近一次完成执行」形状，与正文留证同形共用）",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
+     "recompute",
      "stop"
     ],
     "repair_owners": [
@@ -505,42 +468,43 @@
     "session_scope": "executor:chapter",
     "recovery_entries": [
      "saved_response",
-     "historical_adoption",
-     "owner_patch"
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 4,
     "approval_bindings": [],
     "approval_projection": []
    }
   },
-  "str06.stage2.names": {
-   "label": "Stage2 源名称结构观察（家族、名、化名、称谓构词）",
+  "str06.stage2.book": {
+   "label": "全书事实语义整合",
    "paid": true,
    "stage": "stage2",
-   "section": "R-3",
+   "section": "R-2",
    "flags": [
     "--check-only"
    ],
    "produces": [
-    "stage2/observations/names.json"
+    "stage2/observations/book.json"
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "书级人物表（book 观察）、完整 MainText 与 hook_copy 章前文字",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "机械校验自证；名称同一性留证，歧义停止；姓氏构词探针只报告",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
+     "recompute",
      "stop"
     ],
     "repair_owners": [
-     "str06.stage2.names"
+     "str06.stage2.book"
     ],
     "session_scope": "executor:book",
     "recovery_entries": [
      "saved_response",
-     "historical_adoption",
-     "owner_patch"
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 4,
     "approval_bindings": [],
@@ -548,7 +512,7 @@
    }
   },
   "str06.stage2.associate": {
-   "label": "Stage2 跨章关联（同一命题、同维状态、悬念配对、跨章因果与续场，D8）",
+   "label": "具体未决项窄消歧",
    "paid": true,
    "stage": "stage2",
    "section": "R-2",
@@ -560,11 +524,12 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "book 与 chapters 观察经 names 已证明同一性归一后的句柄及最小文本（compiler 投影）",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "机械校验自证；只选已给句柄，未决项保持未决、不默认合并或默认不同（D8）",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
+     "recompute",
      "stop"
     ],
     "repair_owners": [
@@ -573,8 +538,43 @@
     "session_scope": "executor:book",
     "recovery_entries": [
      "saved_response",
-     "historical_adoption",
-     "owner_patch"
+     "deterministic_replay",
+     "committed_set_recovery"
+    ],
+    "executor_content_limit": 4,
+    "approval_bindings": [],
+    "approval_projection": []
+   }
+  },
+  "str06.stage2.names": {
+   "label": "源实体名称结构",
+   "paid": true,
+   "stage": "stage2",
+   "section": "R-3",
+   "flags": [
+    "--check-only"
+   ],
+   "produces": [
+    "stage2/observations/names.json"
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "当前契约的冻结正式输入",
+    "generation_mode": "executor",
+    "review_mode": "none",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
+    "repair_actions": [
+     "recompute",
+     "stop"
+    ],
+    "repair_owners": [
+     "str06.stage2.names"
+    ],
+    "session_scope": "executor:book",
+    "recovery_entries": [
+     "saved_response",
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 4,
     "approval_bindings": [],
@@ -582,22 +582,22 @@
    }
   },
   "str06.stage2.compile": {
-   "label": "Stage2 确定性编译：解析证据、生成 ID、执行关联，发布 Characters＋Blueprint（D9）",
+   "label": "发布唯一 SourceStory",
    "paid": false,
    "stage": "stage2",
    "section": "R-2",
-   "flags": [],
+   "flags": [
+    "--check-only"
+   ],
    "produces": [
-    "stage2/characters/characters.json",
-    "stage2/blueprints/chapter_blueprints.json",
-    "stage2/acceptance/fold.json"
+    "stage2/story/source_story.json"
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "book／chapters／names／associate 四份观察",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "deterministic",
     "review_mode": "none",
-    "review_scope": "未决项拒绝发布并按 item 报告（D8）；双真源唯一 writer（D9）",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
      "recompute",
      "stop"
@@ -607,7 +607,9 @@
     ],
     "session_scope": "none",
     "recovery_entries": [
-     "deterministic_replay"
+     "saved_response",
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 0,
     "approval_bindings": [],
@@ -615,7 +617,7 @@
    }
   },
   "str06.stage4.naming": {
-   "label": "Stage4 目标命名（NameMap v6 赋值；置于 Preserve 之前）",
+   "label": "目标人物命名",
    "paid": true,
    "stage": "stage4",
    "section": "R-10",
@@ -627,11 +629,12 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "Characters v6 名称结构与 Blueprint v17",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "机械校验通过即 auto 定稿；目标姓名前移后是 Preserve 与设计链的正式输入",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
+     "recompute",
      "stop"
     ],
     "repair_owners": [
@@ -640,8 +643,8 @@
     "session_scope": "executor:book",
     "recovery_entries": [
      "saved_response",
-     "historical_adoption",
-     "owner_patch"
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 4,
     "approval_bindings": [],
@@ -649,7 +652,7 @@
    }
   },
   "str06.stage4.preserve": {
-   "label": "Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影",
+   "label": "保真选择与局部一致化",
    "paid": true,
    "stage": "stage4",
    "section": "R-5",
@@ -657,16 +660,16 @@
     "--check-only"
    ],
    "produces": [
-    "runtime/preserve_checkpoint.json",
-    "stage4/grounding/reconstruction_brief.json"
+    "stage4/story/preservation.json"
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "源 core 与 Blueprint v17",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "机械校验通过即自动接受",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
+     "recompute",
      "stop"
     ],
     "repair_owners": [
@@ -675,8 +678,8 @@
     "session_scope": "executor:book",
     "recovery_entries": [
      "saved_response",
-     "historical_adoption",
-     "owner_patch"
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 4,
     "approval_bindings": [],
@@ -684,7 +687,7 @@
    }
   },
   "str06.stage4.body_design": {
-   "label": "Stage4 目标故事与导演说明设计（BodyDesign＋real 承载标注派生 SemanticBinding）",
+   "label": "整书目标骨架",
    "paid": true,
    "stage": "stage4",
    "section": "R-5",
@@ -692,16 +695,16 @@
     "--check-only"
    ],
    "produces": [
-    "stage4/design/body_design.json",
-    "stage4/grounding/semantic_binding.json"
+    "stage4/drafts/book.json"
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "Preserve checkpoint、身份投影与 Characters v6",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "机械校验通过即自动执行；CS-3 bind 退役——承载位由 wire 的 real 标注派生，双产物同组发布（semantic_binding 唯一 writer）",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
+     "recompute",
      "stop"
     ],
     "repair_owners": [
@@ -710,16 +713,16 @@
     "session_scope": "executor:book",
     "recovery_entries": [
      "saved_response",
-     "historical_adoption",
-     "owner_patch"
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 4,
     "approval_bindings": [],
     "approval_projection": []
    }
   },
-  "str06.stage4.hook_design": {
-   "label": "Stage4 Hook 设计并经 publish_graph 唯一发布 PresentationGraph",
+  "str06.stage4.chapters": {
+   "label": "逐章场景与行动展开",
    "paid": true,
    "stage": "stage4",
    "section": "R-5",
@@ -727,25 +730,26 @@
     "--check-only"
    ],
    "produces": [
-    "stage4/design/presentation_graph.json"
+    "stage4/drafts/ch{nn}.json"
    ],
    "lifecycle": {
-    "unit_kind": "book",
-    "input_workpack": "BodyDesign、Characters v6 与身份投影",
+    "unit_kind": "chapter",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "机械校验通过即自动执行；graph 唯一 publisher",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
+     "recompute",
      "stop"
     ],
     "repair_owners": [
-     "str06.stage4.hook_design"
+     "str06.stage4.chapters"
     ],
-    "session_scope": "executor:book",
+    "session_scope": "executor:chapter",
     "recovery_entries": [
      "saved_response",
-     "historical_adoption",
-     "owner_patch"
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 4,
     "approval_bindings": [],
@@ -753,25 +757,24 @@
    }
   },
   "str06.stage4.compile": {
-   "label": "Stage4 确定性编译：ExecutionPlan／Guard／WriterBookIR／HookContext",
+   "label": "发布 TargetStory 与章包",
    "paid": false,
    "stage": "stage4",
    "section": "R-6",
-   "flags": [],
+   "flags": [
+    "--check-only"
+   ],
    "produces": [
-    "stage4/compiled/execution_plan.json",
-    "stage4/acceptance/guard/compile.json",
-    "stage4/acceptance/guard/report.json",
-    "stage4/acceptance/packet_metrics.json",
-    "stage4/context/hook/hook.json",
-    "stage4/ir/writer_book_ir.json"
+    "stage4/story/target_story.json",
+    "stage4/story/adaptation_map.json",
+    "stage4/packets/ch{nn}.json"
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "PresentationGraph、SemanticBinding 与 Characters v6",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "deterministic",
     "review_mode": "none",
-    "review_scope": "Guard M1–M8 写前机械校验；零错误才放行",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
      "recompute",
      "stop"
@@ -781,7 +784,79 @@
     ],
     "session_scope": "none",
     "recovery_entries": [
-     "deterministic_replay"
+     "saved_response",
+     "deterministic_replay",
+     "committed_set_recovery"
+    ],
+    "executor_content_limit": 0,
+    "approval_bindings": [],
+    "approval_projection": []
+   }
+  },
+  "str06.stage4.hook_design": {
+   "label": "目标 Hook 组织",
+   "paid": true,
+   "stage": "stage4",
+   "section": "R-5",
+   "flags": [
+    "--check-only"
+   ],
+   "produces": [
+    "stage4/drafts/hook.json"
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "当前契约的冻结正式输入",
+    "generation_mode": "executor",
+    "review_mode": "none",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
+    "repair_actions": [
+     "recompute",
+     "stop"
+    ],
+    "repair_owners": [
+     "str06.stage4.hook_design"
+    ],
+    "session_scope": "executor:book",
+    "recovery_entries": [
+     "saved_response",
+     "deterministic_replay",
+     "committed_set_recovery"
+    ],
+    "executor_content_limit": 4,
+    "approval_bindings": [],
+    "approval_projection": []
+   }
+  },
+  "str06.stage4.hook_compile": {
+   "label": "编译 Hook 写手材料",
+   "paid": false,
+   "stage": "stage4",
+   "section": "R-6",
+   "flags": [
+    "--check-only"
+   ],
+   "produces": [
+    "stage4/packets/hook.json"
+   ],
+   "lifecycle": {
+    "unit_kind": "book",
+    "input_workpack": "当前契约的冻结正式输入",
+    "generation_mode": "deterministic",
+    "review_mode": "none",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
+    "repair_actions": [
+     "recompute",
+     "stop"
+    ],
+    "repair_owners": [
+     "str06.stage4.hook_compile"
+    ],
+    "session_scope": "none",
+    "recovery_entries": [
+     "saved_response",
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 0,
     "approval_bindings": [],
@@ -789,7 +864,7 @@
    }
   },
   "str06.stage5.hook": {
-   "label": "Stage5 Hook 成文（同 Context 有限重写＋机械验）",
+   "label": "Hook 成文与回执",
    "paid": true,
    "stage": "stage5",
    "section": "R-8",
@@ -802,11 +877,12 @@
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "HookContext（正式输入确定性重建）",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "单产＋机械验；重写上限内无合法候选即停止，不披露放行",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
+     "recompute",
      "stop"
     ],
     "repair_owners": [
@@ -814,10 +890,9 @@
     ],
     "session_scope": "executor:book",
     "recovery_entries": [
-     "same_context_rewrite",
      "saved_response",
-     "historical_adoption",
-     "owner_patch"
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 4,
     "approval_bindings": [],
@@ -825,7 +900,7 @@
    }
   },
   "str06.stage5.body": {
-   "label": "Stage5 按章正文成文（机械检查＋有限重写＋章级回执）",
+   "label": "顺序正文与章间窄修",
    "paid": true,
    "stage": "stage5",
    "section": "R-7",
@@ -838,11 +913,12 @@
    ],
    "lifecycle": {
     "unit_kind": "chapter",
-    "input_workpack": "章包（WriterBookIR 逐章确定性投影；各章独立，唯一输入面）",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "executor",
     "review_mode": "none",
-    "review_scope": "章级机械验（硬失败不披露放行，只有篇幅带可披露）；原子写正文→章回执；无合法候选停该章（各章独立，其余章照常；逐章失败留证 runtime/body_failures.json——「最近一次完成执行」形状：requested/attempted/chapters/recorded_at，与章观察同形共用）",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
+     "recompute",
      "stop"
     ],
     "repair_owners": [
@@ -850,10 +926,9 @@
     ],
     "session_scope": "executor:chapter",
     "recovery_entries": [
-     "committed_set_recovery",
      "saved_response",
-     "historical_adoption",
-     "owner_patch"
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 4,
     "approval_bindings": [],
@@ -861,21 +936,23 @@
    }
   },
   "str06.stage7.assemble": {
-   "label": "Stage7 成书装配（TXT 先落盘、manifest 最后提交；rc26 起零改名）",
+   "label": "核对回执后装配成书",
    "paid": false,
    "stage": "stage7",
    "section": "R-10",
-   "flags": [],
+   "flags": [
+    "--check-only"
+   ],
    "produces": [
     "stage7/final/{title}_rewriting.txt",
     "stage7/final/delivery_manifest.json"
    ],
    "lifecycle": {
     "unit_kind": "book",
-    "input_workpack": "章回执链、Hook 回执与正文",
+    "input_workpack": "当前契约的冻结正式输入",
     "generation_mode": "deterministic",
     "review_mode": "none",
-    "review_scope": "章回执链核对＋按阅读序装配；交付可确定性重放（rc26 起零改名）",
+    "review_scope": "引用、证据与机械交接；语义质量 unver",
     "repair_actions": [
      "recompute",
      "stop"
@@ -885,7 +962,9 @@
     ],
     "session_scope": "none",
     "recovery_entries": [
-     "deterministic_replay"
+     "saved_response",
+     "deterministic_replay",
+     "committed_set_recovery"
     ],
     "executor_content_limit": 0,
     "approval_bindings": [],
@@ -982,32 +1061,8 @@
    "required_inputs": []
   },
   {
-   "kind": "str06.stage2.book",
-   "label": "Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）",
-   "extra": null,
-   "paid": true,
-   "free_flag": null,
-   "writes": "stage2/observations/book.json",
-   "writes_disk": true,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
-   "kind": "str06.stage2.book",
-   "label": "Stage2 书级观察（人物候选、称谓及证据、初态、世界约束） --check-only",
-   "extra": [
-    "--check-only"
-   ],
-   "paid": false,
-   "free_flag": "--check-only",
-   "writes": "",
-   "writes_disk": false,
-   "needs_value": null,
-   "required_inputs": []
-  },
-  {
    "kind": "str06.stage2.chapters",
-   "label": "Stage2 逐章观察（事件与三类转移；互不依赖，D3）",
+   "label": "逐章源文理解",
    "extra": null,
    "paid": true,
    "free_flag": null,
@@ -1018,7 +1073,7 @@
   },
   {
    "kind": "str06.stage2.chapters",
-   "label": "Stage2 逐章观察（事件与三类转移；互不依赖，D3） --check-only",
+   "label": "逐章源文理解 --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1030,19 +1085,19 @@
    "required_inputs": []
   },
   {
-   "kind": "str06.stage2.names",
-   "label": "Stage2 源名称结构观察（家族、名、化名、称谓构词）",
+   "kind": "str06.stage2.book",
+   "label": "全书事实语义整合",
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "stage2/observations/names.json",
+   "writes": "stage2/observations/book.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
-   "kind": "str06.stage2.names",
-   "label": "Stage2 源名称结构观察（家族、名、化名、称谓构词） --check-only",
+   "kind": "str06.stage2.book",
+   "label": "全书事实语义整合 --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1055,7 +1110,7 @@
   },
   {
    "kind": "str06.stage2.associate",
-   "label": "Stage2 跨章关联（同一命题、同维状态、悬念配对、跨章因果与续场，D8）",
+   "label": "具体未决项窄消歧",
    "extra": null,
    "paid": true,
    "free_flag": null,
@@ -1066,7 +1121,31 @@
   },
   {
    "kind": "str06.stage2.associate",
-   "label": "Stage2 跨章关联（同一命题、同维状态、悬念配对、跨章因果与续场，D8） --check-only",
+   "label": "具体未决项窄消歧 --check-only",
+   "extra": [
+    "--check-only"
+   ],
+   "paid": false,
+   "free_flag": "--check-only",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage2.names",
+   "label": "源实体名称结构",
+   "extra": null,
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage2/observations/names.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage2.names",
+   "label": "源实体名称结构 --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1079,18 +1158,31 @@
   },
   {
    "kind": "str06.stage2.compile",
-   "label": "Stage2 确定性编译：解析证据、生成 ID、执行关联，发布 Characters＋Blueprint（D9）",
+   "label": "发布唯一 SourceStory",
    "extra": null,
    "paid": false,
    "free_flag": null,
-   "writes": "stage2/characters/characters.json · stage2/blueprints/chapter_blueprints.json · stage2/acceptance/fold.json",
+   "writes": "stage2/story/source_story.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
+   "kind": "str06.stage2.compile",
+   "label": "发布唯一 SourceStory --check-only",
+   "extra": [
+    "--check-only"
+   ],
+   "paid": false,
+   "free_flag": "--check-only",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
    "kind": "str06.stage4.naming",
-   "label": "Stage4 目标命名（NameMap v6 赋值；置于 Preserve 之前）",
+   "label": "目标人物命名",
    "extra": null,
    "paid": true,
    "free_flag": null,
@@ -1101,7 +1193,7 @@
   },
   {
    "kind": "str06.stage4.naming",
-   "label": "Stage4 目标命名（NameMap v6 赋值；置于 Preserve 之前） --check-only",
+   "label": "目标人物命名 --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1114,18 +1206,18 @@
   },
   {
    "kind": "str06.stage4.preserve",
-   "label": "Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影",
+   "label": "保真选择与局部一致化",
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "runtime/preserve_checkpoint.json · stage4/grounding/reconstruction_brief.json",
+   "writes": "stage4/story/preservation.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
    "kind": "str06.stage4.preserve",
-   "label": "Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影 --check-only",
+   "label": "保真选择与局部一致化 --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1138,18 +1230,18 @@
   },
   {
    "kind": "str06.stage4.body_design",
-   "label": "Stage4 目标故事与导演说明设计（BodyDesign＋real 承载标注派生 SemanticBinding）",
+   "label": "整书目标骨架",
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "stage4/design/body_design.json · stage4/grounding/semantic_binding.json",
+   "writes": "stage4/drafts/book.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
    "kind": "str06.stage4.body_design",
-   "label": "Stage4 目标故事与导演说明设计（BodyDesign＋real 承载标注派生 SemanticBinding） --check-only",
+   "label": "整书目标骨架 --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1161,19 +1253,19 @@
    "required_inputs": []
   },
   {
-   "kind": "str06.stage4.hook_design",
-   "label": "Stage4 Hook 设计并经 publish_graph 唯一发布 PresentationGraph",
+   "kind": "str06.stage4.chapters",
+   "label": "逐章场景与行动展开",
    "extra": null,
    "paid": true,
    "free_flag": null,
-   "writes": "stage4/design/presentation_graph.json",
+   "writes": "stage4/drafts/ch{nn}.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
-   "kind": "str06.stage4.hook_design",
-   "label": "Stage4 Hook 设计并经 publish_graph 唯一发布 PresentationGraph --check-only",
+   "kind": "str06.stage4.chapters",
+   "label": "逐章场景与行动展开 --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1186,18 +1278,79 @@
   },
   {
    "kind": "str06.stage4.compile",
-   "label": "Stage4 确定性编译：ExecutionPlan／Guard／WriterBookIR／HookContext",
+   "label": "发布 TargetStory 与章包",
    "extra": null,
    "paid": false,
    "free_flag": null,
-   "writes": "stage4/compiled/execution_plan.json · stage4/acceptance/guard/compile.json · stage4/acceptance/guard/report.json · stage4/acceptance/packet_metrics.json · stage4/context/hook/hook.json · stage4/ir/writer_book_ir.json",
+   "writes": "stage4/story/target_story.json · stage4/story/adaptation_map.json · stage4/packets/ch{nn}.json",
    "writes_disk": true,
    "needs_value": null,
    "required_inputs": []
   },
   {
+   "kind": "str06.stage4.compile",
+   "label": "发布 TargetStory 与章包 --check-only",
+   "extra": [
+    "--check-only"
+   ],
+   "paid": false,
+   "free_flag": "--check-only",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage4.hook_design",
+   "label": "目标 Hook 组织",
+   "extra": null,
+   "paid": true,
+   "free_flag": null,
+   "writes": "stage4/drafts/hook.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage4.hook_design",
+   "label": "目标 Hook 组织 --check-only",
+   "extra": [
+    "--check-only"
+   ],
+   "paid": false,
+   "free_flag": "--check-only",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage4.hook_compile",
+   "label": "编译 Hook 写手材料",
+   "extra": null,
+   "paid": false,
+   "free_flag": null,
+   "writes": "stage4/packets/hook.json",
+   "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage4.hook_compile",
+   "label": "编译 Hook 写手材料 --check-only",
+   "extra": [
+    "--check-only"
+   ],
+   "paid": false,
+   "free_flag": "--check-only",
+   "writes": "",
+   "writes_disk": false,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
    "kind": "str06.stage5.hook",
-   "label": "Stage5 Hook 成文（同 Context 有限重写＋机械验）",
+   "label": "Hook 成文与回执",
    "extra": null,
    "paid": true,
    "free_flag": null,
@@ -1208,7 +1361,7 @@
   },
   {
    "kind": "str06.stage5.hook",
-   "label": "Stage5 Hook 成文（同 Context 有限重写＋机械验） --check-only",
+   "label": "Hook 成文与回执 --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1221,7 +1374,7 @@
   },
   {
    "kind": "str06.stage5.body",
-   "label": "Stage5 按章正文成文（机械检查＋有限重写＋章级回执）",
+   "label": "顺序正文与章间窄修",
    "extra": null,
    "paid": true,
    "free_flag": null,
@@ -1232,7 +1385,7 @@
   },
   {
    "kind": "str06.stage5.body",
-   "label": "Stage5 按章正文成文（机械检查＋有限重写＋章级回执） --check-only",
+   "label": "顺序正文与章间窄修 --check-only",
    "extra": [
     "--check-only"
    ],
@@ -1245,12 +1398,25 @@
   },
   {
    "kind": "str06.stage7.assemble",
-   "label": "Stage7 成书装配（TXT 先落盘、manifest 最后提交；rc26 起零改名）",
+   "label": "核对回执后装配成书",
    "extra": null,
    "paid": false,
    "free_flag": null,
    "writes": "stage7/final/{title}_rewriting.txt · stage7/final/delivery_manifest.json",
    "writes_disk": true,
+   "needs_value": null,
+   "required_inputs": []
+  },
+  {
+   "kind": "str06.stage7.assemble",
+   "label": "核对回执后装配成书 --check-only",
+   "extra": [
+    "--check-only"
+   ],
+   "paid": false,
+   "free_flag": "--check-only",
+   "writes": "",
+   "writes_disk": false,
    "needs_value": null,
    "required_inputs": []
   }

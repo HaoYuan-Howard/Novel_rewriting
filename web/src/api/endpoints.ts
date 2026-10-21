@@ -43,15 +43,12 @@ import type { Artifact, NovelOverview, NovelsResponse } from '@/types/novels'
 import type { TrashNovelResult } from '@/types/novels'
 import type { RunProgress, WorkUnitGrantPreview, WorkUnitGrantResult } from '@/types/run'
 import type {
-  Str06BlueprintView,
   Str06CandidateList,
-  Str06CharactersView,
   Str06ChapterView,
   Str06DeliveryView,
-  Str06DesignView,
   Str06HookView,
-  Str06IrNavView,
-  Str06NamingView,
+  Str06SourceStoryView,
+  Str06TargetStoryView,
   Str06RunView,
 } from '@/types/str06'
 import type {
@@ -68,7 +65,7 @@ import type {
   Stage1View,
 } from '@/types/stages'
 import { isApiError } from './errors'
-import { get, getText, post, postRaw } from './client'
+import { get, getTextFile, post, postRaw } from './client'
 import { mockApi } from './mock'
 
 const n = (sid: string) => '/novels/' + encodeURIComponent(sid)
@@ -511,15 +508,12 @@ export const realApi: Api = {
   // STR-06 候选链只读监控：与现役 `/novels` 面物理分开的另一棵路由树（F7d）。
   getStr06Candidates: () => get<Str06CandidateList>('/str06/candidates'),
   getStr06Run: (candidate) => get<Str06RunView>(str06(candidate, 'run')),
-  getStr06Characters: (candidate) => get<Str06CharactersView>(str06(candidate, 'characters')),
-  getStr06Blueprint: (candidate) => get<Str06BlueprintView>(str06(candidate, 'blueprint')),
-  getStr06Design: (candidate) => get<Str06DesignView>(str06(candidate, 'design')),
-  getStr06Ir: (candidate) => get<Str06IrNavView>(str06(candidate, 'ir')),
+  getStr06SourceStory: (candidate) => get<Str06SourceStoryView>(str06(candidate, 'source-story')),
+  getStr06TargetStory: (candidate) => get<Str06TargetStoryView>(str06(candidate, 'target-story')),
   getStr06Chapter: (candidate, o) => get<Str06ChapterView>(str06(candidate, 'chapters/' + o)),
   getStr06Hook: (candidate) => get<Str06HookView>(str06(candidate, 'hook')),
-  getStr06Naming: (candidate) => get<Str06NamingView>(str06(candidate, 'naming')),
   getStr06Delivery: (candidate) => get<Str06DeliveryView>(str06(candidate, 'delivery')),
-  getStr06Book: (candidate) => getText(str06(candidate, 'book')),
+  getStr06Book: (candidate) => getTextFile(str06(candidate, 'book') + '?download=true'),
 }
 
 /** 编译期常量：VITE_USE_MOCK 会被 Vite 替换成字面量，于是这个三元能被静态折叠 */

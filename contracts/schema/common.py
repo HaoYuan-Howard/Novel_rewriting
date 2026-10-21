@@ -25,12 +25,11 @@ Owner = Literal[OWNER]
 #: 「0 成本路径局部改写过这份产物」那条路的 flag 取值面。
 #: ⚠ F8a：旧链的局部改写旗标（`--recheck`／`--renormalize`／`--identity`／
 #: `--apply-edit`／`--adopt-residual`）随旧链整体退役，`PARTIAL_REWRITE_FLAGS`
-#: 现为空——新链没有「同一份产物被 0 成本路部分改写」的形状：免费恢复入口
-#: （saved_response／historical_adoption／owner_patch／deterministic_replay）
-#   全部整份重写本节点产物，写效应即该节点的 `produces`。
+#: 现为空；当前本根回答重放、重编与重验不使用旧局部改写标记。
+#: 正文开篇局部修订由专用ProseReceipt补丁链保留真实来源。
 #: 空 `Literal[()]` 不是合法类型 ⇒ 落到 `Never`：这个字段**结构上只能是 None**。
-#: 保留字段而不删，是因为 `Provenance` 是新旧链共用的载体（I-05），删字段会
-#: 改动所有存量产物的解码面；让它在类型上不可达才是诚实的「这条路没有了」。
+#: 通用Provenance仍供当前Stage0/1和故事产物组合；此字段只可为None，
+#: 不提供旧链混版标记或成稿的解码和迁移。
 if PARTIAL_REWRITE_FLAGS:
     PartialRewrite = Literal[PARTIAL_REWRITE_FLAGS]
 else:
@@ -138,15 +137,6 @@ class HashBoundHumanApproval(HumanApproval):
     subject_sha256: Sha256
 
 
-class SharedAnalysisSource(StrictModel):
-    """共享首抽的不可变来源身份；费用只由回执及唯一 ledger attempt 认领。"""
-
-    receipt_rel: Literal['stage2/analyze_receipt.json']
-    receipt_sha256: Sha256
-    run_id: str = Field(min_length=1)
-    attempt_id: Annotated[str, StringConstraints(pattern=r'^[0-9a-f]{16}$')]
-
-
 class Provenance(StrictModel):
     """产物的来源账。**付费层用 `LlmProvenance`，0 成本层用 `FreeProvenance`。**
 
@@ -174,9 +164,6 @@ class Provenance(StrictModel):
 
     #: 见 `Usage`。可选：0 成本节点没有它。
     usage: Usage | None = None
-
-    #: 非空时 usage 不重复认领共享调用；模型与请求身份仍保留真实生成来源。
-    shared_analysis_source: SharedAnalysisSource | None = None
 
     # ── 以下是**三态**字段：`None` 一律表示「键不在」，落盘时必须 exclude ──
 

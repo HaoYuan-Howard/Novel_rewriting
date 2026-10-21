@@ -9,7 +9,7 @@ queue.py —— 批量队列（`R-13`）。**一次排入多本书，人只在�
 
 【`create()` + runner 才是真队列】确认后的整份命令快照追加进
 `_service/queues.jsonl`；每本书一条 lane，不同书并行。同书首项失败后其余项记
-`not_run`，人工闸门持久写 `waiting_on`。服务重启时，旧 running 先成为 unknown，
+`not_run`，故障阻断持久写 `waiting_on`。服务重启时，旧 running 先成为 unknown，
 再对照 jobs 事件与产物存在性/新鲜度恢复；runner 从不临时扩张已确认的命令面。
 
 【⚠ 队列本身不产生新的判定】`R-13.6` → `R-11.4`：**造第二个判官就是造第二个落点。**
@@ -48,56 +48,19 @@ from novel.errors import (
 from novel.orchestrator import jobs, state as st
 from novel.orchestrator.nodes import build_steps, shell_line
 
-#: 人做的那几个动作。**队列永不自动排它们**——「人看过之后的裁决」机器替不了。
-#: ⚠ 它们进 `blocked` 而不是被跳过：被跳过的闸门在界面上与「不需要它」长得一样。
-#: ⚠ `stage6.approve` 不算人工闸（2026-09-15 全自动裁决）：默认槽位序自动定稿是
-#:   队列的普通 todo。`stage0.approve` / `stage0.edit` / `stage7.approve` 与
-#:   prepare 接受闸均已退役（批次 B1/B4）；现役 ``HUMAN_NODES`` 为空。
+#: 全自动模式没有人工审批节点；保留闭集供调用方验证规划面。
 HUMAN_NODES: frozenset[str] = frozenset()
 
 #: 待人工清单非空时挡队列的那个理由（`INBOX_KIND` 的 `invalid`）。
 WAITING_ON_INBOX = 'inbox:invalid'
-# ⚠⚠ F8c：以下常量是**旧链 waiter 名**，只供存量队列账／审批账的只读解码
-# （历史解码面模块已删，名册见 `tests/test_retired_surface_scan.py`；当前仅
-# 折叠历史 run 时按原字节解释）。现役规划器只发 `WAITING_ON_INBOX`／
-# `WAITING_ON_LEGACY`／`WAITING_ON_RESUME_DECISION` 三个 blocker；旧链的
-# edit-commit／analyze 修复／stage4 repair／stage5 closure／
-# reviewer-rewrite／stage6 prepare 补尾路只能由旧链节点写出，生产入口已拒识。
-WAITING_ON_STAGE2_EDIT_COMMIT = 'recovery:stage2-global-edit-commit'
-WAITING_ON_ANALYZE_RESPONSE_REPAIR = 'human:stage2-analyze-response-repair'
-WAITING_ON_ANALYZE_RESPONSE_TERMINAL = 'human:stage2-analyze-response-terminal'
-WAITING_ON_ANALYZE_SOURCE = 'human:stage2-analyze-source-unavailable'
-WAITING_ON_ANALYZE_DRAFT_REPAIR = 'human:stage2-analyze-owner-draft-repair'
-WAITING_ON_STAGE4_DESIGN_REVIEW = 'approval:stage4-design-review'
-WAITING_ON_STAGE4_BINDING_RESOLUTION = 'approval:stage4-binding-resolution'
-WAITING_ON_STAGE4_STRUCTURE_REPLAN = 'approval:stage4-structure-replan'
-WAITING_ON_STAGE4_STRUCTURE_REVIEW = 'approval:stage4-structure-review'
-# 兼容只 import 常量名的旧调用者；同一退役裁决下的只读别名。
-WAITING_ON_STAGE4_PHASE_APPROVAL = WAITING_ON_STAGE4_DESIGN_REVIEW
-WAITING_ON_STAGE4_REPLAN = WAITING_ON_STAGE4_BINDING_RESOLUTION
-WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT = \
-    'recovery:stage4-design-repair-aggregate-commit'
-WAITING_ON_WRITING_APPROVAL = 'approval:stage5-writing'
-WAITING_ON_REVIEW = 'stage5:review-currentness'
-WAITING_ON_STAGE5_CLOSURE = 'approval:stage5-closure'
-WAITING_ON_STAGE6_PREPARE = 'approval:stage6-prepare'
-WAITING_ON_STAGE6_PREPARE_COMMIT = 'recovery:stage6-prepare-edit'
-WAITING_ON_STAGE5_REVIEWER_REWRITE = 'recovery:stage5-reviewer-rewrite'
-WAITING_ON_PREPARED_DELIVERY = 'recovery:prepared-delivery'
-WAITING_ON_PREPARED_DELIVERY_UNKNOWN = 'human:prepared-unknown'
+#: 只登记当前规划器和队列生命周期实际产生的等待原因。
 WAITING_ON_LEGACY = 'legacy_incompatible'
 WAITING_ON_RESUME_DECISION = 'resume:manual-decision'
 WAITING_ON_RESTART_CONFIRMATION = 'queue:restart-confirmation'
 WAITING_ON_REPLAN = 'queue:plan-changed'
 
-#: 已有 typed 决定、只差按它执行的 blocker 闭集：Supervisor 只对这个集合里的
-#: waiting_on 现场铸 recovery permit 并交给 Executor，避免任何普通人工 blocker
-#: 因“碰巧带 steps”被自动执行。
-#: ⚠⚠ F8c：**现役为空集**。旧链的 0-wire 补尾 waiter（edit-commit／
-#: stage4 repair／reviewer-rewrite／prepared-delivery／stage6
-#: prepare-edit）随旧链退役；新链的恢复是候选 runner 自身续跑（`--check-only`
-#: 免费复检与精确补尾，F7c），不经队列发布补尾 argv。blocked 即停在那里并如实
-#: 报告，不猜成可执行命令。
+#: 当前恢复经 owner runner、免费复检或显式重规划，不从 blocked 项自动铸执行许可。
+#: operator 与 Supervisor 共用此空闭集，不能因故障项碰巧带 steps 而执行。
 DETERMINISTIC_RECOVERY_WAITING_ON: frozenset[str] = frozenset()
 
 
@@ -132,28 +95,6 @@ def _upstream_invalid(ov, stage: str) -> list[str]:
             for a in s.artifacts if a.invalid]
 
 
-def _gate_is_reachable(ov, stage: str) -> bool:
-    """这道人工闸门**此刻够得着吗**——本层盘上有没有东西待人裁决。
-
-    ⚠⚠ **这一格是实跑盘上语料改出来的，不是设计出来的。**
-    第一版让人工闸门无条件挡住其后所有项，于是 `stage0.approve`（处理链第二个节点）
-    把**整条链从头挡死**：盘上 stage0 一份产物都没有，那道闸根本还够不着，
-    而队列却说「在等人批准 stage0」——**一句看起来精确的假话**，
-    且它让队列在任何一本新书上都排不出一项。
-    ⇒ 一道**还没有对象**的闸门不是「在等人」，它只是还没轮到。
-    """
-    s = next((x for x in ov.stages if x.stage == stage), None)
-    return bool(s and any(a.exists for a in s.artifacts))
-
-
-def _human_gate_satisfied(base: str | os.PathLike[str], sid: str, node: str) -> bool:
-    """Read the gate's existing typed artifact; do not invent a queue verdict.
-
-    批次 B4 后 ``HUMAN_NODES`` 为空；本函数仅保留给历史调用方，恒 False。
-    """
-    return False
-
-
 def plan_book(base: str | os.PathLike[str], sid: str, *, until_stage: str,
               follow_check: bool = True) -> tuple[list[QueueItem], list[QueueItem]]:
     """一本书的 `(要跑的, 被挡住的)`。**纯函数**（只读盘，不写、不发请求）。
@@ -181,7 +122,7 @@ def plan_book_from_overview(
     ``allow_deterministic_redo`` 只供每步后都会重新采快照的 AgentRun operator。
     普通多步队列保持默认 ``False``，不能把一份冻结计划扩张成后续重采授权。
 
-    ⚠⚠ B2 起：规划器只按 `NODES`（现役 13 个 `str06.` 节点＋stage0/1）**通用派生**。
+    规划器只按 `NODES` 通用派生，不另建节点顺序或审批分支。
     旧链的节点专属分支全部随旧链退役删除：stage2 analyze/characters/global/
     blueprint 的恢复面、stage4 design/plan 的人工闸与统一机械准入名册、
     stage5 write/review 的闭合回执与 reviewer-rewrite、stage6 prepare 接受闸、
@@ -208,8 +149,7 @@ def plan_book_from_overview(
         verdict, why = st.resume_verdict(ov, node)
         if why_blocked is None and verdict == st.RESUME_LEGACY:
             why_blocked = WAITING_ON_LEGACY
-        if (why_blocked is None and verdict == st.RESUME_RUN
-                and st.live_invalid_artifacts(ov, node)):
+        if why_blocked is None and st.live_invalid_artifacts(ov, node):
             # 本层自己的 live `.INVALID`：没有可自动排入的提升路 ⇒ 收件箱阻断，
             # 且不冻结任何默认付费 argv（见模块 docstring 的 F8c 段）。
             why_blocked = WAITING_ON_INBOX
@@ -256,18 +196,15 @@ def plan_book_from_overview(
 def _blocked_why(
     waiting_on: str, verdict_why: str,
 ) -> str:
-    # F8c：现役队列只发三个 blocker（INBOX／LEGACY／RESUME_DECISION）；旧链的
-    # stage2 edit-commit／stage4 repair／stage5 closure／reviewer-rewrite／
-    # stage6 prepare 提升路随旧链退役删除。`approval:` 前缀保留为编排错误哨兵
-    # （现役链没有任何审批闸，出现即 fail loud）；其余未登记名字走通用句式，
-    # 存量队列账（`read_events` 折叠的历史 run）按原字节解码，不改写历史。
+    # 节点规划只发 INBOX／LEGACY／RESUME_DECISION；approval 前缀是编排错误哨兵。
+    # 未登记等待面只描述故障，不扩张为可执行动作。
     if waiting_on == WAITING_ON_INBOX:
         return (
             '上游或本层有被闸门拦下的稿：现役节点旗标面只有 `--check-only`，'
             '没有 0-wire 自动提升 argv ⇒ 队列关闭式阻断，不冻结默认付费重跑；'
             f'{verdict_why}')
     if waiting_on == WAITING_ON_LEGACY:
-        return f'{verdict_why}；旧产物只读保留，必须显式重建 canonical Stage5'
+        return f'{verdict_why}；旧产物仅归档保留，请在独立新根按当前契约重建'
     if waiting_on == WAITING_ON_RESUME_DECISION:
         return (
             '续跑结论要求人工决定，队列不会把 REDO/UNKNOWN 猜成可执行命令；'
@@ -1301,15 +1238,6 @@ def resume_incomplete(base: str | os.PathLike[str], *,
 
 __all__ = [
     'HUMAN_NODES', 'WAITING_ON_INBOX',
-    'WAITING_ON_STAGE2_EDIT_COMMIT',
-    'WAITING_ON_STAGE4_DESIGN_REVIEW',
-    'WAITING_ON_STAGE4_DESIGN_REPAIR_COMMIT',
-    'WAITING_ON_STAGE4_BINDING_RESOLUTION',
-    'WAITING_ON_STAGE4_STRUCTURE_REPLAN',
-    'WAITING_ON_STAGE4_STRUCTURE_REVIEW',
-    'WAITING_ON_STAGE4_PHASE_APPROVAL', 'WAITING_ON_STAGE4_REPLAN',
-    'WAITING_ON_WRITING_APPROVAL', 'WAITING_ON_REVIEW',
-    'WAITING_ON_STAGE5_CLOSURE', 'WAITING_ON_STAGE5_REVIEWER_REWRITE',
     'WAITING_ON_LEGACY',
     'WAITING_ON_RESUME_DECISION', 'WAITING_ON_RESTART_CONFIRMATION', 'WAITING_ON_REPLAN',
     'DETERMINISTIC_RECOVERY_WAITING_ON',

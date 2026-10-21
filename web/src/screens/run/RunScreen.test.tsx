@@ -1,7 +1,7 @@
 import { api } from '@/api/endpoints'
 import { mockApi, SAMPLE_SID } from '@/api/mock'
 import { JOB } from '@/constants/vocabulary'
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderRoute } from '@/test/render'
 import { READY_PROFILES } from '@/test/agent'
@@ -39,6 +39,26 @@ beforeEach(() => {
 })
 
 describe('RunScreen 交付终验', () => {
+  it('同一合成候选的真实运行投影保留当前生成、机械处理和缓存计数', async () => {
+    const progress = await mockApi.getRunProgress('cand')
+    expect(progress.work_units?.length).toBeGreaterThan(0)
+    vi.spyOn(api, 'getRunProgress').mockImplementation((sid) => mockApi.getRunProgress(sid))
+    vi.spyOn(api, 'getRunMetrics').mockImplementation((sid, runId) => mockApi.getRunMetrics(sid, runId))
+    vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
+    renderRoute(<RunScreen />, '/n/cand/run')
+    const budget = await screen.findByRole('table', { name: '工作单元预算' })
+    expect(within(budget).getAllByRole('row')).toHaveLength(progress.work_units!.length + 1)
+    expect(budget).toHaveTextContent('新生成 1，机械处理 0')
+    expect(budget).toHaveTextContent('缓存 0')
+    expect(budget).not.toHaveTextContent('历史采用')
+    expect(within(budget).getAllByText('未提供审阅结论')).toHaveLength(progress.work_units!.length)
+    expect(budget).not.toHaveTextContent('由人工审阅')
+    expect(await screen.findByText('156 / 104')).toBeVisible()
+    expect(await screen.findByRole('table', { name: '工作单元耗时与用量' })).toHaveTextContent('str06.stage5.body')
+    await expect(mockApi.getRunMetrics(SAMPLE_SID)).rejects.toMatchObject({ kind: 'nosample' })
+    await expect(mockApi.getRunMetrics('cand', 'unrecorded')).rejects.toMatchObject({ kind: 'nosample' })
+  })
+
   it('显示后端当前恢复与续跑前沿，历史工作单元不决定下一角色', async () => {
     const run = await mockApi.getRunProgress(SAMPLE_SID)
     vi.spyOn(api, 'getRunProgress').mockResolvedValue({
@@ -70,11 +90,11 @@ describe('RunScreen 交付终验', () => {
       work_units: [{
         unit_id: 'u1', node: 'str06.stage2.names', role: 'executor', scope: 'book',
         content_used: 2, content_limit: 4, content_remaining: 1,
-        state: 'response_saved', latest_request_sha256: null,
-        latest_response_sha256: 'a'.repeat(64), recovery_action: 'replay_saved_response',
+        state: 'delivered', latest_request_sha256: null,
+        latest_response_sha256: 'a'.repeat(64), recovery_action: 'replay_response',
         content_base_limit: 4, content_granted: 0,
-        processing: { run_id: 'saved', input_sha256: 'a'.repeat(64), total: 1,
-          pending: 0, generated: 0, mechanical: 0, history_adopted: 1,
+        processing: { run_id: 'current-generated', input_sha256: 'a'.repeat(64), total: 1,
+          pending: 0, generated: 1, mechanical: 0,
           cached: 0, failed: 0, unknown: 0, reason: null },
         review: { subject_sha256: 'b'.repeat(64), total: 19, pending: 1, decision_inherited: 18 },
       }],
@@ -82,9 +102,10 @@ describe('RunScreen 交付终验', () => {
     vi.spyOn(api, 'getAgentRuns').mockResolvedValue({ runs: [] })
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
     expect(await screen.findByText('2 / 4，剩余 1')).toBeInTheDocument()
-    expect(screen.getByText('response_saved')).toBeInTheDocument()
-    expect(screen.getByText('replay_saved_response')).toBeInTheDocument()
-    expect(screen.getByRole('table', { name: '工作单元预算' })).toHaveTextContent('历史采用 1')
+    expect(screen.getByText('delivered')).toBeInTheDocument()
+    expect(screen.getByText('replay_response')).toBeInTheDocument()
+    expect(screen.getByRole('table', { name: '工作单元预算' })).toHaveTextContent('新生成 1')
+    expect(screen.getByRole('table', { name: '工作单元预算' })).not.toHaveTextContent('历史采用')
     expect(screen.getByRole('table', { name: '工作单元预算' })).toHaveTextContent('待审 1，决定继承 18')
   })
 
@@ -443,8 +464,8 @@ describe('RunScreen 节点图与完成度', () => {
     renderRoute(<RunScreen />, `/n/${SAMPLE_SID}/run`)
 
     const frontier = await screen.findByTestId('resume-frontier')
-    expect(frontier).toHaveTextContent('下一节点：Stage2 源名称结构观察（家族、名、化名、称谓构词）')
-    expect(frontier).toHaveTextContent('当前执行：Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）（str06.stage2.book）')
+    expect(frontier).toHaveTextContent('下一节点：源实体名称结构')
+    expect(frontier).toHaveTextContent('当前执行：全书事实语义整合（str06.stage2.book）')
     expect(frontier).toHaveTextContent('下一处理者：Executor（执行既有决定）')
     expect(screen.getByRole('button', { name: '跳到下一节点' })).toBeEnabled()
     expect(screen.queryAllByTitle('stage0.remove')).toHaveLength(0)
