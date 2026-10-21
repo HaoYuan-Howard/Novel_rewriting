@@ -6,10 +6,13 @@ import type { AgentRunRequest } from '@/types/agent'
 export const qkStr06 = {
   candidates: () => ['str06', 'candidates'] as const,
   run: (candidate: string) => ['str06', candidate, 'run'] as const,
-  sourceStory: (candidate: string) => ['str06', candidate, 'source-story'] as const,
-  targetStory: (candidate: string) => ['str06', candidate, 'target-story'] as const,
+  characters: (candidate: string) => ['str06', candidate, 'characters'] as const,
+  blueprint: (candidate: string) => ['str06', candidate, 'blueprint'] as const,
+  design: (candidate: string) => ['str06', candidate, 'design'] as const,
+  ir: (candidate: string) => ['str06', candidate, 'ir'] as const,
   chapter: (candidate: string, o: number) => ['str06', candidate, 'chapter', o] as const,
   hook: (candidate: string) => ['str06', candidate, 'hook'] as const,
+  naming: (candidate: string) => ['str06', candidate, 'naming'] as const,
   delivery: (candidate: string) => ['str06', candidate, 'delivery'] as const,
   book: (candidate: string) => ['str06', candidate, 'book'] as const,
 }

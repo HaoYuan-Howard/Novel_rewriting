@@ -70,7 +70,16 @@ FOLLOW_CHECK_NOTE = '自动追跑：退出码 0 也可能是残缺产物'
 #: （``--check-only`` 是免费复检，不在此表）。B2（2026-09-27）五节点重建：
 #: `str06.stage2.source` 退役，book／chapters／associate 三个观察 owner 入表。
 PROFILED_LLM_RUNS: dict[str, tuple[frozenset[str], ...]] = {
-    node: (frozenset(),) for node, spec in NODES.items() if node.startswith('str06.') and spec.paid
+    'str06.stage2.book': (frozenset(),),
+    'str06.stage2.chapters': (frozenset(),),
+    'str06.stage2.names': (frozenset(),),
+    'str06.stage2.associate': (frozenset(),),
+    'str06.stage4.preserve': (frozenset(),),
+    'str06.stage4.body_design': (frozenset(),),
+    'str06.stage4.hook_design': (frozenset(),),
+    'str06.stage5.hook': (frozenset(),),
+    'str06.stage5.body': (frozenset(),),
+    'str06.stage4.naming': (frozenset(),),
 }
 
 PROFILED_LLM_NODES = tuple(PROFILED_LLM_RUNS)

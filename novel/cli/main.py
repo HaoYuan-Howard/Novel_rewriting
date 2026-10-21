@@ -18,6 +18,8 @@ main.py —— `python -X utf8 -u -m novel.cli <子命令> …`
     reconcile                       jobs/编排账/Stage2 假预算的 0 成本 typed 恢复
     doctor --llm-transport          0 成本探测 DeepSeek DNS/TCP/TLS/HTTP；不发正文/密钥
     response-repair <sid>           0 成本：提交/放弃一份隔离的结构化响应修复稿
+    issue-correction <sid>          0 成本：预览或显式更正有正式证据的旧错误回派
+    contract-upgrade <sid>          0 成本：预览或应用已登记的同根契约升级
 
 ⚠ **这张表就是 `--help` 打印出来的那一份**（argparse 的 `description` 直接取本 docstring），
 而操作规程让执行者第一步就跑 `--help`。少列一条 = 那条路对读它的人不存在。
@@ -140,7 +142,18 @@ def _parser() -> argparse.ArgumentParser:
         help='同全局 --run-id；兼容放在 run 子命令之后')
     r.add_argument('--yes', action='store_true',
                    help='确认这一次会花钱（付费跑法必填）')
-    # 请求档位与授权属于调用面；当前协议只在本根恢复同身份的已购回答。
+    # ── 新链调用凭证（不是 NodeSpec 跑法旗标：不进 `_flags_of`、不改贵贱/写盘
+    # 语义，与 `--yes`／`--base` 同属 invocation 面）─────────────────────────
+    # `--wire-dir`／`--adopt-root` 是 F7a 登记的**历史采用通路**：同请求身份的
+    # 已购结果经 wire 字节或源根 ledger 行免费复用，身份不符明确阻断、不补购。
+    # `--reasoning-effort` 进请求身份（档位与已购行逐字相等才采用）。
+    r.add_argument('--wire-dir', default=None,
+                   help='已购 wire 目录（历史采用：同请求身份免费复用，不补购）')
+    r.add_argument('--adopt-root', action='append', default=[],
+                   help='已购来源输出根（可重复；ledger 行身份核验后免费采用）')
+    r.add_argument('--resample', default=None,
+                   help='研发手动定向重采 owner（如 ch04/design/body_ch05）；编排器不生成')
+    r.add_argument('--reason', default=None, help='定向重采理由（与 --resample 同时提供）')
     r.add_argument('--reasoning-effort', default=None,
                    choices=('low', 'high', 'max'),
                    help='新链请求的 reasoning effort 档位（进请求身份；'
@@ -238,11 +251,39 @@ def _parser() -> argparse.ArgumentParser:
     rr.add_argument('sid')
     rr.add_argument('--base', required=True)
     target = rr.add_mutually_exclusive_group(required=True)
+    # F8c：`--batch`（Stage2 一次性 repair_manifest）随旧链 Stage2 修复面退役；
+    # 单项 attempt 路径是通用响应修复的唯一入口。
     target.add_argument('--attempt', help='拒绝记录的 16 位 attempt_id')
     rr.add_argument('--actor', required=True)
     rr.add_argument('--reason', help='必填：本次修复/放弃的理由')
     rr.add_argument('--decline', action='store_true',
                     help='明确放弃本次修复额度；重跑原节点后进入下一采')
+
+    correction = sub.add_parser('issue-correction', help='免费预览／显式更正旧材料或关联回派（不重置额度）')
+    correction.add_argument('sid')
+    correction.add_argument('--base', required=True)
+    correction.add_argument('--owner', required=True, choices=('book', 'preserve', 'associate'))
+    correction.add_argument('--apply', action='store_true')
+    correction.add_argument('--subject-sha256')
+    correction.add_argument('--reason')
+
+    upgrade = sub.add_parser(
+        'contract-upgrade',
+        help='已登记的同根升级；保留历史证据，登记节点的轮次随 apply 返还')
+    upgrade.add_argument('sid')
+    upgrade.add_argument('--base', required=True)
+    upgrade.add_argument('--apply', action='store_true')
+    upgrade.add_argument('--abort-pending', action='store_true',
+                         help='显式放弃尚未归档任何文件的升级恢复日志')
+    upgrade.add_argument('--subject-sha256')
+    upgrade.add_argument('--actor')
+    upgrade.add_argument('--reason')
+    upgrade.add_argument('--convert', default=None,
+                         help='0 成本：把已登记无损换算边的归档产物换算成当前 '
+                              'wire（如 str06.stage4.hook_design），不跑模型')
+    upgrade.add_argument('--wire-dir', default=None,
+                         help='--convert 的输出目录；随后 run --node … --wire-dir '
+                              '… 免费采用')
 
     mk = sub.add_parser('mark', help='进度信标打点（0 成本，恒 exit 0）')
     mk.add_argument('sid')
@@ -332,7 +373,7 @@ def _runners() -> dict[str, Callable[[RunContext, list[str]], int]]:
 
     ⚠⚠ F8c：**只剩 stage0／stage1 两条腿**。旧链 stage2／4／5／7 的 runner 随
     旧链整层退役删除——`_cmd_run` 入口按「非现役节点」通则拒读旧节点
-    （legacy_incompatible），当前 `str06.` 节点在入口分流到 `_run_str06`，
+    （legacy_incompatible），13 个 `str06.` 节点在入口分流到 `_run_str06`，
     两者都到不了这张表。Stage6 腿更早（F8b）已删。
     """
     return {'stage0': _run_stage0, 'stage1': _run_stage1}
@@ -350,7 +391,6 @@ _STR06_THROUGH = {
     'str06.stage2.compile': 'stage2',
     'str06.stage4.preserve': 'stage4', 'str06.stage4.body_design': 'stage4',
     'str06.stage4.hook_design': 'stage4',
-    'str06.stage4.chapters': 'stage4', 'str06.stage4.hook_compile': 'stage4',
     'str06.stage4.compile': 'stage4',
     'str06.stage5.hook': 'stage5', 'str06.stage5.body': 'stage5',
     'str06.stage4.naming': 'stage4', 'str06.stage7.assemble': 'stage7',
@@ -382,6 +422,10 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
     if body_chapters is not None and a.node != 'str06.stage5.body':
         raise TerminalState(
             f'--body-chapters 只对 str06.stage5.body 有效，收到 {a.node}')
+    # 历史采用凭证与 effort 档位是 invocation 面（见 parser 注释）：只在新链
+    # 分流点之后读取，旧链节点到不了这里。
+    wire_dir = getattr(a, 'wire_dir', None)
+    adopt_root = [Path(root) for root in (getattr(a, 'adopt_root', None) or [])]
     backend = N.resolve_executor_backend(a.node, flags, _executor_backend_of(a))
     request_profile = _request_profile_of(a, backend)
     reasoning_effort = (request_profile.reasoning_effort if request_profile is not None
@@ -399,6 +443,10 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         base=os.path.abspath(os.fspath(a.base)),
         source_json=None,
         run_dir=novel_dir,
+        wire_dir=Path(wire_dir) if wire_dir else None,
+        repair_manifest=None,
+        resample=getattr(a, 'resample', None),
+        reason=getattr(a, 'reason', None),
         through=_STR06_THROUGH[a.node],
         book_sid=a.sid,
         budget=None,
@@ -410,6 +458,7 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         reasoning_effort=reasoning_effort,
         request_profile=request_profile,
         check_only='--check-only' in tokens,
+        adopt_root=adopt_root,
         node=[a.node],
         yes=bool(a.yes),
         # 正文外发授权与付费确认是两份独立授权（I-43）：CLI 的 --allow-egress
@@ -417,8 +466,7 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         allow_source_export=bool(getattr(a, 'allow_egress', False)),
     )
     from novel.llm.paid_requests import PurchaseRequired, ValidationStop
-    from novel.stages.chain import StoryUpstreamIssue
-    from novel.stages.stage4 import story as target_engine
+    from novel.stages.revisions import RevisionEvidenceStop
     from novel.stages.owner_revision import (
         MechanicalDefectStop, OwnerRevisionRequired, OwnerRevisionStop)
     try:
@@ -431,8 +479,7 @@ def _run_str06(a: argparse.Namespace, flags: list[str], *, paid: bool) -> int:
         # 把「查出了问题」记成「压根没跑成」。
         print(f'\n✗ 回派负结论已落盘（exit 1，勿当崩溃）：{exc}', file=sys.stderr)
         return X.CHECK_FAILED
-    except (MechanicalDefectStop, ValidationStop,
-            StoryUpstreamIssue, target_engine.TargetStoryIssue) as exc:
+    except (MechanicalDefectStop, ValidationStop, RevisionEvidenceStop) as exc:
         # 机械缺陷（无回派路由，R8c 首现闸同类）同样是 typed 负结论：exit 1
         # （landed_red 停给人，恢复走该章观察重问或 owner patch）；缺陷清单
         # 全文在 stderr＝`_service/logs/<job>.log`。canary 20260930 实证裸
@@ -1237,6 +1284,99 @@ def _cmd_doctor(a: argparse.Namespace) -> int:
     return X.OK if result.reached_http else X.TERMINAL_STATE
 
 
+def _cmd_issue_correction(a: argparse.Namespace) -> int:
+    from novel.store import Str06Repository
+    from novel.stages.chain import derive_total_length_budget, load_stage1_chapters
+    from novel.stages.issue_recovery import preview_issue_correction, apply_issue_correction
+    from novel.orchestrator.write_admission import operation_scope
+
+    def perform():
+        repo = Str06Repository(paths.resolve_novel_dir(Path(a.base), a.sid))
+        chapters = load_stage1_chapters(a.base, a.sid).chapters
+        budget = derive_total_length_budget(chapters)
+        ordinals = tuple(c['chapter_ordinal'] for c in chapters)
+        try:
+            if a.apply:
+                return apply_issue_correction(repo, a.owner, budget=budget,
+                    expected_sha256=a.subject_sha256, reason=a.reason, chapter_ordinals=ordinals)
+            return preview_issue_correction(repo, a.owner, budget=budget, chapter_ordinals=ordinals)
+        except ValueError as exc:
+            raise TerminalState(str(exc)) from exc
+
+    if a.apply:
+        if not a.subject_sha256 or not a.reason:
+            raise TerminalState('--apply必须同时提供免费预览的--subject-sha256和--reason')
+        with operation_scope(a.base, a.sid, operation='issue-correction',
+                             details={'owner': a.owner, 'subject_sha256': a.subject_sha256}):
+            result = perform()
+    else:
+        if a.subject_sha256 or a.reason:
+            raise TerminalState('只读预览不接受apply参数')
+        result = perform()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_contract_upgrade(a: argparse.Namespace) -> int:
+    from novel import prov
+    from novel.store import Str06Repository
+    from novel.stages.chain import load_stage1_chapters
+    from novel.orchestrator.contract_upgrade import (
+        abort_pending, preview, apply, digest,
+    )
+    from novel.orchestrator.work_unit_evidence import rebuild_budget_views
+
+    repo = Str06Repository(paths.resolve_novel_dir(a.base, a.sid))
+    source = load_stage1_chapters(a.base, a.sid)
+    code = prov.code_version()
+    if code == prov.CODE_UNKNOWN:
+        raise TerminalState('代码身份未知，不能规划契约升级')
+    if a.convert:
+        if a.apply or a.abort_pending:
+            raise TerminalState('--convert 与 --apply/--abort-pending 互斥')
+        if not a.wire_dir:
+            raise TerminalState('--convert 必须给 --wire-dir 输出目录')
+        if not all((a.actor, a.reason)):
+            raise TerminalState('--convert 必须给 --actor 和 --reason')
+        from novel.orchestrator.upgrade_converters import (
+            convert_archived_wire, upgrade_id_for_node,
+        )
+        result = convert_archived_wire(
+            repo, upgrade_id=upgrade_id_for_node(a.convert), node=a.convert,
+            wire_dir=Path(a.wire_dir), actor=a.actor, reason=a.reason)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    if a.abort_pending:
+        if a.apply:
+            raise TerminalState('--abort-pending 与 --apply 互斥')
+        if a.subject_sha256:
+            raise TerminalState('--abort-pending 不接受 --subject-sha256')
+        if not all((a.actor, a.reason)):
+            raise TerminalState('--abort-pending 必须给 --actor 和 --reason')
+        result = abort_pending(repo, base=Path(a.base), sid=a.sid,
+                               source_identity=source.source_identity,
+                               code_version=code, actor=a.actor, reason=a.reason)
+    elif a.apply:
+        if not all((a.subject_sha256, a.actor, a.reason)):
+            raise TerminalState('--apply 必须给 --subject-sha256、--actor 和 --reason')
+        result = apply(repo, base=Path(a.base), sid=a.sid, source_identity=source.source_identity,
+                       code_version=code, subject_sha256=a.subject_sha256,
+                       actor=a.actor, reason=a.reason)
+    else:
+        if any((a.subject_sha256, a.actor, a.reason)):
+            raise TerminalState('只读升级预览不接受 apply 参数')
+        plan = preview(repo, source_identity=source.source_identity, code_version=code)
+        result = {'subject_sha256': digest(plan.model_dump(mode='json')),
+                  'plan': plan.model_dump(mode='json')}
+        # 额度是易变状态，只随预览展示、不进计划（进 subject_sha256 会让
+        # 节点一跑预览就漂移）。应用前核对：额度耗尽的重建节点第一步就会
+        # WorkUnitBudgetExhausted，须先对账/追加再 apply。
+        result['rebuild_budgets'] = rebuild_budget_views(
+            a.base, repo.root.name, plan.rebuild_nodes)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _cmd_response_repair(a: argparse.Namespace) -> int:
     """给非节点 response-repair 写动作持有完整 generic admission。"""
     from novel.orchestrator.write_admission import operation_scope
@@ -1255,7 +1395,8 @@ def _cmd_response_repair(a: argparse.Namespace) -> int:
 def _cmd_response_repair_admitted(a: argparse.Namespace) -> int:
     """封存 agent 的修复/放弃决定；真正复验发生在原节点重跑时。
 
-    单项 attempt 是当前协议的通用响应修复入口。
+    F8c：Stage2 一次性 batch repair_manifest 面随旧链退役（其 resume 命令
+    `stage2.blueprint --yes` 已拒识）；单项 attempt 是唯一入口。
     """
     from novel.llm import response_repair
 
@@ -1368,7 +1509,8 @@ _CMDS = {'run': _cmd_run, 'preview': _cmd_preview,
          'queue-list': _cmd_queue_list, 'queue-cancel': _cmd_queue_cancel,
          'queue-resume': _cmd_queue_resume,
          'jobs': _cmd_jobs, 'reconcile': _cmd_reconcile, 'doctor': _cmd_doctor,
-         'response-repair': _cmd_response_repair,
+         'response-repair': _cmd_response_repair, 'issue-correction': _cmd_issue_correction,
+         'contract-upgrade': _cmd_contract_upgrade,
          'mark': _cmd_mark}
 
 
@@ -1428,6 +1570,8 @@ def _execution_context_control_mutation(a: argparse.Namespace) -> bool:
         return not bool(a.plan_only)
     if a.cmd in ('queue-cancel', 'queue-resume'):
         return True
+    if a.cmd in ('issue-correction', 'contract-upgrade'):
+        return bool(a.apply) or bool(getattr(a, 'abort_pending', False))
     if a.cmd != 'reconcile':
         return False
     admission_inspect = bool(

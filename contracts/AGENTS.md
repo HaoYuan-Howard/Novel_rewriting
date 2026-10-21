@@ -1,7 +1,7 @@
 # 契约开发
 
 本目录定义节点、取值域、schema 与判据，供运行时共同消费。它不执行流水线、不读取产物、不导入 `novel`。
-依赖方向为 story_paths → artifacts → invariants → rules/schema；Python 使用类型标注、4 空格与现有命名习惯。
+依赖方向为 artifacts → invariants → rules/schema；Python 使用类型标注、4 空格与现有命名习惯。
 
 ## 修改入口
 

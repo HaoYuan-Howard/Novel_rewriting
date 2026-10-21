@@ -837,8 +837,9 @@ Output/_service/approvals/<sid>.json （历史）人工闸门、已阅状态与 
 `reconcile_commander_call/event` 对账）已随 STR-06 关闭批删除：历史决定按关闭式拒读，
 不再提供重建、loader 回调或跨 parent 补尾。旧 Stage5 retain/rewrite 工作单元、
 reviewer rewrite FREE request producer 与 `stage5.write --reviewer-rewrite` 授权链一并退役。
-历史字节的有效形状见 Git 历史。当前恢复只复用本根相同请求的耐久回答、
-免费重编与重验，并以实际尝试和封存证明补提交；不采用历史根结果或恢复旧owner接口。
+历史字节的有效形状见 Git 历史；现役付费恢复入口只有候选生命周期登记的
+saved_response／historical_adoption／owner_patch／committed_set_recovery／
+same_context_rewrite／deterministic_replay。
 
 #### 冻结旧工作流记录（只读）
 

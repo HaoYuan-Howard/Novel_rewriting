@@ -1,21 +1,200 @@
-"""当前三层的依赖方向；语义引擎保持纯计算，跨层仅消费正式contract。"""
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""dependency —— 新链依赖方向登记（F0）。
+
+【数据表而非守卫】
+F0 只登记规则数据；AST layering 守卫（覆盖绝对/相对导入、保留分母自检）在 F1
+随反例落地，消费本表。规则照抄计划 Dependency Direction 表；模块名是新链目标
+包名（F2–F5 实建时对齐，实建与登记不一致以测试红暴露）。
+
+【两条横向规则】
+  • Guard／Judge 只读验证输入、只写报告出口——禁止写 canonical semantic truth。
+  • shared／repository 只做通用原语与持久化边界——禁止反向依赖具体 Stage 业务。
+这两条作用于**所有**上表模块，登记为 all 规则而非逐行重复。
+"""
 from __future__ import annotations
+
 from typing import Final, NamedTuple
+
 
 class DependencyRule(NamedTuple):
     module: str
-    allows: tuple[str, ...]
-    forbids: tuple[str, ...]
+    allows: tuple[str, ...]      # 允许 import 的目标（前缀匹配；'*' 结尾=子树）
+    forbids: tuple[str, ...]     # 禁止 import 的目标（前缀匹配）
 
-STR06_DEPENDENCY_RULES: Final = (
-    DependencyRule('novel.stages.stage2', ('contracts.schema.*', 'novel.core.source_index'),
-        ('novel.stages.stage4', 'novel.stages.stage5', 'novel.stages.stage7', 'novel.llm', 'novel.store')),
-    DependencyRule('novel.stages.stage4', ('contracts.schema.*',),
-        ('novel.stages.stage2', 'novel.stages.stage5', 'novel.stages.stage7', 'novel.llm', 'novel.store')),
-    DependencyRule('novel.stages.stage5', ('contracts.schema.*', 'novel.core.story_prose'),
-        ('novel.stages.stage2', 'novel.stages.stage4', 'novel.stages.stage7', 'novel.llm', 'novel.store')),
-    DependencyRule('novel.stages.stage7', ('contracts.schema.*', 'novel.core.story_prose'),
-        ('novel.stages.stage2', 'novel.stages.stage4', 'novel.stages.stage5', 'novel.llm', 'novel.store')),
-    DependencyRule('novel.core.story_prose', ('contracts.schema.*',),
-        ('novel.stages', 'novel.llm', 'novel.store', 'novel.orchestrator', 'novel.api', 'novel.views')),
+
+#: 新链依赖方向表。`contracts.*` 与底层设施（errors/config 等纯工具）对所有行
+#: 隐式允许，不逐行抄写；表里只写**区分度所在**的允许与全部禁止。
+#: （2026-10-04 清理批：stage6 层与 stage5.judge 目标随整层退役移除；grounding
+#: 的 allows 随旧链 characters/plot schema 删除修剪。同日收尾批再剪掉盘上不存在
+#: 的模块行与目标名：stage4.context／stages.shared 行、stage2.blueprint／
+#: stage2.characters／novel.runtime.* 目标，`contracts.api.*` 对齐为
+#: `contracts.schema.api`。）
+STR06_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
+    DependencyRule(
+        module='novel.stages.stage2',
+        allows=('contracts.*', 'novel.errors', 'novel.config'),
+        forbids=('novel.stages.stage4', 'novel.stages.stage4.*',
+                 'novel.stages.stage5', 'novel.stages.stage5.*')),
+    DependencyRule(
+        module='novel.stages.stage4.naming',
+        allows=('contracts.schema.*', 'novel.stages.common', 'novel.core.text'),
+        forbids=('novel.llm', 'novel.llm.*')),
+    DependencyRule(
+        module='novel.stages.stage4.design',
+        allows=('contracts.schema.grounding', 'contracts.schema.design',
+                'contracts.schema.consumption'),
+        forbids=('novel.stages.stage4.grounding', 'novel.stages.stage4.grounding.*')),
+    DependencyRule(
+        module='novel.stages.stage4.grounding',
+        allows=('contracts.schema.grounding', 'contracts.schema.design'),
+        forbids=('novel.stages.stage4.design', 'novel.stages.stage4.design.*')),
+    DependencyRule(
+        module='novel.stages.stage4.compile',
+        allows=('contracts.schema.*',),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.stage4.design',
+                 'novel.stages.stage4.design.*', 'novel.stages.stage4.grounding',
+                 'novel.stages.stage4.grounding.*')),
+    DependencyRule(
+        module='novel.stages.stage5',
+        allows=('contracts.schema.context', 'contracts.schema.receipt',
+                'contracts.schema.execution'),
+        forbids=('novel.stages.stage2', 'novel.stages.stage2.*',
+                 'novel.stages.stage4.design', 'novel.stages.stage4.design.*',
+                 'novel.stages.stage4.grounding', 'novel.stages.stage4.grounding.*')),
+    DependencyRule(
+        module='novel.stages.stage7',
+        allows=('contracts.schema.consumption', 'contracts.schema.receipt',
+                'contracts.schema.api'),
+        forbids=('novel.stages.stage2', 'novel.stages.stage2.*',
+                 'novel.stages.stage4', 'novel.stages.stage4.*',
+                 'novel.stages.stage5', 'novel.stages.stage5.*')),
+    DependencyRule(
+        module='novel.stages.stage4.guard',
+        allows=('contracts.schema.context', 'contracts.schema.execution'),
+        forbids=('novel.stages.stage4.design', 'novel.stages.stage4.design.*',
+                 'novel.stages.stage4.grounding', 'novel.stages.stage4.grounding.*',
+                 'novel.stages.stage5', 'novel.stages.stage5.*')),
+)
+
+#: 横向规则（作用于所有行）：guard/judge 不写 canonical；shared/repository 不反依赖
+#: Stage 业务。AST 守卫无法静态证明「不写」，以行为测试落实（F1）。
+
+# ───────────────── F8c：per-stage 模块的真实依赖规则 ─────────────────
+#
+# 上表是新链**目标**模块名（F2–F5 期间实建与登记不一致以测试红暴露）。F6–F7 期间
+# 这些模块在 F6–F7 期住在迁移包，按**真实模块路径**登记 owner 与规则，
+# 并由 AST 测试对真实文件执行（tests/test_str06_hook.py）；规则不是文档，违例即红。
+# F8c 分流后模块落进正式 per-stage 包，本表随同改用**正式模块路径**——迁移包
+# 本身已删除，迁移包路径不再有执行对象。
+
+#: Stage2/4/5/7 各语义模块的集合缩写（跨 stage 禁入面）。
+_STAGE457 = (
+    'novel.stages.stage2.names',
+    'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
+    'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
+    'novel.stages.stage4.hook', 'novel.stages.stage4.hook_context',
+    'novel.stages.stage5.hook_writer', 'novel.stages.stage5.body',
+    'novel.stages.stage5.body_checks',
+    'novel.stages.stage4.naming', 'novel.stages.stage7.assembly',
+)
+
+STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
+    # 结构修复原语只读schema与候选，不反向依赖stage、模型执行或持久化。
+    DependencyRule(
+        module='novel.core.repair', allows=(),
+        forbids=('novel.stages', 'novel.stages.*', 'novel.llm', 'novel.llm.*', 'novel.store')),
+    # names 属 Stage2：禁止 import Stage4/5/7 模块与 LLM 面。
+    DependencyRule(
+        module='novel.stages.stage2.names',
+        allows=('contracts.schema.source', 'contracts.schema.base',
+                'novel.stages.common', 'novel.stages.stage2.resolver'),
+        forbids=_STAGE457 + ('novel.llm', 'novel.llm.*')),
+    # hook_context 是纯投影（Stage4 context owner）：禁止 LLM 与 Stage2/4/5/7 语义模块。
+    # novel.core.text：kp 句柄→命题 statement 的回填尺（R10b 锁以内容送达；
+    # 2026-10-03 D6 渲染修复，与正文 IR project_context 同一把尺，判据 25）。
+    # hook_validation只提供纯结构判据，compiler不得反向依赖hook producer。
+    DependencyRule(
+        module='novel.stages.stage4.hook_context',
+        allows=('contracts.schema.*', 'novel.core.name_materials',
+                'novel.core.text', 'novel.stages.stage4.hook_validation'),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common')
+        + tuple(m for m in _STAGE457 if m != 'novel.stages.stage4.hook_context')),
+    # hook（Stage4 hook_design 的确定性臂与唯一 publisher）禁止 LLM 与
+    # Stage5 写手／Stage7 模块，也不依赖 Stage4 编译面。design_paths 只承载
+    # 判据问题与纯修复范围约定（依赖contracts与novel.core的纯函数），
+    # hook 的错误据此接条目返修（CS-F1），不是生产或编译模块。
+    DependencyRule(
+        module='novel.stages.stage4.hook',
+        allows=('contracts.schema.*', 'novel.core.name_materials',
+                'novel.stages.stage4.hook_validation',
+                'novel.stages.stage4.hook_wire',
+                'novel.stages.stage4.design_paths'),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
+                 'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
+                 'novel.stages.stage4.fold', 'novel.stages.stage4.guard',
+                 'novel.stages.stage5.hook_writer', 'novel.stages.stage4.naming',
+                 'novel.stages.stage7.assembly')),
+    # Hook validator只读规范payload/canonical输入；禁止依赖任何生产或编译模块
+    # （design_paths 是判据问题的构造约定，同上不属生产/编译面）。
+    DependencyRule(
+        module='novel.stages.stage4.hook_validation',
+        allows=('contracts.schema.*', 'novel.core.name_materials',
+                'novel.stages.stage4.materials',
+                'novel.stages.stage4.hook_facts',
+                'novel.stages.stage4.design_paths'),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
+                 'novel.stages.stage4.fold', 'novel.stages.stage4.guard') + _STAGE457),
+    # 事实索引只查询正式 BodyDesign；不依赖 wire 展开或语义 producer。
+    DependencyRule(
+        module='novel.stages.stage4.hook_facts',
+        allows=('contracts.schema.*',),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
+                 'novel.stages.stage4.hook_wire', 'novel.stages.stage4.hook_validation')
+        + _STAGE457),
+    # wire compiler 仅展开引用；不借 validator 或下游编译推断缺失语义。
+    # novel.core.text：name_exposure 标注的命题回填与 hook_context 同尺
+    # （kp_statement，判据 25）；core.repair只给结构诊断，不做语义修复。
+    DependencyRule(
+        module='novel.stages.stage4.hook_wire',
+        allows=('contracts.schema.*', 'novel.stages.stage4.hook_facts',
+                'novel.stages.stage4.design_paths', 'novel.core.text',
+                'novel.core.name_materials', 'novel.core.repair'),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common',
+                 'novel.stages.stage4.hook_validation') + _STAGE457),
+    # hook_writer 只能消费 hook／receipt 契约：禁止 LLM 与 Stage2/4/7 模块。
+    # ⚠ F8c 起 literal_scan 与 prompts 同住 `novel/stages/common.py`，模块粒度
+    # 无法再把「禁 prompt 组装」与「准用 literal_scan」分开——那条禁项改由本行的
+    # **封闭 allows** 承载：只准 contracts.* 与 common，wire/prompt 组装所在的
+    # novel.llm 不在面内。
+    DependencyRule(
+        module='novel.stages.stage5.hook_writer',
+        allows=('contracts.schema.hook', 'contracts.schema.receipt',
+                'contracts.schema.context', 'contracts.schema.state',
+                'contracts.schema.base', 'novel.stages.common', 'novel.core.text',
+                # rc26：模子正文的疑似姓名残留定位报告（纯函数）。
+                'novel.core.name_residue'),
+        forbids=('novel.llm', 'novel.llm.*')
+        + tuple(m for m in _STAGE457 if m != 'novel.stages.stage5.hook_writer')),
+    # naming（2026-10-18 命名前移批起住 stage4 包）／assembly 禁止 import
+    # design／grounding／compile／book_ir／hook（计划原文）；两者共用 common
+    # （literal_scan），assembly 复用 naming 的纯函数。F5 起 assembly 消费
+    # body_checks（篇幅口径）与 body（前文拼接/文本 SHA）。
+    DependencyRule(
+        module='novel.stages.stage4.naming',
+        allows=('contracts.schema.*', 'novel.stages.common', 'novel.core.text'),
+        forbids=('novel.llm', 'novel.llm.*',
+                 'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
+                 'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
+                 'novel.stages.stage4.hook')),
+    DependencyRule(
+        module='novel.stages.stage7.assembly',
+        allows=('contracts.schema.*', 'novel.stages.common',
+                'novel.stages.stage4', 'novel.stages.stage5',
+                'novel.stages.stage5.body_checks', 'novel.stages.stage5.body'),
+        forbids=('novel.llm', 'novel.llm.*', 'novel.stages.stage5.hook_writer',
+                 'novel.stages.stage2.names', 'novel.stages.stage4.naming',
+                 'novel.stages.stage4.grounding', 'novel.stages.stage4.design',
+                 'novel.stages.stage4.compile', 'novel.stages.stage4.book_ir',
+                 'novel.stages.stage4.hook')),
 )

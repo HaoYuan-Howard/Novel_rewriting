@@ -71,9 +71,12 @@ producer 在落盘前处理「不可构造」的终态（无文案、少于两�
 的审批面已随人工闸整层退役，同族不变量改由机械审计承担（反例
 `tests/test_stage01.py::test_hook_tampering_turns_the_stage1_check_red`）。
 
-当前三层根冻结Stage1两份原始字节身份与规范章内容身份。源侧重新物化后，
-只有相同当前来源和内容可继续使用本根；任一身份变化都须在新根重新生成。
-不保留祖先修订链、跨根正文等价、旧票继承或人工切分确认兼容路径。
+已确认切分后，若源侧重新物化两份材料，须按
+`novel/source_identity.py::revision_proof` 证明原切点与正文逐字不变：Stage0 v3 无多
+修订祖先链，旧根必须等于当前 transform 的 clean_sha1 且机械 admission 已 passed，
+MainText／HookCopy 两份字节 SHA 全部对上才放行（稳定盲句柄据此沿用源根）。正文或
+章标记改变、旧根对不上、admission 未过或任一 SHA 损坏时保持拒绝，改根须重新走现役
+审计与显式切分确认；旧「Stage1 只读审批沿用旧票」面已随人工闸整层退役，没有票据可沿用。
 
 ---
 

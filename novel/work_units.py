@@ -19,14 +19,13 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
-from contracts.schema.source_story import STORY_VERSION
 from contracts.invariants import (
     BOOK_CONTENT_CALL_CEILING_DEFAULT, NODES, narrow_unit_scopes,
 )
 from contracts.llm_versions import llm_node_versions
 from contracts.schema.workflow import (
     BookBudgetGrantV1, BookContentBudgetV1,
-    WorkflowManifest, WorkUnitAttempt, WorkUnitBlobV1,
+    WorkflowManifestV7, WorkflowManifestV8, WorkflowManifestV9, WorkUnitAttempt, WorkUnitBlobV1,
     WorkUnitContentTurn, WorkUnitGroupBlobV1, WorkUnitLedgerV3,
     WorkUnitRegistryV1, WorkUnitProcessing, CommitBundleV1, commit_bundle_seal,
     LlmNodeVersionReset, work_unit_ledger_of_payload,
@@ -141,6 +140,18 @@ def _safe(base: str | os.PathLike[str], path: Path) -> Path:
 def _write(base: str | os.PathLike[str], path: Path, model: BaseModel) -> None:
     target = _safe(base, path)
     target.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(model, WorkUnitLedgerV3) and target.is_file():
+        with _open_snapshot(target) as stream:
+            original = stream.read()
+        if json.loads(original).get('schema_version') == 2:
+            # 显式迁移先耐久保存原字节；账仍只有 ledger.json 是现役真相源。
+            snapshot = target.with_name('ledger.v2.' + hashlib.sha256(original).hexdigest() + '.json')
+            if snapshot.is_file():
+                with _open_snapshot(snapshot) as stream:
+                    if stream.read() != original:
+                        raise WorkUnitRefused('V2 原账迁移快照摘要冲突')
+            else:
+                _write_bytes(snapshot, original)
     _write_bytes(target, _bytes(model.model_dump(mode='json')))
 
 
@@ -271,14 +282,28 @@ def _read(base: str | os.PathLike[str], path: Path, model: type[BaseModel]) -> A
         raise WorkUnitRefused(f'工作单元账缺失或不符合当前契约：{target.name}') from exc
 
 
-def workflow_manifest(base: str | os.PathLike[str]) -> WorkflowManifest | None:
+def workflow_manifest(base: str | os.PathLike[str]) -> (
+        WorkflowManifestV7 | WorkflowManifestV8 | WorkflowManifestV9 | None):
     path = _safe(base, paths.workflow_manifest_path(base))
     if not path.exists():
         return None
+    with _open_snapshot(path) as stream:
+        raw = stream.read()
     try:
-        return _read(base, path, WorkflowManifest)
-    except (ValueError, WorkUnitRefused) as exc:
-        raise WorkUnitRefused('输出根不是当前story-v3契约；旧根只读归档，请在新根重新生成') from exc
+        version = json.loads(raw)['schema_version']
+    except (TypeError, ValueError, KeyError) as exc:
+        raise WorkUnitRefused('工作流 manifest 版本不可读') from exc
+    model = {
+        9: WorkflowManifestV9,
+        8: WorkflowManifestV8,
+        7: WorkflowManifestV7,
+    }.get(version)
+    if model is None:
+        raise WorkUnitRefused(f'不支持的工作流 manifest schema_version={version!r}')
+    manifest = _read(base, path, model)
+    if model.model_validate_json(raw) != manifest:
+        raise WorkUnitRefused('读取工作流 manifest 时身份变化')
+    return manifest
 
 
 def _require_clean_base(base: str | os.PathLike[str]) -> None:
@@ -317,7 +342,7 @@ def check_workflow_write(base: str | os.PathLike[str]) -> None:
         _require_clean_base(base)
 
 
-def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifest:
+def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifestV9:
     """仅空 base 可初始化；旧书不能靠删账或换代码获得新额度。"""
     target = _safe(base, paths.workflow_manifest_path(base))
     # 拒绝存量 base 必须零写；锁本身会创建父目录，因此先作只读预检。
@@ -326,10 +351,12 @@ def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifest:
     with path_transaction_lock(target):
         existing = workflow_manifest(base)
         if existing is not None:
+            if not isinstance(existing, WorkflowManifestV9):
+                raise WorkUnitRefused(
+                    '存量 workflow manifest 不是 v9；STR-03-S2-CH 不迁移，请使用 clean base')
             return existing
         _require_clean_base(base)
-        manifest = WorkflowManifest(schema_version=1, contract_version=STORY_VERSION,
-            pipeline_contract_epoch=STORY_VERSION, task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
+        manifest = WorkflowManifestV9(task_id=hashlib.sha256(uuid4().bytes).hexdigest(),
                                       created_at=int(time.time()))
         _write(base, target, manifest)
         return manifest
@@ -337,7 +364,7 @@ def initialize_workflow(base: str | os.PathLike[str]) -> WorkflowManifest:
 
 def require_workflow(
         base: str | os.PathLike[str],
-) -> WorkflowManifest:
+) -> WorkflowManifestV7 | WorkflowManifestV8 | WorkflowManifestV9:
     manifest = workflow_manifest(base)
     if manifest is None:
         return initialize_workflow(base)
@@ -507,7 +534,7 @@ class WorkUnitBudget:
             if self.directory.exists() and any(
                     p.name != 'ledger.json.lock' for p in self.directory.iterdir()):
                 raise WorkUnitRefused('工作单元已有内容但预算账缺失')
-            return WorkUnitLedgerV3(schema_version=3, unit_id=self.unit_id, **self.identity)
+            return WorkUnitLedgerV3(unit_id=self.unit_id, **self.identity)
         ledger = _read(self.base, self.path, WorkUnitLedgerV3)
         if ledger.unit_id != self.unit_id or any(
                 getattr(ledger, key) != val for key, val in self.identity.items()):
@@ -653,6 +680,21 @@ class WorkUnitBudget:
             return {'status': 'refunded', 'additional': updated.content_limit - ledger.content_limit,
                     'remaining': updated.content_limit - len(updated.turns),
                     'versions': updated.version_resets[-1].versions}
+
+    def refund_for_upgrade(self, upgrade_id: str, *, reason: str) -> dict:
+        """登记的旧契约升级调用适配；历史 refunds 只读，预算只按节点版本恢复。
+
+        删除条件：contracts/contract_upgrades.py 的旧身份边全部退役。旧回执重放
+        先复读其原返还记录；新升级共用 synchronize_version，不能重复返还同一版。
+        """
+        if not re.fullmatch(r'[0-9a-f]{64}', upgrade_id or '') or not reason.strip():
+            raise WorkUnitRefused('契约升级返还必须有 SHA-256 身份和理由')
+        ledger = self._read()
+        existing = next((row for row in ledger.refunds if row.upgrade_id == upgrade_id), None)
+        if existing is not None:
+            return {'status': 'already_refunded', 'additional': 0,
+                    'remaining': ledger.content_limit - len(ledger.turns)}
+        return self.synchronize_version()
 
     def reserve(self, request_sha256: str, *, run_id: str,
                 session_run_id: str = '',
@@ -885,9 +927,8 @@ class WorkUnitBudget:
                         ) -> tuple[ContentReservation, dict[str, Any], str, str] | None:
         """该请求身份最近一次**可用**的已交付回答（免费采用）。
 
-        认 ``outcome='ok'`` 且非空的 attempt 响应，或经过同一 compiler
-        接受的完整 reasoning 救回。其余空回答以 failed attempt 留证，
-        **不占据请求身份**（D5）——重跑同一请求身份必须能拿到新回答，
+        只认 ``outcome='ok'`` 且非空的 attempt 响应：空回答以 failed attempt
+        留证，**不占据请求身份**（D5）——重跑同一请求身份必须能拿到新回答，
         而不是免费读回同一空壳。返回 (reservation, payload, attempt_id,
         response_sha256)。blob 缺失或身份漂移是坏账，关闭式拒绝。
         """
@@ -897,25 +938,8 @@ class WorkUnitBudget:
                 if turn.request_sha256 != request_sha256:
                     continue
                 for attempt in reversed(turn.attempts):
-                    if attempt.outcome not in ('ok', 'failed') or not attempt.response_sha256:
+                    if attempt.outcome != 'ok' or not attempt.response_sha256:
                         continue
-                    salvaged = False
-                    if attempt.outcome != 'ok':
-                        path = self.directory / f'accept_{attempt.attempt_id}.json'
-                        if not path.is_file():
-                            continue
-                        acceptance = _read(self.base, path, WorkUnitBlobV1)
-                        record = acceptance.payload
-                        salvaged = (
-                            acceptance.unit_id == self.unit_id
-                            and acceptance.turn_id == turn.turn_id
-                            and record.get('attempt_id') == attempt.attempt_id
-                            and record.get('request_sha256') == request_sha256
-                            and record.get('accepted') is True
-                            and record.get('parse') == 'ok'
-                            and record.get('salvage') == 'reasoning')
-                        if not salvaged:
-                            continue
                     blob = _read(self.base,
                                  self.directory / f'{attempt.response_sha256}.json',
                                  WorkUnitBlobV1)
@@ -926,8 +950,7 @@ class WorkUnitBudget:
                     payload = blob.payload
                     response = payload.get('response') if isinstance(payload, dict) else None
                     if (not isinstance(response, dict)
-                            or not ((response.get('reasoning') if salvaged
-                                     else response.get('content')) or '').strip()):
+                            or not (response.get('content') or '').strip()):
                         raise WorkUnitRefused('ok attempt 的响应证据为空或损坏')
                     return (ContentReservation(self.unit_id, turn.turn_id, turn.ordinal),
                             payload, attempt.attempt_id, attempt.response_sha256)
@@ -977,12 +1000,7 @@ class WorkUnitBudget:
             self._turn(ledger, turn_id)
             blob = WorkUnitBlobV1(unit_id=self.unit_id, turn_id=turn_id, payload=payload)
             digest = _digest(blob.model_dump(mode='json'))
-            latest = self.directory / f'accept_{attempt_id}.json'
-            first = self.directory / 'first_acceptance' / f'{attempt_id}.json'
-            # 首次接受结论冻结；免费重验只更新latest，不改首答分母或历史结论。
-            if not latest.exists() and not first.exists():
-                _write(self.base, first, blob)
-            _write(self.base, latest, blob)
+            _write(self.base, self.directory / f'accept_{attempt_id}.json', blob)
             return digest
 
     def acceptance_records(self) -> tuple[tuple[str, dict[str, Any]], ...]:
@@ -1228,11 +1246,11 @@ class WorkUnitBudget:
         return tuple(history)
 
     def recovery_attempts(self, turn_id: str) -> tuple[dict[str, Any], ...]:
-        """本账恢复只认截至目标回答的实际尝试，不从其他根补采用来源。"""
+        """历史采用只授权本账户内、截至目标回答的实际尝试。"""
         ledger = self._read()
         target = self._turn(ledger, turn_id)
         if not target.response_sha256:
-            raise WorkUnitRefused('本账恢复必须绑定完整保存的回答')
+            raise WorkUnitRefused('历史采用必须绑定完整保存的回答')
         return tuple(dict(attempt_id=attempt.attempt_id, run_id=turn.run_id,
                           request_fingerprint=attempt.request_fingerprint or turn.request_sha256,
                           sid=ledger.sid, node=ledger.node)
@@ -1333,6 +1351,25 @@ def readonly_budget(base: str | os.PathLike[str], sid: str, unit_id: str) -> Wor
     return budget
 
 
+def historical_unit_ledger(base: str | os.PathLike[str], sid: str,
+                           unit_id: str) -> WorkUnitLedgerV3:
+    """**已退役节点**工作单元的集中只读账入口（命名前移批，rc26）。
+
+    旧 `str06.stage7.naming` 退出现役后，其历史轮次与已购响应仍须可读：
+    整书成本继续计入（I-17），升级返还范围也要能按节点过滤。退役节点不在
+    现役 `NODES`：不能经本入口执行、追加授权或修改历史身份——只读盘上
+    ledger.json，身份仍按盘上记录（不猜节点版本、不重置轮数）。
+    读不到即显式 `FileNotFoundError`，不补造空账。
+
+    删除条件：所有存量根只读归档且不再续跑（REQUIREMENTS「目标命名前置与
+    普通正文主链」节）；不扩展为通用旧链兼容层（S-03）。
+    """
+    path = paths.work_unit_dir(base, sid, unit_id) / 'ledger.json'
+    if not path.is_file():
+        raise FileNotFoundError(f'历史工作单元预算账不存在：{unit_id}')
+    return _read(base, path, WorkUnitLedgerV3)
+
+
 def executor_scope(node: str, purpose: str, progress: Any = None) -> str:
     """只从登记的业务拓扑取 scope，修复 purpose 不铸新单元。
 
@@ -1341,12 +1378,13 @@ def executor_scope(node: str, purpose: str, progress: Any = None) -> str:
     章观察（`str06.stage2.chapters`）与按章成文（body）的 purpose／progress
     带显式章号；联合抽取的 `strategy` 整书单元随 `str06.stage2.source` 退役。
     """
-    spec = NODES.get(node)
-    if spec is None or not spec.paid:
-        raise WorkUnitRefused('该节点没有登记 Executor 模型工作单元')
-    if spec.lifecycle.unit_kind == 'book':
+    if node in ('str06.stage2.book', 'str06.stage2.names',
+                'str06.stage2.associate', 'str06.stage4.preserve',
+                'str06.stage4.body_design', 'str06.stage4.hook_design',
+                'str06.stage4.naming',
+                'str06.stage5.hook'):
         return 'book'
-    if spec.lifecycle.unit_kind == 'chapter':
+    if node in ('str06.stage2.chapters', 'str06.stage5.body'):
         chapter = getattr(progress, 'chapter_ordinal', None)
         if chapter is None:
             chapter = getattr(progress, 'chapter', None)
@@ -1377,8 +1415,8 @@ def unit_view(ledger: WorkUnitLedgerV3) -> dict[str, Any]:
                 scope=ledger.scope, content_used=len(ledger.turns),
                 content_limit=ledger.content_limit, content_base_limit=ledger.base_content_limit,
                 content_granted=ledger.content_limit - ledger.base_content_limit,
-                content_refunded=sum(row.additional for row in ledger.version_resets),
-                grant_count=len(ledger.grants), refund_count=sum(
+                content_refunded=sum(row.additional for row in (*ledger.refunds, *ledger.version_resets)),
+                grant_count=len(ledger.grants), refund_count=len(ledger.refunds) + sum(
                     row.additional > 0 for row in ledger.version_resets),
                 content_remaining=ledger.content_limit - len(ledger.turns),
                 state=state, latest_request_sha256=latest.request_sha256 if latest else None,
@@ -1402,7 +1440,7 @@ def processing_view(ledger: WorkUnitLedgerV3) -> dict[str, Any] | None:
                 'failed': 'failed', 'unknown': 'unknown'}[turn.state]
         reason = turn.reason_code or None
     counts = {name: int(name == kind) for name in (
-        'pending', 'generated', 'mechanical', 'cached', 'failed', 'unknown')}
+        'pending', 'generated', 'mechanical', 'history_adopted', 'cached', 'failed', 'unknown')}
     return dict(run_id=last.run_id if last is not None else turn.run_id,
                 input_sha256=last.input_sha256 if last is not None else turn.request_sha256,
                 total=1, **counts, reason=reason)

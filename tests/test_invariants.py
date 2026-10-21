@@ -129,28 +129,31 @@ def test_operator_redo_strategies_are_closed_and_explicit_per_node():
         for node, spec in inv.NODES.items()
         if spec.operator_redo is not None
     }
-    # 当前story节点统一从本节点正式输入重放；跨owner缺口与窄修另由持久typed
-    # issue/冻结补丁权限约束，不能从paid/default flags推断重设计授权。
+    # F8a：新链登记 operator_redo 的节点 = stage1.partition（范围外）＋
+    # 按章正文与装配（默认路径完整重建本节点当前正式输出）。
+    # R3（2026-09-28）：跨节点回派的三个上游 owner 登记 owner_revision——只认
+    # 盘上 open 的 typed issue 记录（runtime/issues/），不是新鲜度重采的后门。
+    # R8a（2026-09-29）：修订级联面需要中下游节点登记 canonical——owner 修订
+    # 写回后，下游（含确定性 compile 与成文面）按默认 flags 重放；级联外的
+    # file_changed 仍关闭式停给人。
     assert registered == {
         'stage1.partition': 'canonical',
         # 真实验收：book 姓名首现回派写回后，names 的消费面随之陈旧。
         'str06.stage2.names': 'canonical',
         'str06.stage2.compile': 'canonical',
-        'str06.stage4.hook_design': 'canonical',
-        'str06.stage4.chapters': 'canonical',
-        'str06.stage4.hook_compile': 'canonical',
+        'str06.stage4.hook_design': 'owner_revision',
         'str06.stage4.compile': 'canonical',
         'str06.stage5.hook': 'canonical',
         'str06.stage5.body': 'canonical',
         'str06.stage4.naming': 'canonical',
         'str06.stage7.assemble': 'canonical',
-        'str06.stage2.associate': 'canonical',
-        'str06.stage4.preserve': 'canonical',
-        'str06.stage4.body_design': 'canonical',
+        'str06.stage2.associate': 'owner_revision',
+        'str06.stage4.preserve': 'owner_revision',
+        'str06.stage4.body_design': 'owner_revision',
         # R10a a3（2026-10-01）：源证据冲突按锚点句柄回派两个 Stage2 语义
         # owner——书级与逐章观察进入 owner_revision 面（表与登记同批闭环）。
-        'str06.stage2.book': 'canonical',
-        'str06.stage2.chapters': 'canonical',
+        'str06.stage2.book': 'owner_revision',
+        'str06.stage2.chapters': 'owner_revision',
     }
     assert set(registered.values()) <= set(inv.OPERATOR_REDO_STRATEGIES)
     assert all(
@@ -195,33 +198,8 @@ def test_free_nodes_are_the_ones_without_llm():
     #（B2 起 Stage2 的 compile 也是确定性免费节点，D9）。
     assert free == {
         'stage0.remove', 'stage1.partition',
-        'str06.stage2.compile', 'str06.stage4.compile', 'str06.stage4.hook_compile', 'str06.stage7.assemble',
+        'str06.stage2.compile', 'str06.stage4.compile', 'str06.stage7.assemble',
     }
-
-
-def test_story_publication_paths_have_one_current_owner():
-    from contracts.story_paths import (
-        ADAPTATION_MAP, CHAPTER_PACKET, HOOK_PACKET, MANIFEST, NAME_MAP, SOURCE_STORY, TARGET_STORY,
-    )
-    expected = {
-        'str06.stage2.compile': (SOURCE_STORY,),
-        'str06.stage4.naming': (NAME_MAP,),
-        'str06.stage4.compile': (TARGET_STORY, ADAPTATION_MAP, CHAPTER_PACKET),
-        'str06.stage4.hook_compile': (HOOK_PACKET,),
-    }
-    for node, outputs in expected.items():
-        assert inv.NODES[node].produces == outputs
-        for output in outputs:
-            assert [owner for owner, spec in inv.NODES.items() if output in spec.produces] == [node]
-    assert MANIFEST in inv.NODES['str06.stage7.assemble'].produces
-
-
-def test_parallel_registry_excludes_sequential_body_and_closes_over_current_nodes():
-    assert inv.PIPELINE_PARALLEL_NODES == ('str06.stage2.chapters', 'str06.stage4.chapters')
-    assert 'str06.stage5.body' not in inv.PIPELINE_PARALLEL_NODES
-    for node in inv.PIPELINE_PARALLEL_NODES:
-        assert inv.NODES[node].paid
-        assert inv.NODES[node].lifecycle.unit_kind == 'chapter'
 
 
 def _known_flags() -> set[str]:
@@ -393,8 +371,10 @@ def test_stage0_admission_covers_mechanical_passed_shape():
 def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
     from contracts.invariants import NODES
 
-    # 三层当前链15个节点，加stage0/1两个摄入节点。
-    assert len(NODES) == 17
+    # F8a（STR-06 切换）：旧链 16 个节点整体退役；B2（2026-09-27）五节点
+    # 重建后为 14 个 str06. 节点；CS-3（2026-10-03）bind 退役后 13 个
+    # ＋ stage0.remove / stage1.partition = 15。
+    assert len(NODES) == 15
     assert all(spec.lifecycle is not None for spec in NODES.values())
     for node, spec in NODES.items():
         life = spec.lifecycle
@@ -408,7 +388,6 @@ def test_node_lifecycle_covers_real_nodes_and_preserves_boundaries():
     # 确定性节点确实是确定性生成模式（B2 起 Stage2 compile 亦然）。
     assert NODES['str06.stage2.compile'].lifecycle.generation_mode == 'deterministic'
     assert NODES['str06.stage4.compile'].lifecycle.generation_mode == 'deterministic'
-    assert NODES['str06.stage4.hook_compile'].lifecycle.generation_mode == 'deterministic'
     assert NODES['str06.stage7.assemble'].lifecycle.generation_mode == 'deterministic'
     assert NODES['stage1.partition'].lifecycle.review_mode == 'none'
     # 单元粒度如实区分：B2 五节点重建（D9）后现役只有 book／chapter 两种——

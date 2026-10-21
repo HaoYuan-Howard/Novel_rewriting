@@ -145,11 +145,11 @@ def test_next_uses_one_snapshot_and_the_shared_queue_lane(monkeypatch, tmp_path)
         ('seal', snapshot.base, 'book-1', 'code-v1')]
 
 
-def test_source_owner_problem_has_no_execution_token(
+def test_retired_blocker_has_no_execution_token(
         monkeypatch, tmp_path):
     snapshot = _snapshot(tmp_path)
-    blocker = _blocked('str06.stage2.book', Q.WAITING_ON_RESUME_DECISION).model_copy(
-        update={'why': '源故事整合存在未闭合的原章问题，等待原 owner 修订及免费重验'})
+    blocker = _blocked(
+        'str06.stage5.body', 'legacy_frozen_v6_design_authority_unavailable')
     _wire(monkeypatch, snapshot, todo=[], blocked=[blocker])
 
     got = O.next_action(tmp_path, 'book-1')
@@ -157,8 +157,8 @@ def test_source_owner_problem_has_no_execution_token(
     assert got.state == 'blocked'
     assert got.execution_token is None
     assert got.action is not None
-    assert got.action.waiting_on == Q.WAITING_ON_RESUME_DECISION
-    assert got.action.node == 'str06.stage2.book'
+    assert got.action.waiting_on == 'legacy_frozen_v6_design_authority_unavailable'
+    assert got.action.waiting_on != Q.WAITING_ON_STAGE4_DESIGN_REVIEW
 
 
 def test_ready_action_carries_the_canonical_safety_axes_and_stable_hash(
@@ -235,12 +235,12 @@ def test_no_lane_item_is_pipeline_complete_not_delivery_ready(monkeypatch, tmp_p
     [
         (
             _blocked(
-                'str06.stage2.chapters', Q.WAITING_ON_INBOX),
+                'str06.stage5.body', Q.WAITING_ON_STAGE5_REVIEWER_REWRITE),
             'unknown',
         ),
         (
             _blocked(
-                'str06.stage2.book', Q.WAITING_ON_RESUME_DECISION),
+                'str06.stage5.body', Q.WAITING_ON_RESUME_DECISION),
             'unknown',
         ),
     ],
@@ -249,8 +249,9 @@ def test_progress_snapshot_projects_authoritative_frontier_and_handler(
         monkeypatch, tmp_path, item, expected_handler):
     """运行页看 operator 当前 lane，不从空 beacon 猜成 Stage0 重跑。
 
-    源章拒稿和全书 owner 的恢复决定都保持 blocked，不从等待文字推断执行许可；
-    没有已登记自动恢复动作时，处理人投影为 unknown，不假装有人在处理。
+    F8c：`DETERMINISTIC_RECOVERY_WAITING_ON` 现为空集——旧链的 0-wire 补尾
+    waiter（reviewer-rewrite 等）随旧链退役，任何未登记的 waiting_on 一律
+    投影为 `unknown` 处理人（fail-closed），不假装有人在处理。
     """
     snapshot = _snapshot(tmp_path)
     _wire(monkeypatch, snapshot, todo=[], blocked=[item])
@@ -280,12 +281,12 @@ def test_resume_frontier_rejects_a_frontend_invented_node_label():
 
 
 def _recovery_frontier_fields():
-    node = 'str06.stage2.book'
+    node = 'str06.stage5.body'
     return dict(
         state='blocked', node=node, seq=list(NODES).index(node) + 1,
         label=NODES[node].label, resume_verdict='run', why='原 owner 尚待免费恢复',
-        waiting_on=Q.WAITING_ON_RESUME_DECISION, paid=False,
-        writes='stage2/observations/book.json', next_handler='unknown')
+        waiting_on=Q.WAITING_ON_ANALYZE_DRAFT_REPAIR, paid=False,
+        writes='stage5/body/ch01.txt', next_handler='human')
 
 
 @pytest.mark.parametrize('prefix_length', [0, 1])

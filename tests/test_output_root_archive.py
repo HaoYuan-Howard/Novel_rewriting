@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import socket
 import subprocess
 import sys
@@ -26,18 +25,8 @@ from tools import archive_output_root as archive
 REPO = Path(__file__).resolve().parents[1]
 
 
-@pytest.fixture(scope='module')
-def paired_old_code(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """只读代码快照与各例数据根隔离，停止证明仍由真实配对代码执行。"""
-    root = tmp_path_factory.mktemp('archive_paired_code')
-    for package in ('novel', 'contracts'):
-        shutil.copytree(REPO / package, root / package,
-            ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.pyo'))
-    return root
-
-
 @pytest.fixture
-def setup(tmp_path, monkeypatch, paired_old_code):
+def setup(tmp_path, monkeypatch):
     source = tmp_path / '旧输出'
     (source / '_service' / 'uploads').mkdir(parents=True)
     (source / '_service' / 'uploads' / 'source.txt').write_text('完整源文与文案', encoding='utf-8')
@@ -50,18 +39,14 @@ def setup(tmp_path, monkeypatch, paired_old_code):
         admission.open_gate(source, 'old-parent', '123')
         admission.close_gate(source, 'old-parent')
         admission.mark_drained(source, 'old-parent')
-    # 工程 checkout 正在修改，只有 Git 清洁证明使用独立 seam。生命周期证明
-    # 在隔离代码快照中真正启动 admission/beacon/jobs/agent，不读取旧故事产物。
-    # 数据根不能位于配对代码内部；仓内固定 .tr 也必须遵守生产路径保护。
-    def code_identity(root):
-        assert root == paired_old_code
-        return 'a' * 40
-    monkeypatch.setattr(archive, '_code_identity', code_identity)
+    # 工程 checkout 正在修改，只有代码清洁证明使用独立 seam。生命周期证明仍
+    # 真正启动配对代码中的 admission/beacon/jobs/agent 读取，且完全不读取旧产物。
+    monkeypatch.setattr(archive, '_code_identity', lambda root: 'a' * 40)
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
     return dict(source=source, archive=tmp_path / '旧根归档', new_root=tmp_path / '新输出',
-                journal=tmp_path / '切换事务', old_code=paired_old_code, ports=[port], stopped_pids=[],
+                journal=tmp_path / '切换事务', old_code=REPO, ports=[port], stopped_pids=[],
                 actor='test:release', reason='整根切换合成验收', offline_ack=True)
 
 
@@ -217,8 +202,8 @@ def test_live_owner_lease_is_probed_across_a_real_process(setup):
               ' print("locked", flush=True)\n'
               ' sys.stdin.readline()\n')
     process = subprocess.Popen([sys.executable, '-B', '-c', script, str(setup['source'])],
-                               cwd=setup['old_code'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               env={**os.environ, 'PYTHONPATH': str(setup['old_code'])}, text=True)
+                               cwd=REPO, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               text=True)
     try:
         assert process.stdout.readline().strip() == 'locked'
         with pytest.raises(archive.ArchiveRefused, match='锁仍被持有'):
@@ -242,9 +227,6 @@ def test_declared_live_pid_and_port_are_not_stop_proof(setup):
 
 
 def test_path_boundaries_and_links_fail_before_preview(setup):
-    for key in ('source', 'archive', 'new_root', 'journal'):
-        with pytest.raises(archive.ArchiveRefused, match='配对旧代码 checkout 之外'):
-            archive.preview(**{**setup, key: setup['old_code'] / '代码内数据根'})
     for changes in ({'archive': setup['source'] / 'inside'},
                     {'source': REPO}, {'new_root': setup['source']},
                     {'journal': setup['archive'] / 'journal'}):

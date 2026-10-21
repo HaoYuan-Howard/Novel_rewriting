@@ -1,8 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""当前三层跨节点回派：严格V3账、有界修订、发现节点免费复验清账。
+"""owner_revision —— R3 跨节点回派：typed issue 记录、有界修订与复验清账。
 
-只持久化显式定位与归属，不判断故事语义；指纹与累计轮数跨重启保留。
+【只修 typed、可定位的机械问题（2026-09-28 裁决 1）】
+  • 下游确定性节点（`run_compile`／`run_compile_stage4`）发现路由表登记的问题
+    时，经 :func:`discover_owner_issues` 写 ``runtime/issues/<owner>.json`` 并抛
+    :class:`OwnerRevisionRequired`；无进展（同问题集指纹原样重现）或修订轮
+    额度耗尽时抛 :class:`OwnerRevisionStop`——按 item 停、不无限付费。
+  • 上游 owner 重跑时经 :func:`open_issue_record` 读 open 记录，把
+    （原请求＋上一版＋typed 问题）并入修订 prompt——形状与
+    `novel/llm/paid_requests.py::ask_json` 的同节点修订内容轮一致；修订要求进
+    prompt 即进请求身份（修订轮是新付费调用，崩溃后按身份免费重放）。
+  • 下游复验通过后经 :func:`resolve_owner_issues` 置 ``status='resolved'``；
+    ``rounds_total`` 留账不复位（「每单元最多 2 轮」是终身上限，耗尽停给人）。
+
+【R8a（2026-09-29 canary 实证）：记录增 ``against_sha256``，写读同批升 v2】
+  • 每次发现都记下判定时 owner 正式产物（`OWNER_PRODUCT_RELS`）的字节摘要；
+    调度门控（`resume_verdict` 的 owner_revision 分支）只在当前摘要仍等于它时
+    判修订 REDO——owner 修订写回后 issue 仍 open，若照旧 REDO 会在「改退出码
+    后反复重买 owner」里打转（B6-A canary 根实证）。
+  • v1 盘上记录经 :func:`read_owner_issue_file` 集中迁移（迁移登记与删除条件
+    见 `contracts/schema/workflow.py::owner_issue_record_of_payload`）。
+  • 报错与监控里的三类上限各自分名（R8a-4），不再共用「修订轮」一个词：
+    **节点内校验重问**（`ask_json` 同 wire 修订，≤OWNER_REVISION_MAX_ROUNDS）、
+    **跨节点回派修订轮**（本模块，每 owner 终身）、**工作单元内容轮额度**
+    （`novel/work_units.py` 的 reserve，耗尽走 grant 追加）。
+
+【边界】路由闭集（code 轴与 unbound.owner 轴）唯一登记在
+`contracts/schema/workflow.py`；本模块不判断文学质量、不修复语义、不猜测
+路由——未知 code／未映射 owner 一律停。issue 记录是 runtime 状态，不是版本化
+书产物；成本权威仍是 `<base>/_service/ledger.jsonl`（修订轮经付费边界外发，
+逐 attempt 入账，I-17）。
 """
 from __future__ import annotations
 
@@ -10,11 +38,10 @@ import hashlib
 from pathlib import Path
 from typing import Callable, NoReturn
 
-from contracts.schema.source_story import STORY_VERSION
 from contracts.invariants import CASCADE_REWIND_LIMIT, OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.workflow import (
     OWNER_PRODUCT_RELS, OwnerIssueFileV3, OwnerIssueV1,
-    owner_issue_record_of_payload, owner_issues_rel, owner_issue_node,
+    owner_issue_record_of_payload, owner_issues_rel,
 )
 from novel.llm.paid_requests import ExecutionError, revision_user_prompt
 from contracts.invariants import NODES
@@ -66,9 +93,13 @@ class OwnerRevisionStop(ExecutionError):
 class MechanicalDefectStop(ExecutionError):
     """机械缺陷停止：确定性编译查出形状/闭集/时序缺陷，且没有回派路由。
 
-    缺少明确修订责任或授权范围时，保留确定性失败并停止，不猜 owner 或扩大修订。
-    CLI 以 typed negative 区分“已经检查且未通过”与“执行结论未知”，
-    错误上下文随运行证据留存，不触发新的付费调用。
+    与 :class:`OwnerRevisionStop` 的区别：这类缺陷（如首现闸
+    ``participant_before_first_appearance``，R8c）不登记回派 owner——
+    恢复走该章观察重问或 owner patch（人工修订 wire），不自动重跑。
+    CLI 把它翻译成 exit 1（typed negative：查出确定性缺陷＝跑完且结论
+    落盘不通过），stderr 全文随 `_service/logs/<job>.log` 留证，编排器按
+    landed_red 停给人。B6-A canary 20260930 实证：裸 ``ValueError`` 穿透成
+    exit 70（「结论未知」），把「查出了确定性缺陷」记成「压根没跑成」。
     """
 
     def __init__(self, message: str, *, node: str, issues: tuple[str, ...], item: str = 'book'):
@@ -79,20 +110,17 @@ class MechanicalDefectStop(ExecutionError):
 
 
 def _messages(issues: tuple[OwnerIssueV1, ...] | list[OwnerIssueV1]) -> list[str]:
-    import json
-    return [f'{issue.code}[{issue.item}]：{issue.message}；context='
-            + json.dumps(issue.context, ensure_ascii=False, sort_keys=True)
-            for issue in issues]
+    return [f'{issue.code}[{issue.item}]：{issue.message}' if issue.item
+            else f'{issue.code}：{issue.message}' for issue in issues]
 
 
 def _issue_key(issue: OwnerIssueV1) -> tuple[str, str, str]:
-    """问题身份取明确定位/材料身份；人读文案和坏值变化不构成修订进展。"""
+    """问题的稳定身份：（规则码，item，材料身份或存量判据身份／消息）；文案与出现次数不参与。"""
     import json
 
-    location = {key: issue.context[key] for key in ('path', 'paths', 'append_paths', 'remove_paths',
-        'operation', 'component', 'event_no', 'section', 'item_no', 'material_identity',
-        'validation_identity') if key in issue.context}
-    detail = json.dumps(location, ensure_ascii=False, sort_keys=True)
+    detail = (json.dumps(issue.context['material_identity'], ensure_ascii=False, sort_keys=True)
+              if 'material_identity' in issue.context else
+              issue.context.get('validation_identity', issue.message))
     return issue.code, issue.item, detail
 
 
@@ -187,9 +215,8 @@ def open_issue_targets_node(repository, node: str) -> bool:
     会推导出**未购买的新身份**（缓存必 miss）。修订循环的验证权威是提出问题的
     下游（compile 复验清账），不是 owner 自己的免费复检——open 期间跳过追跑。
     """
-    directory = repository.path('runtime/issues')
-    for path in sorted(directory.glob('*.json')) if directory.is_dir() else ():
-        record = read_owner_issue_file(repository, path.stem)
+    for owner in OWNER_PRODUCT_RELS:
+        record = read_owner_issue_file(repository, owner)
         if record is not None and record.status == 'open' \
                 and record.node == node:
             return True
@@ -197,7 +224,11 @@ def open_issue_targets_node(repository, node: str) -> bool:
 
 
 def read_owner_issue_file(repository, owner: str) -> OwnerIssueFileV3 | None:
-    """只读当前显式V3记录；损坏、旧版或文件owner错配一律拒绝。"""
+    """读该 owner 的回派账（集中解码为 v3 形状）；无记录返回 None，损坏即显式拒绝。
+
+    v1 盘上记录按登记迁移补 ``against_sha256``（迁移语义与删除条件见
+    `contracts/schema/workflow.py::owner_issue_record_of_payload`）。
+    """
     import json as _json
 
     path = repository.path(owner_issues_rel(owner))
@@ -205,10 +236,9 @@ def read_owner_issue_file(repository, owner: str) -> OwnerIssueFileV3 | None:
         return None
     payload = _json.loads(path.read_text(encoding='utf-8'))
     try:
-        record = owner_issue_record_of_payload(payload)
-        if record.owner != owner:
-            raise ValueError('回派账文件名与owner不一致')
-        return record
+        return owner_issue_record_of_payload(
+            payload, lambda record_owner:
+                owner_product_digest(repository, record_owner))
     except ValueError as exc:
         raise ValueError(
             f'{owner} 的回派账 {owner_issues_rel(owner)} 形状损坏：{exc}；'
@@ -242,8 +272,6 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
     """
     if not issues:
         raise ValueError('discover_owner_issues 要求非空 issue 清单（空清单不是问题）')
-    if owner_issue_node(owner) != node or raised_by not in NODES:
-        raise ValueError('回派owner/node/raised_by不属于当前契约')
     issues = _distinct(issues)
     existing = read_owner_issue_file(repository, owner)
     fingerprint = _fingerprint(issues)
@@ -259,7 +287,6 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
     if existing is not None and existing.status == 'open' \
             and fingerprint in history:
         repository.write(owner_issues_rel(owner), OwnerIssueFileV3(
-            contract_version=STORY_VERSION,
             owner=owner, node=node, raised_by=raised_by, status='open',
             rounds_total=existing.rounds_total, fingerprint=fingerprint,
             against_sha256=against_sha256, no_progress=True, issues=issues,
@@ -272,7 +299,6 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
     rounds = existing.rounds_total if existing is not None else 0
     if rounds >= OWNER_REVISION_MAX_ROUNDS:
         repository.write(owner_issues_rel(owner), OwnerIssueFileV3(
-            contract_version=STORY_VERSION,
             owner=owner, node=node, raised_by=raised_by, status='open',
             rounds_total=rounds, fingerprint=fingerprint,
             against_sha256=against_sha256, no_progress=False, issues=issues,
@@ -294,7 +320,6 @@ def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,
             node=node, owner=owner, issues=issues, raised_by=raised_by,
             rounds=rounds)
     repository.write(owner_issues_rel(owner), OwnerIssueFileV3(
-            contract_version=STORY_VERSION,
         owner=owner, node=node, raised_by=raised_by, status='open',
         rounds_total=rounds + 1, fingerprint=fingerprint,
         against_sha256=against_sha256, issues=issues,
@@ -327,7 +352,7 @@ def _bump_cascade_rewinds(repository) -> int:
 def resolve_owner_issues(repository, *, owner: str, raised_by: str) -> None:
     """下游复验通过：open 记录置 resolved（轮数、指纹与 against 摘要留账，不复位）。"""
     record = read_owner_issue_file(repository, owner)
-    if record is None or record.status != 'open' or record.raised_by != raised_by:
+    if record is None or record.status != 'open':
         return
     repository.write(owner_issues_rel(owner), record.model_copy(update={
         'status': 'resolved', 'dispatch_pending': False, 'raised_by': raised_by, 'updated_at': _now()}))
@@ -361,12 +386,10 @@ def revision_prompt_for_owner(repository, owner: str, base_prompt: str,
     if record is None:
         return base_prompt
     previous = _stored_payload_text(repository, previous_rel, project=previous_wire)
+    from novel.stages.common import semantic_revision_rules
     return revision_user_prompt(base_prompt, previous, _messages(record.issues),
                                 previous_is_canonical=previous_wire is None,
-                                revision_rules=(
-                                    '只修issues.context.path明确授权的条目；原文证据与任务schema是约束。'
-                                    '保持未涉问题的语义；若修复需要修改其他owner，返回该节点明示的上游问题协议。'
-                                    '不要新增机械ID、hash、统计或canonical字段。'))
+                                revision_rules=semantic_revision_rules(owner))
 
 
 def _stored_payload_text(repository, rel: str, *,
@@ -380,9 +403,9 @@ def _stored_payload_text(repository, rel: str, *,
         raise RuntimeError(f'修订上一版不是 JSON：{rel}')
     if not isinstance(envelope, dict):
         raise RuntimeError(f'修订上一版不是 JSON 对象：{rel}')
-    if envelope.get('contract_version') != STORY_VERSION:
-        raise RuntimeError(f'修订上一版不属于当前story-v3：{rel}')
-    payload = envelope
+    payload = envelope.get('payload', envelope)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f'修订上一版 payload 不是 JSON 对象：{rel}')
     stripped = {k: v for k, v in payload.items() if not k.startswith('_')}
     if project is not None:
         stripped = project(stripped)

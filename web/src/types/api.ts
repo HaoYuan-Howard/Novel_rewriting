@@ -56,12 +56,15 @@ import type {
   Stage1View,
 } from './stages'
 import type {
+  Str06BlueprintView,
   Str06CandidateList,
+  Str06CharactersView,
   Str06ChapterView,
   Str06DeliveryView,
+  Str06DesignView,
   Str06HookView,
-  Str06SourceStoryView,
-  Str06TargetStoryView,
+  Str06IrNavView,
+  Str06NamingView,
   Str06RunView,
 } from './str06'
 
@@ -146,10 +149,13 @@ export interface Api {
   /* STR-06 候选链只读监控：隔离候选根的十二条 GET，与现役 `/novels` 面物理分开 */
   getStr06Candidates(): Promise<Str06CandidateList>
   getStr06Run(candidate: string): Promise<Str06RunView>
-  getStr06SourceStory(candidate: string): Promise<Str06SourceStoryView>
-  getStr06TargetStory(candidate: string): Promise<Str06TargetStoryView>
+  getStr06Characters(candidate: string): Promise<Str06CharactersView>
+  getStr06Blueprint(candidate: string): Promise<Str06BlueprintView>
+  getStr06Design(candidate: string): Promise<Str06DesignView>
+  getStr06Ir(candidate: string): Promise<Str06IrNavView>
   getStr06Chapter(candidate: string, ordinal: number): Promise<Str06ChapterView>
   getStr06Hook(candidate: string): Promise<Str06HookView>
+  getStr06Naming(candidate: string): Promise<Str06NamingView>
   getStr06Delivery(candidate: string): Promise<Str06DeliveryView>
-  getStr06Book(candidate: string): Promise<{ text: string; filename: string }>
+  getStr06Book(candidate: string): Promise<string>
 }

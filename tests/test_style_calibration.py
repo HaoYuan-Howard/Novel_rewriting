@@ -27,7 +27,7 @@ def test_only_unique_style_repairs_may_enter_paid_revision():
     """旧链风格判据（含修复类别 UNIQUE/FREE/NONE）已随正文 Judge 整族退役。
 
     新链 Stage5 的语义判定只剩「语义未评如实保留」的披露位；章级机械验
-    （回答完整性、篇幅、回执与补丁scope）不驱动风格修复分类。标定工具保留为参考件，
+    （body_length_band 等）不再驱动风格修复分类。标定工具保留为参考件，
     只做确定性分析（见上条），不再有注册判据面。
     """
     retired_style_rules = (
@@ -41,6 +41,8 @@ def test_only_unique_style_repairs_may_enter_paid_revision():
     # 新链 stage5 现役判据只有章级机械验、Hook 机械验、回执绑定与披露位。
     stage5_rules = {row.rule for row in REGISTRY.of_stage('stage5')}
     assert stage5_rules == {
-        'story_prose_complete', 'story_prose_receipt', 'story_opening_patch_scope',
-        'story_hook_receipt', 'body_semantics_unver',
+        'body_chapter_complete', 'body_name_watch', 'body_required_literals',
+        'body_length_band',
+        'body_semantics_unver', 'body_length_reading', 'name_residue_report',
+        'hook_mechanical', 'chapter_receipt_binding', 'hook_receipt_binding',
     }

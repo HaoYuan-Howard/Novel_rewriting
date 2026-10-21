@@ -8,9 +8,7 @@ test_layering.py —— 分层靠**测试**守，不靠约定。
 一条只写在文档里的分层规矩，与「只写在 prompt 里的约束」是同一个形状（判据 35）。
 
 【它守的那条线】
-    contracts.story_paths ← 小说路径叶子，只依赖标准库
-         ↑
-    contracts.artifacts    ← 产物路径，只额外依赖 story_paths
+    contracts.artifacts    ← 路径叶子，只 import typing
          ↑
     contracts.invariants   ← 取值域叶子。**它不知道 pydantic 的存在**
          ↑
@@ -77,31 +75,25 @@ def _rel(p: str) -> str:
 # ───────────────────── 叶子性 ─────────────────────
 
 def test_invariants_and_artifact_paths_are_contract_leaves():
-    """基础契约只沿 story_paths → artifacts → invariants 依赖。
+    """两个基础契约模块只许依赖标准库；invariants 只能额外依赖路径叶子。
 
     ⚠ 契约层现在依赖 pydantic 了（模型住在 `contracts/schema/`），
-    **而这三个文件必须留在依赖之外**：`/api/enums`、prompt、节点表与 schema 路由都从
+    **而这两个文件必须留在依赖之外**：`/api/enums`、prompt、节点表与 schema 路由都从
     它们派生。路径叶子不能反向 import invariants；invariants 也不能借 `contracts` 这个
     顶层名绕去依赖 schema。
     """
     invariant_path = os.path.join(ROOT, 'contracts', 'invariants.py')
     artifact_path = os.path.join(ROOT, 'contracts', 'artifacts.py')
-    story_path = os.path.join(ROOT, 'contracts', 'story_paths.py')
     invariant_imports = _import_paths(invariant_path)
     artifact_imports = _import_paths(artifact_path)
-    story_imports = _import_paths(story_path)
     allowed_invariants = {'__future__', 're', 'typing', 'contracts.artifacts'}
-    allowed_artifacts = {'__future__', 'typing', 'contracts.story_paths'}
-    allowed_story = {'__future__', 'typing'}
+    allowed_artifacts = {'__future__', 'typing'}
     assert invariant_imports <= allowed_invariants, (
         'contracts/invariants.py 长出了新依赖：'
         f'{sorted(invariant_imports - allowed_invariants)}')
     assert artifact_imports <= allowed_artifacts, (
         'contracts/artifacts.py 长出了新依赖：'
         f'{sorted(artifact_imports - allowed_artifacts)}')
-    assert story_imports <= allowed_story, (
-        'contracts/story_paths.py 必须是无运行时、schema 或其它契约依赖的最底层叶子：'
-        f'{sorted(story_imports - allowed_story)}')
 
 
 def test_contracts_never_imports_the_runtime():
@@ -208,9 +200,12 @@ def _runtime_files() -> tuple[str, ...]:
 
 #: 允许裸读 JSON 的白名单。每一条都要写得出理由。
 _JSON_READ_ALLOWED = {
-    'novel/core/story_prose.py': (
-        '只在 _answer_data 解码模型正文或开篇补丁回答的内存字符串，并拒绝重复 JSON 键；'
-        '不读盘上 JSON——章包、正文和响应证据仍经 repository／付费边界'),
+    'novel/stages/stage5/body.py': (
+        '只解码段落修句回答的内存字符串（行替换 JSON，CS-H H3）；'
+        '不读盘上 JSON——章包与正文仍经 repository／付费边界'),
+    'novel/stages/revisions.py': (
+        '只解码 purchased_baseline 已核验并返回的内存回答以计算结构差异；'
+        '不直接读盘上小说 JSON，所有修订证据与产物读取仍走 repository'),
     'novel/output_root.py': (
         '只读根外的离线归档围栏、清单和提交回执；不解析旧 artifact，'
         '新根须有同事务的 committed 证明，服务/CLI/Store 共用这一判定'),
@@ -721,9 +716,13 @@ def test_the_artifact_mouth_cannot_reach_stage_internals():
     """⭐ 基础设施不知道 stage：产物单口不许在**模块顶层** import `novel.stages`。
 
     依赖方向必须是 stage producer → store/paths。`consumption.py` 完全不许
-    触达 stage；正文短尾与回执判据统一下沉到 `novel.core.story_prose`。
-    `store.py` 只在 Stage1 免费复验时惰性调用 Stage0 的公开审计口，模块加载时
-    不依赖任何 Stage。跨 Stage 深路径另有无白名单守卫。
+    触达 stage（其孤儿 scope 依赖族已删除）；`store.py` 在读特定产物时确有
+    六处**函数内惰性** stage 触达（grounding/binding/character_refs 等投影
+    复算），它们登记在 M5 的跨 stage 深路径 grandfather 清单里、只减不增，
+    本条只钉住更弱但立即为真的一层：**import 时刻**产物单口不依赖任何
+    stage——store/consumption 可以被 contracts 测试与工具独立 import。
+    （2026-09 修正：本条首版对 store 断言了绝对零触达，提交时验证输出被
+    tail 截断而误报全绿；本版按事实收窄并另建 grandfather 守卫。）
     """
     mouth = {
         'novel/consumption.py': 'any',
@@ -807,37 +806,42 @@ def test_ingest_primitives_are_independent_of_stage_and_repository():
                        for m in imports), (rel, imports)
 
 
-def test_shared_story_prose_is_independent_of_runtime_consumers():
-    """正文请求与判据是共享纯边界，不得借 repository 或 Stage 实现完成业务。"""
-    rel = 'novel/core/story_prose.py'
-    path = os.path.join(ROOT, rel)
-    assert os.path.isfile(path), f'共享纯写作边界缺失：{rel}'
-    imports = _full_imports(path)
-    assert not any(m == 'novel' or m.startswith('novel.') for m in imports), (
-        f'{rel} 反向依赖运行时消费者：{sorted(imports)}')
-    assert not os.path.exists(os.path.join(ROOT, 'novel/stages/prose_contract.py')), (
-        '旧 Stage 层共享入口不得作为 shim 与纯边界并存')
-
-
 def test_stage2_owner_shims_cannot_return():
-    """当前 SourceStory 引擎只有公开包与 story；旧 owner shim 与旧链整族不得回流。
+    """STR-02→F8c：旧顶层 shim（plot_* / grounding / …）与整个旧 Stage2 引擎
+    都已删；不得以同名模块或整族回流。
 
-    语义 owner 仍分别执行章理解、全书整合、关联和命名；模块名不再一一对应 owner。
-    原有 book／chapters／names／associate／compile 等旧契约实现已被 story-v1
-    统一替换，不能为了旧调用方重建包装模块。
+    ⚠ F8c（2026-09-25）方向调整：`novel/stages/stage2/` **被新链 per-stage 包
+    原地重建**，因此本条不再断言「整包不得存在」——包回来了不等于旧链回来，
+    **模块名**才说了算。旧 Stage2 的 blueprint／analyze／characters／knowledge／
+    shared 五族与全部顶层 shim 一个都不许回来；模块面按登记 owner 收紧
+    （多一个就是旧链回流的第一级台阶）。
+    ⚠ B2（2026-09-27）五节点重建（D9）：`resolver.py`（证据定位设施）、
+    `book.py`／`chapters.py`（book／chapters 观察 owner，B2 第二步接线）、
+    `associate.py`（跨章关联 owner）与 `compile.py`（双真源唯一发布 owner＋
+    源 fold 唯一实现）已入列。
+    ⚠ B5（2026-09-28，S-05）：旧联合抽取引擎 `source.py` 整包删除——链自 B2
+    起不消费，反例已迁到五 owner 引擎；模块面随之收窄。
+    ⚠ R9b（2026-09-30）：`expression.py` 是 book 表达观察的确定性 compiler，
+    不新增语义 owner；五节点边界及退役模块禁入保持不变。
+    ⚠ CS-2（2026-10-03）：`slim.py` 是章观察瘦 wire（stage2-chapters-v3）的
+    确定性适配层（expand/slim，S-03 集中登记），不新增语义 owner。
     """
     import importlib.util
     from pathlib import Path
 
     stages = Path(__file__).resolve().parents[1] / 'novel' / 'stages'
     root = stages / 'stage2'
-    # 当前正式实现必须落位，防止错误删除被“没有旧模块”掩盖。
+    # F8c＋B2：新链 stage2 包必须落位，模块面按现役 owner 登记。
     assert root.is_dir(), (
-        f'novel/stages/stage2/ 不在（{root}）——当前 SourceStory 引擎应落位')
+        f'novel/stages/stage2/ 不在（{root}）——F8c 分流后新链 Stage2 引擎'
+        f'（book／chapters／names／associate／compile）应落位')
     present = sorted(p.stem for p in root.glob('*.py'))
-    assert present == ['__init__', 'story'], (
+    assert present == ['__init__', 'associate', 'book', 'chapters', 'compile',
+                       'expression', 'names', 'resolver', 'slim'], (
         f'novel/stages/stage2/ 的模块面变了：{present}；'
-        '现役只许 __init__／story，旧协议 owner 模块与兼容 shim 不得回来')
+        f'现役只许 __init__／associate／book／chapters／compile／expression／'
+        f'names／resolver／slim'
+        '（旧联合抽取 source.py 已随 S-05 删除）')
     banned = [
         'plot_checks', 'plot_compile', 'plot_continuity', 'plot_diagnostics',
         'plot_edit', 'plot_inputs', 'plot_prompts', 'plot_recovery',
@@ -847,8 +851,6 @@ def test_stage2_owner_shims_cannot_return():
         'grounding', 'global_contract', 'global_normalize',
         'global_evidence_candidates', 'knowledge_prompts', 'source_blurb',
         'core_evidence', 'normalize', 'extract', 'checks',
-        'associate', 'book', 'chapters', 'compile', 'expression',
-        'names', 'resolver', 'slim', 'source',
     ]
     for name in banned:
         # 子目录族（blueprint／analyze／characters／knowledge／shared）整族不得回来。
@@ -862,8 +864,8 @@ def test_stage2_owner_shims_cannot_return():
             f'novel/stages/stage2/{sub}/ 整族回来了——旧 Stage2 链已随 F8c 删除')
     # 守卫的守卫：新链 Stage2 实现确实住在正式 stage2 包里（而不是又回到某个
     # 迁移包），扫错目录时上面几条会静静地绿。
-    assert (root / 'story.py').is_file(), (
-        'novel/stages/stage2/story.py 不在——扫描目标错了')
+    assert (root / 'book.py').is_file() and (root / 'names.py').is_file(), (
+        'novel/stages/stage2/{book,names}.py 不在——扫描目标错了')
 
 
 def test_the_api_layer_has_no_second_argv_builder():
@@ -1220,21 +1222,14 @@ def test_no_caller_unpacks_a_different_number_of_values_than_declared():
 
 
 def test_the_arity_scan_actually_finds_something():
-    """守卫自身须非空，并真正识别新主链中源窄修和目标双产物的返回契约。
+    """守卫的守卫：两个数都是实测值，掉下来就说明解析器没认出现在的写法。
 
-    旧链删除会合法减少函数总数；全仓数量不能证明现役主链是否仍在扫描范围内。
-    这里钉住两个真实跨模块解包，声明、导入或调用解析失效都会明确失败。
+    下界 132 设定于 2026-08-15（`72c4b2cb`）；此后旧链（stage2/4/5/6/7、
+    stage3、views 旧屏）整层删除与新链上线互换了一批「返回定长元组」的函数，
+    当前实测 130——净减 2，按现役盘面重校。解包点 201→283 同向增长。
+    ⚠ 重校只跟盘面：若哪天掉到 130 以下，仍然是「解析器没认出现在的写法」
+    或「可解析调用方消失」两种真故障，不是默认放行。
     """
     table, sites = _arity_scan()
-    assert table, '没有认出任何返回定长元组的函数——声明扫描失效'
-    assert sites, '没有认出任何可解析解包点——调用扫描失效'
-    expected = {
-        ('novel.stages.stage2.story', 'apply_book_repair'): 2,
-        ('novel.stages.stage4.story', 'compile_target_story'): 2,
-    }
-    for key, arity in expected.items():
-        assert table.get(key) == arity, f'未识别现役返回契约：{key} 应为 {arity} 元'
-        assert any(rel == 'novel/stages/chain.py' and found == key
-                   and declared == arity and unpacked == arity
-                   for rel, _line, found, declared, unpacked in sites), (
-            f'未识别当前主链对 {key} 的真实 {arity} 元解包')
+    assert len(table) >= 130, f'只认出 {len(table)} 个「返回定长元组」的函数（当前实测 130）'
+    assert len(sites) >= 201, f'只查到 {len(sites)} 个可解析的解包点（曾实测 201）'

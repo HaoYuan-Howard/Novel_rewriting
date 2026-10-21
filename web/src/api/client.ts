@@ -77,24 +77,6 @@ export function getText(path: string): Promise<string> {
   return requestText(path)
 }
 
-/** 下载名称来自已核验响应的 Content-Disposition，不能从书ID重新拼一份。 */
-export async function getTextFile(path: string): Promise<{ text: string; filename: string }> {
-  const res = await response(path)
-  const disposition = res.headers.get('Content-Disposition') ?? ''
-  const encoded = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(disposition)?.[1]
-  let filename: string | undefined
-  try {
-    filename = encoded ? decodeURIComponent(encoded.trim())
-      : /filename\s*=\s*"([^"]+)"/i.exec(disposition)?.[1]
-  } catch {
-    throw new ApiError('malformed', path, { message: '下载文件名编码无效。' })
-  }
-  if (!filename || /[\\/\x00-\x1f]/.test(filename)) {
-    throw new ApiError('malformed', path, { message: '后端未提供有效下载文件名。' })
-  }
-  return { text: await res.text(), filename }
-}
-
 export function getBlob(path: string): Promise<Blob> {
   return requestBlob(path)
 }

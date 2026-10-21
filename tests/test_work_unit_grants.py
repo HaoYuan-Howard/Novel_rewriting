@@ -8,7 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
-from contracts.story_paths import SOURCE_STORY
 from contracts.schema.api import WorkUnitGrantRequest
 from contracts.schema.orchestration import LegacyExecutorBackend, LegacyLlmProfile
 from novel import prov
@@ -147,8 +146,9 @@ def test_grant_cannot_bypass_changed_or_pending_work(tmp_path, damage):
     assert view.available, view.reason
     request = _request(view)
     if damage == 'surface':
-        # 当前正式SourceStory的字节变化必须使追加额度预览失效。
-        target = ctx.novel_dir / SOURCE_STORY
+        # 现役 active 面：新链登记产物（global_grounding 已随旧链退役，
+        # 不再进入 surface seal）。
+        target = ctx.novel_dir / 'stage2' / 'characters' / 'characters.json'
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text('{"changed":true}', encoding='utf-8')
     elif damage == 'ledger':

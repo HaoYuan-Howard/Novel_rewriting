@@ -79,10 +79,20 @@ session/ledger 继续保留 `null` / `unknown`，不能拿 adopted identity 倒�
 能立即把 Stage1~7 及其字节产物标为 stale。`RunContext` 从当前已批准的 Stage0 正文建立根身份；
 一次运行内读到不同根、或写入来源账声明另一根，均在写盘前显式拒绝。旧 v1 不手补、不猜迁移。
 
-当前三层根同时冻结原始输入 SHA-256、Stage1 原始字节组合 SHA-1 与
-归一化章内容 SHA-256。`runtime/source_snapshot.json` 必须与当前 workflow 和真实
-Stage1 物化一致；任一源身份变化均拒绝当前根，另开新根重新生成。
-不保留跨源正文等价豁免、旧审批继承或跨版本历史采用。
+源钩子独立编辑只有一条窄例外：`novel/source_identity.py::revision_proof` 逐条验证同书
+Stage0 revision 哈希链、当前批准和真实原文件，复用 Stage1 审计确认两份当前物化准确。
+旧根必须是当前 revision 的祖先；从首个章标记起的全部字节、确定性 MainText 原始编码和
+业务 payload 均未改变，才可对现役 Stage2–5 的已声明正文输入继续运行原 freshness。
+未知输入、HookCopy / clean 依赖、未批准或坏链均无此许可。来源 root、产物、模型费用与
+原审批不重写；稳定盲句柄及审批仍绑定经证明 current 的正文产物来源。未变输入的有效
+审批可以继续生效，任一业务、证据或决定变化仍按原完整身份失效。
+Stage1 原切分确认还须存在：旧票的 MainText 与 HookCopy 两份 SHA 必须均由该祖先
+revision 的确定性切分精确重建，并与当前不变正文及切点相符。只读面保留原票，不
+重签当前根；无原确认、旧任一 SHA 损坏、未批准或切分改变都不能继承。
+
+（历史）旧链 Prepare 实际消费新钩子，不取得正文等价例外。它只通过完整 typed draft 重编当前
+MainText / HookCopy，保存专属 `source_rebuild`（旧 stage6.md 已随 Stage6 退役删除）；通用局部修订不能
+借此跨源重挂。未完成提交遇源再次变化时拒绝补尾，不采用旧回答或继承旧接受。
 
 ---
 
@@ -226,10 +236,10 @@ freshness 映射保留，只服务存量盘面的历史解码；新链 Binding �
 
 **STR-06 切换后这条机制整体退役**：上述 flag 全部随旧链节点删除，
 `contracts/invariants.py::PARTIAL_REWRITE_FLAGS` 为空表，`Provenance.partial_rewrite`
-在类型上结构不可达（`Literal[None]`，只能为 `None`）。当前免费恢复只使用本根同请求
-耐久回答重编、重验和补提交，不接纳旧混版标记。正文开篇局部修订由当前
-`contracts/schema/story_prose.py::ProseReceipt` 的补丁链记录，未授权字节保持不变；
-它不使用旧 `partial_rewrite` 机制，也不把旧来源改造成当前生成来源。
+在类型上结构不可达（`Literal[None]`，只能为 `None`）。新链没有「同一份产物被 0 成本
+路部分改写」的形状——免费恢复入口（saved_response／historical_adoption／owner_patch／
+committed_set_recovery／deterministic_replay）全部整份重写本节点产物，写效应即该节点
+的 `produces`。字段保留在载体上只为存量产物解码，不再有新写入方。
 
 存量盘面上带 `partial_rewrite` 的产物是旧链字节，随旧根与冻结旧代码配对读取；
 新根不产生该键。

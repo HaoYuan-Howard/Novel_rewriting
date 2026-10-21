@@ -21,14 +21,17 @@ from typing import Any, Callable, Final, Mapping
 
 from contracts.artifacts import (
     STAGE0_CLEAN_TEXT, STAGE0_REVISIONS, STAGE1_HOOK_COPY, STAGE1_MAIN_TEXT,
+    STR06_STAGE2_BLUEPRINTS,
+    STR06_STAGE2_OBS_ASSOCIATE, STR06_STAGE2_OBS_BOOK, STR06_STAGE2_OBS_CHAPTER,
+    STR06_STAGE2_OBS_NAMES,
+    STR06_STAGE2_CHARACTERS, STR06_PRESERVE_CHECKPOINT,
+    STR06_RECONSTRUCTION_BRIEF, STR06_SEMANTIC_BINDING,
+    STR06_EXECUTION_PLAN, STR06_BODY_DESIGN, STR06_PRESENTATION_GRAPH,
+    STR06_HOOK_CONTEXT, STR06_WRITER_BOOK_IR,
+    STR06_HOOK_RECEIPT, STR06_NAME_MAP,
+    STR06_ARTIFACT_RC_VERSIONS,
 )
 from contracts.invariants import NODES
-from contracts.story_paths import (
-    ADAPTATION_MAP, ASSOCIATION, BODY, BODY_RECEIPT, BOOK_OBSERVATION,
-    CHAPTER_OBSERVATION, CHAPTER_PACKET, CHAPTER_PLAN, HOOK, HOOK_PACKET,
-    HOOK_PLAN, HOOK_RECEIPT, NAME_MAP, NAME_OBSERVATION, PRESERVATION,
-    SOURCE_STORY, TARGET_MODEL, TARGET_STORY,
-)
 
 Projection = Callable[[object], object]
 
@@ -40,12 +43,17 @@ def artifact_payload(data: object) -> object:
     return data
 
 
-def body_tail_payload(data: object) -> object:
-    """后章只消费实际送达的前章短尾；前半章改文不扩大后章失效。"""
-    if not isinstance(data, str):
-        return None
-    from novel.core.story_prose import prior_tail
-    return prior_tail(data)
+def body_graph_payload(data: object) -> object:
+    """Graph 的正文投影：Hook 选择及其独立版式不进入正文身份。
+
+    graph 的正文结构与 BodyDesign 同源。去掉 Hook 后恢复正文契约版本，
+    使只调整楔子组织不改变正文消费者的业务输入；不迁移旧 graph。
+    """
+    payload = artifact_payload(data)
+    if not isinstance(payload, dict):
+        return payload
+    return {**{key: value for key, value in payload.items() if key != 'hook'},
+            'contract_version': STR06_ARTIFACT_RC_VERSIONS[STR06_BODY_DESIGN]}
 
 
 def stage2_main_text(data: object) -> object:
@@ -59,7 +67,11 @@ def stage2_main_text(data: object) -> object:
 
 
 def stage2_hook_copy(data: object) -> object:
-    """引子参与源身份；第一章观察及后置综合按证据职责消费。"""
+    """Stage2 book／names 消费章前文字（源引子）正文（B2 五节点，D3/D9）。
+
+    引子切成 e00 证据段进书级观察与名称结构观察，并参与 names 的字面校验；
+    chapters 互不依赖（D3），不吃引子。
+    """
     return _hook_text(data)
 
 
@@ -81,74 +93,90 @@ def stage1_stage0_source(data: object) -> object:
     return source.get('normalized_source_sha1')
 
 
-# 只登记当前 story-v3 真实消费；Stage2 前置章观察不反向依赖后置综合。
-# schema、证据和正式语义一律消费整份载荷；正文的前章材料仅消费实际短尾。
+# 每一格的键都是本节点**真正消费**的上游产物相对路径；值是那份上游的投影。
+# ⚠ B2 起：键翻为新链 `str06.` 节点（B2 时 14 个，CS-3 bind 退役后 13；见
+#   `contracts/invariants.py::NODES`），
+# 上游路径翻为三级家族路径（见 `contracts/artifacts.py`）。Stage0/1 两行不变
+# （范围外保留）。旧链 12 个节点键随旧链退役删除（F7e 登记）。
+#
+# 【新链的投影口径：整份载荷】旧链按节点裁剪语义子集（如 stage4.design 只消费
+# blueprints 的剧情字段）；新链统一 `artifact_payload`（整份业务载荷，剥掉上游
+# 自己的来源账）——候选链的来源账边在读取时按完整字节指纹记录
+# （`novel/store.py::Str06Repository.read` → `paths.family_input_key`），
+# 任何上游字节变化都如实过期。更严格是刻意选择：新链的产物由唯一 writer 整份
+# 重写，没有「只改一个字段」的路径，裁剪投影只会造出第二套会漂的语义。
 CONSUMED_PROJECTIONS: Final[dict[str, dict[str, Projection]]] = {
     'stage1.partition': {
         STAGE0_REVISIONS: stage1_stage0_source,
         STAGE0_CLEAN_TEXT: artifact_payload,
     },
+    # ── STR-06 新链（F8a 激活；B2 五节点重建，D3/D9）──
+    # Stage2 五 owner 的投影面：book 吃 Stage1 两份字节；chapters 吃 book 观察
+    # 与 MainText（前文原文，互不依赖）；names 吃 book 观察与全文；associate 吃
+    # book 与 chapters 观察的句柄投影；compile 吃四份观察并发布双真源。
+    # Stage4 一律改读 canonical（Characters／Blueprint），不再有派生输入面。
     'str06.stage2.book': {
         STAGE1_MAIN_TEXT: stage2_main_text,
         STAGE1_HOOK_COPY: stage2_hook_copy,
-        CHAPTER_OBSERVATION: artifact_payload,
-        'runtime/source_snapshot.json': artifact_payload,
     },
     'str06.stage2.chapters': {
+        STR06_STAGE2_OBS_BOOK: artifact_payload,
         STAGE1_MAIN_TEXT: stage2_main_text,
-        STAGE1_HOOK_COPY: stage2_hook_copy,
-        'runtime/source_snapshot.json': artifact_payload,
     },
     'str06.stage2.names': {
-        BOOK_OBSERVATION: artifact_payload,
-        ASSOCIATION: artifact_payload,
+        STR06_STAGE2_OBS_BOOK: artifact_payload,
         STAGE1_MAIN_TEXT: stage2_main_text,
         STAGE1_HOOK_COPY: stage2_hook_copy,
     },
     'str06.stage2.associate': {
-        BOOK_OBSERVATION: artifact_payload,
+        STR06_STAGE2_OBS_BOOK: artifact_payload,
+        STR06_STAGE2_OBS_CHAPTER: artifact_payload,
+        STR06_STAGE2_OBS_NAMES: artifact_payload,
     },
     'str06.stage2.compile': {
-        BOOK_OBSERVATION: artifact_payload,
-        CHAPTER_OBSERVATION: artifact_payload,
-        NAME_OBSERVATION: artifact_payload,
-        ASSOCIATION: artifact_payload,
-        'runtime/source_snapshot.json': artifact_payload,
+        STR06_STAGE2_OBS_BOOK: artifact_payload,
+        STR06_STAGE2_OBS_CHAPTER: artifact_payload,
+        STR06_STAGE2_OBS_NAMES: artifact_payload,
+        STR06_STAGE2_OBS_ASSOCIATE: artifact_payload,
     },
-    'str06.stage4.naming': {SOURCE_STORY: artifact_payload},
     'str06.stage4.preserve': {
-        SOURCE_STORY: artifact_payload,
-        NAME_MAP: artifact_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
+        STR06_STAGE2_BLUEPRINTS: artifact_payload,
     },
     'str06.stage4.body_design': {
-        PRESERVATION: artifact_payload,
-        NAME_MAP: artifact_payload,
+        STR06_PRESERVE_CHECKPOINT: artifact_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
     },
-    'str06.stage4.chapters': {TARGET_MODEL: artifact_payload, PRESERVATION: artifact_payload},
+    'str06.stage4.hook_design': {
+        STR06_BODY_DESIGN: artifact_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
+        STR06_PRESERVE_CHECKPOINT: artifact_payload,
+    },
     'str06.stage4.compile': {
-        TARGET_MODEL: artifact_payload,
-        CHAPTER_PLAN: artifact_payload,
-        PRESERVATION: artifact_payload,
-        NAME_MAP: artifact_payload,
-    },
-    'str06.stage4.hook_design': {TARGET_STORY: artifact_payload},
-    'str06.stage4.hook_compile': {
-        TARGET_STORY: artifact_payload,
-        HOOK_PLAN: artifact_payload,
+        STR06_PRESENTATION_GRAPH: artifact_payload,
+        STR06_SEMANTIC_BINDING: artifact_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
     },
     'str06.stage5.body': {
-        CHAPTER_PACKET: artifact_payload,
-        BODY: body_tail_payload,
+        STR06_WRITER_BOOK_IR: artifact_payload,
+        STR06_PRESENTATION_GRAPH: body_graph_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
     },
-    'str06.stage5.hook': {HOOK_PACKET: artifact_payload},
+    'str06.stage5.hook': {
+        STR06_HOOK_CONTEXT: artifact_payload,
+    },
+    'str06.stage4.naming': {
+        STR06_STAGE2_CHARACTERS: artifact_payload,
+        STR06_STAGE2_BLUEPRINTS: artifact_payload,
+    },
     'str06.stage7.assemble': {
-        CHAPTER_PACKET: artifact_payload,
-        BODY: artifact_payload,
-        BODY_RECEIPT: artifact_payload,
-        HOOK_PACKET: artifact_payload,
-        HOOK: artifact_payload,
-        HOOK_RECEIPT: artifact_payload,
-        'runtime/source_snapshot.json': artifact_payload,
+        STR06_WRITER_BOOK_IR: artifact_payload,
+        STR06_PRESENTATION_GRAPH: artifact_payload,
+        STR06_STAGE2_CHARACTERS: artifact_payload,
+        STR06_NAME_MAP: artifact_payload,
+        STR06_HOOK_CONTEXT: artifact_payload,
+        STR06_SEMANTIC_BINDING: artifact_payload,
+        STR06_HOOK_RECEIPT: artifact_payload,
     },
 }
 
@@ -224,7 +252,7 @@ def producer_node(rel: str, *, fallback: str | None = None) -> str | None:
 
 __all__ = [
     'CONSUMED_PROJECTIONS', 'Projection',
-    'artifact_payload', 'body_tail_payload', 'canonical_rel', 'context_inputs_for',
+    'artifact_payload', 'body_graph_payload', 'canonical_rel', 'context_inputs_for',
     'producer_node', 'project_consumed',
     'projection_for',
 ]

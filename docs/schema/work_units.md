@@ -1,33 +1,139 @@
-# 当前工作单元、预算与发布证据
+# 工作单元与人工追加
 
-## 身份与当前输出根
+`WorkUnitLedgerV3` 位于 `novel/paths.py::work_unit_dir`。工作单元身份仍由工作流任务、书、
+节点、角色和 scope 决定。新工作单元只接受 `role=executor`（`role='commander'` 构造期
+关闭式拒绝；历史 commander 账经 `read_only=True` 只读解码，仅服务 owner 停止证明与
+历史决定重放，不参与任何新预算）。waiting_on 到 owner/scope 的投影用
+`contracts/invariants.py::approval_work_unit` / `::approval_scope_allowed`。基础内容额度
+四次；新候选、新会话、新 run 和新 epoch 都沿用原账。网络重试单列为 attempt，缓存命中
+单列。追加金额只表示允许增加的内容调用次数，不是货币费用。
 
-输出根由 `contracts/schema/workflow.py::WorkflowManifest` 标识，必填当前schema_version=1、contract_version=story-v3、pipeline_contract_epoch=story-v3、task_id和created_at。只接受当前格式；旧根、旧产物和旧账原字节保留，在独立新根重建，不提供读迁移或同根升级。
+**全部 LLM 节点升版重置额度（2026-10-11 用户裁决）**：正式产物、协议、保存策略、写手
+协议、renderer 或机械判据任一版本分量升版，相关节点的每个工作单元（包括逐章和
+窄调用 scope）恢复至少基础四次可用额度。已有更多可用额度保留；历史轮、响应、失败、
+人工追加与费用不删除。`contracts/llm_versions.py::llm_node_versions` 是从正式常量
+派生的唯一版本登记，必须覆盖 NODES 的全部付费节点；改变生成规则必须显式升对应
+版本。不按输入、模型配置、Git、候选、run、epoch 或会话变化恢复额度。
 
-每本书的CandidateWorkflow绑定当前契约表、源文件字节身份source_identity、source_root_sha1及规范原文source_content_sha256。runtime/source_snapshot.json必须可重算，且本根Stage1存在时与正式源输入逐章及raw双hash一致。契约或源身份漂移拒绝当前根；代码修复可以滚动epoch，既有工作单元与费用不重置。
+`LlmNodeVersionReset` 随 V3 账记录完整版本分量、归一账摘要、当前轮序和恢复次数；
+同一版本仅登记一次，即使无需补轮也保存零增量基线，降版拒绝。同版本重放、免费
+采用或契约升级回执重放都不会再次恢复。真实外发前 reserve 和免费处理登记共用
+同一同步入口；unknown、未闭合回答、整书总闸和付费/外发授权仍独立生效。
 
-工作单元唯一身份由task_id、书sid、node、role与scope派生。当前语义role为executor；逐章scope为chapter:N，全书scope为book。一个全书整合工作单元可以含合法材料续答和窄修，每次实际送达都独立留证和计费，不新增隐形工作单元。
+V2→V3 仅经 `contracts/schema/workflow.py::work_unit_ledger_of_payload` 无损读迁移，
+不猜旧节点版本、不在读面写盘或发额度。首次写 V3 前把原 V2 字节耐久保存为
+`ledger.v2.<sha256>.json`，该快照只作历史证据。旧账首次执行版本同步时，一次性建立当前
+版本基线并恢复基础额度。整书免费预览/应用入口为
+`python -m novel.orchestrator.llm_budget_upgrade --base <Output> --sid <sid> [--apply]`；
+应用持书级写许可和 workflow 锁，部分中断按单元重放幂等。版本恢复不自动重跑小说。
 
-## 额度与授权
+**整书级付费内容调用总闸**（2026-09-15）：`BookContentBudgetV1` 持久于
+`novel/paths.py::book_budget_path`（`_service/runs/<sid>/book_budget.json`），对同一本书
+**全部**工作单元的内容调用合账设绝对上限（默认 `BOOK_CONTENT_CALL_CEILING_DEFAULT=512`）。
+只有 `WorkUnitBudget.reserve` 计数；网络重试共享同一 reservation、免费恢复与 prepared 补尾
+不计数。坏账关闭式拒绝新调用，不作零（Q-13）。重启、恢复、重建 job 不重置；追加只能经
+`novel/work_units.py::grant_book_budget` 显式人工（actor/reason 必填），自动恢复路径不得
+追加。反例见 `tests/test_book_budget.py`。
 
-当前工作单元账为WorkUnitLedgerV3，位置由 `novel/paths.py::work_unit_dir` 计算。基础内容轮四次；网络attempt与内容轮分开。新run、epoch、会话、输入或模型变化不重置业务额度。显式节点协议/政策/判据版本变更由 `contracts/llm_versions.py` 登记，同一版本同步幂等，unknown、未闭合回答和整书总闸仍阻止发出请求。旧V2账不被当前运行时转换或返还额度。
+人工追加入口为运行页工作单元详情，API 为
+`GET/POST /api/novels/:sid/work-units/:unit_id/grant`，唯一实现是
+`novel/orchestrator/work_unit_grants.py`。GET 不创建锁、账或模型请求；成本只来自实际 ledger，
+reasoning 不重复加到 completion，缺失用量显示 unknown。默认追加一次，单次一至四次，实际
+选项由后端下发。POST 必须有 CSRF 头、预览 token、稳定 intent_id、追加次数和理由。
 
-BookContentBudgetV1位于_service/runs/<sid>/book_budget.json，对全部工作单元合账设绝对上限。只有reserve计内容轮，网络重试共享reservation；缓存重放和确定性补提交不追加内容调用。追加必须给actor/reason及不可变授权，不能由自动恢复暗自追加。
+提交先取得同书 writer、审批和工作单元锁，再证明全部原 owner 已停止并在锁内复验主体、
+代码、成本和 session/epoch 归属。预算未耗尽、未闭合尝试、已保存回答或 producer/group
+待提交、升版待免费恢复均不能追加。只在现有 ledger 的 grants 末尾记录不可变 `BudgetGrant`；原轮次与费用
+完整保留。相同 intent_id 的原内容重试返回同一授权；改金额、理由或 token 必须拒绝。
+授权自身不发模型、不改变 typed 决定、不解除无进展停点。后续模型调用仍经过独立付费与正文
+外发授权。每个 role/scope 的额度互不流转；直连 `LlmClient` / `WorkUnitBudget` 恢复同一
+logical request 时接受累计额度和全部历史 attempt links，不把第五次当成新的首次调用。
+（历史 Agent CLI `SessionAgentClient` 已退役，仅见于只读账与 fixtures。）
 
-新购同时需要付费和正文外发授权。CLI分别为--yes与--allow-egress；上传入口的全自动授权由运行代码冻结后传递。免费--check-only不授予新购；缓存缺失则needs_authorization。kind:legacy是当前直连LLM的稳定wire名称，与退役兼容无关。
+`contracts/schema/work_unit_recovery.py` 定义无回答传输失败的工程收口请求、预览与回执
+（现役 executor 同一入口收口；原 commander profile 自 profiles v3 读边界起不可恢复，
+改用 append-only started 原字节核对）。
+仅最后一轮 `unknown/commander_transport_failed`、全部 attempt 明确连接或超时失败、成本/session/
+原请求/日志及原 owner 排空证明一致时可用；已保存或孤立回答、待补提交和未结束尝试均拒绝。
+预览 token 绑定完整来源；提交在书级 writer、审批/工作单元锁及 owner 停止 lease 内复验。
+回执写入内容寻址 blob，现有 `processing.kind=mechanical` 绑定它，随后原子发布 failed 状态。
+读取及新 reserve 必须再次验证原轮次与回执；损坏保持拒绝。原轮次、attempt、追加额度与成本不变，
+缺失 token 仍未知；仅允许另开内容轮消耗原剩余额度，不恢复旧 provider 会话。工程操作入口见
+`docs/OPERATIONS.md`。
 
-成本唯一权威为_service/ledger.jsonl，attempt逐行关联原请求、模型、用量、网络结果与费用。缓存行单列；未知用量不作零；reasoning不重复相加。
+`WorkUnitLedgerV3.processing` 按写入顺序保存不可变来源回执；冻结请求时登记待处理单元，
+包括尚未启动的并发章节，避免只统计已发请求。模型项精确引用内容轮次，
+机械处理、历史采用和缓存命中引用 producer 已核验的输入与结果摘要。免费处理登记同一
+业务单元但不创建 turn、不消耗额度；只有节点正式升版才恢复基础额度，同一来源重放幂等。回执损坏保持 unknown。
+`WorkUnitView` 统一发布 content_base_limit、content_granted、grant_count、content_used、
+content_limit、content_remaining 和恢复入口；`WorkUnitView.processing` 展示该单元最近一次
+实际处理的总量、待处理、新生成、机械处理、历史采用、缓存、失败、未知和原因。这描述处理
+成果，不代表产物通过质量审阅；缺失或坏账只令该投影 unknown 并保留原因，不拦截独立的
+暂停、停止或排空控制。
 
-## 响应、接受与封存
+## 接受记录与发布语义（CS-H，RC-54～56）
 
-`novel/llm/paid_requests.py`只管许可、持久额度、外发、原响应与来源；`novel/llm/story_requests.py`处理JSON、材料控制与有界字段补丁。原响应先按attempt耐久，随后才解析。空答在同一内容轮内有界重试；完整reasoning可按同一schema/compiler救回，但原网络error和原usage不得改写。unknown与截断不自动重购。
+工作单元账管内容轮与已购回答，**不管哪份回答被接受**：采用状态只从已封存的 CommitBundle 派生
+（`novel/llm/paid_requests.py::sealed_turn_references`），`AcceptanceRecord` 只回答「这份回答是否通过
+owner 的完整验收、可发布」。二者各自独立：
 
-AcceptanceRecordV1显式response_kind=result/material/patch/format_failure，parse、salvage、errors、accepted与semantic=unver分别记录。每attempt的首次结论冻结于first_acceptance，免费复验只更新最新接受记录。合法material不算语义候选通过或失败，仍计真实调用成本。读数器 `tools/story_metrics.py` 保留未知分母，不把回放接受率当首答率。
+- `accepted=true`：解析、救回、引用解析、编译与机械闸全部通过（语义恒 `unver`）；
+- `accepted=false`：被拒（问题随记录留证），或问题归上游 owner 因而被回派——验收回调抛出类型化信号
+  `UpstreamOwned`，`ask_json` 记 `accepted=false` 与这些问题后上抛，由节点编排登记跨节点回派，不在节点内
+  再问、也不再以空错误列表冒充通过；文本节点（正文、楔子）的机械闸错误同样进入记录；
+- 「已被采用」不是记录字段：只看已封存 CommitBundle 的 adoptions 是否引用该内容轮／attempt。
 
-正式输出只有当前repository发布口。CommitBundleV1保存输入、采用的真实attempt、输出字节摘要和seal；同writer输出组先完整落字节，再封存。SourceStory与TargetStory各唯一发布，章正文与回执、最终TXT与manifest按组发布。无覆盖当前字节的seal即不是正式输入；文件存在、运行退出码和文本可读均不能代替证明。
+每个接受版本以**一个 CommitBundle 原子发布一次**；跨节点修订产生新版本，旧版本的 bundle 保留可追溯；
+交付清单引用的各输入版本必须彼此一致。指标 M1 数的是接受版本，不是“全程只许发布一次”。
+单节点路径跑了交付组装时，`runtime/workflow_status.json` 的终态与 `accepted_body` 取交付报告，与整链
+同源（`delivered`／`assembly_not_ready`），不再恒记 `node_run`。
 
-中断后同请求身份的合法已购回答免费重放，再编译、验证与补封存；不直接接纳未封存正文，不复制跨根候选或伪造来源。补丁保留初始生成来源，另记实际窄修request/response/base/result摘要。
+## 候选集合与沿用凭证（CS-H，RC-50～56）
 
-## 已知范围
+已购候选的权威是工作单元账与响应 blob；候选登记（`runtime/candidates/<owner>.json`，
+`novel/stages/candidates.py`）是**可由账重建的索引**：每个内容轮取最后一份有回答的 attempt，
+patch 回合在上一份候选上合并成整份 wire，登记该单元全部已购候选（含补丁链合并结果），每条记
+wire 原字节摘要、生成它的请求身份、采用引用链、生成时所依据的上游版本摘要与最近一次预检摘要。
+登记丢失或过期即从账重建——不重购、不补造谱系；`tools/replay_candidates.py` 与生产判定共用
+同一把读取尺。
 
-机械通过不证明源语义理解或文学质量。只有相应golden set与人工评价能够提供质量证据，未经标定保持unver。普通测试不调用线上模型，不覆盖真实成书质量。
+**免费沿用（carried_forward）**：上游修订使请求身份变化后，节点在购买前先对候选集合做免费判定
+（兼容性→上游差异→完整预检→择优）。零调用采用时：
+
+- 修订记录新增 kind `carried_forward`（`OwnerRevisionRecord` V2，新增必填
+  `applies_to_request_sha256`＝当前请求身份；`baseline_*` 仍是候选生成时的原请求/响应），
+  落 `runtime/revisions/carried/<owner>/<applies_to_request_sha256>.json`——**不进** `active/`
+  （它不是待办恢复级联），也不覆盖 `runtime/revisions/<owner>.json`（那格是历史采用记录，
+  owner patch 链核验要读它）；同一应用身份＋同一候选重放保留首次建档（I-30/I-31）；
+- 成本链 `ledger-row` 指向**原 attempt**：provenance 按 attempt_id 从成本账精确聚合原付费行，
+  本根只记一行零 token 的 cached 行（`cache_policy='carried-forward'`，新 attempt_id），
+  不把历史 token 抄第二遍；
+- 重启按当前请求身份免费重放（沿用事件按次记零 token 行，凭证不重写）；
+- 只读复检（`--check-only`）不走沿用凭证：同身份免费重放本就命中已购回答，
+  不该把每次免费复检记成一次采用；
+- 人工 wire 采用与仓外换算采用仍是各自档位，不并入沿用；**沿用只是没有更高优先级采用时的
+  快路径**——候选请求身份＝当前身份（那是缓存重放）、本身份下已登记 owner patch（普通重放
+  必须采用它，沿用旧候选会反向覆盖人工修订）、显式重采或已登记的采样选择，沿用闭包
+  （`novel/stages/chain.py::carry_forward_candidate`）一律放弃，节点落回普通接受循环。
+
+# 按原配置继续
+
+`GET /api/agent/runs/:run_id/continuation` 返回历史完整 profiles、来源 hash、可用性及原因。
+此处 **Agent** 仅指整书代跑编排；profiles 现役唯一 wire 为 `kind:"legacy"`。
+默认 Executor 和全部逐节点覆盖必须完整；缺失、冲突、模型已不支持或原执行
+未排空均不得用当前 settings/default 补齐。只读能力查询不会产生模型请求。
+
+`AgentRunRequest.continuation` 在 preview 和 start 中绑定同一个 `RunContinuationSource`。
+启动在书级 writer 与原 owner 停止 lease 内复验；新的 `RunContractV2.continuation` 保存原来源。
+旧 contract 没有该字段时不向旧 hash 加入 null。原配置续跑重新明确付费与正文外发，保留
+原工作单元累计额度；正在暂停的同一运行继续沿用原有 pause/resume 协议。
+
+单本 `AgentRunRequest.pause_before_node` 是可选的登记节点上界，preview 回显最终范围，
+`AgentRunStart` 与 `RunContractV2` 共同持久化。编排器按登记节点顺序，在该节点及之后节点
+的任何执行、免费恢复或终验启动前结束本次范围；先关闭 epoch、排空并释放 owner，结果为
+`stopped`，原因明确为范围边界，不伪造 `pipeline_complete`。返修按实际 owner 位置判断；
+未知节点归属关闭式停止。
+
+continuation 返回并继承原上界：请求省略该字段保持原范围，显式新节点改变范围，显式
+`null` 解除上界。范围变化不改变已冻结 profiles、历史来源或工作单元累计额度；旧 contract
+没有上界时不向原内容地址补入 `null`。

@@ -1,261 +1,79 @@
-import type { ReactNode } from 'react'
 import { useParams } from 'react-router-dom'
 import { Mono } from '@/components/ui/Mono'
 import { Panel, PaneHeader, SectionTitle } from '@/components/ui/Panel'
 import { Prose } from '@/components/ui/Prose'
-import { LoadFailed, LoadingPane, NotRunYet } from '@/components/state/States'
+import { LoadFailed } from '@/components/state/States'
 import { useStr06Monitor } from '@/hooks/useStr06Monitor'
 import type {
-  ChapterPacketData, HookPacketData, SourceStoryData, StoryArtifactView, StoryProseReceipt,
-  TargetStoryData, Str06AssemblyReportView, Str06ChapterFailuresView,
-  Str06OwnerIssuesView, Str06RunView,
+  Str06AssemblyReportView,
+  Str06ChapterFailuresView,
+  Str06OwnerIssuesView,
+  Str06RunView,
 } from '@/types/str06'
 
 type Monitor = ReturnType<typeof useStr06Monitor>
 
-/** 三层并排核读；所有状态、章包、正文与成本来自当前后端，只读不补判定。 */
+/**
+ * STR-06 候选链只读监控屏（F7d）。
+ *
+ * 与现役 Stage 屏的分界：这一屏看的是**隔离候选根**（`outputs/<candidate>/run`），
+ * 不是已切换的产品链——F8 激活前它没有 check 面板、没有写按钮、不进左导航。
+ * 页面顶部常驻「候选链 · 未切换」标注，不把监控面伪装成现役产品。
+ *
+ * 数据全部经 `api.*`（mock 与真实后端同一条路）；判定字段一个都没有——
+ * 「跑到哪了」是 workflow 状态与产物在不在的盘面事实，「合不合格」归现役
+ * check 报告与机械回执名单，本屏只并排呈现。
+ */
 export function Str06MonitorScreen() {
   const { candidate = '' } = useParams<{ candidate: string }>()
   const m = useStr06Monitor(candidate)
-  if (m.candidates.isError) return <LoadFailed error={m.candidates.error} onRetry={() => void m.candidates.refetch()} />
+
+  if (m.candidates.isError) {
+    return <LoadFailed error={m.candidates.error} onRetry={() => void m.candidates.refetch()} />
+  }
+  if (m.run.isError) {
+    return <LoadFailed error={m.run.error} onRetry={() => void m.run.refetch()} />
+  }
+
   return (
-    <section className="flex flex-col gap-18 px-30 py-24">
-      <header className="flex flex-wrap items-start justify-between gap-16">
+    <section className={'flex flex-col gap-16 px-30 py-24'}>
+      <header className={'flex flex-wrap items-start justify-between gap-16'}>
         <div>
-          <h1 className="m-0 text-screen font-semibold">小说重写 · 三层只读监控</h1>
-          <p className="m-0 mt-6 text-tag text-ink-4">源事实 → 目标故事 → 正文执行。机械检查与阅读质量分别呈现。</p>
+          <h1 className={'m-0 text-screen font-semibold'}>STR-06 候选链 · 只读监控</h1>
+          <p className={'m-0 mt-6 text-tag text-ink-4'}>
+            隔离候选根（F8 激活前不进现役注册表）：判定只有现役 check 报告与机械回执名单，
+            本屏只呈现盘面事实。
+          </p>
         </div>
-        <Mono className="text-tag text-ink-4">{candidate}</Mono>
+        <Mono className={'text-tag text-ink-4'}>{candidate}</Mono>
       </header>
-      {m.run.isPending ? <LoadingPane label="读取运行状态" /> : m.run.isError
-        ? <LoadFailed error={m.run.error} onRetry={() => void m.run.refetch()} />
-        : m.run.data ? <RunPane run={m.run.data} /> : null}
-      <div className="grid grid-cols-1 items-start gap-18 xl:grid-cols-2">
-        <Panel><PaneHeader title="Stage2 · 源事实层" />
-          <ArtifactBody query={m.sourceStory} missing="源事实尚未发布，等待事实抽取与编译。">
-            {(story) => <SourceStoryPane story={story} />}
-          </ArtifactBody>
-        </Panel>
-        <Panel><PaneHeader title="Stage4 · 目标故事层" />
-          <ArtifactBody query={m.targetStory} missing="目标故事尚未发布，等待目标建模与编译。">
-            {(story) => <TargetStoryPane story={story} />}
-          </ArtifactBody>
-        </Panel>
-      </div>
-      <Panel>
-        <PaneHeader title="Stage5 · 正文执行层" meta="按章顺序写作 · 章包与前章短尾绑定" />
-        <div className="flex flex-col gap-12 px-18 py-16">
-          <div className="flex flex-wrap gap-6" aria-label="选择章节">
-            {m.ordinals.map((ordinal) => <button key={ordinal} type="button" onClick={() => m.select(ordinal)}
-              aria-pressed={m.selected === ordinal}
-              className={'rounded-btn border px-12 py-6 text-tag ' +
-                (m.selected === ordinal ? 'border-ink bg-ink text-card' : 'border-line-btn bg-card text-ink-2')}>
-              第 {ordinal} 章
-            </button>)}
-          </div>
-          {m.selected === null ? <NotRunYet compact title="尚无可写作章节" body="目标故事发布后，这里显示当前章包与正文。" /> :
-            <ArtifactBody query={m.chapter} missing="本章材料尚未生成，等待自动流水线推进。">
-              {(chapter) => <>
-                {chapter.packet ? <PacketPane packet={chapter.packet} /> : <p className="text-tag text-ink-4">本章章包尚未生成。</p>}
-                {chapter.body !== null ? <Prose text={chapter.body} /> : <p className="text-tag text-ink-4">本章尚无已提交正文。</p>}
-                {chapter.receipt ? <ReceiptPane receipt={chapter.receipt} /> : <p className="text-tag text-ink-4">尚无正文机械回执。</p>}
-              </>}
-            </ArtifactBody>}
-        </div>
-      </Panel>
-      <Panel><PaneHeader title="Hook · 开篇成文" />
-        <ArtifactBody query={m.hook} missing="Hook 材料尚未生成。">
-          {(hook) => <>
-            {hook.packet ? <PacketPane packet={hook.packet} /> : null}
-            {hook.body !== null ? <Prose text={hook.body} /> : <p className="text-tag text-ink-4">Hook 尚未成文。</p>}
-            {hook.receipt ? <ReceiptPane receipt={hook.receipt} /> : null}
-          </>}
-        </ArtifactBody>
-      </Panel>
-      <Panel><PaneHeader title="Stage7 · 成书交付" />
-        <div className="flex flex-col gap-10 px-18 py-16">
-          {m.delivery.isPending ? <LoadingPane label="读取交付状态" /> : m.delivery.isError
-            ? <LoadFailed error={m.delivery.error} onRetry={() => void m.delivery.refetch()} />
-            : m.delivery.data?.present ? <>
-              <span className="text-tag text-ink-3">成书摘要 <Mono>{m.delivery.data.final_text_sha256 ?? 'unknown'}</Mono></span>
-              <span className="text-tag text-ink-4">源章号与正文回执已由后端核对；文学质量仍需阅读验收。</span>
-              {m.delivery.data.disclosure ? <Prose text={m.delivery.data.disclosure} className="text-tag text-ink-4" /> : null}
-              <button type="button" onClick={() => void m.openBook()} disabled={m.downloading}
-                className="self-start rounded-btn border border-line-btn bg-card px-12 py-6 text-tag text-ink-2">
-                {m.downloading ? '正在读取成书' : '下载成书全文'}
-              </button>
-            </> : <NotRunYet compact title="尚未交付" body="最终正文、Hook 与回执通过后端当前来源核对后才开放下载。" />}
-          {m.downloadError ? <LoadFailed compact error={m.downloadError} /> : null}
-        </div>
-      </Panel>
+
+      {m.run.data ? <RunPane run={m.run.data} /> : null}
+      {m.characters.data ? <CharactersPane chars={m.characters.data} /> : null}
+      {m.blueprint.data ? <BlueprintPane blueprint={m.blueprint.data} /> : null}
+      {/* 命名前移批：目标人物命名移到故事设计之前（str06.stage4.naming 在
+          Stage2 compile 之后、Preserve／Design 之前）。 */}
+      {m.naming.data ? <NamingPane naming={m.naming.data} /> : null}
+      {m.design.data ? <DesignPane design={m.design.data} /> : null}
+      {m.ir.data ? <IrPane ir={m.ir.data} /> : null}
+      <ChapterPane
+        ordinals={m.ir.data?.chapters.map((c) => c.chapter_ordinal) ?? []}
+        selected={m.selected}
+        onSelect={m.select}
+        chapter={m.chapter.data}
+      />
+      {m.hook.data ? <HookPane hook={m.hook.data} /> : null}
+      {m.delivery.data ? <DeliveryPane delivery={m.delivery.data} onBook={m.openBook} /> : null}
     </section>
   )
 }
 
-interface ArtifactQuery<T> {
-  isPending: boolean
-  isError: boolean
-  error: unknown
-  data: StoryArtifactView<T> | undefined
-  refetch: () => Promise<unknown>
-}
-
-function ArtifactBody<T>({ query, missing, children }: {
-  query: ArtifactQuery<T>; missing: string; children: (data: T) => ReactNode
-}) {
-  if (query.isPending) return <LoadingPane label="读取正式材料" />
-  if (query.isError) return <LoadFailed error={query.error} onRetry={() => void query.refetch()} />
-  const view = query.data
-  if (!view) return <LoadFailed error={new Error('后端没有返回材料状态。')} />
-  if (view.status === 'missing') return <NotRunYet compact title="尚未生成" body={missing} />
-  if (view.status === 'invalid') return <div role="alert" className="flex flex-col gap-6 px-18 py-16">
-    <span className="text-tag text-ink-2">正式材料不可用</span>
-    {view.errors.map((error, index) => <p key={index} className="m-0 text-tag text-ink-3">{error}</p>)}
-  </div>
-  if (view.data === null) return <LoadFailed error={new Error('后端报告ready，但缺少正式材料。')} />
-  return <div className="flex flex-col gap-12 px-18 py-16">{children(view.data)}</div>
-}
-
-function SourceStoryPane({ story }: { story: SourceStoryData }) {
-  const entity = (id: string) => story.entities[id]?.label ?? id
-  return <>
-    <Prose className="text-tag text-ink-3" text={story.expression.statement} />
-    <div className="flex flex-wrap gap-x-16 gap-y-6 text-tag text-ink-2">
-      {Object.entries(story.entities).map(([id, person]) => <span key={id}>{person.label}
-        <span className="text-ink-4">（{person.kind}）</span></span>)}
-    </div>
-    <SectionTitle>事件与故事时间</SectionTitle>
-    <ol className="m-0 flex list-none flex-col gap-10 p-0 text-tag">
-      {Object.entries(story.events).map(([id, event]) => <li key={id}>
-        <span className="text-ink-4">第{event.chapter_ordinal}章 · {event.temporal.frame} · 场景 {event.scene_boundary}</span>
-        <Prose text={event.summary} className="text-tag text-ink-2" />
-      </li>)}
-    </ol>
-    <details><summary className="cursor-pointer text-tag text-ink-3">命题、认知与读者揭示</summary>
-      <div className="mt-8 flex flex-col gap-8 text-tag">
-        {Object.entries(story.propositions).map(([id, fact]) => <p key={id} className="m-0 text-ink-2">
-          {fact.statement} <Mono className="text-ink-4">{fact.world_status}</Mono>
-        </p>)}
-        {story.knowledge_updates.map((update) => <p key={update.update_id} className="m-0 text-ink-3">
-          {entity(update.holder)} · {update.mode} · {update.polarity}：{story.propositions[update.proposition_ref]?.statement ?? update.proposition_ref}
-          {update.supersedes.length ? '（纠正既有认知）' : ''}
-        </p>)}
-        {story.exposures.map((exposure, index) => <p key={index} className="m-0 text-ink-4">
-          读者 · {exposure.mode}：{story.propositions[exposure.proposition_ref]?.statement ?? exposure.proposition_ref}
-        </p>)}
-      </div>
-    </details>
-    <details><summary className="cursor-pointer text-tag text-ink-3">状态、因果与悬念</summary>
-      <div className="mt-8 flex flex-col gap-8 text-tag text-ink-3">
-        {story.state_updates.map((update, index) => {
-          const slot = story.state_slots[update.slot_ref]
-          return <p key={index} className="m-0">{slot ? slot.subjects.map(entity).join('／') + ' · ' + slot.aspect + ' · ' + slot.focus : update.slot_ref}
-            ：{update.value ?? update.op}（{update.effective_time} · {update.modality}）</p>
-        })}
-        {story.causal_links.map((cause, index) => <p key={index} className="m-0">
-          {story.events[cause.from_event]?.summary ?? cause.from_event} → {story.events[cause.to_event]?.summary ?? cause.to_event}
-          <span className="text-ink-4">（{cause.kind} · {cause.support}）</span>
-        </p>)}
-        {Object.entries(story.threads).map(([id, thread]) => <div key={id}>
-          <p className="m-0 text-ink-2">{thread.question}</p>
-          {thread.updates.map((update, index) => <p key={index} className="m-0 text-ink-4">{update.op} · {update.resolution ?? '尚无答案'}</p>)}
-        </div>)}
-      </div>
-    </details>
-    <details><summary className="cursor-pointer text-tag text-ink-3">世界规则与源文歧义</summary>
-      {Object.entries(story.world_rules).map(([id, rule]) => <p key={id} className="text-tag text-ink-3">{rule.kind} · {rule.statement}</p>)}
-      {story.conflicts.length ? story.conflicts.map((conflict, index) => <p key={index} className="text-tag text-ink-3">{conflict.status} · {conflict.statement}</p>)
-        : <p className="text-tag text-ink-4">没有登记的源文歧义；不等于已穷尽全部语义问题。</p>}
-    </details>
-    <details><summary className="cursor-pointer text-tag text-ink-3">源文证据</summary>
-      {Object.entries(story.evidence).map(([id, evidence]) => <div key={id} className="mt-10">
-        <Mono className="text-tag text-ink-4">第{evidence.chapter_ordinal}章 · 自然段{evidence.paragraph_ordinal}</Mono>
-        <Prose text={evidence.text} className="text-tag text-ink-3" />
-      </div>)}
-    </details>
-  </>
-}
-
-function TargetStoryPane({ story }: { story: TargetStoryData }) {
-  const name = (id: string) => id === 'reader' ? '读者' : story.initial_displays[id] ?? story.names[id]?.primary ?? id
-  return <>
-    <Prose text={story.premise} className="text-tag text-ink-2" />
-    <p className="m-0 text-tag text-ink-4">{story.narration} · {story.style}</p>
-    <span className="text-tag text-ink-4">保留源章数 {story.source_chapter_count} · 总目标篇幅 {story.total_length_budget}</span>
-    {story.character_arcs.map((arc) => <div key={arc.entity_ref} className="flex flex-col gap-4">
-      <SectionTitle>{story.names[arc.entity_ref]?.primary ?? arc.entity_ref} · 人物转变</SectionTitle>
-      <p className="m-0 text-tag text-ink-3">{arc.starting_position} → {arc.end_position}</p>
-      <p className="m-0 text-tag text-ink-4">压力：{arc.pressure} · 选择：{arc.choice}</p>
-    </div>)}
-    <SectionTitle>章节目的与承接</SectionTitle>
-    {story.chapters.map((chapter) => <div key={chapter.chapter_ordinal} className="flex flex-col gap-4">
-      <span className="text-tag text-ink-2">第{chapter.chapter_ordinal}章 · {chapter.purpose}</span>
-      <span className="text-tag text-ink-4">入场：{chapter.entry} → 离场：{chapter.exit} · 预算 {chapter.length_budget}</span>
-    </div>)}
-    <details><summary className="cursor-pointer text-tag text-ink-3">目标事件的触发、选择与结果</summary>
-      {story.events.map((event) => <div key={event.event_id} className="mt-10 flex flex-col gap-4 text-tag">
-        <Prose text={event.summary} className="text-tag text-ink-2" />
-        <span className="text-ink-4">触发：{event.trigger}</span>
-        <span className="text-ink-3">选择：{event.choice}</span>
-        <span className="text-ink-3">结果：{event.result}</span>
-      </div>)}
-    </details>
-    <details><summary className="cursor-pointer text-tag text-ink-3">目标初态、认知与世界规则</summary>
-      <div className="mt-8 flex flex-col gap-8 text-tag text-ink-3">
-        {story.initial_state.map((state, index) => <p key={index} className="m-0">
-          {state.subject_ids.map(name).join('／')} · {state.dimension} · {state.qualifier}：{state.value ?? (state.op === 'unset' ? '已明确解除' : '状态值未知')}（{state.modality}）
-        </p>)}
-        {story.initial_knowledge.map((knowledge, index) => <p key={index} className="m-0">
-          {name(knowledge.holder)} · {knowledge.mode}：{story.propositions[knowledge.proposition_ref]?.statement ?? knowledge.proposition_ref}
-        </p>)}
-        {story.world_rules.map((rule) => <p key={rule.rule_id} className="m-0">{rule.statement}</p>)}
-      </div>
-    </details>
-  </>
-}
-
-const PACKET_SECTIONS = [
-  ['must_realize', '必须写出'], ['must_respect', '必须遵守'], ['continuity', '连续性'],
-  ['creative_guidance', '表达空间'], ['background', '背景'], ['guard_only', '禁止越界'],
-] as const
-
-function PacketPane({ packet }: { packet: ChapterPacketData | HookPacketData }) {
-  const boundaries = 'entry_state' in packet
-    ? [{ label: '入场', states: packet.entry_state }, { label: '离场', states: packet.exit_state }] : []
-  return <details><summary className="cursor-pointer text-tag text-ink-3">当前正式写作材料 · 六分区</summary>
-    <p className="text-tag text-ink-4">当前称谓：{Object.values(packet.names).join('、')} · 目标 {packet.length_budget} 非空白字符（{packet.min_chars}～{packet.max_chars}）</p>
-    {'actions' in packet ? <div className="flex flex-col gap-6 text-tag text-ink-3">
-      <SectionTitle>本章行动与状态</SectionTitle>
-      {packet.actions.map((action, index) => <Prose key={'action-' + index} text={action} className="text-tag text-ink-3" />)}
-      {boundaries.map(({ label, states }) =>
-        <p key={label} className="m-0 text-ink-4">{label}：{states.join('；') || '无登记状态'}</p>)}
-    </div> : null}
-    <div className="mt-10 grid grid-cols-1 gap-10 lg:grid-cols-2">
-      {PACKET_SECTIONS.map(([field, title]) => <div key={field}>
-        <SectionTitle>{title}</SectionTitle>
-        {packet[field].length ? packet[field].map((line, index) => <Prose key={index} text={line} className="text-tag text-ink-3" />)
-          : <p className="text-tag text-ink-4">本区为空</p>}
-      </div>)}
-    </div>
-  </details>
-}
-
-function ReceiptPane({ receipt }: { receipt: StoryProseReceipt }) {
-  return <div data-testid="story-prose-receipt" className="flex flex-wrap gap-x-20 gap-y-6 rounded-btn bg-sunken px-12 py-10 text-tag text-ink-3">
-    <span>机械 {receipt.mechanical} · 语义 {receipt.semantic}</span>
-    <span>{receipt.provider} / {receipt.model}</span>
-    <span>前章短尾 <Mono>{receipt.prior_tail_sha256.slice(0, 12)}</Mono></span>
-    <span>正文摘要 <Mono>{receipt.body_sha256.slice(0, 12)}</Mono></span>
-    <span>请求 <Mono>{receipt.request_id.slice(0, 12)}</Mono></span>
-    <span>开篇窄修 {receipt.patches.length} 次</span>
-  </div>
-}
 function RunPane({ run }: { run: NonNullable<Monitor['run']['data']> }) {
   const cost = run.cost
   return (
     <Panel>
       <PaneHeader
-        title={'运行状态与成本'}
+        title={'Run · 节点图与成本'}
         meta={<><Mono>{run.status ?? 'unknown'}</Mono>{run.failed_node
           ? <Mono className={'text-ink-3'}> · 失败归属 {run.failed_node}</Mono>
           : null}</>}
@@ -279,8 +97,7 @@ function RunPane({ run }: { run: NonNullable<Monitor['run']['data']> }) {
             产物节点 {run.nodes.filter((n) => n.produced).length}/{run.nodes.length}
           </span>
         </div>
-        <details><summary className="cursor-pointer text-tag text-ink-3">节点产物明细</summary>
-        <ul className={'m-0 mt-8 grid list-none grid-cols-2 gap-6 p-0 text-tag'}>
+        <ul className={'m-0 grid list-none grid-cols-2 gap-6 p-0 text-tag'}>
           {run.nodes.map((node) => (
             <li key={node.node} className={'flex items-center justify-between gap-8 rounded-btn bg-sunken px-12 py-8'}>
               <Mono className={'text-ink-2'}>{node.node}</Mono>
@@ -289,7 +106,7 @@ function RunPane({ run }: { run: NonNullable<Monitor['run']['data']> }) {
               </span>
             </li>
           ))}
-        </ul></details>
+        </ul>
         {cost ? (
           <div className={'flex flex-col gap-6'}>
             <SectionTitle note={'实付与缓存分开；usage 缺失单列，不并零'}>ledger 成本</SectionTitle>
@@ -449,5 +266,331 @@ function AssemblyReport({ report }: { report: Str06AssemblyReportView }) {
         <span className={'text-tag text-ink-3'}>not_ready：{report.assembly.reason}</span>
       ) : null}
     </div>
+  )
+}
+
+function CharactersPane({ chars }: { chars: NonNullable<Monitor['characters']['data']> }) {
+  return (
+    <Panel>
+      <PaneHeader title={'Characters · 源名称结构'} meta={<Mono>{chars.contract_version ?? 'unknown'}</Mono>} />
+      <div className={'flex flex-col gap-12 px-18 py-16'}>
+        {chars.characters.map((c) => (
+          <div key={c.char_id} className={'flex flex-col gap-4'}>
+            <SectionTitle note={<Mono>{c.char_id}</Mono>}>{c.canonical}</SectionTitle>
+            <span className={'text-tag text-ink-3'}>
+              {c.surfaces.map((s) => `${s.surface}（第${s.from_chapter}章起${
+                s.until_chapter ? `·至第${s.until_chapter}章` : ''}）`).join('、')}
+            </span>
+          </div>
+        ))}
+        {chars.name_structure ? (
+          <span className={'text-tag text-ink-4'}>
+            家族 {Object.entries(chars.name_structure.families).map(([id, literal]) => `${id}=${literal}`).join('、') || '无'}
+          </span>
+        ) : null}
+      </div>
+    </Panel>
+  )
+}
+
+function BlueprintPane({ blueprint }: { blueprint: NonNullable<Monitor['blueprint']['data']> }) {
+  return (
+    <Panel>
+      <PaneHeader title={'Blueprint · 源骨架'} meta={<Mono>{blueprint.chapters.length} 章</Mono>} />
+      <div className={'flex flex-col gap-12 px-18 py-16'}>
+        {blueprint.chapters.map((chapter) => (
+          <div key={chapter.chapter} className={'flex flex-col gap-6'}>
+            <SectionTitle note={<Mono>{chapter.beats.length} 拍</Mono>}>第 {chapter.chapter} 章</SectionTitle>
+            <ul className={'m-0 flex list-none flex-col gap-4 p-0 text-tag text-ink-2'}>
+              {chapter.beats.map((beat) => (
+                <li key={beat.beat_id} className={'flex flex-col gap-2'}>
+                  <span>
+                    <Mono className={'text-ink-4'}>{beat.beat_id}</Mono>{' '}
+                    {beat.scene_boundary === 'new' ? <span className={'text-ink-4'}>〔开场景〕</span> : null}
+                    {beat.temporal_mode === 'iterative' ? <span className={'text-ink-4'}>〔重复〕</span> : null}{' '}
+                    {beat.event}
+                  </span>
+                  {beat.effects.length ? (
+                    <span className={'pl-12 text-tag text-ink-3'}>
+                      事实：
+                      {beat.effects.map((eff, i) => (
+                        <span key={i}>
+                          {i ? '；' : ''}
+                          <Mono>{String((eff as Record<string, unknown>).target && JSON.stringify((eff as Record<string, unknown>).target))}</Mono>
+                          {' '}
+                          <Mono>{String((eff as Record<string, unknown>).key)}</Mono>
+                          {'='}
+                          {String((eff as Record<string, unknown>).op)}
+                          {' '}
+                          {String((eff as Record<string, unknown>).value ?? '')}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
+                  {beat.cognition.length ? (
+                    <span className={'pl-12 text-tag text-ink-3'}>
+                      认知：
+                      {beat.cognition.map((cog, i) => (
+                        <span key={i}>
+                          {i ? '；' : ''}
+                          <Mono>{String((cog as Record<string, unknown>).proposition && JSON.stringify((cog as Record<string, unknown>).proposition))}</Mono>
+                          {' → '}
+                          {String((cog as Record<string, unknown>).holder)}
+                          {' '}
+                          {String((cog as Record<string, unknown>).mode)}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
+                  {beat.loops.length ? (
+                    <span className={'pl-12 text-tag text-ink-3'}>
+                      悬念：
+                      {beat.loops.map((loop, i) => (
+                        <span key={i}>
+                          {i ? '；' : ''}
+                          <Mono>{String((loop as Record<string, unknown>).ref)}</Mono>
+                          {' '}
+                          {String((loop as Record<string, unknown>).op)}
+                          {' '}
+                          {String((loop as Record<string, unknown>).question ?? (loop as Record<string, unknown>).resolution ?? '')}
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+        {blueprint.world_constraints.length
+          ? <span className={'text-tag text-ink-4'}>世界约束 {blueprint.world_constraints.length} 条</span>
+          : null}
+      </div>
+    </Panel>
+  )
+}
+
+function DesignPane({ design }: { design: NonNullable<Monitor['design']['data']> }) {
+  return (
+    <Panel>
+      <PaneHeader title={'Target Design · 导演说明与章目的'} meta={<Mono>{design.scenes.length} 场</Mono>} />
+      <div className={'flex flex-col gap-12 px-18 py-16'}>
+        {design.chapters.map((chapter) => (
+          <div key={chapter.chapter_ordinal} className={'flex flex-col gap-4'}>
+            <SectionTitle>第 {chapter.chapter_ordinal} 章 · {chapter.purpose}</SectionTitle>
+            <span className={'text-tag text-ink-4'}>{chapter.scene_ids.join('、')}</span>
+          </div>
+        ))}
+        {design.hook ? (
+          <div className={'flex flex-col gap-4'}>
+            <SectionTitle note={<Mono>{design.hook.person} 人称</Mono>}>Hook 选择</SectionTitle>
+            <span className={'text-tag text-ink-2'}>材料序：{design.hook.materials.join(' → ')}</span>
+            <span className={'text-tag text-ink-4'}>
+              隐藏人物 {design.hook.concealed.join('、') || '无'} · 禁止揭示 {design.hook.forbidden_reveals} 条
+            </span>
+            <Prose className={'text-tag text-ink-3'} text={design.hook.design_brief} />
+          </div>
+        ) : null}
+        {design.binding ? (
+          <span className={'text-tag text-ink-4'}>
+            Binding：义务 {design.binding.obligations} · 承载 {design.binding.entries.length} · 未承载 {design.binding.unbound.length}
+          </span>
+        ) : null}
+      </div>
+    </Panel>
+  )
+}
+
+function IrPane({ ir }: { ir: NonNullable<Monitor['ir']['data']> }) {
+  return (
+    <Panel>
+      <PaneHeader
+        title={'WriterBookIR · 导航'}
+        meta={<Mono>{ir.target_chapter_count ?? '—'} 章 · 总篇幅 {ir.total_length_budget ?? '—'}</Mono>}
+      />
+      <div className={'flex flex-col gap-10 px-18 py-16'}>
+        {ir.chapters.map((chapter) => (
+          <div key={chapter.chapter_ordinal} className={'flex flex-col gap-4'}>
+            <SectionTitle note={<Mono>预算 {chapter.length_budget} 字</Mono>}>
+              第 {chapter.chapter_ordinal} 章
+            </SectionTitle>
+            <span className={'text-tag text-ink-2'}>{chapter.purpose}</span>
+            <ul className={'m-0 flex list-none flex-col gap-2 p-0 text-tag text-ink-4'}>
+              {chapter.scene_lines.map((line, index) => <li key={chapter.scene_ids[index]}>{line}</li>)}
+            </ul>
+          </div>
+        ))}
+        {ir.release_schedule.length ? (
+          <div className={'flex flex-col gap-4'}>
+            <SectionTitle note={'未到位置不得使用对应字面'}>称谓释放位置</SectionTitle>
+            <ul className={'m-0 flex list-none flex-col gap-2 p-0 text-tag text-ink-2'}>
+              {ir.release_schedule.map((entry) => (
+                <li key={`${String(entry.char_id)}@${String(entry.from_chapter)}`}>
+                  <Mono className={'text-ink-4'}>{String(entry.char_id)}</Mono>{' '}
+                  {(entry.surfaces as string[]).join('、')}（第{String(entry.from_chapter)}章起）
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </Panel>
+  )
+}
+
+function ChapterPane({ ordinals, selected, onSelect, chapter }: {
+  ordinals: number[]
+  selected: number | null
+  onSelect: (ordinal: number) => void
+  chapter: Monitor['chapter']['data']
+}) {
+  return (
+    <Panel>
+      <PaneHeader title={'章正文与章回执'} meta={<span>机械范围 · 语义未评 · 篇幅披露</span>} />
+      <div className={'flex flex-col gap-12 px-18 py-16'}>
+        <div className={'flex flex-wrap gap-6'}>
+          {ordinals.map((ordinal) => (
+            <button
+              key={ordinal}
+              type={'button'}
+              onClick={() => onSelect(ordinal)}
+              className={
+                'rounded-btn border px-12 py-6 text-tag ' +
+                (selected === ordinal ? 'border-ink bg-ink text-card' : 'border-line-btn bg-card text-ink-2')
+              }
+            >
+              第 {ordinal} 章
+            </button>
+          ))}
+        </div>
+        {chapter ? (
+          chapter.present && chapter.prose ? (
+            <div className={'flex flex-col gap-8'}>
+              <Prose text={chapter.prose} />
+              {chapter.receipt ? (
+                <div
+                  data-testid={'str06-chapter-receipt'}
+                  className={'flex flex-wrap gap-x-24 gap-y-6 text-tag text-ink-3'}
+                >
+                  <span>回执 <Mono>{chapter.receipt.status}</Mono></span>
+                  <span>semantic <Mono>{chapter.receipt.semantic}</Mono></span>
+                  <span>
+                    篇幅 <Mono>{chapter.receipt.length.char_count}</Mono>／目标{' '}
+                    <Mono>{chapter.receipt.length.target_chars}</Mono>
+                    （带 [{chapter.receipt.length.band_low}, {chapter.receipt.length.band_high}]）
+                  </span>
+                  <span>篇幅披露 <Mono>{String(chapter.receipt.length_disclosed)}</Mono></span>
+                  <span>机械检查 {chapter.receipt.mechanical_checks.join('、')}</span>
+                  <span>请求身份 <Mono>{chapter.receipt.request_identity.slice(0, 12)}</Mono></span>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <span className={'text-tag text-ink-4'}>这一章还没有提交的正文与回执（present=false，不是空章）。</span>
+          )
+        ) : null}
+      </div>
+    </Panel>
+  )
+}
+
+function HookPane({ hook }: { hook: NonNullable<Monitor['hook']['data']> }) {
+  return (
+    <Panel>
+      <PaneHeader title={'Hook · 成文与机械回执'} />
+      <div className={'flex flex-col gap-8 px-18 py-16'}>
+        {hook.present && hook.prose ? <Prose text={hook.prose} />
+          : <span className={'text-tag text-ink-4'}>Hook 尚未成文。</span>}
+        {hook.receipt ? (
+          <span className={'text-tag text-ink-3'}>
+            回执 <Mono>{String(hook.receipt.status)}</Mono> · semantic{' '}
+            <Mono>{String(hook.receipt.semantic ?? 'unverified')}</Mono> · 机械检查{' '}
+            {(hook.receipt.mechanical_checks as string[] | undefined)?.join('、') ?? '—'}
+          </span>
+        ) : null}
+      </div>
+    </Panel>
+  )
+}
+
+function NamingPane({ naming }: { naming: NonNullable<Monitor['naming']['data']> }) {
+  return (
+    <Panel>
+      <PaneHeader title={'NameMap v6 · 交付变换契约'} meta={<Mono>{naming.entries.length} 人</Mono>} />
+      <ul className={'m-0 flex list-none flex-col gap-6 px-18 py-16 text-tag'}>
+        {naming.entries.map((entry) => (
+          <li key={entry.char_ref} className={'flex flex-wrap items-baseline gap-8'}>
+            <Mono className={'text-ink-4'}>{entry.char_ref}</Mono>
+            <span className={'text-ink-2'}>{entry.full}</span>
+            {entry.given ? <span className={'text-ink-4'}>名 {entry.given}</span> : null}
+            {entry.keep_reason ? <span className={'text-ink-4'}>保留：{entry.keep_reason}</span> : null}
+          </li>
+        ))}
+      </ul>
+    </Panel>
+  )
+}
+
+function DeliveryPane({ delivery, onBook }: {
+  delivery: NonNullable<Monitor['delivery']['data']>
+  onBook: () => void
+}) {
+  return (
+    <Panel>
+      <PaneHeader
+        title={'成书交付 · manifest'}
+        meta={<Mono>{(delivery.delivery_identity ?? '—').slice(0, 12)}</Mono>}
+      />
+      <div className={'flex flex-col gap-8 px-18 py-16'}>
+        {delivery.present ? (
+          <>
+            <div className={'flex flex-wrap gap-x-24 gap-y-6 text-tag text-ink-3'}>
+              <span>成书 hash <Mono>{(delivery.final_text_sha256 ?? '—').slice(0, 12)}</Mono></span>
+              {delivery.length_reading ? (
+                <span>
+                  全书 <Mono>{delivery.length_reading.total_chars}</Mono> 字 · 偏差{' '}
+                  <Mono>{delivery.length_reading.whole_book_deviation_ratio}</Mono>
+                </span>
+              ) : null}
+            </div>
+            <ul className={'m-0 flex list-none flex-col gap-2 p-0 text-tag text-ink-4'}>
+              {delivery.chapters.map((chapter) => (
+                <li key={chapter.chapter_ordinal}>
+                  第 {chapter.chapter_ordinal} 章 · {chapter.length?.char_count ?? '—'} 字
+                  {chapter.length_disclosed ? ' · 篇幅披露' : ''}
+                </li>
+              ))}
+            </ul>
+            {delivery.name_residue && Object.keys(delivery.name_residue).length > 0 ? (
+              <div className={'text-tag text-ink-4'}>
+                疑似姓名残留定位（不阻断）：{' '}
+                {Object.entries(delivery.name_residue).map(([scope, counts]) => (
+                  <span key={scope} className={'mr-12'}>
+                    {scope}{' '}
+                    <Mono>
+                      {Object.entries(counts)
+                        .map(([code, n]) => `${code}×${n}`)
+                        .join(' ')}
+                    </Mono>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {delivery.disclosure ? <Prose className={'text-tag text-ink-4'} text={delivery.disclosure} /> : null}
+            <div>
+              <button
+                type={'button'}
+                onClick={onBook}
+                className={'rounded-btn border border-line-btn bg-card px-12 py-6 text-tag text-ink-2'}
+              >
+                查看成书全文
+              </button>
+            </div>
+          </>
+        ) : (
+          <span className={'text-tag text-ink-4'}>尚未交付（跑到 stage7 assemble 且 manifest 提交后才有）。</span>
+        )}
+      </div>
+    </Panel>
   )
 }

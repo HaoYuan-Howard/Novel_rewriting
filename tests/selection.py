@@ -70,10 +70,9 @@ def _python_modules(root: Path) -> dict[str, Path]:
     result = {}
     for prefix in ('novel', 'contracts', 'tests', 'tools'):
         for path in (root / prefix).rglob('*.py'):
-            relative = path.relative_to(root)
-            if any(part in {'.tr', '__pycache__', '.test_cache'} for part in relative.parts):
+            if any(part in {'.tr', '__pycache__', '.test_cache'} for part in path.parts):
                 continue
-            name = relative.with_suffix('').as_posix().replace('/', '.')
+            name = path.relative_to(root).with_suffix('').as_posix().replace('/', '.')
             result[name.removesuffix('.__init__')] = path
     return result
 

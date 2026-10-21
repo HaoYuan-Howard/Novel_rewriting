@@ -1,23 +1,103 @@
-# Stage5：写作执行层
+# Stage 5 当前契约
 
-body按章顺序写作，输入仅为本章ChapterPacket及已接受前章的有限短尾。短尾默认最多800个非空白字符，按完整自然段取；整段过长时明确无可用短尾，不截断句子。hook独立消费HookPacket。
+Stage5 在新链（STR-06，F8a 激活）有两个付费节点：`str06.stage5.body`（按章串行
+成文）与 `str06.stage5.hook`（Hook 单产成文）。旧 `stage5.write`／`stage5.review`
+两相、typed edit、Reviewer rewrite 与 trim 人工面随旧链退役；生产正文 Judge 已取消，
+语义质量一律 unver 披露。
 
-模型输出prose或needs_design；表达与节奏可以调整，关键动机、决策、沟通和剧情桥梁缺失必须回到Stage4。开篇窄修只允许前8个现有自然段的keep/replace，禁止增加段落、越界修改或借窄修整章重写。
+正文按章成文：每章一次首次生成＋同输入有限重写（attempt 进请求身份），章级机械验
+全过才算合法候选；确定性候选选择（硬检查全过优先，耗尽后按相对目标偏差最小、平局
+取较晚）。提交顺序＝原响应耐久 → 检查 → 候选 → 原子写正文 → 原子写章回执。恢复按
+已提交目标章集合装载（`committed_set_recovery`，选章见 `--body-chapters`），回执绑定
+当前章包摘要（写手视图＋验证输入）与正文字节，不绑定全书 IR 与前文链。Hook 只消费
+HookContext（正式输入确定性重建），不读源 hook 文案。
+写手视图摘要含实际外发的正文 system 与渲染字节，system 与正文请求使用同一入口；
+仅修改 system 也使旧章回执失效，Machine 审计摘要与验证输入摘要不因此改变。
 
-送达材料逐项带`[section:序号]`。needs_design逐问题必填section、item_no与detail；item_no引用真实送达项，由compiler映射到ChapterPlan/HookPlan的自然字段。对应场景行动可补齐必要的即时决定和剧情桥梁，不能改变冻结跨章事实。无法定位时以story_structure和显式null报告范围不足，停止且不购买模糊修订。
+Hook 篇幅走包络（rc24）：compiler 按书级章预算派生目标区间与硬上限
+（`HookContext.length_low/high/cap`，锚定章预算而非源引子字数）随请求送达；
+目标区间是创作指导，硬上限由机械验拒收（同 Context 有限重写，超限人工恢复走
+hook_writer wire 免费采用）。输出 token 预算与有限修订属于执行边界。写手在正式材料边界内安排对白、即时反应、
+语言与节奏，每段应推进局面、人物认识或阅读期待，背景只解释到足以理解当前行动。
+人物声线、全书风格与正式表达决定同源，材料场声线标明适用材料编号；表达决定
+只投影已选机制，不让写手重作决定。局部表现策略不能新增前史、动机、关键剧情事实或结局；
+呈现既定行动的自然移步、短转场和即时动作遵守下文正文边界。
+破折号、问句和环境描写不设数量闸，是否服务具体情境由阅读验收判断。
 
-模型、请求、正文与前章短尾的真实摘要由代码签入ProseReceipt；补丁保留初始生成来源，另记实际窄修请求和结果。机械通过与文学质量unver分别披露。模型在 `contracts/schema/story_prose.py`，纯请求及验证在 `novel/core/story_prose.py`，公开入口在 `novel/stages/stage5/story.py`。详细交接见 [三层规格](str06.md)。
+Hook 保留单个正式产物与现有有限修订，不增加生产审稿节点或 Hook 段落修复协议。
+已有 Stage4 条目窄修和正文称谓段落修句保留；其他成文局部修复是否增加，依后续
+可定位失败与修复效果决定。
+首答质量以固定样本的“楔子＋第 1 章”联合阅读验证：冲突清晰度、因果承接、人物声线、
+阅读期待、简洁与开章新增推进分别评价，机械通过不代签文学质量。
 
-## 当前版本与判据
+选中的可改写细节只进创作提示，
+系列概括所覆盖的目标实例只在概括拍进不可违背分区。写手遵守必要动机与铺垫，
+不能用主题／情绪解释替代保存条件，也不能补造过去的实例。
+现役 renderer v13 按身份逐次投影自然混称，写手协议 v12 允许以自然移步、短
+转场和即时动作呈现既定行动，补写的钟点不得倒置触发与行动。必要因果通过联合
+材料送达，不要求机械复述；新增情节、沟通与决策仍归 Design。正文机械 validator
+v4 保留有标题边界的包装识别，首句“尾声未尽”等自然措辞不拒收，并验证身份声明。
+标题字样后的行尾或标题分隔符构成识别边界，实际章号、标题、Markdown 标题与围栏
+仍拒收；普通正文句不是仅因包含“第一章”或“尾声”就成为包装。
 
-本层正式故事产物**都是 schema story-v3**，旧根只读归档，须在新根由当前producer重建。
+已确定的必要因果合起来足够理解即可，写手不逐条复述背景或条件。人物的触发、
+回应、权衡与选择在场景中展开，不能只用“终于答应”替代决定过程。新增沟通、
+决定、信息获得及后文依赖的情节归 Design；自然移步与即时动作可由写手呈现，
+但不得改写既定位置、感知通道或触发在前、行动在后的关系，回溯须明确标记。
+未定的具体钟点无需强行补写。称谓已释放只证明字面可用，实际叙述、自称和对他人
+的称呼仍须符合说话人与对象的关系。这些生成规则由阅读验收核查，不新增机械语义闸。
 
-当前注册表共 **5 条**：**4 hard、1 unver**。
+必保揭名称谓缺失走段落窄修：validator 给原文精确命中区间，runner 只发送
+受影响行、前后非空只读邻行与本章合法已释放称谓；补丁只能替换受影响行。
+请求绑定完整基文 hash 与章包写手／验证身份，未发送的正文变化也会换身份。
+坏 JSON、重复键、越界行或修改邻行仍留在原窄修臂；合并后以原校验器重验整章。
+与篇幅等其它失败混合时维持现役整章修订，首次＋最多两次修订的额度不变；
+合法补丁的接受记录绑定合并后的正文与身份声明，丢回执仍经既有免费恢复入口重建。
+身份文本的语法、引用或候选未声明问题走当前整章修订，不能把未知词面当成已证实
+姓名泄漏复用旧段落修句；缺少两类声明表的旧稿不能免费补标后接受。
 
-| 判据 | 级别 | 职责 |
+## 现役产物
+
+本层产物**都是 schema v1**（三级路径是切换时新建的命名空间；形状破坏史由模型
+`contract_version` 字面量与候选产物表的 RC 标签承载，见 `docs/BACKEND_CONTRACT.md`
+`R-2.5`／`R-5.11b`）。
+
+| 路径 | 模型 | 生产节点 | 内容 |
+|---|---|---|---|
+| `stage5/body/ch{nn}.txt` | 正文（text） | `str06.stage5.body` | 逐章改名前正文（prose） |
+| `stage5/acceptance/body/ch{nn}.json` | `ChapterReceipt` | `str06.stage5.body` | 章级接受回执（绑定章序、章包写手视图与验证输入摘要、正文 hash 与请求身份；Machine 层摘要仅审计，各章独立有效） |
+| `stage5/hook/hook.txt` | 正文（text） | `str06.stage5.hook` | Hook 成文（prose） |
+| `stage5/hook/receipt.json` | `HookReceipt` | `str06.stage5.hook` | Hook 回执（绑定 HookContext 身份、正文 hash 与请求身份） |
+
+`runtime/body_attempts_ch{nn}.json`、`runtime/hook_attempts.json` 等 attempts 记录
+是逐请求动态文件，由付费边界与 runner 各自的契约治理，不进版本表。
+
+## 机械验边界
+
+章级机械验（`novel/stages/stage5/body_checks.py`）覆盖：非空／编码／叙述外壳、
+身份声明语法、授权引用、候选覆盖及必保揭名称谓字面（硬失败，修订耗尽后无合法候选即停止，不披露放行）、篇幅带（超限只有
+篇幅带可披露）。Hook 机械验（`novel/stages/stage5/hook_writer.py`）覆盖：非空、编码、
+包装行、身份声明与篇幅硬上限（rc24 包络沿用，见上）。POV、起笔时序和披露
+引用在设计／Context 构建期检查；目标区间不拒稿，只有硬上限是成文硬闸。机械通过
+不证明文学质量、章内
+揭示位置或逐场义务兑现——那些维度保持未评披露。
+
+## 判据表
+
+| 判据 | sev | 要求 |
 |---|---|---|
-| `story_prose_complete` | hard | 回答协议、finish_reason、非空与篇幅带通过机械校验 |
-| `story_prose_receipt` | hard | 章回执绑定真实调用来源、章包、前章短尾、正文及修订链摘要 |
-| `story_opening_patch_scope` | hard | 窄修仅替换前八个非空自然段，句柄闭合且未授权字节不变 |
-| `story_hook_receipt` | hard | Hook 正文与回执绑定当前 HookPacket、请求与正文摘要 |
-| `body_semantics_unver` | unver | 逻辑、人物转变、场景衔接、兑现与文学质量未经语义验收 |
+| `body_chapter_complete` | hard | 每章正文完整（非空、编码合法、无叙述外壳、不含身份协议定界符；rc26） |
+| `body_name_watch` | hard | 写手材料不含旧名残留与未释放目标名（compile 派生监视行字面平铺）；正文里的同类命中只进定位报告（rc26） |
+| `body_required_literals` | hard | 必保揭名的承载章正文必现该称谓字面（缺字面即拒，段落级修句） |
+| `body_length_band` | hard | 章篇幅落在配置篇幅带内；超限只有篇幅带可披露 |
+| `chapter_receipt_binding` | hard | 章回执绑定章序、章包实际写手视图及验证输入摘要、正文 hash 与请求身份；Machine 摘要仅审计，不绑定全书 IR 或前文链 |
+| `body_semantics_unver` | unver | 正文文学质量未经语义评审（Judge 已取消） |
+| `body_length_reading` | metric | 逐章实际篇幅与预算偏差读数 |
+| `name_residue_report` | metric | 疑似旧名残留／提前揭名定位报告计数（不阻断、不购返修；rc26） |
+| `hook_mechanical` | hard | Hook 机械验通过 |
+| `hook_receipt_binding` | hard | Hook 回执绑定 Context 身份、正文 hash 与请求身份 |
+
+当前注册表共 **10 条**：**7 hard、2 metric、1 unver**。唯一注册表为
+`contracts/judges/str06.py`（F8c 起分流至本层判据模块）。
+
+rc26（2026-10-18 命名前移批 C）：正文直接以目标姓名成文——identity-text-v1 协议退役，回执不再携带 name_mentions／non_name_spans 两类区间表，机械检查项 name_text 退出；疑似旧名/提前揭名只形成定位报告（R-7.9，runtime 审计面），必保揭名按纯文本判定。

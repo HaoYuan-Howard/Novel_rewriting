@@ -42,7 +42,7 @@ function UnitRow({ unit, maximum, maxTokens, sid, runs }: { unit: UnitMetrics; m
       <div className="mt-5 h-5 w-140 bg-inset" aria-hidden="true"><div className="h-full bg-ink-3" style={{ width: (maxTokens ? (unit.usage.known_prompt_tokens + unit.usage.known_completion_tokens) / maxTokens * 100 : 0) + '%' }} /></div>
       缺用量 {unit.usage.missing_usage_calls} 次</td>
     <td className="py-12 align-top"><details><summary className="cursor-pointer">{unit.content_turns} 内容轮 · {unit.network_retries} 网络重试</summary>
-      <p>机械处理 {unit.mechanical} · 缓存处理 {unit.cached_processing}</p>
+      <p>历史采用 {unit.history_adopted} · 机械处理 {unit.mechanical} · 缓存处理 {unit.cached_processing}</p>
       {unit.issues.map((issue) => <p key={issue}>{issue}</p>)}
       {unit.attempts.length === 0 ? <p>无已登记网络尝试</p> : <ol className="pl-18">{unit.attempts.map((attempt) => <li key={attempt.attempt_id} className="my-9">
         第 {attempt.turn} 轮 · {attempt.state} · {duration(attempt.latency_ms)} · 输入/输出 {number(attempt.prompt_tokens)} / {number(attempt.completion_tokens)}

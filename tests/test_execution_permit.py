@@ -95,15 +95,14 @@ def test_ready_permit_accepts_only_the_exact_current_action(monkeypatch, tmp_pat
         P.permit_from_next(current, NODE, [])
 
 
-@pytest.mark.parametrize('node', [node for node, spec in NODES.items() if '--check-only' in spec.flags])
 def test_blocked_recovery_gets_a_new_permit_not_the_blocker_hash(
-        monkeypatch, tmp_path, node):
+        monkeypatch, tmp_path):
     _stable(monkeypatch)
     current = _next(
-        tmp_path, state='blocked', node=node,
+        tmp_path, state='blocked', node=NODE,
         waiting_on=Q.WAITING_ON_INBOX)
 
-    got = P.permit_from_next(current, node, ['--check-only'])
+    got = P.permit_from_next(current, NODE, ['--check-only'])
 
     assert got.kind == 'recovery'
     assert got.next_state == 'blocked'
@@ -165,7 +164,7 @@ def test_policy_tables_are_closed_and_all_rows_are_free_rechecks():
     # F8b-3：恢复表只登记免费 --check-only 复检；不设任何付费恢复行。
     assert all(row.tokens == frozenset({'--check-only'}) for row in P.RECOVERY_RUN_POLICIES)
     assert not any(row.paid for row in P.RECOVERY_RUN_POLICIES)
-    # 当前compile/assemble也登记check-only，免费恢复集合恰好等于节点声明。
+    # compile/assemble 结构性禁付且无旗标，不设恢复行。
     assert {row.node for row in P.RECOVERY_RUN_POLICIES} == {
         node for node, spec in NODES.items() if '--check-only' in spec.flags}
     # 旧链外部文件输入族随旧链退役：现役旗标面无文件型 flag ⇒ 空表。

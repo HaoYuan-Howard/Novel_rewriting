@@ -22,13 +22,14 @@ from __future__ import annotations
 
 import re
 
-from contracts.schema.source_story import STORY_VERSION
 from contracts.artifacts import (
     ARTIFACT_PATHS, BOOK_SCOPED_PATHS, STAGE1_MAIN_TEXT,
+    STAGE2_BLUEPRINT_CHARACTER_PROJECTION, STR06_BODY_DESIGN, artifact_rel,
+    STR06_STAGE2_OBS_CHAPTER, STR06_STAGE5_BODY, STR06_STAGE5_BODY_RECEIPT,
 )
-from contracts.story_paths import BODY, BODY_RECEIPT, CHAPTER_OBSERVATION, CHAPTER_PACKET, CHAPTER_PLAN, chapter_rel
 
 import os
+import re
 import weakref
 from pathlib import Path
 from typing import Any
@@ -78,21 +79,10 @@ def _is_pattern(rel: str) -> bool:
 #: ⚠⚠ 这一层必须跑在 `_is_pattern` **之前**：书级路径解析之后是**一份具名产物**，
 #: 而 `_is_pattern` 只看 `'{' in rel` ⇒ 不先解析就会把成书整个丢出 `artifacts[]`，
 #: 于是它从完成度、freshness 徽章和 inbox 里**同时消失**，而没有一层会报错。
-def _final_book_rel(novel_dir):
-    from contracts.story_paths import FINAL, MANIFEST
-    from contracts.schema.story_prose import FinalManifest
-    repository = Str06Repository(Path(novel_dir))
-    if not repository.path(MANIFEST).is_file():
-        return FINAL
-    try:
-        raw = repository.inspect(MANIFEST)
-        manifest = FinalManifest.model_validate({k: v for k, v in raw.items() if not k.startswith('_')})
-    except (OSError, UnicodeDecodeError, ValueError, AttributeError):
-        return FINAL
-    return FINAL.format(title=manifest.title)
-
-
-_BOOK_SCOPED_RESOLVERS = {'stage7/final/{title}_rewriting.txt': _final_book_rel}
+_BOOK_SCOPED_RESOLVERS = {
+    # F8a：新链成书路径（`stage7/final/{title}_rewriting.txt`）。
+    'stage7/final/{title}_rewriting.txt': paths.book_txt_rel,
+}
 
 
 def _resolve_book_scoped(rel: str, novel_dir: str | os.PathLike[str]) -> str:
@@ -152,28 +142,37 @@ _BODY_PROBE_SWALLOWED = (
 
 
 class _BodyIdentityProbe:
-    """一次只读概览内核对当前章包、真实正文与前章短尾；不缓存跨调用结论。"""
+    """一次完成度调用内的逐章身份核对复用面（IR 装载一次，逐章只做投影）。
+
+    `overview_at` 冻结只读坐标的同调用纪律：全书章共享同一份 IR 校验结果，
+    不为每章重付一次 CommitBundle 扫描加整份 IR 模型校验。缓存不跨调用——
+    下一次 overview 重新探测，上游变化不会被旧结论遮住（I-16：缓存是派生物）。
+    """
 
     def __init__(self, novel_dir) -> None:
         self.repository = Str06Repository(novel_dir)
-        self._packets: dict[int, Any] = {}
-        self._checks: dict[int, Any] = {}
+        self._writer_ir: tuple[bool, Any] | None = None
+        self._identities: dict[int, Any] = {}
 
-    def packet(self, ordinal: int):
-        if ordinal not in self._packets:
-            self._packets[ordinal] = self.repository.check_model(chapter_rel(CHAPTER_PACKET, ordinal))
-        return self._packets[ordinal]
+    def identities(self, ordinal: int):
+        cached = self._identities.get(ordinal)
+        if cached is None:
+            from novel.stages.common import chapter_identities, project_chapter_packet
+            cached = chapter_identities(project_chapter_packet(self.writer_ir(), ordinal))
+            self._identities[ordinal] = cached
+        return cached
 
-    def issues(self, ordinal: int):
-        if ordinal not in self._checks:
-            from contracts.schema.story_prose import ChapterBody
-            from novel.core.story_prose import verify_body
-            receipt = self.repository.inspect_sealed_model(chapter_rel(BODY_RECEIPT, ordinal))
-            body = ChapterBody(contract_version=STORY_VERSION, chapter_ordinal=ordinal,
-                               text=self.repository.read_text(chapter_rel(BODY, ordinal)), receipt=receipt)
-            previous = self.repository.read_text(chapter_rel(BODY, ordinal - 1)) if ordinal > 1 else None
-            self._checks[ordinal] = verify_body(body, self.packet(ordinal), prior_body=previous)
-        return self._checks[ordinal]
+    def writer_ir(self):
+        if self._writer_ir is None:
+            try:
+                self._writer_ir = (True, self.repository.check_model(
+                    'stage4/ir/writer_book_ir.json'))
+            except _BODY_PROBE_SWALLOWED as exc:
+                self._writer_ir = (False, exc)
+        ok, value = self._writer_ir
+        if not ok:
+            raise value
+        return value
 
 
 #: store 实例 → 其逐章身份探测（弱键：探测生命周期＝一次完成度调用）。
@@ -210,10 +209,17 @@ def _candidate_artifact_state(store: ArtifactStore, rel: str, st: os.stat_result
     body = re.fullmatch(r'stage5/body/ch(\d+)\.txt', rel)
     if readable and fresh == 'fresh' and body is not None:
         # 正文字节当前不代表写作输入仍当前；章包绑定是逐章权威，不按整本 IR hash 失效。
+        from novel.stages.common import check_chapter_receipt
         probe = _body_probe(store)
+        repository = probe.repository
         ordinal = int(body.group(1))
         try:
-            if probe.issues(ordinal):
+            receipt = repository.inspect_sealed_model(artifact_rel(STR06_STAGE5_BODY_RECEIPT, nn=ordinal))
+            identities = probe.identities(ordinal)
+            if receipt.chapter_ordinal != ordinal or receipt.status != 'accepted':
+                fresh, reason = 'unknown', 'no_provenance'
+            elif check_chapter_receipt(receipt, identities=identities,
+                                       prose_sha256=repository.file_sha256(repository.path(rel))):
                 fresh, reason = 'stale', 'consumed_changed'
         except _BODY_PROBE_SWALLOWED:
             fresh, reason = 'unknown', 'consumed_unresolved'
@@ -224,7 +230,7 @@ def _candidate_artifact_state(store: ArtifactStore, rel: str, st: os.stat_result
             payload = None
         ordinal = payload.get('chapter_ordinal') if isinstance(payload, dict) else None
         readable = (isinstance(ordinal, int)
-                    and rel == chapter_rel(BODY_RECEIPT, ordinal))
+                    and rel == artifact_rel(STR06_STAGE5_BODY_RECEIPT, nn=ordinal))
     return ArtifactState(
         rel=rel, exists=True, bytes=st.st_size, mtime=int(st.st_mtime),
         freshness=fresh, reason=reason, ghosts=ghosts,
@@ -257,6 +263,13 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
             invalid_reason = invalid_report.reason
     if not p.is_file():
         reason = 'no_provenance'
+        if rel == STAGE2_BLUEPRINT_CHARACTER_PROJECTION:
+            try:
+                report = store.freshness(rel)
+            except (ArtifactUnreadable, UpstreamMissing):
+                pass
+            else:
+                reason = report.reason
         return ArtifactState(rel=rel, exists=False, bytes=None, mtime=None,
                              freshness='unknown', reason=reason,
                              display_freshness='missing', invalid=invalid,
@@ -298,7 +311,8 @@ def artifact_state(store: ArtifactStore, rel: str) -> ArtifactState:
                 output_ordinal = getattr(obj, 'chapter_ordinal', None)
                 readable = (
                     isinstance(output_ordinal, int)
-                    and rel == chapter_rel(BODY_RECEIPT, output_ordinal)
+                    and rel == artifact_rel(STR06_STAGE5_BODY_RECEIPT,
+                                            nn=output_ordinal)
                 )
 
     return ArtifactState(
@@ -334,7 +348,7 @@ def chapters_done(novel_dir: Path) -> list[int]:
         if not digits:
             continue
         ordinal = int(digits)
-        expected = novel_dir / chapter_rel(BODY, ordinal)
+        expected = novel_dir / artifact_rel(STR06_STAGE5_BODY, nn=ordinal)
         if p == expected:
             out.append(ordinal)
     return sorted(out)
@@ -359,7 +373,7 @@ def stage2_observations_done(novel_dir: Path) -> list[int]:
         if not digits:
             continue
         ordinal = int(digits)
-        expected = novel_dir / chapter_rel(CHAPTER_OBSERVATION, ordinal)
+        expected = novel_dir / artifact_rel(STR06_STAGE2_OBS_CHAPTER, nn=ordinal)
         if p == expected:
             out.append(ordinal)
     return sorted(out)
@@ -381,7 +395,7 @@ def stage5_invalid_inventory(novel_dir: Path) -> tuple[list[int], list[str]]:
         ordinal = int(digits) if digits else 0
         expected = (
             novel_dir / paths.invalid_of(
-                chapter_rel(BODY, ordinal))
+                artifact_rel(STR06_STAGE5_BODY, nn=ordinal))
             if ordinal >= 1 else None
         )
         if expected is not None and candidate == expected:
@@ -417,43 +431,47 @@ def _legacy_ghosts(artifacts: list[ArtifactState]) -> list[str]:
 
 
 def planned_chapters(store: ArtifactStore) -> list[int] | None:
-    """章数唯一来自冻结源；目标模型缺失不把已购正文误判为待重新购买。"""
-    count = stage1_chapter_count(store)
-    return list(range(1, count + 1)) if count is not None else None
+    """Design 正式产物中的输出章号。**读不回来就返回 `None`**（不是空列表）。
+
+    STR-03-S4：章集分母改读 body_design（``BodyDesign.chapters``；早期的
+    BlindCandidate / presentation graph 读路已随旧链退役），不再依赖已退役的
+    ``plan_chapters.json``。
+    """
+    try:
+        design, _raw = store.read_own(STR06_BODY_DESIGN, STR06_BODY_DESIGN)
+    except (ArtifactUnreadable, UpstreamMissing):
+        # 候选链盘面（F8d 桥）：BodyDesign 不带版本信封，正式读路读不回来；
+        # 按候选格式读同一份产物——章集分母不能因为读路差异变成「判不了」。
+        design = _candidate_body_design(store)
+    if design is None:
+        return None
+    out = getattr(design, 'chapters', None)
+    if out is None:
+        return None
+    return sorted(int(c.chapter_ordinal) for c in out)
+
+
+def _candidate_body_design(store: ArtifactStore):
+    """候选根上的 BodyDesign（F8d 桥）；读不回来返回 `None`，不猜章集。
+
+    未封存（R6 发布校验拒绝）同样按未知章集处理：不能证明已发布的计划
+    不参与完成度判定，交重跑免费补封存。
+    """
+    from novel.errors import UnsealedArtifact
+    try:
+        return Str06Repository(store.ctx.novel_dir).read_model(STR06_BODY_DESIGN)
+    except (ArtifactUnreadable, UpstreamMissing, UnsealedArtifact,
+            OSError, ValueError):
+        return None
 
 
 def stage1_chapter_count(store: ArtifactStore) -> int | None:
-    """正式 Stage1 或新根冻结源快照；两者并存时必须一致，不从目标层猜章数。"""
-    from novel.core.source_index import build_source_index
-    formal = None
+    """stage1 主正文里的真实章数；缺席或读不回时显式返回未知。"""
     try:
-        if store.path(STAGE1_MAIN_TEXT).is_file():
-            main, _raw = store.read_own(ARTIFACTS[STAGE1_MAIN_TEXT], STAGE1_MAIN_TEXT)
-            formal = [{'chapter_ordinal': chapter.chapter_ordinal, 'text': chapter.text}
-                      for chapter in main.root]
-        repository = Str06Repository(store.ctx.novel_dir)
-        snapshot_path = repository.path('runtime/source_snapshot.json')
-        if not snapshot_path.is_file():
-            return len(formal) if formal is not None else None
-        snapshot = repository.inspect('runtime/source_snapshot.json')
-        expected = {'contract_version', 'source_identity', 'content_sha256', 'chapters', 'hook_copy'}
-        if not isinstance(snapshot, dict) or set(snapshot) != expected or snapshot['contract_version'] != STORY_VERSION:
-            return None
-        from novel.llm.paid_requests import workflow_from_disk
-        workflow = workflow_from_disk(repository.inspect('runtime/candidate_workflow.json'))
-        if store._story_source_freshness(workflow.source_root_sha1).state != 'fresh':
-            return None
-        index = build_source_index(snapshot['chapters'], snapshot['hook_copy'],
-                                   source_identity=snapshot['source_identity'])
-        if snapshot['content_sha256'] != index.content_sha256:
-            return None
-        rows = [{'chapter_ordinal': chapter['chapter_ordinal'], 'text': chapter['text']}
-                for chapter in snapshot['chapters']]
-        if formal is not None and formal != rows:
-            return None
-        return len(index.chapter_ordinals)
-    except (ArtifactUnreadable, UpstreamMissing, ProvenanceRefused, OSError, ValueError, KeyError, TypeError):
+        main, _raw = store.read_own(ARTIFACTS[STAGE1_MAIN_TEXT], STAGE1_MAIN_TEXT)
+    except (ArtifactUnreadable, UpstreamMissing):
         return None
+    return len(main.root)
 
 
 def numbered_produces(stage: str) -> dict[str, str]:
@@ -494,7 +512,7 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
         hook_issues = [
             artifact for artifact in arts
             if not artifact.exists or not artifact.readable
-            or artifact.freshness != 'fresh' or artifact.invalid
+            or artifact.freshness == 'stale' or artifact.invalid
         ]
         arts = hook_issues
         written = chapters_done(store.ctx.novel_dir)
@@ -508,7 +526,7 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
         ordinals = sorted(
             set(written) | set(want or ()) | set(invalid_ordinals))
         chapter_states = [
-            artifact_state(store, chapter_rel(BODY, ordinal))
+            artifact_state(store, artifact_rel(STR06_STAGE5_BODY, nn=ordinal))
             for ordinal in ordinals
         ]
         usable = [
@@ -562,19 +580,9 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
             legacy_incompatible=bool(legacy), legacy_paths=legacy,
         )
 
-    if stage == 'stage4':
-        want = planned_chapters(store)
-        for spec in NODES.values():
-            if spec.stage == stage:
-                for template in spec.produces:
-                    if '{nn}' in template:
-                        for ordinal in want or ():
-                            arts.append(artifact_state(store, chapter_rel(template, ordinal)))
     done = all(a.exists and a.readable
-               and a.freshness == 'fresh' and not a.invalid
+               and a.freshness != 'stale' and not a.invalid
                for a in arts) if arts else None
-    if arts and any(a.exists and a.freshness == 'unknown' for a in arts):
-        done = None
     reviewable = done is True or any(
         a.exists and a.readable for a in arts)
     legacy = _legacy_ghosts(arts)
@@ -586,7 +594,7 @@ def stage_state(store: ArtifactStore, stage: str) -> StageState:
         observation_issues: list[ArtifactState] = []
         for ordinal in stage2_observations_done(store.ctx.novel_dir):
             observation = artifact_state(
-                store, chapter_rel(CHAPTER_OBSERVATION, ordinal))
+                store, artifact_rel(STR06_STAGE2_OBS_CHAPTER, nn=ordinal))
             if (observation.exists and observation.readable
                     and observation.freshness == 'fresh' and not observation.invalid):
                 written.append(ordinal)
@@ -686,7 +694,8 @@ def _owner_issue_states(novel_dir: Path) -> list['OwnerIssueState']:
     """读盘上 open 的跨节点修订问题（R3；`runtime/issues/<owner>.json`）。
 
     resolved 不进投影（留账不是待修订）；文件损坏即显式拒绝——它是续跑判定
-    的输入，静默当「没有问题」会把修订循环变成静默跳过（I-34）。只读story-v3/V3；``product_sha256`` 采本快照时的当前摘要（None＝
+    的输入，静默当「没有问题」会把修订循环变成静默跳过（I-34）。v1 记录经
+    统一读口解码为 v3；``product_sha256`` 采本快照时的当前摘要（None＝
     owner 产物不在盘上，门控见 `resume_verdict` 的 owner_revision 分支）。
     """
     import json as _json
@@ -709,9 +718,8 @@ def _owner_issue_states(novel_dir: Path) -> list['OwnerIssueState']:
     for path in sorted(issues_dir.glob('*.json')):
         try:
             record = owner_issue_record_of_payload(
-                _json.loads(path.read_text(encoding='utf-8')))
-            if record.owner != path.stem:
-                raise ValueError('回派账文件名与owner不一致')
+                _json.loads(path.read_text(encoding='utf-8')),
+                lambda record_owner: owner_product_digest_at(novel_dir, record_owner))
         except ValueError as exc:
             raise ValueError(
                 f'回派账 {path.name} 形状损坏：{exc}；拒绝当作「没有问题」继续，'
@@ -736,6 +744,7 @@ def overview_at(novel_dir: Path, code: str) -> NovelOverview:
     塞进 ``NovelOverview``（HTTP 的完成度响应仍然 verdict-free）。
     """
     legacy = legacy_stage5_paths(novel_dir)
+    from novel.stages.revisions import revision_states_at
 
     #: 每层挑**本层第一个产它的节点**当提问者，理由见 `readonly_ctx`。
     asker = {s: next((n for n, sp in NODES.items() if sp.stage == s and sp.produces), None)
@@ -759,7 +768,7 @@ def overview_at(novel_dir: Path, code: str) -> NovelOverview:
         stages=stages,
         stage5_legacy_paths=legacy,
         owner_issues=_owner_issue_states(novel_dir),
-        owner_revisions=[],
+        owner_revisions=revision_states_at(novel_dir),
         summary=overview_summary(stages),
     )
 
@@ -771,23 +780,42 @@ def overview(base: str | os.PathLike[str], sid: str) -> NovelOverview:
 
 
 def artifacts_for_node(ov: NovelOverview, node: str) -> list[ArtifactState]:
-    """按现役 produces 精确投影，逐章模板同样参与，不借用兄弟节点状态。"""
+    """从完成度的现役 ``produces`` 投影取本节点自己的产物行。
+
+    同一 stage 可能有多个节点；直接看整层 ``artifacts`` 会把 Global 的 INVALID
+    错算到 Blueprint 上。``resume_verdict`` 与 queue 的安全关闭式判断共用这一口，
+    不在两个消费者里各重拼一份 node→artifact 关系。
+    """
     spec = NODES.get(node)
     if spec is None:
         return []
     stage = next((item for item in ov.stages if item.stage == spec.stage), None)
     if stage is None:
         return []
-    def matches(template, rel):
-        if '{nn}' in template:
-            pattern = re.escape(template).replace(re.escape('{nn}'), r'([0-9]+)')
-            match = re.fullmatch(pattern, rel)
-            return match is not None and rel == chapter_rel(template, int(match[1]))
-        if '{title}' in template:
-            return rel.startswith('stage7/final/') and rel.endswith('_rewriting.txt')
-        return rel == template
-    return [item for item in stage.artifacts
-            if any(matches(template, item.rel) for template in spec.produces)]
+    if node == 'str06.stage2.chapters':
+        prefix = 'stage2/observations/ch'
+        selected = []
+        for item in stage.artifacts:
+            if item.rel.startswith(prefix) and item.rel.endswith('.json'):
+                digits = item.rel[len(prefix):-5]
+                if digits.isascii() and digits.isdigit() and item.rel == artifact_rel(
+                        STR06_STAGE2_OBS_CHAPTER, nn=int(digits)):
+                    selected.append(item)
+        return selected
+    if node == 'str06.stage5.body':
+        # 逐章路径是模板，Stage5 完成度只把问题章物化进 artifacts。
+        return list(stage.artifacts)
+    selected = [item for item in stage.artifacts if item.rel in spec.produces]
+    if not spec.stage_required:
+        return selected
+    if spec.stage == 'stage5':
+        # ⚠⚠ Stage5 的 `artifacts` 只物化**问题行**（干净书不把几十份章稿逐行塞进
+        # 公共状态）：本节点 produces 全都健康时，它一行都没有。此时回落整层会把
+        # **章稿**缺失算到 Hook 节点头上——实测 Supervisor 据此对一个已成功的节点
+        # 反复派发（F8d 全链集成跑出来的死循环：每轮 rc=0、盘面不变、永远不推进）。
+        # Hook 节点只认自己的两行：不在盘上（或坏/陈旧）才是它自己的 missing。
+        return selected
+    return selected or list(stage.artifacts)
 
 
 def live_invalid_artifacts(ov: NovelOverview, node: str) -> list[ArtifactState]:
@@ -839,7 +867,7 @@ def resume_verdict(
     """
     spec = NODES.get(node)
     if spec is None:
-        return RESUME_UNKNOWN, f'不支持非现役节点 {node!r}'
+        return RESUME_RUN, f'未知节点 {node!r}'
     st = next((s for s in ov.stages if s.stage == spec.stage), None)
     if st is None:
         return RESUME_RUN, f'{spec.stage} 盘上没有可判定的产物'
@@ -908,44 +936,103 @@ def resume_verdict(
         return RESUME_RUN, (
             f'{node} 盘上一轮都没有（{", ".join(numbered)}）')
 
-    if node in ('str06.stage2.chapters', 'str06.stage4.chapters', 'str06.stage5.body'):
-        if node == 'str06.stage5.body':
-            invalid = [row for row in st.artifacts
-                       if row.invalid and row.rel.startswith(BODY.rpartition('/')[0] + '/')]
-            if invalid:
-                return RESUME_UNKNOWN, ('当前章稿仍有未接受结果：' + ', '.join(row.rel for row in invalid)
-                    + '；先执行本节点 --check-only 免费复验，无法采用时再决定是否授权付费重写')
-        if ov.chapters is None:
-            return RESUME_UNKNOWN, '冻结源章数不可得，不能把未知判成缺章或自动重新购买'
-        wanted = set(range(1, ov.chapters + 1))
-        mine = artifacts_for_node(ov, node)
-        if node in ('str06.stage2.chapters', 'str06.stage5.body'):
-            got = set(st.chapters_done)
-            # 库存发现之后文件仍可能消失；显式逐章缺失行优先于此前的文件名清单。
-            for row in mine:
-                if not row.exists:
-                    match = re.search(r'/ch([0-9]+)\.(?:txt|json)$', row.rel)
-                    if match is not None:
-                        got.discard(int(match[1]))
-        else:
-            got = {int(re.search(r'ch([0-9]+)\.json$', item.rel)[1])
-                   for item in mine if item.exists and item.readable
-                   and item.freshness == 'fresh' and not item.invalid}
-        if got - wanted:
-            return RESUME_UNKNOWN, '发现源章集合之外的正式章节，禁止以目标计划缩小验收分母'
-        blocked = [item for item in mine if item.exists and
-                   (not item.readable or item.freshness == 'unknown' or item.invalid)]
-        if blocked:
-            return RESUME_UNKNOWN, ('逐章结果不可用或身份未知：' + ', '.join(item.rel for item in blocked)
-                + '；先执行本节点 --check-only 免费恢复，不能猜成未运行后重新购买')
-        stale = [item for item in mine if item.freshness == 'stale']
+    # 逐章观察（B2 五节点：`str06.stage2.chapters`，D3）：结论挂在「源章全都
+    # 观察过了」上。`ch{nn}` 模板在通用完成度里没有行——若不单开一条账，
+    # 这个已成功的节点会被 Supervisor 反复派发（F8d 同形死循环，实测复现）。
+    if node == 'str06.stage2.chapters':
+        # R10c（2026-10-02）：chapters 的 stale 检查只认**真上游**＝stage0/1
+        # 产物＋book 观察（`run_chapters` 的实际读面）。同 stage 的
+        # names/associate 观察是平行兄弟节点、compile 产物是下游——book 修订
+        # 级联期间它们 file_changed/stale 直到各自重跑，把它们算进「上游变过」
+        # 会让 planner 永远选秩更早的 chapters、兄弟节点饿死（两轮共 89 次零
+        # 进展重派实证）。白名单而非黑名单：新 stage2 产物默认不算 chapters
+        # 上游。
+        upstream = ({'stage2/observations/book.json'}
+                    | set(NODES['stage0.remove'].produces)
+                    | set(NODES['stage1.partition'].produces))
+        stale_upstream = [a for a in st.artifacts
+                          if a.freshness == 'stale' and a.rel in upstream]
+        if stale_upstream:
+            return RESUME_REDO, (
+                f'上游变过：{", ".join(a.rel for a in stale_upstream)} 已陈旧 '
+                f'（{", ".join(sorted({a.reason for a in stale_upstream}))}）。'
+                '⚠ 这不是「续」，是「重来」——续下去会把新旧两版上游拼进同一本书')
+        observations = artifacts_for_node(ov, node)
+        uncertain = [a for a in observations if not a.readable or a.freshness == 'unknown']
+        if uncertain:
+            return RESUME_UNKNOWN, (
+                f'章观察不可读或新鲜度未知：{", ".join(a.rel for a in uncertain)}；'
+                '不能从文件存在判已完成，也不能猜成缺失后重新购买')
+        stale_observations = [a for a in observations if a.freshness == 'stale']
+        if stale_observations:
+            return RESUME_REDO, (
+                f'章观察消费的上游已变化：{", ".join(a.rel for a in stale_observations)}；'
+                '从本节点正式入口重放/重建，不能把旧观察交给下游')
+        if any(a.invalid for a in observations):
+            return RESUME_RUN, '章观察被拒收；先使用 --check-only 免费复验，再决定是否新购买'
+        want = ov.chapters
+        got = st.chapters_done
+        if want is None:
+            return RESUME_UNKNOWN, (
+                '判不了：stage1 章数不可得，无法证明章观察齐了。'
+                '⚠ 按没跑完重跑会重复付费，先人工核对 stage1 产物')
+        missing = [n for n in range(1, want + 1) if n not in got]
+        if not missing:
+            return RESUME_SKIP, (
+                f'全部 {want} 章的观察都已在盘上且当前'
+                '（D3：章观察互不依赖，缺失单元才需要重跑）')
+        return RESUME_RUN, (
+            f'第 {missing} 章的观察尚未落盘（D3：逐章停，'
+            '恢复按请求身份免费重放已存章）')
+
+    # 逐章类的层（F8c：`stage5.write` → `str06.stage5.body`）：结论挂在
+    # 「计划里的每个输出章都有成稿吗」上，而那可能是**判不了**的。
+    if node == 'str06.stage5.body':
+        got = len(st.chapters_done)
+        if st.done is True:
+            return RESUME_SKIP, (
+                f'{spec.stage} 计划里的每个输出章都有当前、可读的 canonical 成稿了')
+        invalid = live_invalid_artifacts(ov, node)
+        if invalid:
+            invalid_rels = [
+                a.rel if paths.is_invalid(a.rel) else paths.invalid_of(a.rel)
+                for a in invalid
+            ]
+            return RESUME_RUN, (
+                f'盘上有被闸门拦下的稿：'
+                f'{", ".join(invalid_rels)}。'
+                f'先尝试免费复检 `{node} --check-only`'
+                '（不签发新付费调用，按请求身份重放已购响应并按当前判据关闭式重判）；'
+                '不能提升时再决定是否付费重写')
+        stale = [a for a in st.artifacts if a.freshness == 'stale']
         if stale:
-            return RESUME_REDO, ('本节点实际材料已变：' + ', '.join(item.rel for item in stale)
-                + '；仅按当前章包、源观察或前章短尾证明重放对应单元')
-        missing = sorted(wanted - got)
+            return RESUME_REDO, (
+                f'上游变过：{", ".join(a.rel for a in stale)} 已陈旧 '
+                f'（{", ".join(sorted({a.reason for a in stale}))}）。'
+                f'⚠ 这不是「续」，是「重来」——续下去会把新旧两版上游拼进同一本书')
+        unreadable = [a for a in st.artifacts if a.exists and not a.readable]
+        unknown = [a for a in st.artifacts
+                   if a.exists and a.freshness == 'unknown']
+        if unreadable or unknown:
+            blocked = sorted({a.rel for a in [*unreadable, *unknown]})
+            return RESUME_UNKNOWN, (
+                f'{", ".join(blocked)} 在盘上，但按当前 schema/version 读不回来或新鲜度判不了。'
+                f'⚠ 它已经跑过，不能把未知折成 missing 后静默重跑付费写作')
+        if st.done is None:
+            return RESUME_UNKNOWN, (
+                f'{spec.stage} 判不了：盘上有 canonical 成稿 {got} 章，但当前计划、'
+                '章集或来源新鲜度不足以证明这些章已经完成。'
+                '⚠ **这不是「没跑完」**——按没跑完处理会重跑一个可能已完成的付费层')
+        missing = [a for a in st.artifacts if not a.exists]
         if missing:
-            return RESUME_RUN, f'源章集合中的第 {missing} 章尚无当前正式结果，恢复先采用已购回答'
-        return RESUME_SKIP, f'全部 {ov.chapters} 章结果可读且当前；兄弟节点变化不改变本结论'
+            return RESUME_RUN, (
+                f'计划中的 canonical 章尚未落盘：'
+                f'{", ".join(a.rel for a in missing)}')
+        # `done=False` 却既不缺、也不坏：典型是计划外多出 canonical 章。
+        # producer 自己未必有任何可写 todo，不能谎报成「缺失后继续付费」。
+        return RESUME_UNKNOWN, (
+            f'{spec.stage} 的 canonical 章集合与当前计划不一致，'
+            '但没有可安全归类为缺章的项；请先人工核对计划与多余章稿')
 
     mine = artifacts_for_node(ov, node)
     stale = [a for a in mine if a.freshness == 'stale']
@@ -1025,7 +1112,10 @@ def _revision_cascade_surface(artifacts: list[ArtifactState], ov) -> bool:
     if not stale or any(artifact.reason not in ('consumed_changed', 'file_changed')
                         for artifact in stale):
         return False
-    if not typed_revision:
+    allowed = {rel for r in getattr(ov, 'owner_revisions', ())
+               if r.current_product_sha256 == r.accepted_product_sha256
+               for rel in r.cascade_artifacts}
+    if not (typed_revision or all(a.rel in allowed for a in stale)):
         return False
     return not any(
         artifact.invalid

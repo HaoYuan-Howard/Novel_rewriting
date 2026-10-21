@@ -5,23 +5,6 @@ import { READY_PROFILES } from '@/test/agent'
 import { mockApi, SAMPLE_SID } from './mock'
 
 describe('request-shaped cache and diagnostics', () => {
-  it('现役故事样例明确使用v2姓名分段，不携带旧模板或null称谓', async () => {
-    const source = await mockApi.getStr06SourceStory('cand')
-    expect(source.data?.contract_version).toBe('story-v3')
-    const people = Object.values(source.data?.entities ?? {}).filter((entity) => entity.kind === 'person')
-    expect(people).toHaveLength(3)
-    for (const person of people) {
-      expect(person.name).not.toBeNull()
-      for (const form of Object.values(person.name?.surface_forms ?? {})) {
-        expect(Array.isArray(form)).toBe(true)
-        expect(form.length).toBeGreaterThan(0)
-      }
-    }
-    const baby = people.find((person) => person.label === '婴儿')
-    expect(baby?.name?.surface_forms['盛儿']).toEqual([{ kind: 'alias', alias_ref: 'al01' }])
-    expect(baby?.name?.surface_forms['孩子']).toEqual([{ kind: 'text', literal: '孩子' }])
-  })
-
   it('人工闸写面已从 Api 退役，本地历史审批键不构成授权', async () => {
     // 人工逐 Stage 过闸模式退役后数据缝上不再有审批/重置类方法；mock 也不再读
     // 本地审批账 ⇒ 浏览器里遗留的旧 gate 记录没有任何读者，不能冒充授权。

@@ -47,10 +47,10 @@ def test_stage4_closure_includes_downstream_but_not_upstream_or_retired_stage():
     selected = S.plan(catalog, layer='stage', stages=('stage4',), affected=True)
     # F8a：Stage6 退役后下游闭包是 stage4 → stage5 → stage7。
     assert selected.stages == {'stage4', 'stage5', 'stage7'}
-    assert 'tests/test_story_pipeline.py' in selected.modules
+    assert 'tests/test_str06_body.py' in selected.modules
     # STR-06 关闭批：workflow transition 随存量解码面删除；stage 层同坐标
     # 的现役载体是回派自愈测试（stage2/4/5）。
-    assert 'tests/test_story_api.py' in selected.modules
+    assert 'tests/test_str06_r3_selfheal.py' in selected.modules
     assert 'tests/test_stage01.py' not in selected.modules
     # F8c：旧链功能测试已整批删除——目录表里不再有它们，选测面也不该有。
     assert not ({'tests/test_stage4_v3_integration.py', 'tests/test_plot_pipeline.py',
@@ -65,12 +65,8 @@ def test_mixed_stage_module_keeps_pure_contract_out_of_stage_layer():
     # 未逐例登记的用例默认跟随模块层，不猜成 stage。
     assert S.case_layer('tests/test_paths.py::test_dirname_survives_a_title_that_looks_like_a_platform_prefix', catalog)[0] == 'unit_contract'
     # 混合模块里逐例登记成 unit_contract 的那一例，不跟着模块的 stage 面升级。
-    assert S.case_layer('tests/test_api_http.py::test_enums_matches_the_current_contract_over_the_wire', catalog)[0] == 'unit_contract'
-    assert S.case_layer('tests/test_api_http.py::test_sandbox_selects_current_stage1_and_preserves_workflow_and_artifact_bytes', catalog)[0] == 'stage'
-    assert catalog['modules']['tests/test_source_story.py']['stages'] == ['stage2', 'stage4']
-    assert S.case_layer('tests/test_source_story.py::test_source_revision_name_parts_and_segments_need_real_names_wire', catalog)[0] == 'unit_contract'
-    assert S.case_layer('tests/test_source_story.py::test_names_owner_atomically_resegments_growing_and_shrinking_surfaces_and_replays_free', catalog)[0] == 'stage'
-    assert S.case_layer('tests/test_story_runtime.py::test_associate_owner_revision_inherits_authenticated_material_schema_and_replays_free', catalog)[0] == 'stage'
+    assert S.case_layer('tests/test_str06_cli_dispatch.py::test_build_argv_keeps_the_run_shape_for_str06_nodes', catalog)[0] == 'unit_contract'
+    assert catalog['modules']['tests/test_str06_phase2_facts.py']['stages'] == ['stage2']
 
 
 def test_regression_reuses_both_layers_and_keeps_cross_stage_integration():
@@ -79,7 +75,7 @@ def test_regression_reuses_both_layers_and_keeps_cross_stage_integration():
     assert all_tests.modules == set(catalog['modules'])
     assert S.plan(catalog, layer='stage').modules <= all_tests.modules
     assert S.plan(catalog, layer='unit_contract').modules <= all_tests.modules
-    assert 'tests/test_story_pipeline.py' in all_tests.modules
+    assert 'tests/test_str06_workflow.py' in all_tests.modules
 
 
 @pytest.mark.parametrize('kwargs', [dict(stages=('stage3',)), dict(affected=True),
@@ -144,9 +140,9 @@ def test_real_changed_stage_path_includes_direct_unit_tests_and_downstream_consu
     assert not ({'tests/test_stage6.py', 'tests/test_stage7_delivery_gate.py'}
                 & result.modules), '已退役消费者的文件不应再被选测'
     # 现役引擎路径：hook 成文改动选到直连测试与传递下游消费者（命名/组装）。
-    # F8c：`novel/stages/str06/hook_writer.py` → `novel/stages/stage5/story.py`。
-    live = S.plan(S.load_catalog(), changed=('novel/stages/stage5/story.py',))
-    assert {'tests/test_story_prose.py', 'tests/test_target_story.py',
+    # F8c：`novel/stages/str06/hook_writer.py` → `novel/stages/stage5/hook_writer.py`。
+    live = S.plan(S.load_catalog(), changed=('novel/stages/stage5/hook_writer.py',))
+    assert {'tests/test_str06_hook.py', 'tests/test_str06_naming.py',
             'tests/test_layering.py'} <= live.modules
 
 
@@ -156,7 +152,7 @@ def test_changed_schema_keeps_contract_guards_without_direct_import_edges():
     # 变化没有直接 import 边也要选契约守卫，且不得退到「基线不可证明 ⇒
     # 完整工程集合」的兜底分支（那会让本条恒真）。
     catalog = S.load_catalog()
-    result = S.plan(catalog, changed=('contracts/schema/source_story.py',))
+    result = S.plan(catalog, changed=('contracts/schema/observation.py',))
     assert S.CONTRACT_GUARDS <= result.modules < set(catalog['modules'])
 
 
@@ -176,10 +172,7 @@ def test_str06_scope_keeps_contracts_replay_and_layering_without_old_stage_closu
     选测范围随之改登记新落点；范围名 `str06` 是这条链的身份，不是路径前缀。
     """
     catalog = S.load_catalog()
-    expected = {'tests/test_source_story.py', 'tests/test_target_story.py',
-                'tests/test_story_prose.py', 'tests/test_story_pipeline.py',
-                'tests/test_story_runtime.py', 'tests/test_story_store.py'}
-    assert expected <= set(catalog['modules'])
+    expected = {path for path in catalog['modules'] if path.startswith('tests/test_str06_')}
     # 文档改动：登记范围 + 守卫，不拉进范围外真实消费者。
     result = S.plan(catalog, changed=('docs/schema/str06.md',))
     assert expected | {'tests/test_layering.py', 'tests/test_test_selection.py'} <= result.modules
@@ -190,13 +183,13 @@ def test_str06_scope_keeps_contracts_replay_and_layering_without_old_stage_closu
     # `novel/stages/chain.py`，于是 stage0/1 的 CLI 面（test_stage01）是
     # **真实传递消费者**——登记范围不得把范围外真实消费者截掉
     # （selection 的理由串「不排除范围外真实消费者」是同一判据）。
-    engine = S.plan(catalog, changed=('novel/stages/stage4/story.py',))
+    engine = S.plan(catalog, changed=('novel/stages/stage4/hook_context.py',))
     assert expected | {'tests/test_layering.py', 'tests/test_test_selection.py',
                        'tests/test_stage01.py'} <= engine.modules
     assert engine.modules < set(catalog['modules'])
-    # Hook schema 经 `contracts/schema/story_prose.py` 直接进入公共 paths 与共用原语；
+    # Hook schema 经 `contracts/schema/hook.py` 直接进入公共 paths 与共用原语；
     # 真实共享边不能被隔离登记截断。
-    shared = S.plan(catalog, changed=('contracts/schema/story_prose.py',))
+    shared = S.plan(catalog, changed=('contracts/schema/hook.py',))
     assert expected | S.CONTRACT_GUARDS | {'tests/test_stage01.py', 'tests/test_paths.py'} <= shared.modules
 
 
@@ -333,16 +326,14 @@ def test_scope_registration_rejects_missing_tests(tmp_path):
 
 
 def _pytest(tmp_path, *args):
-    # 内层也启xdist时，沿用外层popen-gw目录会叠两层worker前缀并撞MAX_PATH。
-    # 只复用外层basetemp内本worker独占的短子根；内层pytest只会清空.sN，
-    # 不清外层根、本worker报告目录或其他worker的临时内容。cache仍按测试隔离。
-    worker_root = tmp_path.parent
-    worker_number = worker_root.name.removeprefix('popen-gw')
-    nested_root = (worker_root.parent / f'.s{worker_number}'
-                   if worker_number != worker_root.name and worker_number.isdecimal()
-                   else worker_root / '.sm')
+    # ⚠ 嵌套 pytest 的 basetemp 锚在**本 worker 的 basetemp 根**（`tmp_path.parent`），
+    #   不是本测试自己的 tmp 目录：外层闸门（如 `-n 4 --basetemp=E:/_tr/<名>`）之下，
+    #   每测试目录名再占 ~31 字符，嵌套 basetemp 叠上 Stage0 的最长临时归档后缀
+    #   （conftest 预检按 204 字符预算）就会撞 MAX_PATH——外层预检只核
+    #   `<外层根>\popen-gwN`，看不到这个再嵌套的深度。锚到 worker 根后，只要
+    #   外层自己过得了预检，嵌套层就还剩 ~26 字符余量。cache_dir 仍按测试隔离。
     result = subprocess.run(
-        [sys.executable, '-B', '-m', 'pytest', '-n', '0', '--basetemp', str(nested_root),
+        [sys.executable, '-B', '-m', 'pytest', '-n', '0', '--basetemp', str(tmp_path.parent / 't'),
          '-o', f'cache_dir={tmp_path / "c"}', *args], cwd=S.ROOT,
         capture_output=True, text=True, encoding='utf-8', timeout=180)
     return result
@@ -366,19 +357,18 @@ def test_real_pytest_selects_only_stage_cases_and_reports_exact_collection(tmp_p
 def test_real_pytest_document_and_str06_selection_excludes_unrelated_tests(tmp_path):
     report = tmp_path / 'str06.json'
     result = _pytest(tmp_path, '--collect-only', '--changed', 'docs/schema/str06.md',
-                     '--changed', 'novel/stages/stage4/story.py',
+                     '--changed', 'novel/stages/stage4/hook_context.py',
                      '--changed-base', 'HEAD', '--selection-report', str(report))
     assert result.returncode == 0, result.stdout + result.stderr
     data = json.loads(report.read_text(encoding='utf-8'))
     paths = {row['nodeid'].split('::')[0] for row in data['items']}
-    assert {'tests/test_story_prose.py', 'tests/test_target_story.py', 'tests/test_layering.py'} <= paths
+    assert {'tests/test_str06_hook.py', 'tests/test_str06_naming.py', 'tests/test_layering.py'} <= paths
     assert S.CONTRACT_GUARDS <= paths
     # 引擎源码经 CLI 分流成为 stage0/1 面的真实传递消费者，不得被截掉；
-    # Store 的当前故事恢复是 Stage4 消费者，必须纳入；
+    # Store 的免费 Design 恢复已成为 Stage4 消费者，必须纳入；
     # 独立的路径与 appendlog 测试仍然排除。
     assert 'tests/test_stage01.py' in paths
-    assert 'tests/test_story_store.py' in paths
-    assert 'tests/test_store.py' not in paths
+    assert 'tests/test_store.py' in paths
     assert 'tests/test_paths.py' not in paths
     assert 'tests/test_appendlog.py' not in paths
     assert any(row['layer'] == 'stage' for row in data['items'])
@@ -412,7 +402,7 @@ def test_stage_scope_never_leaks_into_another_stages_layer(tmp_path):
 
     F8c：原载体 `tests/test_stage_responsibilities.py`（逐 stage 参数化的
     `stage_scope` 反例）随旧链删除；现役 stage 层模块是
-    `tests/test_api_stage01.py`（stage0/1）与 `tests/test_story_pipeline.py`
+    `tests/test_api_stage01.py`（stage0/1）与 `tests/test_str06_r3_selfheal.py`
     （stage2/4/5）——本条改钉模块级 stage 切选与范围外拒绝。
     """
     report = tmp_path / 'scope.json'
@@ -453,4 +443,4 @@ def test_every_active_stage_has_default_suite_responsibility_evidence():
         assert selected.modules, stage
     # 未逐例登记的用例默认跟随模块层（unit_contract），不猜成 stage。
     assert S.case_layer('tests/test_paths.py::test_title_comes_from_the_directory_not_the_argument', catalog)[0] == 'unit_contract'
-    assert catalog['modules']['tests/test_story_pipeline.py']['layer'] == 'stage'
+    assert catalog['modules']['tests/test_str06_r3_selfheal.py']['layer'] == 'stage'

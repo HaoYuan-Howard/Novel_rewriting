@@ -98,7 +98,15 @@ def test_joint_owner_and_repair_owner_cannot_evade_range_order():
 
 
 def test_range_uses_registered_owner_not_blocked_consumer():
-    # 未登记等待原因不能改写 owner：blocked 消费者按自身登记位置参与范围判定。
+    from contracts.invariants import NODES
+    from novel.orchestrator.queue import WAITING_ON_STAGE4_DESIGN_REVIEW
+    # Stage4 审阅席位已随 2026-09-15 全自动裁决退役；STR-06 关闭批删除
+    # 历史 blocker→owner 只读表后，历史审批 blocker 与未登记 blocker 统一
+    # 按通则处理：不做席位重映射，blocked 消费者按自身编排位参与范围判定。
+    # STR-06 关闭批：历史席位只读表（RETIRED_APPROVAL_BINDINGS）已删；
+    # 历史审批 blocker 一律无归属 ⇒ 未登记 blocker 的关闭式拒排语义
+    # 由下方未登记反例等价覆盖。
+    # 未登记 blocker 不做历史席位重映射：blocked 消费者按自身编排位参与范围判定。
     consumer = _current('str06.stage2.book', state='blocked',
                         waiting_on='unregistered-blocker')
     assert range_boundary_reason(consumer, 'str06.stage4.compile') is None

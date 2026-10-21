@@ -33,7 +33,7 @@ import re
 import time
 from pathlib import Path
 
-from contracts.story_paths import MANIFEST
+from contracts.artifacts import STR06_DELIVERY_MANIFEST
 from contracts.schema.orchestration import AgentDeliveryOutcome
 from novel import paths, prov
 from novel.prov import CODE_UNKNOWN
@@ -95,11 +95,11 @@ def assess(base: str | Path, sid: str, *, start_code_version: str | None,
             '无法证明本次跑可交付；新链候选根见 GET /api/str06/candidates')
     from novel.store import Str06Repository
     try:
-        manifest = Str06Repository(run).inspect(MANIFEST)
+        manifest = Str06Repository(run).inspect(STR06_DELIVERY_MANIFEST)
     except FileNotFoundError:
         return _outcome(
             'unknown',
-                f'候选根没有 delivery manifest（{MANIFEST}）：'
+            f'候选根没有 delivery manifest（{STR06_DELIVERY_MANIFEST}）：'
             '本次跑未到 str06.stage7.assemble 交付，不把盘面冒充可交付')
     except Exception as exc:  # noqa: BLE001 —— manifest 损坏也只得到 unknown
         return _outcome(

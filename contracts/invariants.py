@@ -39,9 +39,6 @@ ARTIFACT_DISPLAY: Final = ('missing', 'fresh', 'stale', 'unknown')
 #: 文件可用性与来源新鲜度是两轴；这一轴负责 `.INVALID` / 读不回 / 缺席。
 ARTIFACT_CONDITION: Final = ('missing', 'ready', 'invalid', 'unreadable')
 
-#: 当前故事只读载体的可用性；合法空数据与缺失、损坏不能混为一态。
-STORY_ARTIFACT_STATUS: Final = ('ready', 'missing', 'invalid')
-
 #: 一本书顶部那句服务端结论。顺序优先级由 `novel.orchestrator.state` 唯一计算。
 OVERVIEW_VERDICT: Final = (
     'broken', 'legacy_incompatible', 'stale', 'pending', 'unknown', 'complete',
@@ -272,10 +269,13 @@ OWNER: Final = (
 #: 解析器读不懂一个记号时**不会报错**，它只是把那一行读成「什么也没声明」——
 #: 而那正是这一列存在的理由要防的事。实测：本文档一度有 **10 行**是解析器读不懂的。
 #:
-#: 前两个是「有一条注册判据在管它」，后四个都不是判据，
+#: 【为什么是八个而不是三个】前四个是「有一条注册判据在管它」，后四个都不是判据，
 #: 但每一个都是一种**真实存在、且互不相同**的守卫形态。写成 `HARD` 是说假话，
 #: 写成 `无守卫` 也是说假话——两种假话方向相反，危害相同。
 #:   · `HARD` / `INFO`     判据在查，阻断 / 提示
+#:   · `GATE`（闸门）       落盘闸门：不合格就不落盘
+#:   · `METRIC`（度量）     **无条件产出的读数，不是结论**。它必须有一条注册判据（sev=metric），
+#:                         但它永远不「命中」——写成 `INFO` 会让度量与告警重新合流（判据 21）
 #:   · `CARRIER`（载体）    **类型系统在守**：`Literal` 收走了取值面，构造期就拦住了。
 #:                         ⚠ 准入：那一格必须点名是哪个字段
 #:   · `STRUCTURAL`（结构） **代码结构使然，要违反它必须先改代码**（例：「一次调用产三候选」
@@ -288,11 +288,11 @@ OWNER: Final = (
 #:
 #: ⚠ 后四个**不许有判据指着它们**——有判据就说明它其实是判据在守，那一格标错了
 #: （`tests/test_coverage.py::test_no_rule_claims_a_non_judge_requirement` 钉着）。
-WHO_CHECKS: Final = ('HARD', 'INFO', 'CARRIER', 'STRUCTURAL', 'DELEGATED', 'N_A')
+WHO_CHECKS: Final = ('HARD', 'INFO', 'GATE', 'METRIC',
+                     'CARRIER', 'STRUCTURAL', 'DELEGATED', 'N_A')
 
-#: 通用 Rule 的注册域与当前需求文档的使用域分开：METRIC/GATE 暂无现役
-#: 文档声明，但仍保护规则构造与严重度校验，不为填满枚举制造假度量或假闸。
-#: 判据存在本身否定了「载体在守 / 结构在守 / 转授 / 不适用」。
+#: 一条**判据**可以声称自己对应哪个取值。比 `WHO_CHECKS` 少四个：
+#: 判据存在本身就否定了「载体在守 / 结构在守 / 转授 / 不适用」。
 #: `HUMAN` 只出现在这一侧——它是「有人给这一步签过字吗」那一类 `unver` 判据
 #: （判据在**报告人做没做**，不是在替人做判断）。
 WHO_CHECKS_RULE: Final = ('HARD', 'INFO', 'GATE', 'METRIC', 'HUMAN')
@@ -523,7 +523,7 @@ PIPELINE_TOTAL_CONCURRENCY_MAX: Final = 200
 #: `stage2.blueprint`／`stage4.design`／`stage4.plan`／`stage5.write`
 #: 已随旧链退役删除（str06.md「额度、并发与配置」）。并发度不进语义身份。
 PIPELINE_PARALLEL_NODES: Final = (
-    'str06.stage2.chapters', 'str06.stage4.chapters')
+    'str06.stage2.chapters', 'str06.stage5.body')
 #: 这两个节点的并发数与两个总槽使用同一整数区间。未配置的节点保持默认，
 #: 不因给一个节点设了并发就抬高其他节点。
 
@@ -582,14 +582,14 @@ BOOK_BLOCK_SEP: Final = '\n\n'
 #: **命名体系本身是资产**：同一个语义在不同节点上必须叫同一个名字。
 #:
 #: 新链节点的节点级旗标只有 `--check-only`（免费复检：
-#: 本根同请求已购回答重放、确定性重编与重验，零新购）；Stage0/1 保留 `--dry-run`。
+#: 本地已购行／登记的历史采用与确定性重放，零新购）；Stage0/1 保留 `--dry-run`。
 #: 旧链的 typed edit／recovery／revalidate 一族随旧节点整体退役（F7e 登记）——
-#: 当前语义问题走结构化回派和有界修订，机械复检走 `--check-only`，
+#: 新链的语义修复走 owner patch（基线身份核验），机械复检走 `--check-only`，
 #: 人工编辑面随人工闸退役不再存在。**表不全 ⇒ 系统在对用户说假话**（`Q-3`）：
 #: `is_paid` 拿本表当白名单、未知一律按付费算，所以这里只剩真实存在的两个。
 FREE_ENTRIES: Final = {
-    '--check-only': '按当前契约免费复检：仅本根同请求已购回答重放、确定性重编与重验，'
-                    '零新购；报 FAIL 退出码非零',
+    '--check-only': '按当前契约免费复检：只允许缓存命中与登记的历史采用，'
+                    '零新购、纯读不写盘；报 FAIL 退出码非零',
     '--dry-run': '只打印将要发出去的东西，不调用、不写盘',
 }
 
@@ -623,7 +623,8 @@ VALUED_FLAGS: Final = {
 #:
 #: F8a 后只剩两条纯读旗标：`--check-only`（免费复检）与 `--dry-run`。
 #: 旧链的免费但写盘一族（revalidate／apply-edit／recover-prepared…）随旧节点
-#: 整体退役；当前本根的已购回答重放、封存补提交与确定性重放经同一执行
+#: 整体退役；新链的免费恢复入口（saved_response／historical_adoption／
+#: owner_patch／committed_set_recovery／deterministic_replay）全部经同一付费
 #: 边界落盘，写效应即对应节点的 `produces`，无需逐旗标覆盖。
 WRITE_EFFECTS: Final = {
     '--dry-run': '',
@@ -850,127 +851,176 @@ NODES: Final[dict[str, NodeSpec]] = {
                                  produces=(artifact_paths.STAGE1_MAIN_TEXT,
                                            artifact_paths.STAGE1_HOOK_COPY),
                                  operator_redo='canonical'),
-    'str06.stage2.chapters': NodeSpec(
-        'stage2', 'R-2', True, '逐章源文理解', flags=('--check-only',),
-        produces=('stage2/observations/ch{nn}.json',), operator_redo='canonical',
-        lifecycle=NodeLifecycleSpec(
-            'chapter', '当前契约的冻结正式输入', 'executor', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage2.chapters',), 'executor:chapter',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 4)),
+    # ── STR-06 新链（F8a 激活；owner runner 见 novel/stages/chain.py）──
+    # B2（2026-09-27 职责解耦 D3/D8/D9）：Stage2 按语义单元与作用域拆五节点，
+    # `str06.stage2.source`（book＋chNN 联合抽取）退役。观察与关联协议见
+    # `contracts/schema/observation.py`；compile 是 Characters＋Blueprint 双真源
+    # 的唯一 writer（`stage2/compiled/book_extraction.json` 派生输入退役）。
+    # 恢复入口沿用候选生命周期：saved_response（本地已购行）、historical_adoption
+    # （F7a 登记的跨根历史采用）、owner_patch（基线身份核验后的语义修复）、
+    # committed_set_recovery（有效提交集合恢复：只补缺章，崩溃窗口按请求身份
+    # 免费重放）、same_context_rewrite（同 Context 有限重写）、deterministic_replay
+    # （确定性节点免费重算）。
     'str06.stage2.book': NodeSpec(
-        'stage2', 'R-2', True, '全书事实语义整合', flags=('--check-only',),
-        produces=('stage2/observations/book.json',), operator_redo='canonical',
+        'stage2', 'R-2', True, 'Stage2 书级观察（人物候选、称谓及证据、初态、世界约束）',
+        flags=('--check-only',),
+        operator_redo='owner_revision',
+        produces=('stage2/observations/book.json',),
         lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'executor', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage2.book',), 'executor:book',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 4)),
-    'str06.stage2.associate': NodeSpec(
-        'stage2', 'R-2', True, '具体未决项窄消歧', flags=('--check-only',),
-        produces=('stage2/observations/associate.json',), operator_redo='canonical',
+            'book',
+            '正式 Stage1 MainText 章数组（阅读序密集）＋hook_copy 章前文字（e00 证据段）',
+            'executor', 'none', '机械校验自证；语义未审以 unver 披露',
+            ('stop',), ('str06.stage2.book',), 'executor:book',
+            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
+    'str06.stage2.chapters': NodeSpec(
+        'stage2', 'R-2', True, 'Stage2 逐章观察（事件与三类转移；互不依赖，D3）',
+        flags=('--check-only',),
+        operator_redo='owner_revision',
+        produces=('stage2/observations/ch{nn}.json',),
         lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'executor', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage2.associate',), 'executor:book',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 4)),
+            'chapter',
+            '书级人物表（book 观察）、本章句段与第 1..k-1 章原文、抽取协议',
+            'executor', 'none',
+            '机械校验自证；章观察互不依赖，缺失单元恢复不重购已存结果（D3）；'
+            '逐章失败留证 runtime/chapter_observation_failures.json'
+            '（「最近一次完成执行」形状，与正文留证同形共用）',
+            ('stop',), ('str06.stage2.chapters',), 'executor:chapter',
+            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage2.names': NodeSpec(
-        'stage2', 'R-3', True, '源实体名称结构', flags=('--check-only',),
-        produces=('stage2/observations/names.json',), operator_redo='canonical',
+        'stage2', 'R-3', True, 'Stage2 源名称结构观察（家族、名、化名、称谓构词）',
+        flags=('--check-only',),
+        operator_redo='canonical',
+        produces=('stage2/observations/names.json',),
         lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'executor', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage2.names',), 'executor:book',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 4)),
+            'book', '书级人物表（book 观察）、完整 MainText 与 hook_copy 章前文字',
+            'executor', 'none',
+            '机械校验自证；名称同一性留证，歧义停止；姓氏构词探针只报告',
+            ('stop',), ('str06.stage2.names',), 'executor:book',
+            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
+    'str06.stage2.associate': NodeSpec(
+        'stage2', 'R-2', True,
+        'Stage2 跨章关联（同一命题、同维状态、悬念配对、跨章因果与续场，D8）',
+        flags=('--check-only',),
+        operator_redo='owner_revision',
+        produces=('stage2/observations/associate.json',),
+        lifecycle=NodeLifecycleSpec(
+            'book', 'book 与 chapters 观察经 names 已证明同一性归一后的句柄及最小文本（compiler 投影）',
+            'executor', 'none',
+            '机械校验自证；只选已给句柄，未决项保持未决、不默认合并或默认不同（D8）',
+            ('stop',), ('str06.stage2.associate',), 'executor:book',
+            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage2.compile': NodeSpec(
-        'stage2', 'R-2', False, '发布唯一 SourceStory', flags=('--check-only',),
-        produces=('stage2/story/source_story.json',), operator_redo='canonical',
+        'stage2', 'R-2', False,
+        'Stage2 确定性编译：解析证据、生成 ID、执行关联，发布 Characters＋Blueprint（D9）',
+        produces=('stage2/characters/characters.json',
+                  'stage2/blueprints/chapter_blueprints.json',
+                  'stage2/acceptance/fold.json'),
+        operator_redo='canonical',
         lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'deterministic', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage2.compile',), 'none',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 0)),
+            'book', 'book／chapters／names／associate 四份观察',
+            'deterministic', 'none',
+            '未决项拒绝发布并按 item 报告（D8）；双真源唯一 writer（D9）',
+            ('recompute', 'stop'), ('str06.stage2.compile',), 'none',
+            ('deterministic_replay',), 0)),
+    # 目标命名前置（2026-10-18，命名前移批）：str06.stage4.naming 从 Stage7
+    # 末端前移到 Stage2 compile 之后、Preserve 之前——目标姓名是 Preserve 目标
+    # 简报与设计链的正式输入，不再由末端改名回填。产物改为
+    # stage4/naming/name_map.json（NameMap v6）；旧 str06.stage7.naming 退役，
+    # 历史工作单元转只读（删除条件见 docs/REQUIREMENTS.md）。
     'str06.stage4.naming': NodeSpec(
-        'stage4', 'R-10', True, '目标人物命名', flags=('--check-only',),
-        produces=('stage4/naming/name_map.json',), operator_redo='canonical',
+        'stage4', 'R-10', True, 'Stage4 目标命名（NameMap v6 赋值；置于 Preserve 之前）',
+        flags=('--check-only',),
+        operator_redo='canonical',
+        produces=('stage4/naming/name_map.json',),
         lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'executor', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage4.naming',), 'executor:book',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 4)),
+            'book', 'Characters v6 名称结构与 Blueprint v17', 'executor', 'none',
+            '机械校验通过即 auto 定稿；目标姓名前移后是 Preserve 与设计链的正式输入',
+            ('stop',), ('str06.stage4.naming',), 'executor:book',
+            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage4.preserve': NodeSpec(
-        'stage4', 'R-5', True, '保真选择与局部一致化', flags=('--check-only',),
-        produces=('stage4/story/preservation.json',), operator_redo='canonical',
+        'stage4', 'R-5', True, 'Stage4 Preserve（保存策略义务）与 ReconstructionBrief 投影',
+        flags=('--check-only',),
+        operator_redo='owner_revision',
+        produces=('runtime/preserve_checkpoint.json',
+                  'stage4/grounding/reconstruction_brief.json'),
         lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'executor', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage4.preserve',), 'executor:book',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 4)),
+            'book', '源 core 与 Blueprint v17', 'executor', 'none',
+            '机械校验通过即自动接受',
+            ('stop',), ('str06.stage4.preserve',), 'executor:book',
+            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage4.body_design': NodeSpec(
-        'stage4', 'R-5', True, '整书目标骨架', flags=('--check-only',),
-        produces=('stage4/drafts/book.json',), operator_redo='canonical',
+        'stage4', 'R-5', True,
+        'Stage4 目标故事与导演说明设计（BodyDesign＋real 承载标注派生 SemanticBinding）',
+        flags=('--check-only',),
+        operator_redo='owner_revision',
+        produces=('stage4/design/body_design.json',
+                  'stage4/grounding/semantic_binding.json'),
         lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'executor', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage4.body_design',), 'executor:book',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 4)),
-    'str06.stage4.chapters': NodeSpec(
-        'stage4', 'R-5', True, '逐章场景与行动展开', flags=('--check-only',),
-        produces=('stage4/drafts/ch{nn}.json',), operator_redo='canonical',
-        lifecycle=NodeLifecycleSpec(
-            'chapter', '当前契约的冻结正式输入', 'executor', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage4.chapters',), 'executor:chapter',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 4)),
-    'str06.stage4.compile': NodeSpec(
-        'stage4', 'R-6', False, '发布 TargetStory 与章包', flags=('--check-only',),
-        produces=('stage4/story/target_story.json', 'stage4/story/adaptation_map.json', 'stage4/packets/ch{nn}.json'), operator_redo='canonical',
-        lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'deterministic', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage4.compile',), 'none',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 0)),
+            'book', 'Preserve checkpoint、身份投影与 Characters v6', 'executor', 'none',
+            '机械校验通过即自动执行；CS-3 bind 退役——承载位由 wire 的 real '
+            '标注派生，双产物同组发布（semantic_binding 唯一 writer）',
+            ('stop',), ('str06.stage4.body_design',), 'executor:book',
+            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
     'str06.stage4.hook_design': NodeSpec(
-        'stage4', 'R-5', True, '目标 Hook 组织', flags=('--check-only',),
-        produces=('stage4/drafts/hook.json',), operator_redo='canonical',
+        'stage4', 'R-5', True, 'Stage4 Hook 设计并经 publish_graph 唯一发布 PresentationGraph',
+        flags=('--check-only',),
+        operator_redo='owner_revision',
+        produces=('stage4/design/presentation_graph.json',),
         lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'executor', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage4.hook_design',), 'executor:book',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 4)),
-    'str06.stage4.hook_compile': NodeSpec(
-        'stage4', 'R-6', False, '编译 Hook 写手材料', flags=('--check-only',),
-        produces=('stage4/packets/hook.json',), operator_redo='canonical',
+            'book', 'BodyDesign、Characters v6 与身份投影', 'executor', 'none',
+            '机械校验通过即自动执行；graph 唯一 publisher',
+            ('stop',), ('str06.stage4.hook_design',), 'executor:book',
+            ('saved_response', 'historical_adoption', 'owner_patch'), 4)),
+    'str06.stage4.compile': NodeSpec(
+        'stage4', 'R-6', False, 'Stage4 确定性编译：ExecutionPlan／Guard／WriterBookIR／HookContext',
+        produces=('stage4/compiled/execution_plan.json',
+                  'stage4/acceptance/guard/compile.json',
+                  'stage4/acceptance/guard/report.json',
+                  'stage4/acceptance/packet_metrics.json',
+                  'stage4/context/hook/hook.json',
+                  'stage4/ir/writer_book_ir.json'),
+        operator_redo='canonical',
         lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'deterministic', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage4.hook_compile',), 'none',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 0)),
+            'book', 'PresentationGraph、SemanticBinding 与 Characters v6',
+            'deterministic', 'none', 'Guard M1–M8 写前机械校验；零错误才放行',
+            ('recompute', 'stop'), ('str06.stage4.compile',), 'none',
+            ('deterministic_replay',), 0)),
     'str06.stage5.hook': NodeSpec(
-        'stage5', 'R-8', True, 'Hook 成文与回执', flags=('--check-only',),
-        produces=('stage5/hook/hook.txt', 'stage5/hook/receipt.json'), operator_redo='canonical',
+        'stage5', 'R-8', True, 'Stage5 Hook 成文（同 Context 有限重写＋机械验）',
+        flags=('--check-only',),
+        operator_redo='canonical',
+        produces=('stage5/hook/hook.txt', 'stage5/hook/receipt.json'),
         lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'executor', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage5.hook',), 'executor:book',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 4)),
+            'book', 'HookContext（正式输入确定性重建）', 'executor', 'none',
+            '单产＋机械验；重写上限内无合法候选即停止，不披露放行',
+            ('stop',), ('str06.stage5.hook',), 'executor:book',
+            ('same_context_rewrite', 'saved_response', 'historical_adoption',
+             'owner_patch'), 4)),
     'str06.stage5.body': NodeSpec(
-        'stage5', 'R-7', True, '顺序正文与章间窄修', flags=('--check-only',),
-        produces=('stage5/body/ch{nn}.txt', 'stage5/acceptance/body/ch{nn}.json'), operator_redo='canonical',
+        'stage5', 'R-7', True, 'Stage5 按章正文成文（机械检查＋有限重写＋章级回执）',
+        flags=('--check-only',),
+        produces=('stage5/body/ch{nn}.txt', 'stage5/acceptance/body/ch{nn}.json'),
+        operator_redo='canonical',
         lifecycle=NodeLifecycleSpec(
-            'chapter', '当前契约的冻结正式输入', 'executor', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage5.body',), 'executor:chapter',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 4)),
+            'chapter', '章包（WriterBookIR 逐章确定性投影；各章独立，唯一输入面）',
+            'executor', 'none',
+            '章级机械验（硬失败不披露放行，只有篇幅带可披露）；原子写正文→章回执；'
+            '无合法候选停该章（各章独立，其余章照常；逐章失败留证 '
+            'runtime/body_failures.json——「最近一次完成执行」形状：'
+            'requested/attempted/chapters/recorded_at，与章观察同形共用）',
+            ('stop',), ('str06.stage5.body',), 'executor:chapter',
+            ('committed_set_recovery', 'saved_response', 'historical_adoption',
+             'owner_patch'), 4)),
     'str06.stage7.assemble': NodeSpec(
-        'stage7', 'R-10', False, '核对回执后装配成书', flags=('--check-only',),
-        produces=('stage7/final/{title}_rewriting.txt', 'stage7/final/delivery_manifest.json'), operator_redo='canonical',
+        'stage7', 'R-10', False, 'Stage7 成书装配（TXT 先落盘、manifest 最后提交；rc26 起零改名）',
+        produces=('stage7/final/{title}_rewriting.txt',
+                  'stage7/final/delivery_manifest.json'),
+        operator_redo='canonical',
         lifecycle=NodeLifecycleSpec(
-            'book', '当前契约的冻结正式输入', 'deterministic', 'none',
-            '引用、证据与机械交接；语义质量 unver', ('recompute', 'stop'),
-            ('str06.stage7.assemble',), 'none',
-            ('saved_response', 'deterministic_replay', 'committed_set_recovery'), 0)),
-
+            'book', '章回执链、Hook 回执与正文', 'deterministic', 'none',
+            '章回执链核对＋按阅读序装配；交付可确定性重放（rc26 起零改名）',
+            ('recompute', 'stop'), ('str06.stage7.assemble',), 'none',
+            ('deterministic_replay',), 0)),
 }
 
 # 所有节点必须登记真实职责；不能给新增节点隐式发放模型或修改权限。
@@ -978,8 +1028,17 @@ assert all(spec.lifecycle is not None for spec in NODES.values())
 assert all(owner in NODES for spec in NODES.values()
            for owner in spec.lifecycle.repair_owners)
 
-#: 需要独立付费单元的窄调用登记；当前无额外owner，修订使用原owner额度。
-NARROW_OWNER_UNITS: Final[dict[str, tuple[str, str]]] = {}
+#: 节点内“窄调用”owner 的独立工作单元：owner → (所属节点, 工作单元 scope)。
+#: CS-S 1c／Phase 2 的窄调用（T-3：不增节点）与主调用请求身份不同、内容轮序
+#: 各自独立；若共用节点的 `book` 单元，后一个 ask 取轮时会把前一个已验收但未
+#: 封存的首答记成 `failed/superseded_unadopted`，且两者瓜分同一份 4 轮额度。
+#: 故每个窄调用 owner 独占一个单元（scope＝`book:<owner>`，节点不变）。
+#: 登记在此而不放进 ``NodeLifecycleSpec``：该元组会整体出现在 API 枚举与前端
+#: 冻结夹具里，窄调用 scope 是后端工作单元的内部拓扑，不是前端契约。
+NARROW_OWNER_UNITS: Final[dict[str, tuple[str, str]]] = {
+    'name_variants': ('str06.stage2.names', 'book:name_variants'),
+    'cross_cause': ('str06.stage2.associate', 'book:cross_cause'),
+}
 assert all(node in NODES and NODES[node].lifecycle.unit_kind == 'book'
            and scope == f'book:{owner}'
            for owner, (node, scope) in NARROW_OWNER_UNITS.items())
@@ -1027,7 +1086,7 @@ def approval_scope_allowed(node: str, scope: str) -> bool:
 #: 新增付费节点却没接 executor、或代码节点误标 paid，两种漂移都必须响亮地红。
 LLM_EXECUTOR_NODES: Final = (
     'str06.stage2.book', 'str06.stage2.chapters', 'str06.stage2.names',
-    'str06.stage2.associate', 'str06.stage4.chapters',
+    'str06.stage2.associate',
     'str06.stage4.naming',
     'str06.stage4.preserve', 'str06.stage4.body_design',
     'str06.stage4.hook_design',
@@ -1078,8 +1137,8 @@ RETIRED_STAGES: Final = ('stage3', 'stage6')
 #: ⚠ 一个 stage 可以有多节（stage2 → R-2+R-3 · stage4 → R-5+R-6 · stage5 → R-7+R-8），
 #: 所以值是元组不是标量。正向覆盖率要取并集。
 STAGE_SECTIONS: Final[dict[str, tuple[str, ...]]] = {
-    stage: tuple(dict.fromkeys(node.section for node in NODES.values() if node.stage == stage))
-    for stage in STAGES
+    s: tuple(dict.fromkeys(n.section for n in NODES.values() if n.stage == s))
+    for s in STAGES
 }
 
 

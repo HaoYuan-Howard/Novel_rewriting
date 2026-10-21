@@ -18,7 +18,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from contracts.artifacts import RETIRED_ARTIFACT_PATHS
+from contracts.artifacts import RETIRED_STAGE3_STYLE_GROUNDING
 from novel import prov
 from novel.api.app import UI_HEADER, create_app
 from novel.cli import main as cli
@@ -98,12 +98,12 @@ def test_retired_stage3_edge_stays_unresolved_even_when_old_file_hash_matches(
     book, _sid, _target = _old_book(tmp_path, 6)
     ctx = state.readonly_ctx(book, node, 'test-current-code')
     store = ArtifactStore(ctx)
-    retired = book / RETIRED_ARTIFACT_PATHS['stage3.style_grounding']
+    retired = book / RETIRED_STAGE3_STYLE_GROUNDING
     retired.parent.mkdir()
     retired.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
     before = retired.read_bytes()
     fp = prov.fingerprint_bytes(before)
-    recorded = {RETIRED_ARTIFACT_PATHS['stage3.style_grounding']: {'file': fp, 'consumed': 'a' * 10}}
+    recorded = {RETIRED_STAGE3_STYLE_GROUNDING: {'file': fp, 'consumed': 'a' * 10}}
     result = store.freshness_of_inputs(rel, recorded)
     assert result.state == 'unknown'
     assert result.reason == 'consumed_unresolved'

@@ -197,9 +197,6 @@ class DeepSeekTransport:
             'max_tokens': req.max_tokens,
         }
         if req.json_mode:
-            # 当前 Chat Completions 只声明 text/json_object，不支持在此传 json_schema。
-            # Responses 的 text.format 及 Beta strict tool 是不同协议；不能静默切端点、
-            # 关闭 thinking 或伪装成相同请求。独立 schema/严格解析与 compiler 仍须本地执行。
             params['response_format'] = {'type': 'json_object'}
         if req.temperature is not None:
             params['temperature'] = req.temperature

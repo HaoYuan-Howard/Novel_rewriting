@@ -10,8 +10,8 @@
 * 主产物 + 确定性派生 bundle 的 baseline-bound ``prepared -> committed`` journal。
 
 它不认识 Stage4/5/6/7 的业务 schema、HARD、正式落点或恢复决策。正式 artifact
-始终由各 stage producer 经 ``ArtifactStore`` 写；这里只恢复当前 run 的冻结请求，
-不提供跨 run 采用或旧协议迁移。
+始终由各 stage producer 经 ``ArtifactStore`` 写；业务 adapter 也必须自己提供跨 run
+所有权/foreign reservation，不能把本模块的单 journal 文件锁误当作业务提交锁。
 """
 from __future__ import annotations
 
@@ -48,6 +48,7 @@ from novel.llm.structured_stdin import render_structured_agent_stdin_bytes
 from novel.appendlog import process_append_lock
 from novel.errors import ArtifactUnreadable, ProvenanceRefused, UpstreamMissing
 from novel.llm.json_text import normalize_json_text
+from novel.llm.ledger import CostLedger
 from novel.llm.prompts import missing_required_fields, required_top_level
 from novel.llm.transport import ChatResponse
 from novel.run_identity import check_run_id
@@ -174,8 +175,34 @@ class RestoredCheckpoint(Generic[M]):
     response_repair: dict[str, str] | None = None
 
 
+@dataclass(frozen=True)
+class RestoredHistoricalRun(Generic[M]):
+    """以 source 自己的 code/profile/run ledger 复验后的只读历史 run。
+
+    普通恢复仍只能使用当前 ``RunContext``；本载体只给显式跨 run adoption
+    bridge 使用，调用方不能拿它创建 checkpoint、请求或覆盖 source sidecar。
+    """
+
+    context: Any
+    run_record: dict[str, Any]
+    run_sha256: str
+    checkpoint: RestoredCheckpoint[M]
 
 
+@dataclass
+class _HistoricalContext:
+    novel_dir: Path
+    node: str
+    code: str
+    executor_profile: LegacyLlmProfile
+    run_id: str
+    ledger: CostLedger
+    _sid: str
+    readonly: bool = True
+
+    @property
+    def sid(self) -> str:
+        return self._sid
 
 
 def _now() -> str:
@@ -1297,8 +1324,71 @@ def restore_checkpoint(
     )
 
 
+def _historical_run_context(
+        current_ctx: Any, spec: SingleSessionRunSpec, *, source_run_id: str,
+        ledger_source_path: Path | None = None,
+) -> tuple[_HistoricalContext, dict[str, Any], Path]:
+    """先复验旧请求自身份；请求不适用与证据损坏由这里分开。"""
+    source = check_run_id(source_run_id)
+    if source == check_run_id(current_ctx.run_id):
+        raise ProvenanceRefused('historical adoption 必须使用不同于当前 run 的 source run')
+    bootstrap = type('_HistoricalPathContext', (), {
+        'novel_dir': Path(current_ctx.novel_dir),
+        'run_id': source,
+    })()
+    run_path = _read_run_file(bootstrap, spec)
+    record = _read_json(run_path, label=f'{spec.label} historical run')
+    fields = _RUN_FIELDS | ({'initial_artifact_sha256s'} if spec.initial_artifacts else set())
+    if set(record) != fields:
+        raise ArtifactUnreadable(f'{run_path} historical run.json 字段漂移')
+    identity = {
+        key: record[key] for key in fields
+        if key not in ('identity_sha256', 'created_at')
+    }
+    if record.get('identity_sha256') != canonical_sha256(identity):
+        raise ArtifactUnreadable(f'{run_path} historical identity SHA 不闭合')
+    expected_shell = {
+        'version': VERSION, 'run_id': source, 'sid': current_ctx.sid,
+        'node': spec.node, 'session_owner': spec.session_owner,
+        'chapter': spec.chapter, 'purpose': spec.purpose,
+    }
+    if {key: record.get(key) for key in expected_shell} != expected_shell:
+        raise ProvenanceRefused(f'{run_path} 不属于指定 source run/sid/chapter/purpose')
+    code = record.get('code')
+    policy = record.get('request_policy')
+    profile_payload = policy.get('profile') if isinstance(policy, dict) else None
+    if not isinstance(code, str) or not code or not isinstance(profile_payload, dict):
+        raise ArtifactUnreadable(f'{run_path} 缺历史 code/resolved profile')
+    try:
+        profile = validate_profile(
+            LegacyLlmProfile.model_validate(profile_payload))
+    except (ValidationError, ValueError) as exc:
+        raise ProvenanceRefused(f'{run_path} 历史 executor profile 不可执行：{exc}') from exc
+    if profile.model_dump(mode='json') != profile_payload:
+        raise ProvenanceRefused(f'{run_path} 历史 profile 尚未完整物化')
+    ledger_path = (ledger_source_path if ledger_source_path is not None
+                   else getattr(current_ctx.ledger, 'path', None))
+    if ledger_path is None:
+        raise ProvenanceRefused('historical adoption 需要盘上 ledger.jsonl')
+    historical = _HistoricalContext(
+        novel_dir=Path(current_ctx.novel_dir), node=spec.node, code=code,
+        executor_profile=profile, run_id=source,
+        ledger=CostLedger(path=Path(ledger_path), run_id=source),
+        _sid=str(current_ctx.sid),
+    )
+    checked = _validate_run_record(historical, spec, record)
+    return historical, checked, run_path
 
 
+@dataclass(frozen=True)
+class HistoricalRequestMatch:
+    """只描述已完整验证的旧请求是否适用；读取/完整性异常不转成未命中。"""
+
+    changed_fields: tuple[str, ...]
+
+    @property
+    def matches(self) -> bool:
+        return not self.changed_fields
 
 
 def own_request_changed(
@@ -1322,8 +1412,69 @@ def own_request_changed(
     return any(record[key] != value for key, value in expected.items())
 
 
+def match_historical_request(
+        current_ctx: Any, spec: SingleSessionRunSpec, *, source_run_id: str,
+        input_sha256: str, system: str, user: str,
+        response_model: type[BaseModel], max_tokens: int,
+    use_source_profile: bool = False,
+) -> HistoricalRequestMatch:
+    """用请求的同一构造器判不适用，不捕获损坏或缺失作为缓存未命中。
+
+    本函数不授予采用权。命中后仍须完整 restore，包括当前 validator、回答、
+    checkpoint、session、ledger 和业务状态；跨代码政策由调用方显式登记。
+    """
+    source_ctx, record, _path = _historical_run_context(
+        current_ctx, spec, source_run_id=source_run_id)
+    if use_source_profile and getattr(current_ctx, 'paid', None) is not False:
+        raise ProvenanceRefused('只有显式免费汇合可以按来源原配置比对；生成仍需当前 profile')
+    expected = _expected_run_identity(
+        source_ctx if use_source_profile else current_ctx, spec, input_sha256=input_sha256, system=system, user=user,
+        response_model=response_model, max_tokens=max_tokens)
+    fields = ('input_sha256', 'request_policy', 'request_policy_sha256', 'request')
+    return HistoricalRequestMatch(tuple(
+        key for key in fields if record[key] != expected[key]))
 
 
+def restore_historical_run(
+        current_ctx: Any, spec: SingleSessionRunSpec, *, source_run_id: str,
+        input_sha256: str, system: str, user: str,
+        response_model: type[M], max_tokens: int,
+        validator: Callable[[M, ChatResponse], str | None] | None = None,
+        ledger_source_path: Path | None = None,
+) -> RestoredHistoricalRun[M]:
+    """只读复验一个旧 run，且不放宽普通 exact-code 恢复语义。
+
+    先从 hash-closed ``run.json`` 取得旧 code/profile，再用它们和 source-run
+    ``CostLedger`` 构造隔离 context；后续直接复用本模块现有的 run/request/
+    checkpoint/session/ledger validators。current prompt/schema/input 仍由参数提供，
+    因而旧响应只能在当前 producer 恰好仍接受同一请求时被采用。只读规划上下文
+    使用内存账；业务恢复探针须显式给出持久成本证据路径，不替换调用方的账本。
+    """
+    historical, record, run_path = _historical_run_context(
+        current_ctx, spec, source_run_id=source_run_id,
+        ledger_source_path=ledger_source_path)
+    checked_run = _validate_run_record(
+        historical, spec, record,
+        response_model=response_model, max_tokens=max_tokens)
+    restored = restore_checkpoint(
+        historical, spec, input_sha256=input_sha256,
+        system=system, user=user, response_model=response_model,
+        max_tokens=max_tokens, validator=validator)
+    if restored is None:
+        raise ProvenanceRefused(f'{run_path} historical run 没有 checkpoint')
+    links = restored.acceptance.get('attempt_links')
+    if not isinstance(links, list):
+        raise ProvenanceRefused(f'{run_path} historical checkpoint 缺 attempt links')
+    historical.ledger.usage_for_complete_purposes(
+        [spec.purpose], sid=historical.sid, node=spec.node,
+        required_identities=[(spec.purpose, row) for row in links],
+    )
+    return RestoredHistoricalRun(
+        context=historical,
+        run_record=checked_run,
+        run_sha256=canonical_sha256(run_path.read_bytes()),
+        checkpoint=restored,
+    )
 
 
 def _commit_hash(payload: Mapping[str, Any]) -> str:
@@ -1455,6 +1606,25 @@ def commit_state(ctx: Any, spec: CommitBundleSpec) -> dict[str, Any] | None:
     return _validate_commit_state(ctx, spec, target) if target.is_file() else None
 
 
+def validate_foreign_commit_envelope(
+        path: Path, *, label: str, run_id: str, sid: str, node: str,
+) -> dict[str, Any]:
+    """跨 run reservation 扫描只验证不依赖当前 profile/ledger 的不可变外壳。
+
+    只读投影可核验当前快照；实际提交仍须在业务 adapter 的全书所有权锁内
+    重新扫描，并决定 foreign prepared 阻止哪些节点。损坏记录不能当作“不存在”跳过。
+    """
+    checked_run_id = check_run_id(run_id)
+    record = _read_json(path, label=label)
+    if (set(record) != _COMMIT_FIELDS
+            or record.get('commit_sha256') != _commit_hash(record)
+            or record.get('version') != VERSION
+            or record.get('run_id') != checked_run_id
+            or record.get('sid') != sid
+            or record.get('node') != node
+            or record.get('state') not in ('prepared', 'committed')):
+        raise ArtifactUnreadable(f'{label} {path} 身份/哈希不闭合')
+    return record
 
 
 def prepare_commit(
@@ -1706,14 +1876,14 @@ def verify_committed_delivery(
 
 __all__ = [
     'AGENT_ACCEPTANCE_FIELDS', 'COMMIT_FILE', 'CommitBundleSpec', 'RUN_FILE',
-    'RestoredCheckpoint', 'SingleSessionRunSpec',
+    'RestoredCheckpoint', 'RestoredHistoricalRun', 'SingleSessionRunSpec',
     'SESSION_PROTOCOL_VERSION', 'agent_json_schema',
     'canonical_bytes', 'canonical_sha256',
     'commit_state', 'ensure_run', 'file_sha256', 'is_sha256', 'mark_committed',
     'initial_artifact_sha256s', 'own_request_changed',
-    'prepare_commit', 'restore_checkpoint',
+    'prepare_commit', 'restore_checkpoint', 'restore_historical_run',
     'restore_commit_adoption',
     'target_state', 'verify_commit_finalization', 'verify_commit_primary',
-    'verify_committed_delivery',
+    'validate_foreign_commit_envelope', 'verify_committed_delivery',
     'write_checkpoint',
 ]

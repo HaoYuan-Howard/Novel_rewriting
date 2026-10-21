@@ -30,7 +30,6 @@
             "str06.stage2.chapters",
             "str06.stage2.names",
             "str06.stage2.associate",
-            "str06.stage4.chapters",
             "str06.stage4.naming",
             "str06.stage4.preserve",
             "str06.stage4.body_design",
@@ -65,7 +64,6 @@
             "str06.stage2.chapters",
             "str06.stage2.names",
             "str06.stage2.associate",
-            "str06.stage4.chapters",
             "str06.stage4.naming",
             "str06.stage4.preserve",
             "str06.stage4.body_design",
@@ -82,7 +80,6 @@
     "str06.stage2.chapters",
     "str06.stage2.names",
     "str06.stage2.associate",
-    "str06.stage4.chapters",
     "str06.stage4.naming",
     "str06.stage4.preserve",
     "str06.stage4.body_design",
@@ -94,7 +91,7 @@
   "concurrency": {
     "nodes": [
       "str06.stage2.chapters",
-      "str06.stage4.chapters"
+      "str06.stage5.body"
     ],
     "node_choices": [],
     "default_node": 4,

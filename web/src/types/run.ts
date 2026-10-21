@@ -89,6 +89,7 @@ export interface RunWorkUnit {
     pending: number
     generated: number
     mechanical: number
+    history_adopted: number
     cached: number
     failed: number
     unknown: number

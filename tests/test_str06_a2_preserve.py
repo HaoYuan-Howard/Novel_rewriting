@@ -1,0 +1,600 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""test_str06_a2_preserve —— R10a a2 判据面的定向红绿例（Preserve 证据视图、
+anchors 锚定、series、evidence_conflicts 形状）。
+
+【验证边界】`project_preserve_view` 确定性渲染（句柄闭集＋逐字引文＋证据
+窗口，取代 Blueprint JSON 倾倒）；`assemble_preserve` v2 的机械闸——义务
+anchors 闭集（C4 锚定纪律）、lineage 由 compiler 从锚点派生（I-15/I-21）、
+series 成员闭集互斥（C3/C5 的机械面）、冲突报告只验形状（消费归 a3）。
+「多次发生是否合并」「义务选得对不对」是语义，归 Preserve 与核读，不在此。
+"""
+from __future__ import annotations
+
+from contracts.schema.grounding import ObligationSeries, PreserveCheckpoint
+from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
+from contracts.schema.source import (
+    BlueprintsArtifactV17, ChapterBlueprint, CharactersCore,
+)
+from novel.stages.stage4.grounding import (
+    assemble_preserve, project_preserve_view,
+)
+from tests.str06_expression_inputs import sample_blueprint_expression
+from tests.str06_facilities import name_map_of, v13_beat, v13_effect
+from tests.str06_semantic_cases import CASES_BY_BATCH
+
+A2_CASES = CASES_BY_BATCH['R10a-a2']
+
+BASIS = ({'segment': 'e01_01', 'quote': '夫君藏进床底'},)
+
+
+def _characters() -> CharactersCore:
+    return CharactersCore.model_validate({
+        'characters': {
+            'yun_niang': {'canonical': '云娘', 'surfaces': [
+                {'surface': '云娘', 'from_chapter': 1, 'source_refs': ['e01_01']}]},
+            'fu_jun': {'canonical': '夫君', 'surfaces': [
+                {'surface': '夫君', 'from_chapter': 1, 'source_refs': ['e01_01']}]},
+        },
+        'initial_state': [
+            {'state_id': 's0_01', 'target': {'kind': 'character', 'char_id': 'fu_jun'},
+             'key': 'identity', 'value': '养子', 'persistence': 'stable',
+             'source_refs': ['e01_01'], 'basis': [BASIS[0]]}],
+    })
+
+
+def _blueprint() -> BlueprintsArtifactV17:
+    return BlueprintsArtifactV17.model_validate({
+        'source_expression': sample_blueprint_expression(),
+        'world_constraints': [
+            {'constraint_id': 'wc_01', 'kind': 'hard_rule',
+             'statement': '术法须以寿命为代价', 'source_refs': ['e01_01'],
+             'basis': [BASIS[0]]}],
+        'chapters': [
+            {'chapter': 1,
+             'beats': [
+                 v13_beat('b01_01', '夫君藏进床底', participants=('fu_jun',),
+                          source_refs=('e01_01',),
+                          effects=(v13_effect(
+                              {'kind': 'character', 'char_id': 'fu_jun'},
+                              'scene_location', '床底',
+                              basis=BASIS),),
+                          cognition=({'proposition': {'ref': 'p_guess',
+                                                      'statement': '夫君像是看穿了什么'},
+                                      'holder': 'yun_niang', 'mode': 'suspects',
+                                      'basis': BASIS},)),
+                 v13_beat('b01_02', '云娘起疑', source_refs=('e01_02',),
+                          cognition=({'proposition': {'ref': 'p_hide'},
+                                      'holder': 'yun_niang', 'mode': 'suspects',
+                                      'basis': ({'segment': 'e01_02',
+                                                 'quote': '云娘听见床板响动'},)},)),
+             ],
+             'scenes': [{'scene_id': 'sc01', 'beat_ids': ['b01_01', 'b01_02']}],
+             'causal_edges': []},
+        ],
+        'evidence': {'e01_01': '夫君藏进床底。', 'e01_02': '云娘听见床板响动。'},
+    })
+
+
+def _wire(**over) -> dict:
+    wire = {'protocol_version': STAGE4_PRESERVE_PROTOCOL, 'obligations': [
+        {'kind': 'event_core', 'statement': '夫君藏身床底',
+         'anchors': ['b01_01.e1'],
+         'must_preserve': True, 'satisfaction': '正文呈现藏身与佯离的关系',
+         'requires': []},
+        {'kind': 'character_arc', 'statement': '云娘从起疑到怀疑加深',
+         'anchors': ['b01_01.c1', 'b01_02.c1'],
+         'must_preserve': True, 'satisfaction': '正文呈现怀疑的渐进', 'requires': []},
+        {'kind': 'identity', 'statement': '夫君身世',
+         'anchors': ['s0_01'],
+         'must_preserve': False, 'satisfaction': '', 'requires': []},
+    ]}
+    wire.update(over)
+    return wire
+
+
+def _assemble(wire: dict, **kw):
+    from tests.str06_facilities import name_map_of
+    kw.setdefault('policy_id', 'p')
+    kw.setdefault('policy_version', 5)
+    kw.setdefault('characters', _characters())
+    kw.setdefault('blueprint', _blueprint())
+    kw.setdefault('provider', 'x')
+    kw.setdefault('model', 'y')
+    kw.setdefault('request_sha256', 'r' * 64)
+    kw.setdefault('name_map', name_map_of(kw['characters']))
+    kw.setdefault('name_map_sha256', 'n' * 64)
+    return assemble_preserve(wire, **kw)
+
+
+# ───────────────────────── 投影视图：确定性渲染 ─────────────────────────
+
+def test_project_preserve_view_renders_handles_quotes_and_windows():
+    """视图含全部句柄类别（s0/wc/b拍.e|c|l）、逐字引文、证据窗口（邻段并入）
+    与 ex_id 闭集节；不含本地命题句柄。"""
+    view = project_preserve_view(_characters(), _blueprint())
+    for handle in ('[s0_01]', '[wc_01]', '[b01_01.e1]', '[b01_01.c1]', '[b01_02.c1]'):
+        assert handle in view, handle
+    assert '「夫君藏进床底」' in view, '逐字引文按 basis 渲染'
+    assert 'expected' not in view.split('【证据窗口')[0]
+    # 事实行带 modality（CS-S 1b：scope／可见性／effect 命题不再渲染）；认知行
+    # 带命题（按 canonical 的正式 ref 原样渲染）
+    assert 'actual' in view and 'suspects' in view
+    assert '命题 p_guess「夫君像是看穿了什么」' in view
+    assert '命题 p_hide（引用）' in view
+    # 证据窗口：被引段全文（含邻段合并文本）
+    assert 'e01_01：' in view and '夫君藏进床底' in view.split('【证据窗口')[1]
+
+
+def test_project_preserve_view_is_deterministic_and_pure():
+    """同一输入两次渲染逐字节一致；输入模型不被修改（I-24）。"""
+    from copy import deepcopy
+    chars, bp = _characters(), _blueprint()
+    chars_before, bp_before = deepcopy(chars.model_dump()), deepcopy(bp.model_dump())
+    first = project_preserve_view(chars, bp)
+    second = project_preserve_view(chars, bp)
+    assert first == second
+    assert chars.model_dump() == chars_before and bp.model_dump() == bp_before
+
+
+def test_event_only_obligation_and_detail_copy_evidence_without_inventing_locks():
+    from novel.stages.stage4.grounding import project_brief, preserve_patch_slice
+    raw = _blueprint().model_dump(mode='json')
+    beat = raw['chapters'][0]['beats'][0]
+    beat.update(effects=[], cognition=[], loops=[])
+    bp = BlueprintsArtifactV17.model_validate(raw)
+    wire = _wire(obligations=[{
+        'kind': 'event_core', 'statement': '夫君藏进床底',
+        'anchors': ['b01_01.v1'], 'must_preserve': True,
+        'satisfaction': '呈现夫君主动藏身', 'requires': [],
+        'details': [{'anchor': 'b01_02.v1', 'text': '云娘因响动起疑'}]}])
+    before = bp.model_dump(mode='json')
+    checkpoint, errors = _assemble(
+        wire, policy_id='p', policy_version=8, characters=_characters(), blueprint=bp,
+        provider='x', model='y', request_sha256='a' * 64)
+    assert not errors
+    anchor = checkpoint.obligations[0].anchors[0]
+    assert anchor.source_kind == 'event' and anchor.event_statement == beat['event']
+    assert [(e.segment, e.window) for e in anchor.event_evidence] == [
+        ('e01_01', bp.evidence['e01_01'])]
+    assert anchor.quotes == () and anchor.holder is anchor.modality is None
+    assert checkpoint.obligations[0].lineage.character_ids == ('fu_jun',)
+    brief, _ = project_brief(checkpoint, _characters(), bp, name_map=name_map_of(_characters()))
+    assert not brief.knowledge_locks and not brief.fact_locks
+    assert brief.requirements[0].details[0].text == '云娘因响动起疑'
+    assert 'b01_01' not in str(brief.model_dump())
+    sliced = preserve_patch_slice(wire, _characters(), bp, [0])
+    assert sliced['targets'][0]['atoms'][0]['event_evidence'] == [
+        {'segment': 'e01_01', 'window': bp.evidence['e01_01']}]
+    assert bp.model_dump(mode='json') == before
+
+
+def test_selected_event_missing_evidence_and_old_protocol_fail_closed():
+    from copy import deepcopy
+    wire = _wire()
+    wire['obligations'][0]['anchors'] = ['b01_01.v1']
+    bp = _blueprint().model_copy(update={'evidence': {}})
+    checkpoint, errors = _assemble(
+        wire, policy_id='p', policy_version=8, characters=_characters(), blueprint=bp,
+        provider='x', model='y', request_sha256='a' * 64)
+    assert checkpoint is None and any('完整证据窗口' in str(e) for e in errors)
+    old = deepcopy(wire)
+    old['protocol_version'] = 'stage4-preserve-v4'
+    assert _assemble(old)[0] is None
+
+
+def test_event_cannot_smuggle_knowledge_or_state_fields():
+    import pytest
+    from pydantic import ValidationError
+    from contracts.schema.grounding import ObligationAnchor
+    for extra in ({'holder': 'yun_niang'}, {'modality': 'actual'}, {'quotes': ['伪引文']}):
+        with pytest.raises(ValidationError, match='不得混入'):
+            ObligationAnchor(handle='b01_01.v1', source_kind='event',
+                             event_statement='夫君出现', **extra)
+
+
+def test_preserve_input_keeps_operations_scope_known_holders_loops_and_causality():
+    raw = _blueprint().model_dump(mode='json')
+    first, second = raw['chapters'][0]['beats']
+    first['loops'] = [{'ref': 'loop_noise', 'op': 'open', 'question': '谁在床底？'}]
+    second['loops'] = [{'ref': 'loop_noise', 'op': 'close', 'resolution': '夫君藏身床底。'}]
+    second['effects'] = [{**first['effects'][0], 'op': 'unset', 'value': None}]
+    raw['chapters'][0]['causal_edges'] = [
+        {'from_beat': 'b01_01', 'to_beat': 'b01_02', 'kind': 'causes'}]
+    view = project_preserve_view(_characters(), BlueprintsArtifactV17.model_validate(raw))
+    assert 'stage4-preserve-input-v3' in view
+    assert '（actual）' in view
+    assert 'scene_location unset None' in view
+    assert 'loop_noise open：谁在床底？' in view
+    assert 'loop_noise close：夫君藏身床底。' in view
+    assert '因果 b01_01 —causes→ b01_02' in view
+    assert '依据 [b01_01.e1,b01_01.c1] e01_01：「夫君藏进床底」' in view
+
+
+# ───────────────────────── assemble v2：锚定与派生 ─────────────────────────
+
+def test_green_wire_publishes_with_derived_lineage_and_typed_anchors():
+    """绿：anchors 闭集内 → checkpoint 发布；lineage 从锚点派生（blueprint_refs
+    ＝锚点主体、character_ids＝效应对象＋认知 holder）；anchors 是 compiler
+    类型化拷贝（C1 的 a2 面：cognition.mode 原样保留 suspects，不升格）。"""
+    checkpoint, errors = _assemble(_wire())
+    assert errors == [] and checkpoint is not None, errors
+    first = checkpoint.obligations[0]
+    assert first.lineage.blueprint_refs == ('b01_01',)
+    assert set(first.lineage.character_ids) == {'fu_jun'}
+    assert first.anchors[0].source_kind == 'effect'
+    assert first.anchors[0].modality == 'actual'
+    second = checkpoint.obligations[1]
+    assert second.lineage.blueprint_refs == ('b01_01', 'b01_02')
+    assert second.lineage.character_ids == ('yun_niang',)
+    # C1（a2 面）：mode 由 compiler 从 cognition 拷贝——怀疑保持怀疑
+    assert all(a.mode == 'suspects' for a in second.anchors)
+    identity_ob = checkpoint.obligations[2]
+    assert identity_ob.lineage.blueprint_refs == ('s0_01',)
+    assert identity_ob.lineage.character_ids == ('fu_jun',)
+
+
+def test_obligation_without_anchors_or_unknown_handle_is_rejected():
+    """红：缺 anchors（义务必须锚定原子）；未知句柄（闭集外）精确拒。"""
+    missing = _wire()
+    missing['obligations'][0].pop('anchors')
+    _cp, errors = _assemble(missing)
+    assert any('缺 anchors' in e for e in errors), errors
+    bad = _wire()
+    bad['obligations'][0]['anchors'] = ['b01_01.e9', 'b99_99.c1']
+    _cp, errors = _assemble(bad)
+    assert any("未知句柄：'b01_01.e9'" in e for e in errors), errors
+    assert any("未知句柄：'b99_99.c1'" in e for e in errors), errors
+
+
+def test_lineage_key_is_refused_in_wire():
+    """红（I-21）：wire 带 lineage（v1 旧形状）即拒——来源由 compiler 派生。"""
+    stale = _wire()
+    stale['obligations'][0]['lineage'] = {
+        'blueprint_refs': ['b01_01'], 'character_ids': []}
+    _cp, errors = _assemble(stale)
+    assert any('未知字段' in e and 'lineage' in e for e in errors), errors
+
+
+# ───────────────────────── series：同一机制的多次发生 ─────────────────────────
+
+def test_series_green_publishes_and_members_resolve_to_formal_ids():
+    """绿：members 序号（1-based）→ 正式 ID；mechanism 取源表达 ex_id。"""
+    from contracts.schema.expression import SourceExpressionItem
+    wire = _wire()
+    # 用第 1、2 条义务（各自独立的兑现时点）登记同一机制
+    ex_id = _blueprint().source_expression.items[0].ex_id
+    wire['series'] = [{'members': [1, 2], 'mechanism': ex_id}]
+    checkpoint, errors = _assemble(wire)
+    assert errors == [] and checkpoint is not None, errors
+    assert checkpoint.series == (ObligationSeries(
+        members=('ob01', 'ob02'), mechanism=ex_id),)
+    # mechanism=None 合法（没有合用的源表达）
+    wire['series'] = [{'members': [1, 2], 'mechanism': None}]
+    checkpoint, errors = _assemble(wire)
+    assert errors == [] and checkpoint.series[0].mechanism is None
+
+
+def test_series_red_shapes_are_rejected():
+    """红（C3/C5 的机械面）：成员越界／少于 2／mechanism 不在 ex_id 闭集；
+    同一义务进两个 series 由 schema 互斥闸拒。"""
+    oob = _wire()
+    oob['series'] = [{'members': [1, 9], 'mechanism': None}]
+    _cp, errors = _assemble(oob)
+    assert any('成员序号越界' in e for e in errors), errors
+
+    single = _wire()
+    single['series'] = [{'members': [1], 'mechanism': None}]
+    _cp, errors = _assemble(single)
+    assert any('至少 2 个成员' in e for e in errors), errors
+
+    bad_mech = _wire()
+    bad_mech['series'] = [{'members': [1, 2], 'mechanism': 'ex_99'}]
+    _cp, errors = _assemble(bad_mech)
+    assert any('ex_id 闭集' in e for e in errors), errors
+
+    # schema 互斥：同一义务进两个 series——wire 两个组都含义务 1。R10c 硬化
+    # （6d0e6231）：构造期 ValidationError 归入修订反馈（不再裸穿 exit 70），
+    # 故 assemble 拒签 errors（话术含互斥），供同节点修订轮重问。
+    import pytest
+    from pydantic import ValidationError
+    overlap = _wire()
+    overlap['series'] = [{'members': [1, 2], 'mechanism': None},
+                         {'members': [1, 3], 'mechanism': None}]
+    _cp, errors = _assemble(overlap)
+    assert any('互斥' in e for e in errors), errors
+
+    # schema 闭集：成员不在义务闭集内（直接构造 checkpoint 才可能越界——
+    # wire 序号路径由 assemble 先拦；这里钉 schema 兜底）
+    base = _assemble(_wire(series=[{'members': [1, 2], 'mechanism': None}]))[0]
+    with pytest.raises(ValidationError, match='闭集'):
+        PreserveCheckpoint.model_validate({**base.model_dump(),
+                                           'series': [{'members': ['ob01', 'ghost']}]})
+
+
+# ───────────────────────── evidence_conflicts：只验形状 ─────────────────────────
+
+def test_conflict_shape_is_validated_but_checkpoint_still_publishes():
+    """冲突条目：锚点/句段闭集、句段属锚点拍的证据、note 非空；有冲突时
+    checkpoint 照常构造（「不发布、回派」是 a3 run_preserve 的编排决定，
+    不混入 validator——I-36）。"""
+    wire = _wire()
+    wire['evidence_conflicts'] = [
+        {'anchor': 'b01_01.e1', 'segment': 'e01_01', 'note': '引文与效应矛盾'}]
+    checkpoint, errors = _assemble(wire)
+    assert errors == [] and checkpoint is not None, errors
+
+    wrong_segment = _wire()
+    wrong_segment['evidence_conflicts'] = [
+        {'anchor': 'b01_01.e1', 'segment': 'e01_02', 'note': '句段不属该拍'}]
+    _cp, errors = _assemble(wrong_segment)
+    assert any('不属于锚点' in e for e in errors), errors
+
+    unknown_anchor = _wire()
+    unknown_anchor['evidence_conflicts'] = [
+        {'anchor': 'b09_99.e1', 'segment': 'e01_01', 'note': 'x'}]
+    _cp, errors = _assemble(unknown_anchor)
+    assert any('未知锚点' in e for e in errors), errors
+
+    no_note = _wire()
+    no_note['evidence_conflicts'] = [
+        {'anchor': 'b01_01.e1', 'segment': 'e01_01', 'note': ''}]
+    _cp, errors = _assemble(no_note)
+    assert any('缺 note' in e for e in errors), errors
+
+
+def test_empty_beat_accepts_missing_conflict_but_not_obligation_anchor():
+    """事件及证据可见、三类转移全空时可报漏抽；不把拍升级成义务原子。"""
+    from copy import deepcopy
+    bp = _blueprint().model_dump(mode='json')
+    bp['chapters'][0]['beats'].append(v13_beat(
+        'b01_03', '云娘看见夫君从床底现身', source_refs=('e01_03',)))
+    bp['chapters'][0]['scenes'][0]['beat_ids'].append('b01_03')
+    bp['evidence']['e01_03'] = '我就见夫君从床底爬出来。'
+    blueprint = BlueprintsArtifactV17.model_validate(bp)
+    before = blueprint.model_dump(mode='json')
+
+    def assemble(wire):
+        return _assemble(wire, policy_id='p', policy_version=7,
+                                 characters=_characters(), blueprint=blueprint,
+                                 provider='x', model='y', request_sha256='r' * 64)
+
+    assert '拍 b01_03' in project_preserve_view(_characters(), blueprint)
+    # 普通空拍无报告也合法；validator 不推断遗漏，不生成 cognition。
+    assert assemble(_wire())[1] == []
+    wire = _wire(evidence_conflicts=[{
+        'anchor': 'b01_03', 'segment': 'e01_03', 'note': '缺少云娘目睹现身的知情'}])
+    assert assemble(wire)[1] == []
+    assert blueprint.model_dump(mode='json') == before
+    for anchor, segment, message in [
+            ('b01_03', 'e01_02', '不属于锚点'),
+            ('b01_03', 'e99_01', '未知句段'),
+            ('b01_99', 'e01_03', '未知锚点'),
+            ('b01_03.c1', 'e01_03', '未知锚点')]:
+        bad = deepcopy(wire)
+        bad['evidence_conflicts'][0].update(anchor=anchor, segment=segment)
+        assert any(message in e for e in assemble(bad)[1])
+    for target in ('obligation', 'detail'):
+        bad = deepcopy(wire)
+        if target == 'obligation':
+            bad['obligations'][0]['anchors'] = ['b01_03']
+        else:
+            bad['obligations'][0]['details'] = [{'anchor': 'b01_03', 'text': '看见现身'}]
+        assert assemble(bad)[1], target
+
+
+def test_preserve_v3_wire_is_not_implicitly_upgraded():
+    assert any('protocol_version' in e for e in _assemble(_wire(
+        protocol_version='stage4-preserve-v3'))[1])
+
+
+# ───────────────────────── a2 案例面（str06_semantic_cases 索引） ─────────────────────────
+
+def test_a2_batch_cases_are_consumed_with_mechanical_faces():
+    """CASES_BY_BATCH['R10a-a2'] 在册案例全部有机械面描述（消费入口自洽）；
+    C1 的 a2 面（mode 拷贝）与 P1 的 a2 面（跨章锚点合法）由上方用例覆盖。"""
+    assert {c.case_id for c in A2_CASES} >= {'C1', 'C3', 'C5', 'P1'}
+    assert all(c.mechanical_face for c in A2_CASES if c.mechanical)
+    # P1（跨章证据支持同一次揭示）：anchors 引不同章句柄不因跨章拒。
+    cross = _wire()
+    cross['obligations'][1]['anchors'] = ['b01_01.c1', 'b01_02.c1']
+    checkpoint, errors = _assemble(cross)
+    assert errors == [] and checkpoint is not None, errors
+
+
+def test_checkpoint_hash_binds_series_and_anchors():
+    """checkpoint_sha256 覆盖 anchors 与 series：任一变化即不同内容 hash
+    （同请求身份下历史采用的边界）。"""
+    base_cp, _ = _assemble(_wire())
+    other, _ = _assemble(_wire(series=[{'members': [1, 2], 'mechanism': None}]))
+    assert base_cp.checkpoint_sha256 != other.checkpoint_sha256
+    assert isinstance(base_cp, PreserveCheckpoint)
+
+
+# 真实返修曾误回 canonical anchors 对象；所有 JSON 容器先验形状再查闭集。
+def test_malformed_preserve_containers_report_errors_without_mutation():
+    from copy import deepcopy
+
+    malformed = [None, [], 'checkpoint', _wire(obligations={}),
+                 _wire(obligations=[None]), _wire(obligations=['ob01'])]
+    for field, value in [('anchors', [{'handle': 'b01_01.e1'}]),
+                         ('anchors', 'b01_01.e1'), ('requires', 1)]:
+        wire = _wire()
+        wire['obligations'][0][field] = value
+        malformed.append(wire)
+    malformed.extend([
+        _wire(series={}), _wire(series=[[]]),
+        _wire(series=[{'members': 1, 'mechanism': None}]),
+        _wire(series=[{'members': [1, 2], 'mechanism': {}}]),
+        _wire(series=[{'members': [1, 1], 'mechanism': None}]),
+        _wire(series=[{'members': [True, 2], 'mechanism': None}]),
+        _wire(evidence_conflicts={}), _wire(evidence_conflicts=[[]]),
+        _wire(evidence_conflicts=[{'anchor': {}, 'segment': 'e01_01', 'note': 'x'}]),
+        _wire(evidence_conflicts=[{'anchor': 'b01_01.e1', 'segment': [], 'note': 'x'}]),
+        _wire(evidence_conflicts=[{'anchor': 'b01_01.e1', 'segment': 'e01_01', 'note': {}}]),
+    ])
+    for wire in malformed:
+        before = deepcopy(wire)
+        checkpoint, errors = _assemble(wire)
+        assert checkpoint is None and errors, wire
+        assert wire == before, 'validator 不得偷偷修复输入'
+
+
+def test_preserve_revision_wire_roundtrips_semantics_without_derived_fields():
+    from novel.stages.stage4.grounding import preserve_revision_wire
+    from copy import deepcopy
+
+    checkpoint, errors = _assemble(_wire(series=[{'members': [1, 2], 'mechanism': None}]))
+    assert not errors
+    before = deepcopy(checkpoint.model_dump())
+    wire = preserve_revision_wire(checkpoint)
+    assert wire['protocol_version'] == STAGE4_PRESERVE_PROTOCOL
+    assert wire['obligations'][0]['anchors'] == ['b01_01.e1']
+    assert wire['series'][0]['members'] == [1, 2]
+    assert not any(k in wire for k in ('checkpoint_id', 'checkpoint_sha256', 'provider'))
+    assert all(set(o) == {'kind', 'statement', 'anchors', 'must_preserve',
+                          'satisfaction', 'requires'} for o in wire['obligations'])
+    again, errors = _assemble(wire)
+    assert not errors and again == checkpoint
+    assert checkpoint.model_dump() == before
+
+
+def test_optional_details_resolve_anchors_and_keep_stable_identity_without_mutation():
+    """可用细节不改变必保分母；锚点与身份由代码派生，改无关义务不漂移。"""
+    from copy import deepcopy
+    wire = _wire()
+    wire['obligations'][0]['details'] = [
+        {'anchor': 'b01_01.e1', 'text': '先佯装走开，再从床底钻出'}]
+    before = deepcopy(wire)
+    checkpoint, errors = _assemble(wire)
+    assert not errors, errors
+    detail = checkpoint.obligations[0].details[0]
+    assert detail.anchor == checkpoint.obligations[0].anchors[0]
+    assert detail.detail_id.startswith('dt_') and len(detail.detail_id) == 19
+    changed = deepcopy(wire)
+    changed['obligations'][1]['statement'] = '女主的怀疑加深'
+    other, errors = _assemble(changed)
+    assert not errors and other.obligations[0].details == (detail,)
+    assert checkpoint.obligations[1].details == ()
+    assert wire == before
+
+
+def test_detail_bad_shapes_unknown_anchors_and_duplicates_get_exact_patch_paths():
+    from copy import deepcopy
+    cases = [
+        {'anchor': 'b99_99.e1', 'text': '门边放一只篮子'},
+        {'anchor': 'b01_01.e1', 'text': '   '},
+        {'anchor': 'b01_01.e1', 'text': '藏身床底', 'detail_id': 'forged'},
+        {'anchor': ['b01_01.e1'], 'text': '藏身床底'},
+        '藏身床底',
+    ]
+    for detail in cases:
+        wire = _wire()
+        wire['obligations'][0]['details'] = [detail]
+        before = deepcopy(wire)
+        checkpoint, errors = _assemble(wire)
+        assert checkpoint is None and errors
+        assert errors[0].context['wire_paths'] == [['obligations', 0, 'details', 0]]
+        assert wire == before
+    wire = _wire()
+    detail = {'anchor': 'b01_01.e1', 'text': '藏身床底'}
+    wire['obligations'][0]['details'] = [detail, dict(detail)]
+    checkpoint, errors = _assemble(wire)
+    assert checkpoint is None and errors[0].code == 'preserve_detail_duplicate'
+    assert errors[0].context['wire_paths'] == [['obligations', 0, 'details', 1]]
+
+
+def test_detail_revision_and_brief_projection_keep_content_but_remove_source_coordinates():
+    from novel.stages.stage4.grounding import (
+        obligation_core_id, preserve_patch_slice, preserve_revision_wire, project_brief,
+    )
+    wire = _wire()
+    wire['obligations'][0]['details'] = [
+        {'anchor': 'b01_01.e1', 'text': '先佯装走开，再从床底钻出'}]
+    wire['series'] = [{'members': [1, 2, 3], 'mechanism': None,
+                       'summaries': [{'member': 2, 'covers': [1]}]}]
+    checkpoint, errors = _assemble(wire)
+    assert not errors, errors
+    revision = preserve_revision_wire(checkpoint)
+    assert revision['obligations'][0]['details'] == wire['obligations'][0]['details']
+    assert revision['series'] == wire['series']
+    assert _assemble(revision)[0] == checkpoint
+    brief, _identity = project_brief(checkpoint, _characters(), _blueprint(), name_map=name_map_of(_characters()))
+    by_core = {r.core_id: r for r in brief.requirements}
+    detail = by_core[obligation_core_id('ob01')].details[0]
+    assert detail.text == wire['obligations'][0]['details'][0]['text']
+    assert set(detail.model_dump()) == {'detail_id', 'text'}
+    assert by_core[obligation_core_id('ob02')].summarizes_cores == (
+        obligation_core_id('ob01'),)
+    assert by_core[obligation_core_id('ob03')].summarizes_cores == ()
+    assert 'b01_01' not in str(brief.model_dump())
+    slices = preserve_patch_slice(wire, _characters(), _blueprint(), [0])
+    assert slices['targets'][0]['atoms'][0]['handle'] == 'b01_01.e1'
+
+
+def test_series_summary_covers_only_instances_in_same_group_and_can_precede_future_member():
+    """中途回顾已发生子集合法；不要求回顾在全组末尾，也不把先后当因果。"""
+    from contracts.schema.grounding import SemanticBinding
+    wire = _wire(series=[{'members': [1, 2, 3], 'mechanism': None,
+                         'summaries': [{'member': 2, 'covers': [1]}]}])
+    checkpoint, errors = _assemble(wire)
+    assert not errors, errors
+    summary = checkpoint.series[0].summaries[0]
+    assert summary.member == 'ob02' and summary.covers == ('ob01',)
+    binding = SemanticBinding(contract_version='str06-rc26',
+        binding_id='bind', preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
+        obligations=checkpoint.obligations, series=checkpoint.series, entries=(), unbound=())
+    assert binding.series == checkpoint.series
+    invalid = [
+        [{'member': 2, 'covers': [2]}],
+        [{'member': 2, 'covers': [1, 1]}],
+        [{'member': 2, 'covers': []}],
+        [{'member': True, 'covers': [1]}],
+        [{'member': 2, 'covers': [True]}],
+        [{'member': 2, 'covers': [9]}],
+        [{'member': 2, 'covers': [1]}, {'member': 2, 'covers': [3]}],
+        [{'member': 2, 'covers': [1]}, {'member': 1, 'covers': [3]}],
+    ]
+    for summaries in invalid:
+        bad = _wire(series=[{'members': [1, 2, 3], 'summaries': summaries}])
+        checkpoint, errors = _assemble(bad)
+        assert checkpoint is None and errors, summaries
+    for summaries in ([{'member': 3, 'covers': [1]}],
+                      [{'member': 2, 'covers': [3]}]):
+        checkpoint, errors = _assemble(_wire(series=[{
+            'members': [1, 2], 'summaries': summaries}]))
+        assert checkpoint is None and any('同一个 series 闭集' in e for e in errors)
+
+
+def test_binding_detail_identity_is_globally_unique_and_compiler_defends_bypassed_models():
+    import pytest
+    from pydantic import ValidationError
+    from contracts.schema.grounding import SemanticBinding, SourceDetail, UnboundEntry
+    from novel.stages.stage4.compile import compile_execution_plan
+    from tests.test_str06_body import _green_binding, _green_design
+
+    body = _green_design()
+    binding = _green_binding(body)
+    obligation = binding.obligations[0]
+    detail = SourceDetail(detail_id='dt_1234567890abcdef',
+                          anchor=obligation.anchors[0], text='迎娶的人群散去')
+    first = obligation.model_copy(update={'details': (detail,)})
+    second = obligation.model_copy(update={
+        'obligation_id': 'ob02', 'must_preserve': False, 'satisfaction': '',
+        'details': (detail.model_copy(update={'text': '只剩新婚两人对坐'}),)})
+    bad = binding.model_copy(update={
+        'obligations': (first, second),
+        'unbound': (UnboundEntry(obligation_id='ob02', owner='design', reason='可综合'),)})
+    with pytest.raises(ValidationError, match='细节身份必须唯一'):
+        SemanticBinding.model_validate(bad.model_dump(mode='json'))
+    plan, errors = compile_execution_plan(body, bad)
+    assert plan is None
+    [duplicate] = [error for error in errors
+                   if getattr(error, 'code', '') == 'design_detail_ref']
+    assert duplicate.owner == 'compile'
+    assert duplicate.location == ('detail_identity', detail.detail_id, ('ob01', 'ob02'))
+    unique_second = second.model_copy(update={'details': (
+        second.details[0].model_copy(update={'detail_id': 'dt_fedcba0987654321'}),)})
+    green = SemanticBinding.model_validate(bad.model_copy(update={
+        'obligations': (first, unique_second)}).model_dump(mode='json'))
+    assert compile_execution_plan(body, green)[0] is not None

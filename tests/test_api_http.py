@@ -54,7 +54,7 @@ def no_api_key(monkeypatch):
 
 
 def _corpus_boxes() -> list:
-    books = sandbox.books_with_stage1()
+    books = sandbox.books_with_stage3()
     if books:
         return [pytest.param(books[0], marks=pytest.mark.corpus, id='pipeline-corpus')]
     return [pytest.param(
@@ -135,29 +135,6 @@ def _empty_book(base, sid: str = '422'):
     book = base / f'审批守卫测试书_{sid}'
     (book / 'stage0').mkdir(parents=True)
     return book
-
-
-@pytest.mark.stage_scope('stage0', 'stage1')
-def test_sandbox_selects_current_stage1_and_preserves_workflow_and_artifact_bytes(tmp_path, monkeypatch):
-    """当前免费摄入、切分产物可直接成为沙箱，不能以退役Stage3筛掉。"""
-    from novel import config, paths
-    from novel.cli.main import main
-    monkeypatch.setattr(config, 'load_config', lambda **_: config.Config(api_key=None))
-    source = tmp_path / '当前样书_123.txt'
-    source.write_text('雨夜有人敲门，她终于等到了来客。\n1\n她在门外等候。\n2\n来客走进院子。\n', encoding='utf-8')
-    output = tmp_path / 'current'
-    assert main(['run', 'stage0.remove', '--base', str(output), '--source', str(source)]) == 0
-    assert main(['run', 'stage1.partition', '123', '--base', str(output)]) == 0
-    monkeypatch.setenv('NOVEL_OUTPUT', str(output))
-    books = sandbox.books_with_stage1()
-    assert len(books) == 1 and not (output / books[0] / 'stage3').exists()
-    copied = sandbox.Sandbox(books[0], root=tmp_path / 'copied')
-    try:
-        for rel in (sandbox.CHAIN_ROOT, *sandbox.STAGE1_INPUTS):
-            assert (copied.dir / rel).read_bytes() == (output / books[0] / rel).read_bytes()
-        assert paths.workflow_manifest_path(copied.root).read_bytes() == paths.workflow_manifest_path(output).read_bytes()
-    finally:
-        copied.close()
 
 
 # ─────────────────────── 审批写面的 HTTP 面已整体退役 ───────────────────────
@@ -382,7 +359,8 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
     ⚠ F8b-3：旧链读屏/人工写回/审批写面整族退役（stage2 global/characters/
     analyze-draft/blueprint-reading-workpack、stage4/:o、stage5/:o、
     review/:o、reading/:o、inbox、approvals 全家、stage7 读屏）；新链只读
-    监控面为列表、运行、源故事、目标故事、章节、Hook、交付与成书 GET。
+    监控面是 12 条 `str06/candidates/*` GET（列表 + run/characters/
+    blueprint/design/ir/chapters/hook/naming/delivery/book）。
     """
     assert _surface(app) == {
         '/api/agent/capabilities': ['GET'],
@@ -425,13 +403,16 @@ def test_the_published_surface_is_exactly_the_current_surface(app):
         '/api/settings/agent-profiles': ['GET', 'POST'],
         '/api/settings/network': ['GET', 'POST'],
         '/api/str06/candidates': ['GET'],
+        '/api/str06/candidates/{candidate}/blueprint': ['GET'],
         '/api/str06/candidates/{candidate}/book': ['GET'],
+        '/api/str06/candidates/{candidate}/characters': ['GET'],
         '/api/str06/candidates/{candidate}/chapters/{ordinal}': ['GET'],
         '/api/str06/candidates/{candidate}/delivery': ['GET'],
+        '/api/str06/candidates/{candidate}/design': ['GET'],
         '/api/str06/candidates/{candidate}/hook': ['GET'],
+        '/api/str06/candidates/{candidate}/ir': ['GET'],
+        '/api/str06/candidates/{candidate}/naming': ['GET'],
         '/api/str06/candidates/{candidate}/run': ['GET'],
-        '/api/str06/candidates/{candidate}/source-story': ['GET'],
-        '/api/str06/candidates/{candidate}/target-story': ['GET'],
         '/api/upload': ['POST'],
     }
 
@@ -460,7 +441,6 @@ def test_the_service_writes_nothing_at_all(corpus_client, box):
     """
     client = corpus_client
     before = _tree(box.root)
-    service_before = _tree(box.root / '_service')
     for url in ('/api/enums', '/api/novels', f'/api/novels/{box.sid}',
                 f'/api/novels/{box.sid}/check/stage0', '/api/jobs',
                 f'/api/novels/{box.sid}/run',
@@ -474,8 +454,8 @@ def test_the_service_writes_nothing_at_all(corpus_client, box):
     client.post('/api/jobs/preview',
                 json={'sid': box.sid, 'node': 'stage1.partition', 'flags': []})
     assert _tree(box.root) == before, '服务往产物盘上写了东西（`R-11.3`）'
-    assert _tree(box.root / '_service') == service_before, \
-        '只读端点改变了沙箱复制的当前工作流身份或新增了服务账'
+    assert not (box.root / '_service').exists(), \
+        '⚠ 只读端点建出了 `_service/`——那一处只归真跑作业的时候写'
     assert len(before) >= 4, f'只扫到 {len(before)} 个文件——沙箱多半没建起来'
 
 
@@ -509,14 +489,14 @@ def test_preview_refuses_a_flag_that_node_does_not_have(client):
 
 
 _EXECUTOR_PROFILE_HTTP_CASES = (
-    # 当前付费节点逐项走HTTP；有check-only时免费追检，付费组合是空flags。
+    # F8a/F8b；B2（2026-09-27）五节点重建、CS-3（2026-10-03）bind 退役后
+    # 付费面 10 个，节点旗标面只有 --check-only（付费 token 组合即空 flags）。
     ('str06.stage2.book', (), 2),
     ('str06.stage2.chapters', (), 2),
     ('str06.stage2.names', (), 2),
     ('str06.stage2.associate', (), 2),
     ('str06.stage4.preserve', (), 2),
     ('str06.stage4.body_design', (), 2),
-    ('str06.stage4.chapters', (), 2),
     ('str06.stage4.hook_design', (), 2),
     ('str06.stage5.hook', (), 2),
     ('str06.stage5.body', (), 2),

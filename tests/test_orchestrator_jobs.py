@@ -666,7 +666,7 @@ def test_a_real_subprocess_runs_the_pasted_command_and_its_output_lands_in_the_l
     ⇒ 这一条必须真起一个进程。
     """
     from tests import sandbox
-    books = sandbox.books_with_stage1()
+    books = sandbox.books_with_stage3()
     if not books:
         pytest.skip('盘上没有语料——本条**没在查**，不是「查过没事」')
     box = sandbox.Sandbox(books[0])
