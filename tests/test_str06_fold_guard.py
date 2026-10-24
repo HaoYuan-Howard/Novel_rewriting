@@ -83,7 +83,7 @@ def _graph() -> BodyDesign:
 
 
 def _binding(*entries: BindingEntry) -> SemanticBinding:
-    return SemanticBinding(contract_version='str06-rc26',
+    return SemanticBinding(contract_version='str06-rc27',
         binding_id='bd1', preserve_checkpoint_sha256=H64,
         obligations=tuple(_ob(e.obligation_id) for e in entries),
         entries=tuple(entries), unbound=())
@@ -214,13 +214,13 @@ def test_m2_premature_knowledge():
     order = scene_order(graph)
     # ce1：把后期（s03）才揭示的 knowledge 塞进 s02 的 entry_knowledge
     context = _context('s02', entry_knowledge=(
-        KnowledgeEntry(key='secret', mode='known', holder='ch1', proposition='身世',
+        KnowledgeEntry( polarity='positive',    key='secret', mode='known', holder='ch1', proposition='身世',
                        established_by='s03#bt1'),))
     problems = check_entry_timing(context, order)
     assert problems and problems[0].startswith('M2 提前揭示')
     # init 锚恒合法（前史初始知识）
     ok = _context('s02', entry_knowledge=(
-        KnowledgeEntry(key='secret', mode='known', holder='ch1', proposition='婚约', established_by='init'),))
+        KnowledgeEntry( polarity='positive',    key='secret', mode='known', holder='ch1', proposition='婚约', established_by='init'),))
     assert check_entry_timing(ok, order) == []
 
 

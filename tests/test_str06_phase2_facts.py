@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""test_str06_phase2_facts —— CS-S Phase 2 的 facts 词表与 know.f引用判据。
+"""test_str06_phase2_facts —— facts 词表、带性质证据与 know.fact 引用判据。
 
 【验证边界】书级命题词表（Book facts）与章观察 know.fact 引用的合同行为：
-  • book wire v9：facts 无编号（F 编号 f{nn} 由 expand 按列表序派发，I-21）、
-    basis 引文＝段全文派生、evidence_refs 闭集、known_at_start 持有者闭集
+  • book wire v11：facts 无编号（F 编号 f{nn} 由 expand 按列表序派发，I-21）、
+    evidence 内引文＝段全文派生、evidence_refs 闭集、known_at_start 持有者闭集
     ＝人物 slug（D-5：不收 public／reader——reader 知情 Phase 3 派生）；
-  • canonical v6：facts 带 fact_id 与 basis；D-3：无 address 字段；
-  • chapters wire v9：know 的 fact 与 what 恰写其一（引用不携带文本）；
+  • canonical v8：facts 带 fact_id 与带性质和极性的 evidence；无 address 字段；
+  • chapters wire v11：know 的 fact 与 what 恰写其一（引用不携带文本）；
     f{nn} 引用闭集核对（词表成员资格）；canonical 直通面 fact 引用不带
     statement；
   • compile：fact 引用直接解析（正式 ID＝fact 编号、文本＝词表文本），
@@ -41,12 +41,12 @@ def _book_wire_v9(*facts: dict) -> dict:
     """book wire v9（模型输出面）：facts 无编号、evidence_refs 只给段 id。"""
     characters = {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+            {'surface': '夫君', 'source_refs': ['e01_01']}], 'identity_bindings': []},
         'yun_niang': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_02']}]},
+            {'surface': '云娘', 'source_refs': ['e01_02']}], 'identity_bindings': []},
     }
     return {**sample_book_expression(characters),
-            'protocol_version': 'stage2-book-v10',
+            'protocol_version': 'stage2-book-v11',
             'characters': characters, 'initial_state': [], 'world_constraints': [],
             'facts': list(facts)}
 
@@ -55,41 +55,41 @@ def test_wire_facts_dispatch_f_ids_and_derive_basis_quotes():
     """wire v9 → canonical v6：F 编号按列表序派发（I-21），引文＝段全文派生
     （模型只选段、代码切原文），known_at_start 闭集＝人物 slug。"""
     wire = _book_wire_v9(
-        {'statement': '夫君藏身床底', 'evidence_refs': ['e01_01'],
-         'known_at_start': ['yun_niang']},
-        {'statement': '玉佩刻着沈字', 'evidence_refs': ['e01_01'],
+        {'statement': '夫君藏身床底', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': 'yun_niang', 'evidence_refs': ['e01_01']}],
+         'known_at_start': [{'holder': 'yun_niang', 'polarity': 'positive'}]},
+        {'statement': '玉佩刻着沈字', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': ['e01_01']}],
          'known_at_start': []})
     observation, errors = compile_book_observation(wire, evidence=EVIDENCE)
     assert errors == [], errors
     assert [fact.fact_id for fact in observation.facts] == ['f01', 'f02']
-    assert observation.facts[0].known_at_start == ('yun_niang',)
-    assert observation.facts[0].basis[0].quote == EVIDENCE['e01_01']['text'], \
+    assert [(item.holder, item.polarity) for item in observation.facts[0].known_at_start] == [('yun_niang', 'positive')]
+    assert observation.facts[0].evidence[0].basis[0].quote == EVIDENCE['e01_01']['text'], \
         '引文＝段全文（构造上不存在转写）'
     assert not hasattr(observation.facts[0], 'address'), 'D-3：facts 不带 address'
     # 位置路径：book_patch_locate 同管道（facts[i] 条目可定位）。
     from novel.stages.stage2 import book_patch_locate
     bad = deepcopy(wire)
-    bad['facts'][0]['evidence_refs'] = ['e99_99']
+    bad['facts'][0]['evidence'][0]['evidence_refs'] = ['e99_99']
     _obs, errors = compile_book_observation(bad, evidence=EVIDENCE)
     assert any('e99_99' in e for e in errors), errors
     targets = book_patch_locate(bad, errors, evidence=EVIDENCE)
-    assert targets is not None and ('facts', 0) in [t[0] for t in targets], targets
+    assert targets is not None and ('facts', 0, 'evidence', 0) in [t[0] for t in targets], targets
 
 
 def test_wire_facts_reject_unknown_holders_and_bad_shapes():
     """known_at_start 引用未知人物／evidence_refs 越闭集逐条精确拒。"""
     wire = _book_wire_v9(
-        {'statement': '命题甲', 'evidence_refs': ['e01_01'],
-         'known_at_start': ['ghost']})
+        {'statement': '命题甲', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': ['e01_01']}],
+         'known_at_start': [{'holder': 'ghost', 'polarity': 'positive'}]})
     _obs, errors = compile_book_observation(wire, evidence=EVIDENCE)
     assert any('known_at_start' in e and 'ghost' in e for e in errors), errors
-    wire = _book_wire_v9({'statement': '命题甲', 'evidence_refs': ['e09_99']})
+    wire = _book_wire_v9({'statement': '命题甲', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': ['e09_99']}], 'known_at_start': []})
     _obs, errors = compile_book_observation(wire, evidence=EVIDENCE)
     assert any('e09_99' in e for e in errors), errors
     # D-5 反例：reader 也不是词表持有者（Phase 3 才由 compile 派生读者知情）。
     wire = _book_wire_v9(
-        {'statement': '命题甲', 'evidence_refs': ['e01_01'],
-         'known_at_start': ['reader']})
+        {'statement': '命题甲', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': ['e01_01']}],
+         'known_at_start': [{'holder': 'reader', 'polarity': 'positive'}]})
     _obs, errors = compile_book_observation(wire, evidence=EVIDENCE)
     assert any('reader' in e for e in errors), errors
 
@@ -101,7 +101,7 @@ def test_fact_malformed_containers_report_shape_errors_without_crashing():
     """
     from novel.stages.stage2 import book_patch_locate
     for holders in ([['fu_jun']], [{'char_id': 'fu_jun'}], 7, 'fu_jun'):
-        wire = _book_wire_v9({'statement': '甲', 'evidence_refs': ['e01_01'],
+        wire = _book_wire_v9({'statement': '甲', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': ['e01_01']}],
                               'known_at_start': holders})
         before = deepcopy(wire)
         observation, errors = compile_book_observation(wire, evidence=EVIDENCE)
@@ -135,8 +135,8 @@ def test_reader_is_reserved_in_all_character_carriers_but_reader_proxy_is_valid(
     canonical = _book_v6(wire['characters'], [])
     with pytest.raises(ValidationError, match='人物键禁 reader'):
         BookObservation.model_validate(canonical)
-    core = {'characters': {'reader': {'canonical': '夫君', 'surfaces': [
-        {'surface': '夫君', 'from_chapter': 1, 'source_refs': ['e01_01']}]}},
+    core = {'initial_knowledge': [], 'characters': {'reader': {'canonical': '夫君', 'surfaces': [
+        {'surface': '夫君', 'from_chapter': 1, 'source_refs': ['e01_01']}], 'identity_bindings': []}},
         'initial_state': []}
     with pytest.raises(ValidationError, match='人物键禁 reader'):
         CharactersCore.model_validate(core)
@@ -146,11 +146,11 @@ def test_reader_is_reserved_in_all_character_carriers_but_reader_proxy_is_valid(
     assert targets is not None and [path for path, _ in targets] == [('characters', 'reader')]
 
     wire['characters']['reader_proxy'] = wire['characters'].pop('reader')
-    wire['facts'] = [{'statement': '甲', 'evidence_refs': ['e01_01'],
-                     'known_at_start': ['reader_proxy']}]
+    wire['facts'] = [{'statement': '甲', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': 'reader_proxy', 'evidence_refs': ['e01_01']}],
+                     'known_at_start': [{'holder': 'reader_proxy', 'polarity': 'positive'}]}]
     BookObservationWire.model_validate(wire)
     observation, errors = compile_book_observation(wire, evidence=EVIDENCE)
-    assert not errors and observation.facts[0].known_at_start == ('reader_proxy',)
+    assert not errors and [(item.holder, item.polarity) for item in observation.facts[0].known_at_start] == [('reader_proxy', 'positive')]
     projected, errors = character_core_view(observation, evidence=EVIDENCE)
     assert not errors and 'reader_proxy' in projected.characters
     BookObservation.model_validate(observation.model_dump(mode='json'))
@@ -160,8 +160,8 @@ def test_reader_is_reserved_in_all_character_carriers_but_reader_proxy_is_valid(
 def test_reader_initial_knowledge_is_refused_even_when_raw_characters_register_it():
     """同份坏 wire 把 reader 注册成人物不能让 facts 初始读者知情获得合法性。"""
     from novel.stages.stage2 import book_patch_locate
-    wire = _book_wire_v9({'statement': '甲', 'evidence_refs': ['e01_01'],
-                          'known_at_start': ['reader']})
+    wire = _book_wire_v9({'statement': '甲', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': ['e01_01']}],
+                          'known_at_start': [{'holder': 'reader', 'polarity': 'positive'}]})
     wire['characters']['reader'] = deepcopy(wire['characters']['fu_jun'])
     observation, errors = compile_book_observation(wire, evidence=EVIDENCE)
     assert observation is None
@@ -174,39 +174,39 @@ def test_reader_initial_knowledge_is_refused_even_when_raw_characters_register_i
 def test_fact_wire_model_is_id_free_and_exactly_shaped():
     """FactWire（模型输出面）无编号位、无 address 位：编造编号即形状失败。"""
     good = FactWire.model_validate(
-        {'statement': '甲', 'evidence_refs': ['e01_01'], 'known_at_start': ()})
+        {'statement': '甲', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': ['e01_01']}], 'known_at_start': ()})
     assert good.statement == '甲'
     import pytest
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         FactWire.model_validate(
-            {'statement': '甲', 'evidence_refs': ['e01_01'],
+            {'statement': '甲', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': ['e01_01']}],
              'known_at_start': (), 'fact_id': 'f01'}), '编号不进 wire（I-21）'
     with pytest.raises(ValidationError):
         FactWire.model_validate(
-            {'statement': '甲', 'evidence_refs': ['e01_01'],
+            {'statement': '甲', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': ['e01_01']}],
              'known_at_start': (), 'address': 'world'}), 'D-3：无 address 字段'
 
 
 def _book_v6(characters: dict, facts: list) -> dict:
     """canonical v6 直通面：facts 带 F 编号与 basis（引文＝段全文前 6 字）。"""
     return {**sample_book_expression(characters),
-            'protocol_version': 'stage2-book-v7',
+            'protocol_version': 'stage2-book-v8',
             'characters': characters, 'initial_state': [], 'world_constraints': [],
             'facts': facts}
 
 
 def _chapter_wire_v9(know: list[dict]) -> dict:
     """章瘦 wire v9（模型输出面）：fact 与 what 恰写其一。"""
-    return {'protocol_version': 'stage2-chapters-v10', 'beats': [
-        {'event': '云娘起疑', 'on_stage': ['yun_niang'], 'start': 'e01_01',
+    return {'protocol_version': 'stage2-chapters-v11', 'beats': [
+        {'location_reader_visible': False, 'event': '云娘起疑', 'on_stage': ['yun_niang'], 'start': 'e01_01',
          'change': [], 'know': know, 'loops': []}]}
 
 
 def test_slim_know_fact_xor_what_and_closed_set():
     """wire v9：fact 与 what 恰写其一；f{nn} 引用闭集核对（词表成员资格）。"""
     wire = _chapter_wire_v9([{'who': 'yun_niang', 'how': 'suspects',
-                              'fact': 'f01', 'evidence_refs': ['e01_01']}])
+                              'fact': 'f01', 'evidence_refs': ['e01_01'], 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False}])
     observation, errors = compile_chapter_observation(
         wire, evidence_ids=EVIDENCE, chapter=1,
         character_slugs=('fu_jun', 'yun_niang'), fact_ids=frozenset({'f01'}))
@@ -221,21 +221,21 @@ def test_slim_know_fact_xor_what_and_closed_set():
     with pytest.raises(ValidationError):
         expand_chapter_wire(_chapter_wire_v9([
             {'who': 'yun_niang', 'how': 'suspects', 'fact': 'f01',
-             'what': '夫君藏身床底', 'evidence_refs': ['e01_01']}]))
+             'what': '夫君藏身床底', 'evidence_refs': ['e01_01'], 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False}]))
     with pytest.raises(ValidationError):
         expand_chapter_wire(_chapter_wire_v9([
             {'who': 'yun_niang', 'how': 'suspects',
-             'evidence_refs': ['e01_01']}]))
+             'evidence_refs': ['e01_01'], 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False}]))
     # 闭集：词表外的 f 编号即拒（fail fast——fact_ids 缺省同样拒）。
     _obs, errors = compile_chapter_observation(
         _chapter_wire_v9([{'who': 'yun_niang', 'how': 'suspects',
-                           'fact': 'f99', 'evidence_refs': ['e01_01']}]),
+                           'fact': 'f99', 'evidence_refs': ['e01_01'], 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False}]),
         evidence_ids=EVIDENCE, chapter=1,
         character_slugs=('fu_jun', 'yun_niang'), fact_ids=frozenset({'f01'}))
     assert any('词表之外' in e and 'f99' in e for e in errors), errors
     _obs, errors = compile_chapter_observation(
         _chapter_wire_v9([{'who': 'yun_niang', 'how': 'suspects',
-                           'fact': 'f01', 'evidence_refs': ['e01_01']}]),
+                           'fact': 'f01', 'evidence_refs': ['e01_01'], 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False}]),
         evidence_ids=EVIDENCE, chapter=1, character_slugs=('fu_jun', 'yun_niang'))
     assert any('词表之外' in e for e in errors), '未提供词表闭集即 fail fast'
 
@@ -246,29 +246,29 @@ def test_compile_resolves_fact_refs_and_merges_near_synonym_via_verdict():
     from contracts.schema.observation import AssociateObservation
     characters = {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+            {'surface': '夫君', 'source_refs': ['e01_01']}], 'identity_bindings': []},
         'yun_niang': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_02']}]}}
+            {'surface': '云娘', 'source_refs': ['e01_02']}], 'identity_bindings': []}}
     book = _book_v6(characters, [{
         'fact_id': 'f01', 'statement': '夫君藏身床底',
-        'basis': [{'segment': 'e01_01', 'quote': EVIDENCE['e01_01']['text'][:6]}],
-        'known_at_start': ['yun_niang']}])
+        'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': 'yun_niang', 'basis': [{'segment': 'e01_01', 'quote': EVIDENCE['e01_01']['text'][:6]}]}],
+        'known_at_start': [{'holder': 'yun_niang', 'polarity': 'positive'}]}])
     ch01 = {'protocol_version': CPV, 'beats': [
         _beat('云娘起疑', ('e01_01',), participants=('yun_niang',),
               cognition=[{'proposition': {'ref': 'f01', 'statement': None},
                           'holder': 'yun_niang', 'mode': 'suspects',
-                          'basis': _basis('e01_01')}])]}
+                          'basis': _basis('e01_01'), 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False}])]}
     ch02 = {'protocol_version': CPV, 'beats': [
         _beat('词表外转写', ('e02_01',), participants=('yun_niang',),
               cognition=[{'proposition': {'ref': 'p_drift', 'statement': '夫君藏身于床底'},
                           'holder': 'yun_niang', 'mode': 'confirms',
-                          'basis': _basis('e02_01')}])]}
+                          'basis': _basis('e02_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False}])]}
     ch03 = {'protocol_version': CPV, 'beats': [
         _beat('揭示', ('e03_01',), participants=('yun_niang', 'fu_jun'),
               access='narrated',
               cognition=[{'proposition': {'ref': 'f01', 'statement': None},
                           'holder': 'yun_niang', 'mode': 'confirms',
-                          'basis': _basis('e03_01')}])]}
+                          'basis': _basis('e03_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True}])]}
     book_obs, chapters = _observations(book, {1: ch01, 2: ch02, 3: ch03})
     associate = AssociateObservation.model_validate({
         'protocol_version': 'stage2-associate-v5',
@@ -293,7 +293,10 @@ def test_compile_resolves_fact_refs_and_merges_near_synonym_via_verdict():
     # fold 时间线：known_at_start 起步＋逐认知转移事件；冗余告知读数（度量不是门）。
     timeline = outcome.fold['knowledge']['f01']
     assert timeline['statement'] == '夫君藏身床底'
-    assert timeline['known_at_start'] == ['yun_niang']
+    assert timeline['known_at_start'] == [{'holder': 'yun_niang', 'polarity': 'positive'}]
+    assert outcome.characters.initial_knowledge[0].holder == 'yun_niang'
+    assert outcome.characters.initial_knowledge[0].proposition.ref == 'f01'
+    assert 'yun_niang=learns[positive](known_at_start)' in '\n'.join(outcome.fold['snapshots'][0])
     # 逐认知转移事件（拍序，同一持有者的多次转移都在）：ch1 起疑、ch2 经 same
     # 并入的转写证实、ch3 叙述直陈再证实＋派生的读者 learns。
     assert [(event['holder'], event['mode'], event['at'])
@@ -312,23 +315,23 @@ def test_fold_redundancy_reading_exempts_pre_chapter_replay_beats():
     from contracts.schema.observation import AssociateObservation
     characters = {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+            {'surface': '夫君', 'source_refs': ['e01_01']}], 'identity_bindings': []},
         'yun_niang': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_02']}]}}
+            {'surface': '云娘', 'source_refs': ['e01_02']}], 'identity_bindings': []}}
     book = _book_v6(characters, [{
         'fact_id': 'f01', 'statement': '夫君藏身床底',
-        'basis': _basis('e00_01'),
-        'known_at_start': ['yun_niang']}])
+        'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': 'yun_niang', 'basis': _basis('e00_01')}],
+        'known_at_start': [{'holder': 'yun_niang', 'polarity': 'positive'}]}])
     ch01 = {'protocol_version': CPV, 'beats': [
         _beat('新婚夜坦白', ('e00_01',), participants=('yun_niang', 'fu_jun'),
               cognition=[{'proposition': {'ref': 'f01', 'statement': None},
                           'holder': 'yun_niang', 'mode': 'learns',
-                          'basis': _basis('e00_01')}])]}
+                          'basis': _basis('e00_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False}])]}
     ch02 = {'protocol_version': CPV, 'beats': [
         _beat('事后又证实', ('e02_01',), participants=('yun_niang',),
               cognition=[{'proposition': {'ref': 'f01', 'statement': None},
                           'holder': 'yun_niang', 'mode': 'confirms',
-                          'basis': _basis('e02_01')}])]}
+                          'basis': _basis('e02_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False}])]}
     book_obs, chapters = _observations(book, {1: ch01, 2: ch02})
     from tests.str06_facilities import complete_associate_fixture
     associate = complete_associate_fixture(
@@ -357,16 +360,16 @@ def test_fold_timeline_keeps_every_transition_not_just_the_last_per_holder():
     时间线读数另记流水）。"""
     from contracts.schema.observation import EvidenceQuote, Fact
     from contracts.schema.source import (
-        Beat, BlueprintsArtifactV17, ChapterBlueprint, CharactersCore,
+        Beat, BlueprintsArtifactV18, ChapterBlueprint, CharactersCore,
         Cognition, PropositionRef, SceneSpan,
     )
     from novel.stages.stage2.expression import compile_source_expression
-    core = CharactersCore(characters={
+    core = CharactersCore(initial_knowledge=[], characters={
         'yun_niang': {'canonical': '云娘', 'surfaces': [
             {'surface': '云娘', 'from_chapter': 1, 'until_chapter': None,
-             'source_refs': ['e01_02']}]}})
+             'source_refs': ['e01_02']}], 'identity_bindings': []}})
     fact = Fact(fact_id='f01', statement='夫君藏身床底',
-                basis=(EvidenceQuote(segment='e01_01', quote='夫君藏进床底'),),
+                evidence=({'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'basis': (EvidenceQuote(segment='e01_01', quote='夫君藏进床底'),)},),
                 known_at_start=())
 
     def beat(no: int, mode: str) -> Beat:
@@ -377,9 +380,9 @@ def test_fold_timeline_keeps_every_transition_not_just_the_last_per_holder():
             cognition=(Cognition(
                 proposition=PropositionRef(ref='f01', statement='夫君藏身床底'),
                 holder='yun_niang', mode=mode,
-                basis=(EvidenceQuote(segment='e01_01', quote='夫君藏进床底'),)),))
+                basis=(EvidenceQuote(segment='e01_01', quote='夫君藏进床底'),), op='set', polarity='positive', support='confirmed', reader_visible=True),))
     book_obs = _book_obs_for_blueprint()
-    blueprint = BlueprintsArtifactV17(
+    blueprint = BlueprintsArtifactV18(
         source_expression=compile_source_expression(book_obs.expression, texts=None),
         chapters=(ChapterBlueprint(
             chapter=1, beats=(beat(1, 'suspects'), beat(2, 'confirms')),
@@ -394,7 +397,7 @@ def _book_obs_for_blueprint():
     from contracts.schema.observation import BookObservation
     return BookObservation.model_validate(_book_v6({
         'yun_niang': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_02']}]}}, []))
+            {'surface': '云娘', 'source_refs': ['e01_02']}], 'identity_bindings': []}}, []))
 
 
 def test_one_proposition_same_as_two_facts_stays_undecided():
@@ -404,25 +407,25 @@ def test_one_proposition_same_as_two_facts_stays_undecided():
     from contracts.schema.observation import AssociateObservation
     characters = {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+            {'surface': '夫君', 'source_refs': ['e01_01']}], 'identity_bindings': []},
         'yun_niang': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_02']}]}}
+            {'surface': '云娘', 'source_refs': ['e01_02']}], 'identity_bindings': []}}
     book = _book_v6(characters, [
         {'fact_id': 'f01', 'statement': '夫君藏身床底',
-         'basis': _basis('e01_01'), 'known_at_start': []},
+         'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'basis': _basis('e01_01')}], 'known_at_start': []},
         {'fact_id': 'f02', 'statement': '夫君藏身在床底',
-         'basis': _basis('e01_02'), 'known_at_start': []}])
+         'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'basis': _basis('e01_02')}], 'known_at_start': []}])
     chapters = {
         1: {'protocol_version': CPV, 'beats': [_beat(
             '起疑', ('e01_01',), participants=('yun_niang',),
             cognition=[{'proposition': {'ref': 'f01', 'statement': None},
                         'holder': 'yun_niang', 'mode': 'suspects',
-                        'basis': _basis('e01_01')}])]},
+                        'basis': _basis('e01_01'), 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False}])]},
         2: {'protocol_version': CPV, 'beats': [_beat(
             '转写', ('e02_01',), participants=('yun_niang',),
             cognition=[{'proposition': {'ref': 'pb', 'statement': '夫君藏身于床底'},
                         'holder': 'yun_niang', 'mode': 'learns',
-                        'basis': _basis('e02_01')}])]}}
+                        'basis': _basis('e02_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False}])]}}
     book_obs, parsed = _observations(book, chapters)
 
     def compile_with(verdicts):
@@ -454,15 +457,15 @@ def test_compile_rejects_public_holder_after_d5():
     from contracts.schema.observation import AssociateObservation
     characters = {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+            {'surface': '夫君', 'source_refs': ['e01_01']}], 'identity_bindings': []},
         'yun_niang': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_02']}]}}
+            {'surface': '云娘', 'source_refs': ['e01_02']}], 'identity_bindings': []}}
     book = _book_v6(characters, [])
     ch01 = {'protocol_version': CPV, 'beats': [
         _beat('公开知情', ('e01_01',), participants=('fu_jun',),
               cognition=[{'proposition': {'ref': 'p_pub', 'statement': '满城皆知'},
                           'holder': 'public', 'mode': 'learns',
-                          'basis': _basis('e01_01')}])]}
+                          'basis': _basis('e01_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False}])]}
     book_obs, chapters = _observations(book, {1: ch01})
     associate = AssociateObservation.model_validate({
         'protocol_version': 'stage2-associate-v5', 'same_proposition': [],
@@ -479,27 +482,35 @@ def test_compile_rejects_public_holder_after_d5():
 def test_fold_knowledge_timeline_reads_only():
     """T-5：知情时间线是 fold 结构化只读读数——无 facts 时空读数；有 facts 时
     只按词表命题聚合，不改动事实层快照。"""
-    from contracts.schema.source import CharactersCore
-    core = CharactersCore(characters={
+    from contracts.schema.source import CharactersCore, InitialKnowledgeAtom
+    core = CharactersCore(initial_knowledge=[], characters={
         'fu_jun': {'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
-             'source_refs': ['e01_01']}]}})
+             'source_refs': ['e01_01']}], 'identity_bindings': []}})
     empty = source_fold(core, _blueprint_stub(), facts=())
     assert empty.knowledge_timeline == {}
     # 直接用契约模型构造最小 fact（不经过 book 验收——fold 只读）。
     from contracts.schema.observation import Fact, EvidenceQuote
     fact = Fact(fact_id='f01', statement='甲',
-                basis=(EvidenceQuote(segment='e01_01', quote='甲'),),
-                known_at_start=('fu_jun',))
+                evidence=({'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'basis': (EvidenceQuote(segment='e01_01', quote='甲'),)},),
+                known_at_start=[{'holder': 'fu_jun', 'polarity': 'positive'}])
     with_facts = source_fold(core, _blueprint_stub(), facts=(fact,))
     assert with_facts.knowledge_timeline == {
-        'f01': {'statement': '甲', 'known_at_start': ['fu_jun'], 'events': []}}
+        'f01': {'statement': '甲', 'known_at_start': [{'holder': 'fu_jun', 'polarity': 'positive'}], 'events': []}}
+    assert with_facts.snapshots[0] == [], '词表只产生读数，不能给正式初态补知识'
+    formal = core.model_copy(update={'initial_knowledge': (
+        InitialKnowledgeAtom(
+            knowledge_id='k0_01', holder='fu_jun',
+            proposition={'ref': 'f01', 'statement': '甲'}, polarity='positive',
+            basis=(EvidenceQuote(segment='e01_01', quote='甲'),)),)})
+    assert 'fu_jun=learns[positive](known_at_start)' in '\n'.join(
+        source_fold(formal, _blueprint_stub()).snapshots[0])
 
 
 def _blueprint_stub():
     """最小蓝图（source_fold 只读消费；一拍一场景）。"""
     from contracts.schema.source import (
-        Beat, BlueprintsArtifactV17, ChapterBlueprint, SceneSpan,
+        Beat, BlueprintsArtifactV18, ChapterBlueprint, SceneSpan,
     )
     beat = Beat(beat_id='b01_01', event='事件', participants=('fu_jun',),
                 source_refs=('e01_01',), scene_boundary='new', temporal_mode='single')
@@ -507,8 +518,8 @@ def _blueprint_stub():
     from novel.stages.stage2.expression import compile_source_expression
     book_obs = BookObservation.model_validate(_book_v6({
         'fu_jun': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'source_refs': ['e01_01']}]}}, []))
-    return BlueprintsArtifactV17(
+            {'surface': '夫君', 'source_refs': ['e01_01']}], 'identity_bindings': []}}, []))
+    return BlueprintsArtifactV18(
         source_expression=compile_source_expression(book_obs.expression, texts=None),
         chapters=(ChapterBlueprint(chapter=1, beats=(beat,),
                                    scenes=(SceneSpan(scene_id='sc01',
@@ -542,10 +553,10 @@ def test_book_wire_shape_errors_get_item_level_paths():
     from novel.stages.stage2 import book_patch_locate
     cases = {
         'fact evidence_refs 为空': (
-            _book_wire_v9({'statement': '甲', 'evidence_refs': [],
+            _book_wire_v9({'statement': '甲', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': []}],
                            'known_at_start': []}), ('facts', 0)),
         'fact 缺 statement': (
-            _book_wire_v9({'evidence_refs': ['e01_01']}), ('facts', 0)),
+            _book_wire_v9({'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': ['e01_01']}], 'known_at_start': []}), ('facts', 0)),
         'initial_state 表外键': (_wire_with_atom(key='foo_bar'), ('initial_state', 0)),
         'initial_state 缺 persistence': (
             _wire_with_atom(persistence=None), ('initial_state', 0)),
@@ -583,7 +594,7 @@ def test_book_initial_key_with_unhashable_value_is_an_item_error_not_a_crash():
         assert located is not None and [p for p, _ in located] == [('initial_state', 0)]
     # canonical 直通面同样不崩。
     characters = {'fu_jun': {'canonical': '夫君', 'surfaces': [
-        {'surface': '夫君', 'source_refs': ['e01_01']}]}}
+        {'surface': '夫君', 'source_refs': ['e01_01']}], 'identity_bindings': []}}
     canonical = _book_v6(characters, [])
     canonical['initial_state'] = [{
         'target': {'kind': 'character', 'char_id': 'fu_jun'}, 'key': ['identity'],
@@ -602,11 +613,11 @@ def test_book_facts_must_be_a_dense_sequence_at_model_level():
     from pydantic import ValidationError
     from contracts.schema.observation import BookObservation
     characters = {'fu_jun': {'canonical': '夫君', 'surfaces': [
-        {'surface': '夫君', 'source_refs': ['e01_01']}]}}
+        {'surface': '夫君', 'source_refs': ['e01_01']}], 'identity_bindings': []}}
 
     def fact(fact_id: str, statement: str) -> dict:
         return {'fact_id': fact_id, 'statement': statement,
-                'basis': [{'segment': 'e01_01', 'quote': '新婚夜'}],
+                'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'basis': [{'segment': 'e01_01', 'quote': '新婚夜'}]}],
                 'known_at_start': []}
 
     ok = BookObservation.model_validate(

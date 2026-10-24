@@ -7,7 +7,7 @@ Hook 是同一目标故事的另一种呈现，不是第二份 truth、不是 Sc
 （材料及顺序、展开重点、转场、阅读期待、起笔事实、POV、披露边界）由 Hook Design 保存进 PresentationGraph.hook，
 由唯一 publisher 发布；Writer 只做呈现。机械可验性靠两条类型纪律保证：
 
-  ① 起笔事实只引用已存在的目标事实（ref='init' 或 '场景#拍' + StateAddress），
+  ① 起笔基线引用已存在的具体原子（位置＋StateAddress＋compiler fact_ref），
      不收自由文本——「读者获准知道什么」是可解析引用，不是散文。
   ② 材料只允许 `presentation` 一处承载呈现语义（隐藏侧面／隐藏人物时才给），
      其余投影一律从 body 拍的 event／delta 确定性解析。局部表现重点不承载剧情；
@@ -76,19 +76,26 @@ class HookPov(StrictModel):
 class OpeningFact(StrictModel):
     """起笔事实：Hook 开写前已成立、且 Design 获准使用的一条目标事实。
 
-    `audience` 区分三种获准面：world（世界已成立）、pov（POV 人物已知）、
-    reader（读者获准知道）。它不是镜头描述，也不自动等于全书 T₀。
+    `audience` 区分故事背景、POV 认知或经历、读者可见三种获准面，真假与
+    确认程度仍由所选原子的模式表达。它不自动等于全书 T₀ 或命题为真。
     """
 
     ref: OpeningRef
     address: StateAddress
+    fact_ref: str = Field(min_length=1, description='compiler 派生的具体 delta 原子引用')
     audience: Literal['world', 'pov', 'reader']
+
+
+class HookWithheldFact(StateAddress):
+    """材料内不呈现的具体原子；同址的另一认知不随之隐藏。"""
+
+    fact_ref: str = Field(min_length=1)
 
 
 class HookMaterial(StrictModel):
     """一份 Hook 材料：按呈现序排列，允许乱序冷开。
 
-    `withheld` 是该拍 delta 中本材料不呈现的地址子集（隐藏侧面）；
+    `withheld` 是该拍 delta 中本材料不呈现的原子子集（保留地址用于诊断）；
     `presentation` 只在需要隐藏侧面或隐藏人物时由 Design 显式给出，
     此时 compiler 不再投影该拍的 event／delta。
     """
@@ -96,15 +103,29 @@ class HookMaterial(StrictModel):
     beat_ref: OpeningRef
     emphasis: HookEmphasis
     transition: HookTransition
-    withheld: tuple[StateAddress, ...] = ()
+    withheld: tuple[HookWithheldFact, ...] = ()
     presentation: str | None = None
 
 
 class ForbiddenReveal(StrictModel):
     """禁止提前兑现的后文揭示：锚定到故事位置；address 可选地缩小到具体事实。"""
 
+    model_config = {'extra': 'forbid', 'json_schema_extra': {'allOf': [{
+        'if': {'required': ['address'], 'properties': {'address': {'type': 'null'}}},
+        'then': {'properties': {'fact_ref': {'type': 'null'}}},
+        'else': {'properties': {'fact_ref': {'type': 'string', 'minLength': 1}}},
+    }]}}
     ref: OpeningRef
-    address: StateAddress | None = None
+    address: StateAddress | None
+    fact_ref: str | None = Field(description='事实为具体原子引用，整拍事件显式为 null')
+
+    @model_validator(mode='after')
+    def _atom_reference(self) -> 'ForbiddenReveal':
+        if (self.address is None) != (self.fact_ref is None):
+            raise ValueError('事实禁区必须同时给 address 和 fact_ref；事件禁区两者为空')
+        if self.fact_ref == '':
+            raise ValueError('fact_ref 不得为空字符串')
+        return self
 
 
 class HookReaderExpectationFocus(StrictModel):
@@ -204,8 +225,8 @@ class HookReaderDevelopmentWire(HookReaderExpectationFocus):
 
 
 class HookDesignWire(StrictModel):
-    """v3 组织选择随有序材料，阅读期待用已有事实/拍；无第二份剧情简报。"""
-    protocol_version: Literal['stage4-hook-design-v4']
+    """现役 v5：有序材料、组织选择和阅读期待；旧协议按字面量拒识。"""
+    protocol_version: Literal['stage4-hook-design-v5']
     pov: HookPov
     opening_facts: tuple[HookOpeningFactWire, ...] = ()
     materials: tuple[HookMaterialWire, ...] = Field(min_length=1)
@@ -216,12 +237,6 @@ class HookDesignWire(StrictModel):
     reader_expectation: Annotated[
         HookReaderFactWire | HookReaderDevelopmentWire, Field(discriminator='kind')]
     local_focus: str = Field(min_length=1)
-
-
-class HookDesignWireV3(HookDesignWire):
-    """仅供已购历史候选集中解码；新请求与新生成只使用 v4。"""
-
-    protocol_version: Literal['stage4-hook-design-v3']
 
 
 class HookOpeningFact(StrictModel):
@@ -276,7 +291,7 @@ class HookContext(StrictModel):
     不被投影改写。
     """
 
-    contract_version: Literal['str06-rc26'] = 'str06-rc26'
+    contract_version: Literal['str06-rc27'] = 'str06-rc27'
     pov: HookPov
     opening_facts: tuple[HookOpeningFact, ...] = ()
     materials: tuple[HookMaterialView, ...] = Field(min_length=1)

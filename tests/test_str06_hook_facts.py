@@ -12,7 +12,7 @@ from novel.stages.stage4.hook_facts import established_fact, fact_ref_of, hook_f
 from novel.stages.stage4.hook_wire import (
     expand_hook_wire, hook_catalog, hook_wire_schema, project_hook_input,
 )
-from tests.factories import hook_wire_v3
+from tests.factories import current_hook_wire
 from tests.test_str06_hook import _characters, _green_pair, _hook_wire, _projection
 from tests.str06_facilities import name_map_of
 
@@ -33,7 +33,7 @@ def test_hook_author_text_reports_target_literal_exposure():
 
 def test_explicit_hidden_identity_cannot_escape_through_a_pure_appellation():
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     wire['materials'][0]['presentation'] = '夫君翻出后墙'
     hook, errors = _accept(body, wire)
     assert hook is None
@@ -67,13 +67,13 @@ def test_later_same_address_material_does_not_reject_established_initial_fact():
     """本书首答反例：init 已成立，同地址在材料拍再次更新，不等于引用该拍增量。"""
     body, _, _ = _green_pair()
     body = _append_delta(body, 1, 0, _state())
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     before = deepcopy(wire)
     hook, errors = _accept(body, wire)
     assert hook is not None and not errors, errors
     assert hook.opening_facts[0].ref == 'init' and wire == before
     # 实际引用材料拍这一次建立，仍然拒绝；不能靠地址相同把它当旧事实。
-    wire['opening_facts'][0]['fact_ref'] = fact_ref_of('sc02#b01', ADDRESS)
+    wire['opening_facts'][0]['fact_ref'] = fact_ref_of('sc02#b01', ADDRESS, 1)
     hook, errors = _accept(body, wire)
     assert hook is None and any('材料拍' in e for e in errors)
 
@@ -83,7 +83,7 @@ def test_later_same_address_material_does_not_reject_established_initial_fact():
 def test_invalidated_initial_fact_is_still_rejected(change):
     body, _, _ = _green_pair()
     body = _append_delta(body, 0, 0, change)
-    hook, errors = _accept(body, hook_wire_v3(_hook_wire()))
+    hook, errors = _accept(body, current_hook_wire(_hook_wire()))
     assert hook is None and any('失效' in e for e in errors)
 
 
@@ -92,38 +92,38 @@ def test_unknown_and_unset_are_not_established_opening_facts(op):
     body, _, _ = _green_pair()
     delta = body.initial_state[0].model_copy(update={'op': op, 'value': None, 'modality': None})
     body = body.model_copy(update={'initial_state': (delta,)})
-    hook, errors = _accept(body, hook_wire_v3(_hook_wire()))
+    hook, errors = _accept(body, current_hook_wire(_hook_wire()))
     assert hook is None and any('未建立' in e for e in errors)
-    assert fact_ref_of('init', ADDRESS) not in hook_wire_schema(body)[
+    assert fact_ref_of('init', ADDRESS, 0) not in hook_wire_schema(body)[
         '$defs']['HookOpeningFactWire']['properties']['fact_ref']['enum']
 
 
 def test_scene_overlay_expires_and_does_not_destroy_book_initial_value():
     body, _, _ = _green_pair()
     body = _append_delta(body, 0, 0, _state(scope='scene'))
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     assert _accept(body, wire)[1] == []
-    wire['opening_facts'][0]['fact_ref'] = fact_ref_of('sc01#b01', ADDRESS)
+    wire['opening_facts'][0]['fact_ref'] = fact_ref_of('sc01#b01', ADDRESS, 1)
     assert any('失效' in e for e in _accept(body, wire)[1])
 
 
 def test_expired_scene_establishment_is_rejected_even_if_book_value_is_identical():
     body, _, _ = _green_pair()
     body = _append_delta(body, 0, 0, _state(scope='scene', value=body.initial_state[0].value))
-    wire = hook_wire_v3(_hook_wire())
-    wire['opening_facts'][0]['fact_ref'] = fact_ref_of('sc01#b01', ADDRESS)
+    wire = current_hook_wire(_hook_wire())
+    wire['opening_facts'][0]['fact_ref'] = fact_ref_of('sc01#b01', ADDRESS, 1)
     assert any('失效' in e for e in _accept(body, wire)[1])
 
 
 def test_coldopen_anchor_is_first_presented_material_and_reader_uses_max_horizon():
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     # 第一材料 sc02#b01，随后回到 sc01#b02；婚礼事实 sc01#b01 在冷开前已成立。
     wire['opening_facts'] = [{'fact_ref': fact_ref_of('sc01#b01',
-        ('relation', ('yun_niang', 'fu_jun'), '', 'marital_status')), 'audience': 'world'}]
+        ('relation', ('yun_niang', 'fu_jun'), '', 'marital_status'), 0), 'audience': 'world'}]
     assert _accept(body, wire)[1] == []
     wire['opening_facts'] = [{'fact_ref': fact_ref_of('sc02#b02',
-        ('knowledge', ('fu_jun',), 'yun_niang', 'secret')), 'audience': 'reader'}]
+        ('knowledge', ('fu_jun',), 'yun_niang', 'secret'), 0), 'audience': 'reader'}]
     assert any('视界' in e for e in _accept(body, wire)[1])
 
 
@@ -132,7 +132,7 @@ def test_plans_are_not_world_facts_and_writer_keeps_their_modality(modality):
     body, _, _ = _green_pair()
     delta = body.initial_state[0].model_copy(update={'modality': modality})
     body = body.model_copy(update={'initial_state': (delta,)})
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     assert any('不能把' in e for e in _accept(body, wire)[1])
     wire['opening_facts'][0]['audience'] = 'pov'
     hook, errors = _accept(body, wire)
@@ -152,8 +152,8 @@ def test_pov_knowledge_requires_correct_holder_and_keeps_knowledge_mode():
         'holder': 'fu_jun', 'key': 'rumor', 'op': 'set', 'value': '玉佩另有主人',
         'knowledge_mode': 'suspected', 'scope': 'book'})
     body = body.model_copy(update={'initial_state': (*body.initial_state, delta)})
-    wire = hook_wire_v3(_hook_wire())
-    wire['opening_facts'] = [{'fact_ref': fact_ref_of('init', delta.address()), 'audience': 'pov'}]
+    wire = current_hook_wire(_hook_wire())
+    wire['opening_facts'] = [{'fact_ref': fact_ref_of('init', delta.address(), 1), 'audience': 'pov'}]
     assert any('持有人' in e for e in _accept(body, wire)[1])
     wire['pov']['focalizers'] = ['fu_jun']
     hook, errors = _accept(body, wire)
@@ -169,32 +169,92 @@ def test_pov_knowledge_requires_correct_holder_and_keeps_knowledge_mode():
 def test_forbidden_fact_is_one_occurrence_not_every_update_at_same_address():
     body, _, _ = _green_pair()
     body = _append_delta(body, 1, 1, _state())
-    wire = hook_wire_v3(_hook_wire())
-    wire['forbidden_reveals'] = [{'kind': 'fact', 'fact_ref': fact_ref_of('sc02#b02', ADDRESS)}]
+    wire = current_hook_wire(_hook_wire())
+    wire['forbidden_reveals'] = [{'kind': 'fact', 'fact_ref': fact_ref_of('sc02#b02', ADDRESS, 1)}]
     assert _accept(body, wire)[1] == []
-    wire['forbidden_reveals'][0]['fact_ref'] = fact_ref_of('init', ADDRESS)
+    wire['forbidden_reveals'][0]['fact_ref'] = fact_ref_of('init', ADDRESS, 0)
     assert any('禁止揭示集' in e for e in _accept(body, wire)[1])
 
 
 def test_catalog_reference_is_stable_and_ambiguous_establishment_is_not_accepted():
     body, _, _ = _green_pair()
-    initial_ref = fact_ref_of('init', ADDRESS)
+    initial_ref = fact_ref_of('init', ADDRESS, 0)
     extra = TargetDelta.model_validate(_state(key='residence', value='陆家'))
-    changed = body.model_copy(update={'initial_state': (extra, *body.initial_state)})
+    changed = body.model_copy(update={'initial_state': (*body.initial_state, extra)})
     assert hook_catalog(body)[initial_ref] == hook_catalog(changed)[initial_ref]
+    inserted = body.model_copy(update={'initial_state': (extra, *body.initial_state)})
+    shifted_ref = fact_ref_of('init', ADDRESS, 1)
+    assert shifted_ref != initial_ref and initial_ref not in hook_catalog(inserted)
+    for field in ('domain', 'subjects', 'holder', 'key'):
+        assert hook_catalog(inserted)[shifted_ref][field] == hook_catalog(body)[initial_ref][field]
+    rebuilt = BodyDesign.model_validate_json(body.model_dump_json())
+    assert hook_catalog(rebuilt) == hook_catalog(body)
     duplicate = body.model_copy(update={'initial_state': (*body.initial_state, body.initial_state[0])})
-    assert established_fact(hook_facts(duplicate), 'init', ADDRESS) is None
+    facts = hook_facts(duplicate)
+    assert established_fact(facts, 'init', ADDRESS, fact_ref=None) is None
+    for ordinal in (0, 1):
+        selected = established_fact(facts, 'init', ADDRESS,
+                                    fact_ref=fact_ref_of('init', ADDRESS, ordinal))
+        assert selected is not None and selected.atom_ordinal == ordinal
+
+
+def test_coordinate_fixture_requires_an_explicit_or_unique_atomic_choice():
+    """构造器也不把同址多次认知操作偷换成最后一次，悬空红例仍交生产判据。"""
+    body, _, _ = _green_pair()
+    coordinates = _hook_wire()
+    coordinates['opening_facts'][0].pop('atom_ordinal')
+    with pytest.raises(ValueError):
+        current_hook_wire(coordinates)
+    selected = current_hook_wire(coordinates, body=body)
+    assert selected['opening_facts'][0]['fact_ref'] == fact_ref_of('init', ADDRESS, 0)
+
+    duplicate = body.model_copy(update={'initial_state': (*body.initial_state, body.initial_state[0])})
+    with pytest.raises(ValueError):
+        current_hook_wire(coordinates, body=duplicate)
+    coordinates['opening_facts'][0]['atom_ordinal'] = 1
+    selected = current_hook_wire(coordinates, body=duplicate)
+    assert selected['opening_facts'][0]['fact_ref'] == fact_ref_of('init', ADDRESS, 1)
+    assert selected['opening_facts'][0]['fact_ref'] != fact_ref_of('init', ADDRESS, 0)
+
+    coordinates['opening_facts'][0]['ref'] = {'scene': 'sc99', 'beat': 'b99'}
+    dangling = current_hook_wire(coordinates, body=body)
+    assert any(error.code == 'hook_fact_ref' for error in _accept(body, dangling)[1])
+
+
+@pytest.mark.parametrize('path', [
+    ('opening_facts', 0), ('forbidden_reveals', 0),
+    ('materials', 0, 'withheld', 0), ('reader_expectation', 'answer'),
+])
+def test_canonical_hook_requires_the_selected_atomic_reference_after_serialization(path):
+    """正式盘面保留原子选择，免费读回不能退化为同地址重新挑选。"""
+    from pydantic import ValidationError
+    from contracts.schema.hook import HookDesign
+    from tests.test_str06_hook import _same_beat_forbidden_fixture
+
+    body, coordinates, address = _same_beat_forbidden_fixture()
+    coordinates['materials'][0]['withheld'] = [address]
+    hook, errors = _accept(body, current_hook_wire(coordinates, body=body))
+    assert hook is not None and not errors, errors
+    restored = HookDesign.model_validate_json(hook.model_dump_json())
+    payload = restored.model_dump(mode='json')
+    selected = payload
+    for component in path:
+        selected = selected[component]
+    assert selected['fact_ref']
+    selected.pop('fact_ref')
+    with pytest.raises(ValidationError):
+        HookDesign.model_validate(payload)
 
 
 def test_v3_closed_schema_rejects_made_up_ref_and_cross_beat_withholding():
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     wire['opening_facts'][0]['fact_ref'] = 'f不存在'
     assert any('未知事实引用' in e for e in _accept(body, wire)[1])
-    wire = hook_wire_v3(_hook_wire())
-    wire['materials'][0]['withheld'] = [fact_ref_of('init', ADDRESS)]
+    wire = current_hook_wire(_hook_wire())
+    wire['materials'][0]['withheld'] = [fact_ref_of('init', ADDRESS, 0)]
     assert any('不属于该拍' in e for e in _accept(body, wire)[1])
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     wire['forbidden_reveals'][0]['address'] = {'key': '乱加字段'}
     assert any('形状非法' in e for e in _accept(body, wire)[1])
     assert any('protocol_version' in e for e in _accept(body, _hook_wire())[1])
@@ -202,9 +262,9 @@ def test_v3_closed_schema_rejects_made_up_ref_and_cross_beat_withholding():
 
 def test_narrow_patch_has_initial_facts_boundaries_and_complete_branch_schema():
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     sliced = hook_patch_slice(body, wire, [('opening_facts', 0)])
-    assert sliced['facts'][fact_ref_of('init', ADDRESS)]['ref'] == 'init'
+    assert sliced['facts'][fact_ref_of('init', ADDRESS, 0)]['ref'] == 'init'
     assert sliced['materials'] == wire['materials'] and sliced['pov'] == wire['pov']
     legal = hook_patch_legal_values(body=body)
     assert set(legal['fact_refs']) == set(sliced['facts'])
@@ -229,14 +289,17 @@ def test_narrow_patch_has_initial_facts_boundaries_and_complete_branch_schema():
                       for beat in body.scenes[0].beats]}
 
 
-@pytest.mark.parametrize('protocol', ['stage4-hook-design-v1', 'stage4-hook-design-v2'])
+@pytest.mark.parametrize('protocol', ['stage4-hook-design-v1', 'stage4-hook-design-v2',
+                                         'stage4-hook-design-v3', 'stage4-hook-design-v4'])
 def test_old_hook_protocols_cannot_be_upgraded_without_new_semantic_choices(protocol):
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     wire['protocol_version'] = protocol
     before = deepcopy(wire)
     hook, errors = _accept(body, wire)
     assert hook is None and any('hook_protocol_literal' == e.code for e in errors)
+    expanded, issues = expand_hook_wire(wire, None)
+    assert expanded is None and any(error.code == 'hook_wire_root_shape' for error in issues)
     assert wire == before
 
 
@@ -246,7 +309,7 @@ def test_fact_expectation_json_schema_keeps_full_branch_and_requires_address():
     from pydantic import ValidationError
     from contracts.schema.hook import HookDesign
     body, _, _ = _green_pair()
-    hook, errors = _accept(body, hook_wire_v3(_hook_wire()))
+    hook, errors = _accept(body, current_hook_wire(_hook_wire()))
     assert hook is not None and not errors, errors
     schema = HookDesign.model_json_schema()
     Draft202012Validator.check_schema(schema)
@@ -254,7 +317,8 @@ def test_fact_expectation_json_schema_keeps_full_branch_and_requires_address():
     validator = Draft202012Validator(schema)
     payload = hook.model_dump(mode='json')
     assert not list(validator.iter_errors(payload))
-    for change in ('missing_kind', 'missing_focus', 'missing_address', 'null_address'):
+    for change in ('missing_kind', 'missing_focus', 'missing_address', 'null_address',
+                   'missing_fact_ref', 'null_fact_ref'):
         bad = deepcopy(payload)
         expectation = bad['reader_expectation']
         if change == 'missing_kind':
@@ -263,8 +327,12 @@ def test_fact_expectation_json_schema_keeps_full_branch_and_requires_address():
             expectation.pop('focus')
         elif change == 'missing_address':
             expectation['answer'].pop('address')
-        else:
+        elif change == 'null_address':
             expectation['answer']['address'] = None
+        elif change == 'missing_fact_ref':
+            expectation['answer'].pop('fact_ref')
+        else:
+            expectation['answer']['fact_ref'] = None
         assert list(validator.iter_errors(bad)), change
         with pytest.raises(ValidationError):
             HookDesign.model_validate(bad)
@@ -291,7 +359,7 @@ def _material(scene, beat, transition):
 ])
 def test_transition_declarations_match_positions_without_banning_cross_scene(materials, valid):
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire(materials=materials, opening_facts=[]))
+    wire = current_hook_wire(_hook_wire(materials=materials, opening_facts=[]))
     before = deepcopy(wire)
     hook, errors = _accept(body, wire)
     transition_errors = [error for error in errors if error.code == 'hook_transition']
@@ -309,7 +377,7 @@ def test_return_after_flashback_and_reader_development_use_real_later_beats():
         'beat_id': 'b03', 'event': '芸娘追问玉佩的旧主。', 'participants': ['yun_niang'],
         'target_delta': []})
     body = BodyDesign.model_validate(raw)
-    wire = hook_wire_v3(_hook_wire(
+    wire = current_hook_wire(_hook_wire(
         materials=[_material('sc02', 'b01', 'start'),
                    _material('sc01', 'b02', 'flashback'),
                    _material('sc02', 'b02', 'return')],
@@ -332,7 +400,7 @@ def test_return_after_flashback_and_reader_development_use_real_later_beats():
 @pytest.mark.parametrize('field', ['emphasis', 'transition'])
 def test_material_organization_is_required_and_not_guessed(field):
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     wire['materials'][0].pop(field)
     hook, errors = _accept(body, wire)
     assert hook is None and any(error.code == 'hook_wire_shape' for error in errors)
@@ -344,7 +412,7 @@ def test_fact_expectation_cannot_promote_uncertain_knowledge_to_an_answer(mode):
     raw = body.model_dump(mode='json')
     raw['scenes'][1]['beats'][1]['target_delta'][0]['knowledge_mode'] = mode
     body = BodyDesign.model_validate(raw)
-    hook, errors = _accept(body, hook_wire_v3(_hook_wire()))
+    hook, errors = _accept(body, current_hook_wire(_hook_wire()))
     assert hook is None and any(error.code == 'hook_expectation_knowledge' for error in errors)
 
 
@@ -355,14 +423,14 @@ def test_fact_expectation_requires_a_real_set_establishment(op):
     raw['scenes'][1]['beats'][1]['target_delta'][0].update(
         op=op, value=None, knowledge_mode=None)
     body = BodyDesign.model_validate(raw)
-    hook, errors = _accept(body, hook_wire_v3(_hook_wire()))
+    hook, errors = _accept(body, current_hook_wire(_hook_wire()))
     assert hook is None and any(error.code == 'hook_expectation_fact' for error in errors)
 
 
 def test_reader_expectation_anchor_is_after_max_horizon_and_has_narrow_patch_evidence():
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire())
-    wire['reader_expectation']['fact_ref'] = fact_ref_of('init', ADDRESS)
+    wire = current_hook_wire(_hook_wire())
+    wire['reader_expectation']['fact_ref'] = fact_ref_of('init', ADDRESS, 0)
     hook, errors = _accept(body, wire)
     assert hook is None and any(error.code == 'hook_expectation_ref' for error in errors)
     wire['reader_expectation'] = {
@@ -378,7 +446,7 @@ def test_reader_expectation_anchor_is_after_max_horizon_and_has_narrow_patch_evi
 @pytest.mark.parametrize('kind', ['fact', 'action', 'relationship'])
 def test_expectation_patch_slice_preserves_each_kind_and_its_real_source(kind):
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     if kind != 'fact':
         wire['reader_expectation'] = {
             'kind': kind, 'focus': '后续发展怎样承接？',
@@ -400,7 +468,7 @@ def test_expectation_patch_slice_preserves_each_kind_and_its_real_source(kind):
 ])
 def test_invalid_expectation_shape_remains_narrowly_repairable_without_inventing_sources(expectation):
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     wire['reader_expectation'] = deepcopy(expectation)
     before = deepcopy(wire)
     hook, errors = _accept(body, wire)
@@ -426,7 +494,7 @@ def test_invalid_expectation_shape_remains_narrowly_repairable_without_inventing
 def test_hook_shape_repairs_keep_the_schema_declared_owner_record(change, target):
     """Hook 各记录采用同一语义边界；标量、数组、联合错误不改变拥有者。"""
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     if change == 'pov-enum':
         wire['pov']['person'] = []
     elif change == 'pov-cardinality':
@@ -463,7 +531,7 @@ def test_expectation_patch_exposes_real_later_action_without_delta_or_prior_refe
         'beat_id': 'b03', 'event': '芸娘向玉佩的旧主递出问讯。',
         'participants': ['yun_niang'], 'target_delta': []})
     body = BodyDesign.model_validate(raw)
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     wire['reader_expectation'] = {
         'kind': 'action', 'focus': '她接下来怎样查证？', 'followup_refs': followups}
     before = deepcopy(wire)
@@ -488,7 +556,7 @@ def test_expectation_patch_exposes_real_later_action_without_delta_or_prior_refe
 
 def test_expectation_patch_does_not_guess_horizon_from_invalid_material_positions():
     body, _, _ = _green_pair()
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire())
     wire['materials'][0]['beat_ref'] = {'scene': 'sc09', 'beat': 'b01'}
     before = deepcopy(wire)
     sliced = hook_patch_slice(body, wire, [('reader_expectation',)])
@@ -510,11 +578,11 @@ def test_context_projects_authoritative_voice_and_never_copies_future_answer():
     raw['scenes'][0]['delivery']['voice'] = '对白里的试探，话说一半便收住。'
     raw['scenes'][1]['delivery']['voice'] = '冷面反应，异常藏在日常动作中。'
     body = BodyDesign.model_validate(raw)
-    wire = hook_wire_v3(_hook_wire(forbidden_reveals=[]))
+    wire = current_hook_wire(_hook_wire(forbidden_reveals=[]))
     hook, errors = _accept(body, wire)
     assert hook is not None and not errors, errors
     graph = publish_graph(body, hook)
-    assert body.contract_version == 'str06-rc26' and graph.contract_version == 'str06-rc26'
+    assert body.contract_version == 'str06-rc27' and graph.contract_version == 'str06-rc27'
     context, errors = compile_hook_context(graph, _projection(),
                                             _characters().name_structure,
                                             total_budget=2000,

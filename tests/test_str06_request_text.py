@@ -58,7 +58,7 @@ def test_hook_request_carries_referenced_scene_avoid_and_leaks_nothing():
     from novel.stages.stage4.grounding import derive_semantic_binding
     from novel.stages.stage4.hook import assemble_hook_design, publish_graph
     from novel.stages.stage4.hook_context import compile_hook_context
-    from tests.factories import hook_wire_v3
+    from tests.factories import current_hook_wire
     from tests.str06_expression_inputs import sample_narration, sample_requirements
     from tests.test_str06_hook import _body_wire, _characters, _hook_wire
     chars = _characters()
@@ -79,7 +79,7 @@ def test_hook_request_carries_referenced_scene_avoid_and_leaks_nothing():
     from tests.str06_facilities import name_map_of
     faces, _face_errors = target_face_table(chars.name_structure, name_map_of(chars))
     hook, errors = assemble_hook_design(
-        hook_wire_v3(hook_wire), body=body, known_char_ids=known,
+        current_hook_wire(hook_wire, body=body), body=body, known_char_ids=known,
         name_projection=chars.name_projection(), name_structure=chars.name_structure,
         faces=faces)
     assert hook is not None and not errors, errors

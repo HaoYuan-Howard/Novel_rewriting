@@ -138,8 +138,9 @@ def test_project_context_backfills_statement_into_ir():
     ir = ctx.verification_ir
     knowledge_deltas = [d for d in ir.beats[0].deltas
                         if d.domain is EffectDomain.KNOWLEDGE]
-    assert knowledge_deltas and knowledge_deltas[0].value == STATEMENT, \
-        '拍增量以命题文本送达（must_realize 面不再出现「true」）'
+    assert knowledge_deltas and knowledge_deltas[0].value == 'true'
+    assert knowledge_deltas[0].proposition_statement == STATEMENT, \
+        '机器值保留极性，命题文本单独送达材料渲染器'
     pendings = [p for p in ir.pending_reader_confirmations if p.key == KP_READER]
     assert pendings and pendings[0].fact == READER_STATEMENT, \
         '未确认事实的禁区提示以命题文本送达（guard_only 面不再出现「true」）'

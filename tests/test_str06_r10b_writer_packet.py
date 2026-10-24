@@ -54,10 +54,10 @@ def _requirements():
 
     propositions = (BriefProposition(kp_id=KP_INQUIRY, statement=INQUIRY),)
     knowledge_locks = (
-        BriefKnowledgeLock(holder='fu_jun', kp=KP_INQUIRY, mode='known'),
-        BriefKnowledgeLock(holder='yun_niang', kp=KP_INQUIRY, mode='suspected'),
-        BriefKnowledgeLock(holder='yun_niang', kp=KP_INQUIRY, mode='known'),
-        BriefKnowledgeLock(holder='reader', kp=KP_INQUIRY, mode='known'),
+        BriefKnowledgeLock(op='set', polarity='positive', holder='fu_jun', kp=KP_INQUIRY, mode='known'),
+        BriefKnowledgeLock(op='set', polarity='positive', holder='yun_niang', kp=KP_INQUIRY, mode='suspected'),
+        BriefKnowledgeLock(op='set', polarity='positive', holder='yun_niang', kp=KP_INQUIRY, mode='known'),
+        BriefKnowledgeLock(op='set', polarity='positive', holder='reader', kp=KP_INQUIRY, mode='known'),
     )
     fact_locks = (
         BriefFactLock(kf_id=KF_PROMISE, statement=PROMISE,
@@ -73,14 +73,14 @@ def _requirements():
             must_preserve=True,
             satisfaction='对外说辞与真实意图都呈现；不得把说辞当成真实动机',
             participants=('fu_jun',),
-            locks=(KP_INQUIRY,), knowledge_changes=({'change_id': 'kc_1111111111111111', 'holder': 'fu_jun', 'kp': KP_INQUIRY, 'mode': 'known'},)),
+            locks=(KP_INQUIRY,), knowledge_changes=({'op': 'set', 'polarity': 'positive', 'change_id': 'kc_1111111111111111', 'holder': 'fu_jun', 'kp': KP_INQUIRY, 'mode': 'known'},)),
         # 先怀疑、后新证据确认（P2 的授权升级链）。
         BriefRequirement(
             core_id='req_suspect_confirm', kind=PreserveKind.CHARACTER_ARC,
             summary='芸娘由起疑到确认', must_preserve=True,
             satisfaction='怀疑与确认分两个时点呈现，确认由新证据支持',
             participants=('yun_niang',),
-            locks=(KP_INQUIRY,), knowledge_changes=tuple({'change_id': 'kc_' + digit * 16, 'holder': 'yun_niang', 'kp': KP_INQUIRY, 'mode': mode} for digit, mode in [('2', 'suspected'), ('3', 'known')])),
+            locks=(KP_INQUIRY,), knowledge_changes=tuple({'op': 'set', 'polarity': 'positive', 'change_id': 'kc_' + digit * 16, 'holder': 'yun_niang', 'kp': KP_INQUIRY, 'mode': mode} for digit, mode in [('2', 'suspected'), ('3', 'known')])),
         # 预计时长不得写成已发生（C2：kf 时态锁）。
         BriefRequirement(
             core_id='req_promise', kind=PreserveKind.EVENT_CORE,
@@ -119,9 +119,9 @@ def _readings():
 
 
 def _wire() -> dict:
-    """stage4-design-v5 中间形状：两章三场，携带 kp 锁承载、被事实锁承载的预计状态与 C7/C10 材料。"""
+    """stage4-design-v6 中间形状：两章三场，携带 kp 锁承载、被事实锁承载的预计状态与 C7/C10 材料。"""
     return {
-        'protocol_version': 'stage4-design-v5',
+        'protocol_version': 'stage4-design-v6',
         'narration': {'person': 'third', 'focalizers': ['narrator', 'yun_niang']},
         'expression_decisions': [
             {'ex_id': 'ex_01', 'action': 'change',
@@ -169,11 +169,11 @@ def _wire() -> dict:
                        'scope': 'book', 'modality': 'actual'},
                       {'domain': 'knowledge', 'subjects': ['fu_jun'],
                        'holder': 'fu_jun', 'key': KP_INQUIRY, 'op': 'set',
-                       'value': INQUIRY, 'scope': 'book',
+                       'value': 'true', 'scope': 'book',
                        'knowledge_mode': 'known'},
                       {'domain': 'knowledge', 'subjects': ['yun_niang'],
                        'holder': 'yun_niang', 'key': KP_INQUIRY, 'op': 'set',
-                       'value': INQUIRY, 'scope': 'book',
+                       'value': 'true', 'scope': 'book',
                        'knowledge_mode': 'suspected'}],
                   # 言行反差的表达任务落具体拍（夹具性质 3）。
                   'expression_refs': ['ex_02'], 'surface_introductions': [],
@@ -205,11 +205,11 @@ def _wire() -> dict:
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': ['yun_niang'],
                        'holder': 'yun_niang', 'key': KP_INQUIRY, 'op': 'set',
-                       'value': INQUIRY, 'scope': 'book',
+                       'value': 'true', 'scope': 'book',
                        'knowledge_mode': 'known'},
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
                        'key': KP_INQUIRY, 'op': 'set',
-                       'value': INQUIRY, 'scope': 'book',
+                       'value': 'true', 'scope': 'book',
                        'knowledge_mode': 'known', 'confirms': {
                            'domain': 'character', 'subjects': ['fu_jun'],
                            'key': 'actual_intent'}}],
@@ -258,7 +258,7 @@ def _binding(body):
     from contracts.schema.policy import PreserveKind
 
     def _cognition(holder: str, mode: str):
-        return ObligationAnchor(
+        return ObligationAnchor(basis_segments=['e01_01'], op='set', polarity='positive', support='confirmed', reader_visible=True,
             handle=f'c_{holder}', source_kind='cognition', holder=holder,
             mode=mode, proposition_ref='p_inquiry', proposition_statement=INQUIRY,
             quotes=(INQUIRY,))
@@ -284,7 +284,7 @@ def _binding(body):
         SourceObligation(
             obligation_id='ob03', kind=PreserveKind.EVENT_CORE,
             statement=PROMISE,
-            anchors=(ObligationAnchor(
+            anchors=(ObligationAnchor(basis_segments=['e01_01'], reader_visible=True,
                 handle='b03_01.e1', source_kind='effect',
                 address='char:fu_jun.return_promise', value=PROMISE,
                 modality='expected', quotes=(PROMISE,)),),
@@ -503,10 +503,13 @@ def test_consumption_closure_ignores_hook_selection():
     from contracts.schema.design import PresentationGraph
     from contracts.schema.hook import HookDesign
     from novel.stages.common import consumption_closure
+    from novel.stages.stage4.hook_facts import fact_ref_of
     body = _design()
     hook = HookDesign(
         pov={'person': 'third', 'focalizers': ['yun_niang']},
         opening_facts=[{'ref': 'init', 'audience': 'reader',
+                        'fact_ref': fact_ref_of(
+                            'init', ('character', ('yun_niang',), '', 'residence'), 0),
                         'address': {'domain': 'character', 'key': 'residence',
                                     'subjects': ['yun_niang'], 'holder': None}}],
         materials=[{'beat_ref': 'sc01#b01', 'emphasis': 'develop', 'transition': 'start'}],
@@ -514,13 +517,15 @@ def test_consumption_closure_ignores_hook_selection():
                                          'surfaces': ['芸娘']}],
         forbidden_reveals=[
             {'ref': 'sc02#b02',
+             'fact_ref': fact_ref_of('sc02#b02',
+                 ('knowledge', ('yun_niang',), 'yun_niang', KP_INQUIRY), 0),
              'address': {'domain': 'knowledge', 'key': KP_INQUIRY,
                          'subjects': ['yun_niang'], 'holder': 'yun_niang'}}],
         reader_expectation={'kind': 'action', 'focus': '她如何查明真相',
                             'followup_refs': ['sc02#b02']},
         local_focus='通过观察与即时反应呈现疑心。')
     graph = PresentationGraph.model_validate({
-        **body.model_dump(mode='json'), 'contract_version': 'str06-rc26',
+        **body.model_dump(mode='json'), 'contract_version': 'str06-rc27',
         'hook': hook.model_dump(mode='json')})
     closure = consumption_closure(graph)
     assert closure == consumption_closure(body)

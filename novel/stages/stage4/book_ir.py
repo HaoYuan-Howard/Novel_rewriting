@@ -208,7 +208,7 @@ def compile_writer_book_ir(
     kp_statements: Mapping[str, str] = {},
     world_statements: Mapping[str, str] = {},
     display_fallback: Mapping[str, str] | None = None,
-    required_releases: Mapping[tuple[str, str, str], tuple[str, ...]] = None,
+    required_releases: Mapping[tuple, tuple[str, ...]] = None,
     name_map: NameMapV6,
 ) -> WriterBookIR:
     """全书静态写作 IR 的唯一产地。纯函数：不落盘、不调 LLM、不修改输入。
@@ -219,8 +219,8 @@ def compile_writer_book_ir(
     派生原文未回答禁区（`unanswered_guards`，从承载位置起进章包）；
     背景投影经 `consumption_closure` 收窄（书级初态立足点＋后文仍被消费
     的当前状态，C7）。`kp_statements`（Brief.propositions 的 kp→statement
-    表）回填知情/读者增量的命题文本——value 恒为 "true"，不回填则写手面
-    全是「确知「true」」（R10b 锁以内容送达；2026-10-03 D6 渲染修复）。
+    表）投影知情/读者增量的命题文本；value 保留 true/false 或撤回的 None，
+    文本进入 IR 专用 proposition_statement，渲染保留极性和操作。
     `world_statements`（Brief 世界约束的 wc_{nn}→statement 表）同尺回填
     world 规则键的 value（CS-3：布尔规则键渲染零信息的收口）。
     rc26（命名前移批 C）：`name_map`（NameMapV6）是称谓材料的目标字面权威——
@@ -249,7 +249,9 @@ def compile_writer_book_ir(
     for scene in graph.scenes:
         for beat in scene.beats:
             for delta in beat.target_delta:
-                key = (delta.holder, delta.key, delta.knowledge_mode)
+                key = (delta.holder, delta.key, delta.op, delta.knowledge_mode,
+                       ('negative' if delta.value == 'false' else 'positive')
+                       if delta.op == 'set' else None)
                 literals = releases.get(key)
                 if not literals:
                     continue

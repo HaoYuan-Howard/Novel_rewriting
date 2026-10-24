@@ -178,10 +178,11 @@ def _read_resolves_in(
     """读取地址在候选条目里是否解析到（与 scene_read_views 同一探测逻辑）。"""
     for entry in entries:
         if read.domain is EffectDomain.KNOWLEDGE:
-            if (('knowledge', entry.subjects, entry.holder, entry.key)
+            if isinstance(entry, KnowledgeEntry) and entry.mode != 'heard' and (
+                    ('knowledge', entry.subjects, entry.holder, entry.key)
                     == ('knowledge', read.subjects, read.holder, read.key)):
                 return True
-        elif entry.address() == read.address():
+        elif isinstance(entry, StateEntry) and entry.address() == read.address():
             return True
     return False
 
@@ -363,15 +364,17 @@ class LockOrderViolation:
 
     holder: str
     kp: str
-    mode: str
+    op: str
+    mode: str | None
+    polarity: str | None
     upgrade_ref: str
     auth_ref: str
     core_id: str
 
     def message(self) -> str:
         who = '读者确认' if self.holder == 'reader' else f'{self.holder} 的知情升级'
-        return (f'epistemic_lock_order：{self.upgrade_ref} 的{who}（{self.kp} 升到 '
-                f'{self.mode}）早于授权该模式的义务承载位置 {self.auth_ref}'
+        return (f'epistemic_lock_order：{self.upgrade_ref} 的{who}（{self.kp} '
+                f'{self.op}/{self.mode}/{self.polarity}）早于授权该认知变化的义务承载位置 {self.auth_ref}'
                 f'（{self.core_id}）——信息披露顺序不得前移：把该知情承载移到'
                 '授权位置之后，或把义务承载位置前移到该拍')
 
@@ -400,7 +403,16 @@ def lock_order_violations(
                  for bi, beat in enumerate(scene.beats)}
     entry_of = {e.obligation_id: e for e in binding.entries}
     # (holder, kp, mode) -> (最早承载位置, 源盲 core_id, 授权承载引用)
-    authorized: dict[tuple[str, str, str], tuple[tuple[int, int], str, str]] = {}
+    authorized: dict[tuple, tuple[tuple[int, int], str, str]] = {}
+    # 开场知识先于全部目标拍成立。后章重复确认同一接受，不得反过来把它的
+    # 授权时点推迟到该章；holder/操作/模式/极性仍逐项隔离。
+    for obligation in binding.obligations:
+        for anchor in obligation.anchors:
+            if anchor.source_kind == 'initial_knowledge':
+                triple = (anchor.holder, _lock_id('kp_', anchor.proposition_ref),
+                          'set', 'known', anchor.polarity)
+                authorized[triple] = ((-1, -1),
+                    obligation_core_id(obligation.obligation_id), 'init')
     for obligation in binding.obligations:
         if not obligation.must_preserve:
             continue
@@ -418,9 +430,11 @@ def lock_order_violations(
             if anchor.source_kind != 'cognition' or not anchor.proposition_ref:
                 continue
             mode = KNOWLEDGE_LOCK_MODE.get(anchor.mode or '')
-            if mode is None or not anchor.holder or anchor.holder == 'public':
+            if (mode is None and anchor.op != 'unset') \
+                    or not anchor.holder or anchor.holder == 'public':
                 continue
-            triple = (anchor.holder, _lock_id('kp_', anchor.proposition_ref), mode)
+            triple = (anchor.holder, _lock_id('kp_', anchor.proposition_ref),
+                      anchor.op, mode, anchor.polarity)
             known = authorized.get(triple)
             if known is None or pos < known[0]:
                 authorized[triple] = (pos, core_id, auth_ref)
@@ -428,17 +442,20 @@ def lock_order_violations(
     for si, scene in enumerate(graph.scenes):
         for bi, beat in enumerate(scene.beats):
             for delta in beat.target_delta:
-                if not (delta.key.startswith('kp_') and delta.op == 'set'
+                if not (delta.key.startswith('kp_') and delta.op in ('set', 'unset')
                         and delta.domain is EffectDomain.KNOWLEDGE):
                     continue
                 # 读者揭示（holder=reader，D5 统一）与人物知情同一把尺——
                 # triple 天然带 holder/mode，无需特判。
                 triple = (delta.holder or '', delta.key,
-                          delta.knowledge_mode or '')
+                          delta.op, delta.knowledge_mode,
+                          ('positive' if delta.value == 'true' else 'negative')
+                          if delta.op == 'set' else None)
                 auth = authorized.get(triple)
                 if auth is not None and (si, bi) < auth[0]:
                     violations.append(LockOrderViolation(
-                        holder=triple[0], kp=triple[1], mode=triple[2],
+                        holder=triple[0], kp=triple[1], op=triple[2],
+                        mode=triple[3], polarity=triple[4],
                         upgrade_ref=f'{scene.scene_id}#{beat.beat_id}',
                         auth_ref=auth[2], core_id=auth[1]))
     return tuple(violations)

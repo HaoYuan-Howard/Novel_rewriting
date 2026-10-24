@@ -21,6 +21,12 @@ export interface Str06Character {
   char_id: string
   canonical: string
   surfaces: Str06SurfaceWindow[]
+  /** 人物同一性证据，与姓名释放和读者知情分别表达。 */
+  identity_bindings: {
+    description: string
+    appearance_refs: string[]
+    identity_refs: string[]
+  }[]
 }
 
 export interface Str06NameStructure {
@@ -32,6 +38,13 @@ export interface Str06CharactersView {
   present: boolean
   contract_version: string | null
   characters: Str06Character[]
+  initial_knowledge: {
+    knowledge_id: string
+    holder: string
+    proposition: { ref: string; statement: string }
+    polarity: 'positive' | 'negative'
+    basis: { segment: string; quote: string }[]
+  }[]
   name_structure: Str06NameStructure | null
 }
 

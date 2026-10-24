@@ -14,7 +14,7 @@ from __future__ import annotations
 from contracts.schema.grounding import ObligationSeries, PreserveCheckpoint
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
 from contracts.schema.source import (
-    BlueprintsArtifactV17, ChapterBlueprint, CharactersCore,
+    BlueprintsArtifactV18, ChapterBlueprint, CharactersCore,
 )
 from novel.stages.stage4.grounding import (
     assemble_preserve, project_preserve_view,
@@ -29,11 +29,11 @@ BASIS = ({'segment': 'e01_01', 'quote': '夫君藏进床底'},)
 
 
 def _characters() -> CharactersCore:
-    return CharactersCore.model_validate({
+    return CharactersCore.model_validate({'initial_knowledge': [],
         'characters': {
-            'yun_niang': {'canonical': '云娘', 'surfaces': [
+            'yun_niang': {'identity_bindings': [], 'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'from_chapter': 1, 'source_refs': ['e01_01']}]},
-            'fu_jun': {'canonical': '夫君', 'surfaces': [
+            'fu_jun': {'identity_bindings': [], 'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'from_chapter': 1, 'source_refs': ['e01_01']}]},
         },
         'initial_state': [
@@ -43,8 +43,8 @@ def _characters() -> CharactersCore:
     })
 
 
-def _blueprint() -> BlueprintsArtifactV17:
-    return BlueprintsArtifactV17.model_validate({
+def _blueprint() -> BlueprintsArtifactV18:
+    return BlueprintsArtifactV18.model_validate({
         'source_expression': sample_blueprint_expression(),
         'world_constraints': [
             {'constraint_id': 'wc_01', 'kind': 'hard_rule',
@@ -59,12 +59,12 @@ def _blueprint() -> BlueprintsArtifactV17:
                               {'kind': 'character', 'char_id': 'fu_jun'},
                               'scene_location', '床底',
                               basis=BASIS),),
-                          cognition=({'proposition': {'ref': 'p_guess',
+                          cognition=({'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False, 'proposition': {'ref': 'p_guess',
                                                       'statement': '夫君像是看穿了什么'},
                                       'holder': 'yun_niang', 'mode': 'suspects',
                                       'basis': BASIS},)),
                  v13_beat('b01_02', '云娘起疑', source_refs=('e01_02',),
-                          cognition=({'proposition': {'ref': 'p_hide'},
+                          cognition=({'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False, 'proposition': {'ref': 'p_hide'},
                                       'holder': 'yun_niang', 'mode': 'suspects',
                                       'basis': ({'segment': 'e01_02',
                                                  'quote': '云娘听见床板响动'},)},)),
@@ -142,7 +142,7 @@ def test_event_only_obligation_and_detail_copy_evidence_without_inventing_locks(
     raw = _blueprint().model_dump(mode='json')
     beat = raw['chapters'][0]['beats'][0]
     beat.update(effects=[], cognition=[], loops=[])
-    bp = BlueprintsArtifactV17.model_validate(raw)
+    bp = BlueprintsArtifactV18.model_validate(raw)
     wire = _wire(obligations=[{
         'kind': 'event_core', 'statement': '夫君藏进床底',
         'anchors': ['b01_01.v1'], 'must_preserve': True,
@@ -196,14 +196,22 @@ def test_event_cannot_smuggle_knowledge_or_state_fields():
 def test_preserve_input_keeps_operations_scope_known_holders_loops_and_causality():
     raw = _blueprint().model_dump(mode='json')
     first, second = raw['chapters'][0]['beats']
-    first['loops'] = [{'ref': 'loop_noise', 'op': 'open', 'question': '谁在床底？'}]
-    second['loops'] = [{'ref': 'loop_noise', 'op': 'close', 'resolution': '夫君藏身床底。'}]
+    first['loops'] = [{'ref': 'loop_noise', 'op': 'open', 'question': '谁在床底？',
+                       'answer_refs': []}]
+    second['cognition'].append({
+        'op': 'set', 'polarity': 'positive', 'support': 'confirmed',
+        'reader_visible': True, 'holder': 'yun_niang', 'mode': 'learns',
+        'proposition': {'ref': 'p_answer', 'statement': '夫君藏身床底。'},
+        'basis': [{'segment': 'e01_02', 'quote': '夫君藏身床底。'}]})
+    raw['evidence']['e01_02'] += '夫君藏身床底。'
+    second['loops'] = [{'ref': 'loop_noise', 'op': 'close', 'resolution': '夫君藏身床底。',
+                        'answer_refs': ['b01_02.c2']}]
     second['effects'] = [{**first['effects'][0], 'op': 'unset', 'value': None}]
     raw['chapters'][0]['causal_edges'] = [
         {'from_beat': 'b01_01', 'to_beat': 'b01_02', 'kind': 'causes'}]
-    view = project_preserve_view(_characters(), BlueprintsArtifactV17.model_validate(raw))
-    assert 'stage4-preserve-input-v3' in view
-    assert '（actual）' in view
+    view = project_preserve_view(_characters(), BlueprintsArtifactV18.model_validate(raw))
+    assert 'stage4-preserve-input-v4' in view
+    assert 'actual' in view
     assert 'scene_location unset None' in view
     assert 'loop_noise open：谁在床底？' in view
     assert 'loop_noise close：夫君藏身床底。' in view
@@ -351,7 +359,7 @@ def test_empty_beat_accepts_missing_conflict_but_not_obligation_anchor():
         'b01_03', '云娘看见夫君从床底现身', source_refs=('e01_03',)))
     bp['chapters'][0]['scenes'][0]['beat_ids'].append('b01_03')
     bp['evidence']['e01_03'] = '我就见夫君从床底爬出来。'
-    blueprint = BlueprintsArtifactV17.model_validate(bp)
+    blueprint = BlueprintsArtifactV18.model_validate(bp)
     before = blueprint.model_dump(mode='json')
 
     def assemble(wire):
@@ -541,7 +549,7 @@ def test_series_summary_covers_only_instances_in_same_group_and_can_precede_futu
     assert not errors, errors
     summary = checkpoint.series[0].summaries[0]
     assert summary.member == 'ob02' and summary.covers == ('ob01',)
-    binding = SemanticBinding(contract_version='str06-rc26',
+    binding = SemanticBinding(contract_version='str06-rc27',
         binding_id='bind', preserve_checkpoint_sha256=checkpoint.checkpoint_sha256,
         obligations=checkpoint.obligations, series=checkpoint.series, entries=(), unbound=())
     assert binding.series == checkpoint.series

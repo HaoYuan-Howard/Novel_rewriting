@@ -70,8 +70,8 @@ def test_edit_distance_one_first_char_must_match():
 
 
 def _core_with(surfaces: dict[str, list[str]]) -> CharactersCore:
-    return CharactersCore.model_validate({
-        'characters': {slug: {'canonical': names[0], 'surfaces': [
+    return CharactersCore.model_validate({'initial_knowledge': [],
+        'characters': {slug: {'identity_bindings': [], 'canonical': names[0], 'surfaces': [
             {'surface': name, 'from_chapter': 1, 'until_chapter': None,
              'source_refs': ['e01_01']} for name in names]}
             for slug, names in surfaces.items()},

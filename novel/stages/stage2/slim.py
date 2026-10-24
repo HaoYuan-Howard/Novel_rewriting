@@ -47,23 +47,83 @@ scene_location 即拒（防双路径，S-04）。
 """
 from __future__ import annotations
 
+import json
 import re
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from contracts.schema.observation import (
     STAGE2_CHAPTERS_PROTOCOL, STAGE2_CHAPTERS_WIRE_PROTOCOL, ChapterObservationWire,
     is_fact_ref,
 )
-from novel.core.text import norm
+from novel.core.state_proposition import state_statement as _state_statement
 
 #: 代码派发的章内命题本地句柄：k01..（OBSERVATION_HANDLE_PATTERN 内）。
 _PROP_SEQUENCE = 'k{:02d}'
 
 #: canonical 效应的现役字段集（逆映射的可表达面；多出的字段一律拒绝）。
-_CANONICAL_EFFECT_FIELDS = frozenset({'target', 'key', 'op', 'modality', 'value', 'basis'})
+_CANONICAL_EFFECT_FIELDS = frozenset({
+    'target', 'key', 'op', 'modality', 'reader_visible', 'value', 'basis'})
 
 #: 段 id 的数值序键：`e{章}_{段}` → (章序, 段序)——≥100 段的章不按字典序。
 _SEGMENT_ID = re.compile(r'^e(\d+)_(\d+)$')
+
+
+def loop_answer_atoms(
+    beat: Mapping[str, Any], refs: Iterable[str], *, beat_id: str | None = None,
+) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
+    """只解析本拍已成立且可见的答案原子；接受、关联和最终编译共用。
+
+    章观察只接受 eN／cN；正式引用只在传入本拍拍号时接受。这里验证显式
+    字段，不判断自然语言答案是否真的回答了问题（该同一性仍归语义单元）。
+    """
+    atoms = {**{f'e{i}': atom for i, atom in enumerate(beat.get('effects') or (), 1)},
+             **{f'c{i}': atom for i, atom in enumerate(beat.get('cognition') or (), 1)}}
+    selected: list[dict[str, Any]] = []
+    issues: list[tuple[str, str]] = []
+    for ref in refs:
+        if not isinstance(ref, str):
+            continue  # 非字符串形状交 schema 按条目定位。
+        local = ref.removeprefix(f'{beat_id}.') if beat_id is not None else ref
+        atom = atoms.get(local)
+        if atom is None:
+            issues.append((ref, '答案必须引用本拍存在的 eN／cN 原子'))
+        elif not isinstance(atom, Mapping):
+            issues.append((ref, '答案原子形状无效，须修复被引用的本拍条目'))
+        elif not atom.get('reader_visible'):
+            issues.append((ref, '答案原子未向读者展示，不能收束悬念'))
+        elif local.startswith('e') and not (
+                atom.get('modality') == 'actual' and atom.get('op') == 'set'):
+            issues.append((ref, '事实答案必须是 actual／set 的已成立事实'))
+        elif local.startswith('c') and not (
+                atom.get('op') == 'set' and atom.get('mode') in ('learns', 'confirms')
+                and atom.get('support') == 'confirmed'):
+            issues.append((ref, '认知答案必须是 confirmed 的 learns／confirms；猜测或说法不能收束'))
+        else:
+            selected.append(atom)
+    return selected, issues
+
+
+
+def loop_answer_resolution(
+    atoms: Iterable[Mapping[str, Any]], *, statements: Mapping[str, str] | None = None,
+) -> str | None:
+    """答案原子确定性渲染；命题文本尚未闭合时保持 None，等待编译完成。
+
+    极性属于命题接受，负极性必须保留，不能无条件回填正命题文本。
+    """
+    texts: list[str] = []
+    for atom in atoms:
+        if 'proposition' in atom:
+            prop = atom.get('proposition') or {}
+            text = prop.get('statement') or (statements or {}).get(prop.get('ref'))
+            if not isinstance(text, str) or not text.strip():
+                return None
+            if atom.get('polarity') == 'negative':
+                text = f'非（{text}）'
+        else:
+            text = _state_statement(atom)
+        texts.append(text)
+    return '；'.join(texts) if texts else None
 
 
 def segment_sort_key(ref: str) -> tuple[int, int]:
@@ -184,27 +244,27 @@ def _target_of(address: str, where: str) -> tuple[dict | None, str | None]:
 
 
 class _PropRegistry:
-    """章内命题文本 → 代码派发句柄（首现建立、norm() 归并重引）。
+    """章内命题文本 → 代码派发句柄（首现建立、逐字相同才重引）。
 
-    与 CS-1 的 D1 配对判定同一把尺（norm()）：标点宽度不同的重引归并同一
-    句柄，norm 后不同即另一条命题——不模糊合并、不替模型选边（I-20）。
+    标点和空白可能属于口令、数值等命题内容（A-B≠AB、10.5≠105），不得
+    用摘抄归一函数先行判 same。语义等价由 Book 引用或 Associate 判断；
+    compiler 这里只复用完整相同的文本，不删除内部字符（I-20）。
     派发顺序＝拍序、拍内 change 先于 know（与 rc12 章内纪律的遍历序一致，
     expand/slim/`_chapter_handle_discipline` 三处同一顺序，判据 25）。
     """
 
     def __init__(self) -> None:
-        self._by_norm: dict[str, str] = {}
+        self._by_text: dict[str, str] = {}
         self._count = 0
 
     def resolve(self, statement: str) -> tuple[str, bool]:
         """→ (句柄, 是否首现)。首现建立新句柄，重引返回既有句柄。"""
-        key = norm(statement)
-        handle = self._by_norm.get(key)
+        handle = self._by_text.get(statement)
         if handle is not None:
             return handle, False
         self._count += 1
         handle = _PROP_SEQUENCE.format(self._count)
-        self._by_norm[key] = handle
+        self._by_text[statement] = handle
         return handle, True
 
 
@@ -252,6 +312,7 @@ def expand_chapter_wire(
                 'target': target, 'key': effect.key,
                 'op': effect.op or 'set',
                 'modality': effect.modality or 'actual',
+                'reader_visible': effect.reader_visible,
                 'value': effect.val,
                 'basis': [{'segment': ref, 'quote': None} for ref in effect.evidence_refs],
             })
@@ -262,7 +323,8 @@ def expand_chapter_wire(
                 'target': {'kind': 'world', 'char_id': None,
                            'subject': None, 'object': None},
                 'key': 'scene_location', 'op': 'set',
-                'modality': 'actual', 'value': beat.scene_location,
+                'modality': 'actual', 'reader_visible': beat.location_reader_visible,
+                'value': beat.scene_location,
                 'basis': [{'segment': ref, 'quote': None} for ref in refs],
             })
         cognition_out: list[dict] = []
@@ -272,7 +334,9 @@ def expand_chapter_wire(
                 # compile 从词表回填；跨章同一性按引用构造成立）。
                 cognition_out.append({
                     'proposition': {'ref': entry.fact, 'statement': None},
-                    'holder': entry.who, 'mode': entry.how,
+                    'holder': entry.who, 'op': entry.op, 'mode': entry.how,
+                    'polarity': entry.polarity, 'support': entry.support,
+                    'reader_visible': entry.reader_visible,
                     'basis': [{'segment': ref, 'quote': None} for ref in entry.evidence_refs],
                 })
                 continue
@@ -280,9 +344,23 @@ def expand_chapter_wire(
             cognition_out.append({
                 'proposition': {'ref': handle,
                                 'statement': entry.what if first else None},
-                'holder': entry.who, 'mode': entry.how,
+                'holder': entry.who, 'op': entry.op, 'mode': entry.how,
+                'polarity': entry.polarity, 'support': entry.support,
+                'reader_visible': entry.reader_visible,
                 'basis': [{'segment': ref, 'quote': None} for ref in entry.evidence_refs],
             })
+        loops_out = []
+        for loop in beat.loops:
+            # 数组索引只数模型 change／know；拍级位置独立选择，原数组索引不变。
+            # scene_location 的存在性与固定 index=1 由当前 wire schema 同尺验证。
+            answer_refs = [
+                'e1' if ref.kind == 'scene_location'
+                else f'e{ref.index + int(beat.scene_location is not None)}'
+                if ref.kind == 'change' else f'c{ref.index}'
+                for ref in loop.answer_refs]
+            loops_out.append({'ref': loop.ref, 'op': loop.op,
+                              'question': loop.question, 'answer_refs': answer_refs,
+                              'resolution': None})
         beats_out.append({
             'event': beat.event,
             'participants': list(beat.on_stage),
@@ -294,7 +372,7 @@ def expand_chapter_wire(
             **({'access': beat.access} if beat.access != 'witnessed' else {}),
             'effects': effects_out,
             'cognition': cognition_out,
-            'loops': [loop.model_dump(mode='json') for loop in beat.loops],
+            'loops': loops_out,
         })
     if issues:
         return None, issues
@@ -328,6 +406,7 @@ def slim_chapter_wire(observation: dict) -> dict:
             raise ValueError('拍没有可作 start 的 source_refs')
         # 拍级 scene_location：从登记键 world 效应还原（compiler 合成的对应逆）。
         scene_location = None
+        location_reader_visible = False
         effects = []
         for effect in beat.get('effects') or ():
             extra = sorted(set(effect) - _CANONICAL_EFFECT_FIELDS)
@@ -343,17 +422,20 @@ def slim_chapter_wire(observation: dict) -> dict:
                         or (effect.get('target') or {}).get('kind') != 'world'
                         or effect.get('op') != 'set'
                         or effect.get('modality') != 'actual'
+                        or not isinstance(effect.get('reader_visible'), bool)
                         or not isinstance(effect.get('value'), str)
                         or not effect['value']
                         or [b['segment'] for b in effect.get('basis', ())] != refs):
                     raise ValueError('canonical scene_location 效应不可表达为拍级位置字段')
                 scene_location = effect['value']
+                location_reader_visible = effect['reader_visible']
                 continue
             effects.append(effect)
         slim_beat: dict[str, Any] = {
             'event': beat['event'],
             'on_stage': list(beat.get('participants') or ()),
             'start': refs[0],
+            'location_reader_visible': location_reader_visible,
         }
         if scene_location is not None:
             slim_beat['scene_location'] = scene_location
@@ -369,6 +451,7 @@ def slim_chapter_wire(observation: dict) -> dict:
             slim_effect: dict[str, Any] = {
                 'at': _address_of(effect['target']),
                 'key': effect['key'],
+                'reader_visible': effect['reader_visible'],
             }
             if effect['op'] != 'set':
                 slim_effect['op'] = effect['op']
@@ -385,12 +468,16 @@ def slim_chapter_wire(observation: dict) -> dict:
             if is_fact_ref(ref):
                 # Phase 2：书级词表引用（f{nn}）——逆映射回 fact 字段，不还原文本。
                 know_out.append({
-                    'who': entry['holder'], 'how': entry['mode'], 'fact': ref,
+                    'who': entry['holder'], 'op': entry['op'], 'how': entry['mode'],
+                    'polarity': entry['polarity'], 'support': entry['support'],
+                    'reader_visible': entry['reader_visible'], 'fact': ref,
                     'evidence_refs': [basis['segment'] for basis in entry['basis']],
                 })
                 continue
             know_out.append({
-                'who': entry['holder'], 'how': entry['mode'],
+                'who': entry['holder'], 'op': entry['op'], 'how': entry['mode'],
+                'polarity': entry['polarity'], 'support': entry['support'],
+                'reader_visible': entry['reader_visible'],
                 'what': prop.get('statement') or statements.get(ref) or '',
                 'evidence_refs': [basis['segment'] for basis in entry['basis']],
             })
@@ -399,6 +486,24 @@ def slim_chapter_wire(observation: dict) -> dict:
         if know_out:
             slim_beat['know'] = know_out
         if beat.get('loops'):
-            slim_beat['loops'] = beat['loops']
+            loops_out = []
+            for loop in beat['loops']:
+                answers = []
+                for ref in loop['answer_refs']:
+                    # canonical 观察只携带本地引用；正式蓝图不作 wire 逆映射。
+                    if not re.fullmatch(r'[ec][1-9]\d*', ref):
+                        raise ValueError('章观察答案不是本拍 eN／cN 引用，不能逆映射')
+                    number = int(ref[1:])
+                    if ref.startswith('e'):
+                        if scene_location is not None and number == 1:
+                            answers.append({'kind': 'scene_location', 'index': 1})
+                            continue
+                        number -= int(scene_location is not None)
+                    answers.append({'kind': 'change' if ref.startswith('e') else 'know',
+                                    'index': number})
+                loops_out.append({'ref': loop['ref'], 'op': loop['op'],
+                                  'question': loop.get('question'),
+                                  'answer_refs': answers})
+            slim_beat['loops'] = loops_out
         beats_out.append(slim_beat)
     return {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL, 'beats': beats_out}

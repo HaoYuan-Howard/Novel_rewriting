@@ -18,7 +18,7 @@ from contracts.schema.execution import EffectDomain
 from contracts.schema.grounding import BindingEntry, SourceLineage
 from contracts.schema.policy import PreserveKind
 from contracts.schema.source import (
-    ChapterBlueprint, CharactersArtifactV6,
+    ChapterBlueprint, CharactersArtifactV7,
 )
 from novel.stages.stage4.compile import compile_execution_plan, init_establishments
 from novel.stages.stage4.fold import FoldedState, fold_accepted_prefix
@@ -89,7 +89,7 @@ def _binding(cp):
         if o.kind is not PreserveKind.CAUSAL else
         BindingEntry(beat_ref=('s02' + '#bt1'), obligation_id=o.obligation_id, scene_id='s02')
         for o in cp.obligations)
-    return SemanticBinding(contract_version='str06-rc26',
+    return SemanticBinding(contract_version='str06-rc27',
         binding_id='b1', preserve_checkpoint_sha256=H64,
         obligations=cp.obligations, entries=entries, unbound=())
 
@@ -191,7 +191,7 @@ def _reader_scene(sid, *, establish=None, confirms=None, reads=()):
                                   subjects=(), op='set', scope='book'))
     for key, value in (confirms or ()):
         deltas.append(TargetDelta(
-            domain='knowledge', key='kp_' + ('1' if key == 'hiding' else '2') * 16, value=value, subjects=(),
+            domain='knowledge', key='kp_' + ('1' if key == 'hiding' else '2') * 16, value='true', subjects=(),
             holder='reader', op='set', scope='scene',
             knowledge_mode='known', confirms={'domain': 'world', 'key': key}))
     return TargetScene(state_reads=reads, scene_id=sid,
@@ -234,17 +234,20 @@ def test_pending_reader_confirmations_are_projected_by_address():
     # s01 只写 world:hiding：清单含 hiding@s02，不含 wardrobe@s03（地址不相干）
     assert [(p.fact, p.position, p.in_scene) for p in
             pending_reader_confirmations(graph, 0)] == [
-        ('床底有人', 's02#bt1', False)]
+        ('true', 's02#bt1', False)]
     # s02 确认 hiding（in_scene）并写 wardrobe：清单含 wardrobe@s03
     assert [(p.fact, p.position, p.in_scene) for p in
             pending_reader_confirmations(graph, 1)] == [
-        ('床底有人', 's02#bt1', True), ('衣柜藏身', 's03#bt1', False)]
+        ('true', 's02#bt1', True), ('true', 's03#bt1', False)]
     # s03 确认 wardrobe：hiding 已在过去确认，不再列入
     assert [(p.fact, p.position, p.in_scene) for p in
             pending_reader_confirmations(graph, 2)] == [
-        ('衣柜藏身', 's03#bt1', True)]
+        ('true', 's03#bt1', True)]
     # 每条清单带读者知情地址（D5 机械面：knowledge/holder=reader）
     items = pending_reader_confirmations(graph, 1)
+    # 原始 Design 保留成立值；命题文本在下方真实 IR／Writer 投影测试中回填。
+    assert [(p.key, p.polarity) for p in items] == [
+        ('kp_1111111111111111', 'positive'), ('kp_2222222222222222', 'positive')]
     assert [(p.address.domain.value, p.address.key) for p in items] == [
         ('world', 'hiding'), ('world', 'wardrobe')]
     assert all(p.address.holder is None for p in items)

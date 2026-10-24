@@ -25,7 +25,7 @@ from contracts.schema.hook import (
     HookDesign, HookPov, HookReceipt,
 )
 from contracts.schema.source import (
-    CharactersArtifactV6, NameStructure,
+    CharactersArtifactV7, NameStructure,
 )
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.hook_context import compile_hook_context
@@ -61,17 +61,17 @@ def _declared_prose(text: str) -> str:
 
 # ───────────────────────── fixture 构造器 ─────────────────────────
 
-def _characters() -> CharactersArtifactV6:
-    return CharactersArtifactV6.model_validate({
+def _characters() -> CharactersArtifactV7:
+    return CharactersArtifactV7.model_validate({'initial_knowledge': [],
             'characters': {
-                'fu_jun': {'canonical': '夫君', 'surfaces': [
+                'fu_jun': {'identity_bindings': [], 'canonical': '夫君', 'surfaces': [
                     {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
                      'source_refs': ['e01_01']},
                     {'surface': '陆大哥', 'from_chapter': 1, 'until_chapter': None,
                      'source_refs': ['e01_01']},
                     {'surface': '陆兄', 'from_chapter': 1, 'until_chapter': None,
                      'source_refs': ['e01_01']}]},
-                'yun_niang': {'canonical': '苏芸娘', 'surfaces': [
+                'yun_niang': {'identity_bindings': [], 'canonical': '苏芸娘', 'surfaces': [
                     {'surface': '苏芸娘', 'from_chapter': 1, 'until_chapter': None,
                      'source_refs': ['e01_01']},
                     {'surface': '芸娘', 'from_chapter': 1, 'until_chapter': None,
@@ -95,9 +95,9 @@ def _characters() -> CharactersArtifactV6:
 
 
 def _body_wire() -> dict:
-    """stage4-design-v5 形状（R2）：无 ID／章切片／相对权重数组；threads＋entry。"""
+    """stage4-design-v6 形状（R2）：无 ID／章切片／相对权重数组；threads＋entry。"""
     return {**sample_design_expression(('yun_niang',)),
-        'protocol_version': 'stage4-design-v5',
+        'protocol_version': 'stage4-design-v6',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'initial_state': [
             {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
@@ -163,11 +163,11 @@ def _hook_wire(**over) -> dict:
         'protocol_version': 'stage4-hook-design-v1',
         'pov': {'person': 'first', 'focalizers': ['yun_niang']},
         'opening_facts': [
-            {'ref': 'init',
+            {'ref': 'init', 'atom_ordinal': 0,
              'address': {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
                          'key': 'marital_status'},
              'audience': 'world'},
-            {'ref': {'scene': 'sc01', 'beat': 'b03'},
+            {'ref': {'scene': 'sc01', 'beat': 'b03'}, 'atom_ordinal': 0,
              'address': {'domain': 'knowledge', 'subjects': ['yun_niang'], 'holder': 'yun_niang',
                          'key': 'intent'},
              'audience': 'reader'}],
@@ -182,12 +182,12 @@ def _hook_wire(**over) -> dict:
         'surface_releases': [
             {'char_id': 'yun_niang', 'surfaces': ['苏芸娘', '芸娘']}],
         'forbidden_reveals': [
-            {'ref': {'scene': 'sc02', 'beat': 'b02'},
+            {'ref': {'scene': 'sc02', 'beat': 'b02'}, 'atom_ordinal': 0,
              'address': {'domain': 'knowledge', 'subjects': ['fu_jun'], 'holder': 'yun_niang',
                          'key': 'secret'}}],
         'reader_expectation': {
             'kind': 'fact', 'focus': '玉佩与那桩旧约有什么关联？',
-            'answer': {'ref': {'scene': 'sc02', 'beat': 'b02'},
+            'answer': {'ref': {'scene': 'sc02', 'beat': 'b02'}, 'atom_ordinal': 0,
                        'address': {'domain': 'knowledge', 'subjects': ['fu_jun'],
                                    'holder': 'yun_niang', 'key': 'secret'}}},
         'local_focus': '重心在眼前异样与旧约的反差，冷面叙述，短句，不解释。',
@@ -202,7 +202,7 @@ def _design_wire_v7() -> dict:
     以 character 域事实断言承载同一信息。义务 ob01 的接受拍＝末次标注拍
     （sc01#b02），sc01#b01 是支撑位——与旧 bind wire 的 entries/supporting 等价。"""
     wire = {
-        'protocol_version': 'stage4-design-v12',
+        'protocol_version': 'stage4-design-v13',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'character_voices': [{'char_id': 'yun_niang', 'voice': '冷峻'}],
         'initial_state': [
@@ -249,12 +249,12 @@ def _hook_wire_v7(**over) -> dict:
     （knowledge 自由键行不存在——见 `_design_wire_v7` 注释）。"""
     wire = _hook_wire()
     wire['opening_facts'][1] = {
-        'ref': {'scene': 'sc01', 'beat': 'b03'},
+        'ref': {'scene': 'sc01', 'beat': 'b03'}, 'atom_ordinal': 0,
         'address': {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
                     'key': 'intent'},
         'audience': 'reader'}
     wire['forbidden_reveals'] = [{
-        'ref': {'scene': 'sc02', 'beat': 'b02'},
+        'ref': {'scene': 'sc02', 'beat': 'b02'}, 'atom_ordinal': 0,
         'address': {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
                     'key': 'secret'}}]
     wire['reader_expectation']['answer'] = deepcopy(wire['forbidden_reveals'][0])
@@ -263,8 +263,8 @@ def _hook_wire_v7(**over) -> dict:
 
 
 def _assemble_coordinate_fixture(wire, **kwargs):
-    from tests.factories import hook_wire_v3
-    return assemble_hook_design(hook_wire_v3(wire), **kwargs)
+    from tests.factories import current_hook_wire
+    return assemble_hook_design(current_hook_wire(wire, body=kwargs.get('body')), **kwargs)
 
 
 def _projection():
@@ -415,11 +415,17 @@ def test_same_beat_forbidden_fact_mask_reaches_hook_writer(mask):
     assert wire == wire_before and body.model_dump(mode='json') == body_before
     if mask == 'withheld':
         assert hook.forbidden_reveals[0].address.address() == hook.materials[0].withheld[0].address()
+        assert hook.forbidden_reveals[0].fact_ref == hook.materials[0].withheld[0].fact_ref
     else:
         assert hook.materials[0].presentation == wire['materials'][0]['presentation']
     graph = publish_graph(body, hook)
     # 正式 canonical 读回复验与初答共用守卫，免费重编不能再误拒该遮罩。
     graph = type(graph).model_validate_json(graph.model_dump_json())
+    assert graph.hook.opening_facts[0].fact_ref == hook.opening_facts[0].fact_ref
+    assert graph.hook.forbidden_reveals[0].fact_ref == hook.forbidden_reveals[0].fact_ref
+    assert graph.hook.reader_expectation.answer.fact_ref == hook.reader_expectation.answer.fact_ref
+    if mask == 'withheld':
+        assert graph.hook.materials[0].withheld[0].fact_ref == hook.materials[0].withheld[0].fact_ref
     context, errors = compile_hook_context(graph, _projection(), _characters().name_structure, total_budget=2000,
                             name_map=_hook_map())
     assert context is not None and not errors, errors
@@ -646,7 +652,7 @@ def test_withheld_must_belong_to_beat_delta():
     wire = _hook_wire()
     wire['materials'][0]['withheld'] = [
         {'domain': 'character', 'subjects': ['yun_niang'], 'holder': None,
-         'key': 'residence'}]
+         'key': 'residence', 'atom_ordinal': 0}]
     _, errors = _assemble(wire)
     assert any('不属于该拍 delta' in e or '未知事实引用' in e for e in errors)
 
@@ -989,13 +995,13 @@ def _full_chain_wires():
     """B2 五节点观察协议下的全链 fake wires（book/chNN/associate 新形状）。"""
     chars = _characters()
     book = {**sample_book_expression({
-            slug: {'canonical': entry.canonical,
+            slug: {'identity_bindings': [], 'canonical': entry.canonical,
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
                                 for s in entry.surfaces]}
             for slug, entry in chars.characters.items()}),
-        'protocol_version': 'stage2-book-v7',
+        'protocol_version': 'stage2-book-v8',
         'characters': {
-            slug: {'canonical': entry.canonical,
+            slug: {'identity_bindings': [], 'canonical': entry.canonical,
                    'surfaces': [{'surface': s.surface, 'source_refs': ['e01_01']}
                                 for s in entry.surfaces]}
             for slug, entry in chars.characters.items()},
@@ -1008,8 +1014,8 @@ def _full_chain_wires():
         wire.update(over)
         return wire
 
-    from tests.factories import hook_wire_v3
-    hook_wire = hook_wire_v3(_hook_wire_v7())
+    from tests.factories import current_hook_wire
+    hook_wire = current_hook_wire(_hook_wire_v7())
     naming_wire = {'entries': [
         {'char_ref': 'fu_jun', 'name': {'family': '顾', 'given': None}, 'aliases': {},
          'keep_reason': None},
@@ -1017,16 +1023,16 @@ def _full_chain_wires():
          'keep_reason': None}]}
     return {
         'book': book,
-        'ch01': {'protocol_version': 'stage2-chapters-v7', 'beats': [
+        'ch01': {'protocol_version': 'stage2-chapters-v8', 'beats': [
             beat('苏芸娘嫁入陆家，夫君立下旧约。', ('e01_01',),
                  participants=('yun_niang', 'fu_jun'),
-                 effects=({'target': {'kind': 'relation', 'subject': 'yun_niang',
+                 effects=({'reader_visible': False, 'target': {'kind': 'relation', 'subject': 'yun_niang',
                                       'object': 'fu_jun'},
                            'key': 'marital_status', 'op': 'set', 'value': '夫妻',
                            'modality': 'actual',
                            'basis': ({'segment': 'e01_01',
                                       'quote': '苏芸娘嫁入陆家'},)},))]},
-        'ch02': {'protocol_version': 'stage2-chapters-v7', 'beats': [
+        'ch02': {'protocol_version': 'stage2-chapters-v8', 'beats': [
             beat('夫君夜半离家，芸娘发现玉佩之秘。', ('e02_01',),
                  participants=('yun_niang', 'fu_jun'))]},
         'names': __import__('tests.str06_facilities', fromlist=['names_v6_wire'])
@@ -1041,7 +1047,7 @@ def _full_chain_wires():
         'cross_cause': {'protocol_version': 'stage2-cross-cause-v1', 'causes': []},
         # 命名前移批（policy 12）：义务文本用目标姓名、无身份文本标记；
         # naming wire 把 yun_niang→柳婉、fu_jun→顾（姓位），夫君是保留称谓。
-        'preserve': {'protocol_version': 'stage4-preserve-v7', 'obligations': [
+        'preserve': {'protocol_version': 'stage4-preserve-v8', 'obligations': [
             {'kind': 'event_core',
              'statement': '柳婉嫁入顾家且夫君立下旧约',
              'anchors': ['b01_01.e1'],
@@ -1157,12 +1163,12 @@ def test_request_catalog_annotates_supersede_writes():
     from novel.stages.stage4.hook_wire import annotated_hook_catalog
     body = _superseded_body()
     catalog = annotated_hook_catalog(body)
-    init_ref = fact_ref_of('init', ('relation', ('yun_niang', 'fu_jun'), '', 'marital_status'))
-    beat_ref = fact_ref_of('sc01#b01', ('relation', ('yun_niang', 'fu_jun'), '', 'marital_status'))
+    init_ref = fact_ref_of('init', ('relation', ('yun_niang', 'fu_jun'), '', 'marital_status'), 1)
+    beat_ref = fact_ref_of('sc01#b01', ('relation', ('yun_niang', 'fu_jun'), '', 'marital_status'), 0)
     assert [row['fact_ref'] for row in catalog[init_ref]['later_writes']] == [beat_ref]
     assert catalog[init_ref]['later_writes'][0]['at'] == {'scene': 'sc01', 'beat': 'b01'}
     assert 'later_writes' not in catalog[beat_ref]
-    only_once = fact_ref_of('sc02#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'secret'))
+    only_once = fact_ref_of('sc02#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'secret'), 0)
     assert 'later_writes' not in catalog[only_once]
 
 
@@ -1175,12 +1181,12 @@ def test_request_catalog_annotates_name_exposure_by_person():
         _characters().name_structure,
         target_face_table(_characters().name_structure, _hook_map())[0])
     catalog = annotated_hook_catalog(body, faces=faces)
-    agreement = fact_ref_of('sc01#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'agreement'))
+    agreement = fact_ref_of('sc01#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'agreement'), 0)
     # 暴露只报本条文本里实际出现的带名目标字面（全部保留替身下目标面＝源面）。
     assert catalog[agreement]['name_exposure'] == {
         'fu_jun': ['陆大哥'],
         'yun_niang': ['苏芸娘', '芸娘']}
-    plain = fact_ref_of('sc02#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'secret'))
+    plain = fact_ref_of('sc02#b02', ('knowledge', ('fu_jun',), 'yun_niang', 'secret'), 0)
     assert 'name_exposure' not in catalog[plain]
 
 
@@ -1189,7 +1195,7 @@ def test_structural_failure_still_aggregates_material_exposure():
     （材料层）同份首答并存时，一轮反馈必须同时暴露两层，不逐层付费排雷。"""
     from types import SimpleNamespace
 
-    from tests.factories import hook_wire_v3
+    from tests.factories import current_hook_wire
     from novel.stages.stage4.preflight import hook_candidate_material_errors
     body = _superseded_body(leaky_agreement=True)
     wire = _hook_wire(
@@ -1209,7 +1215,7 @@ def test_structural_failure_still_aggregates_material_exposure():
     assert hook is None and any('已变化、解除或失效' in str(e) for e in errors), errors
     binding = SimpleNamespace(obligations=(), fact_bindings=())
     diag = hook_candidate_material_errors(
-        hook_wire_v3(wire), body=body, chars=_characters(), binding=binding,
+        current_hook_wire(wire, body=body), body=body, chars=_characters(), binding=binding,
         name_map=_hook_map())
     exposed = [e for e in diag if e.code == 'hook_design_material_exposure']
     assert exposed and exposed[0].location == ('opening_facts', 1), [str(e) for e in diag]
@@ -1220,7 +1226,7 @@ def test_structural_failure_still_aggregates_material_exposure():
 def test_green_wire_material_preview_reports_no_exposure():
     from types import SimpleNamespace
 
-    from tests.factories import hook_wire_v3
+    from tests.factories import current_hook_wire
     from novel.stages.stage4.preflight import hook_candidate_material_errors
     body = _superseded_body(leaky_agreement=True)
     # 只释放芸娘面、不选含名条目的合法设计：预检零误报。
@@ -1236,5 +1242,5 @@ def test_green_wire_material_preview_reports_no_exposure():
     assert hook is not None and not errors, errors
     binding = SimpleNamespace(obligations=(), fact_bindings=())
     assert hook_candidate_material_errors(
-        hook_wire_v3(wire), body=body, chars=_characters(), binding=binding,
+        current_hook_wire(wire, body=body), body=body, chars=_characters(), binding=binding,
         name_map=_hook_map()) == []

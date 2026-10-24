@@ -354,7 +354,7 @@ class BodyDesign(StrictModel):
     """
     # rc26（命名前移批次 C）：自有自然语言为普通目标文本
     # （identity-text 协议退役，无标记、无区间）。
-    contract_version: Literal['str06-rc26'] = 'str06-rc26'
+    contract_version: Literal['str06-rc27'] = 'str06-rc27'
     graph_id: str = Field(min_length=1)
     narration: HookPov
     expression_decisions: tuple[ExpressionDecision, ...] = Field(min_length=1)
@@ -499,7 +499,7 @@ class PresentationGraph(BodyDesign):
     # Hook 组织协议独立升版；正文 view 仍为 rc22，不扩大正文失效面。
     # rc26（命名前移批次 C）：自有自然语言为普通目标文本
     # （identity-text 协议退役，无标记、无区间）。
-    contract_version: Literal['str06-rc26'] = 'str06-rc26'
+    contract_version: Literal['str06-rc27'] = 'str06-rc27'
     hook: HookDesign
     #: 来源账（F7a）：盘上键 `_provenance`；`exclude=True` 保 prompt 字节不变。
     provenance: FreeProvenance | LlmProvenance | None = Field(
@@ -705,7 +705,7 @@ class DesignWireV5(StrictModel):
     闭集＋narration 不上拍，归 assemble）。
     """
 
-    protocol_version: Literal['stage4-design-v5']
+    protocol_version: Literal['stage4-design-v6']
     narration: HookPov
     expression_decisions: tuple[ExpressionDecisionWire, ...] = Field(min_length=1)
     book_style: str = Field(min_length=1)
@@ -735,7 +735,7 @@ class DesignWireV5(StrictModel):
 #: v12（rc26，2026-10-18 命名前移批 C）：identity-text-v1 协议退役——Design
 #: 自有自然语言一律直接写目标姓名普通文本，不再生成姓名标记、普通义标记或字符
 #: 区间；候选覆盖硬闸随协议退役。v11 已购候选只读归档（删除条件见 REQUIREMENTS）。
-STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v12'
+STAGE4_DESIGN_WIRE_PROTOCOL: Final = 'stage4-design-v13'
 
 
 class SlimDesignState(StrictModel):
@@ -869,8 +869,8 @@ class SlimExpressionOverride(StrictModel):
     target_statement: str = Field(min_length=1)
 
 
-class DesignWireV9(StrictModel):
-    """`stage4-design-v9` 瘦顶层（传输面，不落盘）。
+class ResolvedDesign(StrictModel):
+    """当前 Design 的完整引用内部模型（不落盘，不接受历史协议）。
 
     派生面（expand）：narration←Brief.source_narration、expression_decisions
     ←keep-all＋overrides、world_rules←Brief.book_constraints、scene_weights
@@ -880,7 +880,7 @@ class DesignWireV9(StrictModel):
     标注 real**。
     """
 
-    protocol_version: Literal['stage4-design-v9']
+    protocol_version: Literal['stage4-design-v13']
     book_style: str = Field(min_length=1)
     character_voices: tuple[CharacterVoice, ...] = Field(default=(), min_length=0)
     expression_overrides: tuple[SlimExpressionOverride, ...] = Field(default=(), min_length=0)
@@ -905,25 +905,12 @@ class SlimDesignSceneV10(SlimDesignScene):
     beats: tuple[SlimDesignBeatV10, ...] = Field(min_length=1)
 
 
-class DesignWireV10(DesignWireV9):
-    """v10 短命题/锁引用；canonical 仍使用 Brief 的完整盲身份。
+class DesignWireV13(ResolvedDesign):
+    """rc27：知情引用携带 set/unset 与极性，生产使用瘦场景和拍。
 
-    请求投影 v2 与 compiler 共用完整 Brief 的稳定前缀映射。v9 仅供已有付费
-    候选沿用/窄复核，适配集中在 stage4.slim，不再用于新整份生成。
+    模型只标记 know 的短引用与拍位；操作、模式、极性由当前 Brief 回填。
+    正文自然语言保持普通目标文本，旧请求不按新认知语义重放。
     """
 
-    protocol_version: Literal['stage4-design-v10']
+    protocol_version: Literal['stage4-design-v13']
     scenes: tuple[SlimDesignSceneV10, ...] = Field(min_length=1)
-
-
-class DesignWireV12(DesignWireV10):
-    """v12（rc26，命名前移批 C）：自有自然语言一律普通文本。
-
-    identity-text-v1 协议退役：不再生成 [[name:…]]／[[text|…]] 标记，不再有
-    候选覆盖硬闸与字符区间声明。人物称谓一律用目标姓名（输入身份投影的
-    target_name）；疑似旧名与提前揭名只进定位报告
-    （`contracts/schema/state.py::NameWatch` 派生），不阻断。v11 及更早已购
-    候选只读归档（删除条件见 REQUIREMENTS）。
-    """
-
-    protocol_version: Literal['stage4-design-v12']

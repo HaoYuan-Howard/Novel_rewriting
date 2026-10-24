@@ -41,6 +41,7 @@ from contracts.schema.api import (
 from contracts.invariants import NODES, OWNER_REVISION_MAX_ROUNDS
 from contracts.schema.workflow import candidate_node_owner
 from contracts.schema.hook import HookDesign
+from contracts.schema.source import CharactersArtifactV7
 from novel.errors import ArtifactUnreadable
 from novel.stages.common import hook_organization_summary
 from novel.store import Str06Repository
@@ -193,16 +194,23 @@ def list_candidates(base: str | os.PathLike[str]) -> Str06CandidateList:
 # ─────────────────────────────── Stage2 面 ───────────────────────────────
 
 def characters_view(base: str | os.PathLike[str], candidate: str) -> Str06CharactersView:
-    """Characters v6：人物条目（称谓时间窗）＋源名称结构。"""
+    """人物条目、独立身份绑定证据与源名称结构的只读投影。"""
     run = _run_dir(base, candidate)
     if run is None:
         return Str06CharactersView(present=False)
     payload = _inspect(run, 'stage2/characters/characters.json')
     if payload is None:
         return Str06CharactersView(present=False)
+    try:
+        if payload.get('contract_version') != CharactersArtifactV7.model_fields['contract_version'].default:
+            raise ValueError('人物契约版本不是当前版本；旧根仅供原始证据归档')
+        CharactersArtifactV7.model_validate(payload)
+    except (ValidationError, ValueError, TypeError, AttributeError) as exc:
+        raise ArtifactUnreadable(f'人物产物版本或形状不可读：{exc}') from exc
     characters = tuple(
         Str06CharacterView(
             char_id=char_id, canonical=entry['canonical'],
+            identity_bindings=tuple(entry['identity_bindings']),
             surfaces=tuple(
                 Str06SurfaceWindowView(surface=s['surface'],
                                        from_chapter=s['from_chapter'],
@@ -213,6 +221,7 @@ def characters_view(base: str | os.PathLike[str], candidate: str) -> Str06Charac
     return Str06CharactersView(
         present=True, contract_version=payload.get('contract_version'),
         characters=characters,
+        initial_knowledge=tuple(payload['initial_knowledge']),
         name_structure=Str06NameStructureView(
             families={k: v['literal'] for k, v in sorted(
                 (structure.get('families') or {}).items())},
@@ -221,7 +230,7 @@ def characters_view(base: str | os.PathLike[str], candidate: str) -> Str06Charac
 
 
 def blueprint_view(base: str | os.PathLike[str], candidate: str) -> Str06BlueprintView:
-    """Blueprint v17：世界约束＋逐章 beats（三类转移、场景边界与时间模式、场景分段）与因果边。"""
+    """Blueprint v18：世界约束、逐章转移、场景分段与因果边的只读投影。"""
     run = _run_dir(base, candidate)
     if run is None:
         return Str06BlueprintView(present=False)

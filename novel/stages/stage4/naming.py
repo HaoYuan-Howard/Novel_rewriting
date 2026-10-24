@@ -19,7 +19,7 @@ from typing import Any
 
 from contracts.schema.naming import NAMING_VALIDATOR_VERSION, NameAssignment, NameMapV6, TargetName
 from contracts.schema.source import (
-    BlueprintsArtifactV17, CharactersArtifactV6, render_form,
+    BlueprintsArtifactV18, CharactersArtifactV7, render_form,
 )
 from novel.stages.common import group_located_errors
 
@@ -27,8 +27,8 @@ from novel.stages.common import group_located_errors
 # ───────────────────────── 投影（Naming 的唯一输入面） ─────────────────────────
 
 def naming_projection(
-    characters: CharactersArtifactV6,
-    blueprint: BlueprintsArtifactV17 | None = None,
+    characters: CharactersArtifactV7,
+    blueprint: BlueprintsArtifactV18 | None = None,
 ) -> dict[str, Any]:
     """Naming 的只读投影（通常不落盘）：应改名集合、名称位、回避字面、身份与风格。
 
@@ -78,7 +78,7 @@ def naming_projection(
 # ───────────────────────── NameMap compile ─────────────────────────
 
 def compile_name_map(
-    wire: dict[str, Any], characters: CharactersArtifactV6,
+    wire: dict[str, Any], characters: CharactersArtifactV7,
 ) -> tuple[NameMapV6 | None, list[str]]:
     """Naming wire（{'entries': [...]}）→ NameMap v5（full 由 compiler 拼接）。"""
     _map, located = _compile_name_map_located(wire, characters)
@@ -86,7 +86,7 @@ def compile_name_map(
 
 
 def naming_patch_locate(
-    wire: Any, errors: list, characters: CharactersArtifactV6,
+    wire: Any, errors: list, characters: CharactersArtifactV7,
 ) -> list[tuple[tuple[str | int, ...], list]] | None:
     """CS-H H4（RC-57 覆盖）：naming 条目定位（`ask_json` 的 `patch` 协议）。
 
@@ -104,7 +104,7 @@ def naming_patch_locate(
 
 
 def _compile_name_map_located(
-    wire: dict[str, Any], characters: CharactersArtifactV6,
+    wire: dict[str, Any], characters: CharactersArtifactV7,
 ) -> tuple[NameMapV6 | None,
            list[tuple[tuple[tuple[str | int, ...], ...] | None, str]]]:
     """`compile_name_map` 的定位视图：每条错误一项 ``(挂到的条目路径元组, 消息)``

@@ -15,6 +15,7 @@ from typing import Literal
 from contracts.schema.expression import ExpressionRequirement, ExpressionReadings
 from contracts.schema.hook import HookPov
 from contracts.schema.state import StateAddress
+from contracts.schema.source import EvidenceSupport, Polarity
 
 
 class SourceLineage(StrictModel):
@@ -38,7 +39,8 @@ class SourceLineage(StrictModel):
 
 #: rc22：独立事件＋拍内效应／认知／悬念、书级初态、世界约束。
 ANCHOR_SOURCE_KINDS: tuple[str, ...] = (
-    'event', 'effect', 'cognition', 'loop', 'initial_state', 'world_constraint')
+    'event', 'effect', 'cognition', 'loop', 'initial_state', 'initial_knowledge',
+    'world_constraint')
 
 
 class EventEvidence(StrictModel):
@@ -52,11 +54,11 @@ class ObligationAnchor(StrictModel):
     """R10a a2：义务锚点——compiler 从投影句柄解析并**类型化拷贝**的源原子。
 
     Preserve 只给句柄（如 ``b06_21.e1``／``s0_01``／``wc_01``）；本模型的内容
-    全部由 compiler 从 canonical 拷贝（持有者、mode、命题、效应目标/值/
-    modality、逐字引文），不由模型复述（I-15/I-21）。rc22 的 v1 事件单独
+    全部由 compiler 从 canonical 拷贝（持有者、操作、mode、极性、命题、
+    证据性质、可见性、效应目标/值/modality、引文与定位），不由模型复述。
+    rc22 的 v1 事件单独
     复制 beat.event/source_refs 及其证据窗口，不从自然语言推断锁。a4 的知情/时态锁直接
-    消费 holder／mode／proposition_ref／modality。CS-S 1b：`visibility` 删
-    （effect.disclosure 已删——单写者、零逻辑读者的死字段）。
+    消费 holder／op／mode／polarity／proposition_ref／modality。
     """
 
     handle: str = Field(min_length=1)
@@ -65,9 +67,13 @@ class ObligationAnchor(StrictModel):
     holder: str | None = None
     #: 认知模式（cognition.mode；其余 None）
     mode: str | None = None
-    #: 效应操作（effect.op；其余 None）。a4 的 unknown 值锁输入（op=unknown
+    #: 效应或认知的操作（其余 None）。a4 的 unknown 值锁输入（op=unknown
     #: ＝维度已确立但源文未给值——目标不得补值，与 modality 锁同一消费面）。
     op: str | None = None
+    #: 认知操作、极性和证据性质原样复制，撤回不得混成反命题。
+    polarity: Polarity | None = None
+    support: EvidenceSupport | None = None
+    reader_visible: bool | None = None
     #: 命题正式 ID（cognition.proposition.ref；无则 None——effect 命题锚已删）
     proposition_ref: str | None = None
     proposition_statement: str | None = None
@@ -80,18 +86,42 @@ class ObligationAnchor(StrictModel):
     question: str | None = None
     #: 逐字引文（basis quotes 原样拷贝；段归属已在 Stage2 判定，不重验证）
     quotes: tuple[str, ...] = Field(default=(), min_length=0)
+    #: 原子自身的依据定位；揭名只核对本次转移，不借用同命题后章证据。
+    basis_segments: tuple[str, ...] = Field(default=(), min_length=0)
     #: 事件仅复制 beat.event 与 source_refs 对应的 Blueprint.evidence；不生成锁。
     event_statement: str | None = None
     event_evidence: tuple[EventEvidence, ...] = ()
 
     @model_validator(mode='after')
     def _event_shape(self) -> 'ObligationAnchor':
+        if self.source_kind in ('cognition', 'initial_knowledge', 'effect') \
+                and self.quotes and not self.basis_segments:
+            raise ValueError('认知/效应锚点带引文时必须复制原子自身的证据定位')
+        if self.source_kind in ('cognition', 'initial_knowledge'):
+            if self.op not in ('set', 'unset') or not self.holder or not self.proposition_ref:
+                raise ValueError('认知锚点必须复制持有者、命题和明确操作')
+            if self.support is None or self.reader_visible is None:
+                raise ValueError('认知锚点必须复制证据性质和读者可见性')
+            if self.op == 'unset':
+                if self.mode is not None or self.polarity is not None:
+                    raise ValueError('撤回认知锚点的 mode/polarity 必须为空')
+            elif self.mode is None or self.polarity is None:
+                raise ValueError('建立认知锚点必须复制模式和极性')
+            if self.mode in ('learns', 'confirms') and self.support != 'confirmed':
+                raise ValueError('认知确认锚点必须有 confirmed 依据')
+            if self.source_kind == 'initial_knowledge' and (
+                    self.op != 'set' or self.mode != 'learns'
+                    or self.support != 'confirmed' or self.reader_visible):
+                raise ValueError('开场知识锚点必须为已确认的 set/learns，且不自动披露给读者')
+        if self.source_kind == 'effect' and self.reader_visible is None:
+            raise ValueError('效应锚点必须复制读者可见性')
         if self.source_kind == 'event':
             if not self.event_statement or not self.event_statement.strip():
                 raise ValueError('事件锚点必须复制正式 beat.event')
             if any(getattr(self, field) is not None for field in (
-                    'holder', 'mode', 'op', 'proposition_ref', 'proposition_statement',
-                    'address', 'value', 'modality', 'question')) or self.quotes:
+                    'holder', 'mode', 'op', 'polarity', 'support', 'reader_visible',
+                    'proposition_ref', 'proposition_statement',
+                    'address', 'value', 'modality', 'question')) or self.quotes or self.basis_segments:
                 raise ValueError('事件锚点不得混入状态、知情、悬念或逐字引文字段')
             if not self.event_evidence:
                 raise ValueError('事件锚点必须有正式证据窗口')
@@ -231,7 +261,7 @@ class PreserveCheckpoint(StrictModel):
     checkpoint／Brief 及下游明确失效，不静默沿用（§4 升级与失效规则）。
     """
 
-    contract_version: Literal['str06-rc26'] = 'str06-rc26'
+    contract_version: Literal['str06-rc27'] = 'str06-rc27'
     provenance: FreeProvenance | LlmProvenance | None = Field(
         default=None, alias='_provenance', exclude=True)
     checkpoint_id: str = Field(min_length=1)
@@ -301,6 +331,8 @@ class BriefRequirement(StrictModel):
     #: 本义务的每次认知变化，保留持有者、命题与模式的对应关系。compiler
     #: 从正式 anchor 铸盲身份；Design 只标注短引用的拍位，不重写这三个值。
     knowledge_changes: tuple[BriefKnowledgeChange, ...] = Field(default=(), min_length=0)
+    #: 开场基线不是拍内认知变化；目标须以 initial_state 的知识真/假承载。
+    initial_knowledge: tuple[BriefKnowledgeLock, ...] = Field(default=(), min_length=0)
     #: 必保义务须兑现的事实锁（kf_*）：Design 在**已选的目标状态**上以 `lock`
     #: 标注承载（时态锁须同 modality 的 set、值未知锁须 op=unknown；CS-F2，
     #: 不再另写以 kf 为键的重复状态）；非必保义务为空。
@@ -341,6 +373,13 @@ def _lock_id(prefix: str, seed: str) -> str:
     return prefix + hashlib.sha256(seed.encode('utf-8')).hexdigest()[:16]
 
 
+class PublicClaim(StrictModel):
+    """公开说法保留人物与极性；公开否认不变成正命题的声称。"""
+
+    holder: str = Field(min_length=1)
+    polarity: Polarity
+
+
 class BriefProposition(StrictModel):
     """kp 命题登记（a4）：Brief 里可被知情/读者确认引用的命题，盲句柄 kp_<hash>。
 
@@ -351,11 +390,11 @@ class BriefProposition(StrictModel):
 
     kp_id: str = Field(pattern=r'^kp_[0-9a-f]{16}$')
     statement: str = Field(min_length=1)
-    publicly_claimed_by: tuple[str, ...] = Field(default=(), min_length=0)
+    publicly_claimed_by: tuple[PublicClaim, ...] = Field(default=(), min_length=0)
 
 
 class BriefKnowledgeLock(StrictModel):
-    """知情锁（a4）：{持有者|reader, kp, mode}——谁对该命题持什么模式。
+    """知情锁：持有者、命题、操作、模式、极性共同构成授权。
 
     Design 的 knowledge 域（及 reader 域确认）用 kp 键承载该命题时，持有者
     必须有锁且模式被授权（known 只能来自 known 锁——C1 的机械面）。
@@ -363,7 +402,18 @@ class BriefKnowledgeLock(StrictModel):
 
     holder: str = Field(min_length=1)
     kp: str = Field(pattern=r'^kp_[0-9a-f]{16}$')
-    mode: str = Field(pattern=r'^(' + '|'.join(KNOWLEDGE_LOCK_MODES) + r')$')
+    op: Literal['set', 'unset']
+    mode: str | None = Field(pattern=r'^(' + '|'.join(KNOWLEDGE_LOCK_MODES) + r')$')
+    polarity: Polarity | None
+
+    @model_validator(mode='after')
+    def _operation_shape(self) -> 'BriefKnowledgeLock':
+        if self.op == 'unset':
+            if self.mode is not None or self.polarity is not None:
+                raise ValueError('撤回知情锁的 mode/polarity 必须为空')
+        elif self.mode is None or self.polarity is None:
+            raise ValueError('建立知情锁必须显式声明模式和极性')
+        return self
 
 
 class BriefKnowledgeChange(BriefKnowledgeLock):
@@ -443,7 +493,7 @@ class ReconstructionBrief(StrictModel):
     不得经状态或说明改写；兑现与越权校验归 assemble_body_design。
     """
 
-    contract_version: Literal['str06-rc26'] = 'str06-rc26'
+    contract_version: Literal['str06-rc27'] = 'str06-rc27'
     brief_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     requirements: tuple[BriefRequirement, ...] = Field(min_length=1)
@@ -488,10 +538,11 @@ class ReconstructionBrief(StrictModel):
                 if instance.summarizes_cores:
                     raise ValueError('Brief 回顾不得覆盖另一个回顾')
         # 锁引用闭合（a4）：知情锁引用已登记命题；义务的 locks 引用已登记锁；
-        # 每个认知变化的 holder/kp/mode 必须引用已登记的授权锁行。
+        # 每次认知变化的完整五元组必须引用已登记的授权锁行。
         kp_ids = {p.kp_id for p in self.propositions}
         kf_ids = {f.kf_id for f in self.fact_locks}
-        lock_triples = {(lock.holder, lock.kp, lock.mode) for lock in self.knowledge_locks}
+        lock_triples = {(lock.holder, lock.kp, lock.op, lock.mode, lock.polarity)
+                        for lock in self.knowledge_locks}
         for lock in self.knowledge_locks:
             if lock.kp not in kp_ids:
                 raise ValueError(f'知情锁引用未登记命题：{lock.kp}')
@@ -506,9 +557,16 @@ class ReconstructionBrief(StrictModel):
             if len(change_ids) != len(set(change_ids)):
                 raise ValueError(f'义务 {req.core_id} 的认知变化身份重复')
             for change in req.knowledge_changes:
-                if (change.holder, change.kp, change.mode) not in lock_triples:
+                if (change.holder, change.kp, change.op, change.mode,
+                        change.polarity) not in lock_triples:
                     raise ValueError(
                         f'义务 {req.core_id} 的 knowledge_changes 引用无锁行：{change!r}')
+            for initial in req.initial_knowledge:
+                if initial.op != 'set' or initial.mode != 'known':
+                    raise ValueError('开场知识只接受 set/known 锁')
+                if (initial.holder, initial.kp, initial.op, initial.mode,
+                        initial.polarity) not in lock_triples:
+                    raise ValueError(f'义务 {req.core_id} 的 initial_knowledge 引用无锁行')
         return self
 
 
@@ -575,7 +633,7 @@ class SemanticBinding(StrictModel):
     产物没有该映射，由 `contract_version` 字面量拒读——缺省空表不会冒充旧产物。
     """
 
-    contract_version: Literal['str06-rc26'] = 'str06-rc26'
+    contract_version: Literal['str06-rc27'] = 'str06-rc27'
     binding_id: str = Field(min_length=1)
     preserve_checkpoint_sha256: str = Field(min_length=64, max_length=64)
     obligations: tuple[SourceObligation, ...] = Field(min_length=1)

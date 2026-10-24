@@ -56,7 +56,7 @@ def _guard_m2() -> list:
 
     # ce1：把后期（s03）才揭示的 knowledge 塞进 s02 的 entry_knowledge。
     context = _context('s02', entry_knowledge=(
-        KnowledgeEntry(key='secret', mode='known', holder='ch1', proposition='身世',
+        KnowledgeEntry( polarity='positive',    key='secret', mode='known', holder='ch1', proposition='身世',
                        established_by='s03#bt1'),))
     return check_entry_timing(context, {'s01': 0, 's02': 1, 's03': 2})
 
@@ -260,10 +260,10 @@ CASES: dict[str, Case] = {
 # ─── 其余 HARD 的最小会红样本（编译闭合一族） ────────────────────────────────
 
 def _body_design_bad_wire() -> list:
-    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒（stage4-design-v5 形状）。"""
+    """BodyDesign 编译闭合：非法 POV（未知人物）当场拒（stage4-design-v6 形状）。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {'protocol_version': 'stage4-design-v5', 'book_style': '冷峻。',
+        {'protocol_version': 'stage4-design-v6', 'book_style': '冷峻。',
          'chapters': [{'purpose': 'e', 'scenes': 1}],
          'scenes': [{'beats': [{'event': 'e', 'participants': ['ch1'],
                                 'delivery_hint': ''}],
@@ -293,7 +293,7 @@ def _preserve_bad_wire() -> list:
     from novel.stages.stage4.grounding import assemble_preserve
 
     from contracts.schema.source import (
-        BlueprintsArtifactV17, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV18, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_facilities import anchor_stub, v13_beat, v13_effect
@@ -301,13 +301,13 @@ def _preserve_bad_wire() -> list:
              'must_preserve': True, 'satisfaction': '明确呈现',
              'anchors': ['b01_01.e1']}
     _checkpoint, errors = _assemble(
-        {'protocol_version': 'stage4-preserve-v7', 'obligations': [entry]},
+        {'protocol_version': 'stage4-preserve-v8', 'obligations': [entry]},
         policy_id='preserve-default', policy_version=1,
-        characters=CharactersCore(characters={'ch1': CharacterEntry(
+        characters=CharactersCore(initial_knowledge=[], characters={'ch1': CharacterEntry(identity_bindings=[],
             canonical='苏姑娘',
             surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                     source_refs=('e01_01',)),))}),
-        blueprint=BlueprintsArtifactV17(source_expression=sample_blueprint_expression(), chapters=(
+        blueprint=BlueprintsArtifactV18(source_expression=sample_blueprint_expression(), chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat('b01_01', 'e', effects=(
                                  v13_effect({'kind': 'world'}, 'social_standing', '多舛'),)),),
@@ -358,7 +358,7 @@ def _hook_design_bad_wire() -> list:
     _faces, _face_errors = target_face_table(_characters().name_structure,
                                              name_map_of(_characters()))
     _hook, errors = assemble_hook_design(
-        {'protocol_version': 'stage4-hook-design-v4',
+        {'protocol_version': 'stage4-hook-design-v5',
          'pov': {'person': 'third', 'focalizers': ['narrator']},
          'local_focus': '用即时反应形成反差',
          'reader_expectation': {'kind': 'action', 'focus': '人物怎样应对旧约',
@@ -442,7 +442,7 @@ def _receipt_stale() -> list:
 
     from contracts.schema.receipt import ChapterLengthDisclosure
     receipt = ChapterReceipt(
-        contract_version='str06-rc26', chapter_ordinal=1, status='accepted',
+        contract_version='str06-rc27', chapter_ordinal=1, status='accepted',
         writer_view_sha256='a' * 64, validation_sha256='b' * 64,
         machine_view_sha256='e' * 64,
         prose_sha256='c' * 64, request_identity='r1',
@@ -510,7 +510,7 @@ def _canonical_not_a_surface() -> list:
     from tests.test_str06_stage2_publish import EVIDENCE, _book_wire
     from novel.stages.stage2 import compile_book_observation
     wire = _book_wire(extra_characters={
-        'ghost_yun': {'canonical': '陆夫人', 'surfaces': [
+        'ghost_yun': {'identity_bindings': [], 'canonical': '陆夫人', 'surfaces': [
             {'surface': '云姑娘', 'source_refs': ['e01_02']}]}})
     _observation, errors = compile_book_observation(wire, evidence=EVIDENCE)
     return errors
@@ -577,7 +577,7 @@ def _design_surface_not_registered() -> list:
     """称谓闭合：Design 放行 Characters 未登记的字面。"""
     from novel.stages.stage4.design import assemble_body_design
     _body, errors = assemble_body_design(
-        {**sample_design_expression(('yun',)), 'protocol_version': 'stage4-design-v5', 'book_style': '冷峻。',
+        {**sample_design_expression(('yun',)), 'protocol_version': 'stage4-design-v6', 'book_style': '冷峻。',
          'initial_state': [], 'scenes': [{
             'state_reads': [],
             'driver': {'focal_actor': 'yun', 'immediate_want': 'w',
@@ -658,7 +658,7 @@ def _book_extraction_dangling() -> list:
     from tests.test_str06_stage2_publish import EVIDENCE, _book_wire
     from novel.stages.stage2 import compile_book_observation
     wire = _book_wire(extra_characters={
-        'fu_jun': {'canonical': '夫君', 'surfaces': [
+        'fu_jun': {'identity_bindings': [], 'canonical': '夫君', 'surfaces': [
             {'surface': '夫君', 'source_refs': ['e99_99']}]}})
     _observation, errors = compile_book_observation(wire, evidence=EVIDENCE)
     return errors
@@ -681,7 +681,7 @@ def _chapter_blueprint_bad_wire() -> list:
     """章观察编译闭合：participants 引用书级人物账之外的人物（闭集归 compile，R-2.3）。"""
     from tests.test_str06_stage2_publish import _chapter_wires
     outcome = _stage2_outcome(chapters={**_chapter_wires(), 'ch01': {
-        'protocol_version': 'stage2-chapters-v7', 'beats': [
+        'protocol_version': 'stage2-chapters-v8', 'beats': [
             {'event': '开篇', 'participants': ['ghost'],
              'source_refs': ['e01_01'], 'scene_boundary': 'new',
              'temporal_mode': 'single', 'effects': [], 'cognition': [],
@@ -701,7 +701,7 @@ def _loop_reopened() -> list:
     """R-2.11：同一悬念句柄本章内重复 open（章观察 owner 的自含纪律）。"""
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v7', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v8', 'beats': [
         {'event': '开悬念', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single', 'effects': [],
          'cognition': [],
@@ -732,10 +732,10 @@ def _registered_key_wrong_scope() -> list:
     """
     from tests.test_str06_stage2_publish import EVIDENCE
     from novel.stages.stage2 import compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v7', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v8', 'beats': [
         {'event': '旧位置键借道', 'participants': [], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single',
-         'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
+         'effects': [{'reader_visible': False, 'target': {'kind': 'character', 'char_id': 'fu_jun'},
                       'key': 'whereabouts', 'op': 'set',
                       'value': '陆家卧房内，藏于床底',
                       'modality': 'actual',
@@ -752,7 +752,7 @@ def _surface_anchor_without_literal() -> list:
     from tests.test_str06_stage2_publish import _book_wire
     from novel.stages.stage2 import compile_book_observation
     wire = _book_wire(extra_characters={
-        'fu_jun': {'canonical': '陆大哥', 'surfaces': [
+        'fu_jun': {'identity_bindings': [], 'canonical': '陆大哥', 'surfaces': [
             {'surface': '陆大哥', 'source_refs': ['e01_01']}]}})
     _observation, errors = compile_book_observation(wire, evidence={
         'e01_01': {'chapter': 1, 'text': '本章根本没出现这个称呼。'}})
@@ -766,7 +766,7 @@ def _names_structure_uncovered() -> list:
         CharacterEntry, CharactersCore, SurfaceWindow,
     )
     from novel.stages.stage2.names import compile_name_structure
-    core = CharactersCore(characters={'ch1': CharacterEntry(
+    core = CharactersCore(initial_knowledge=[], characters={'ch1': CharacterEntry(identity_bindings=[],
         canonical='夫君',
         surfaces=(SurfaceWindow(surface='夫君', from_chapter=1,
                                 source_refs=('e01_01',)),))})
@@ -848,20 +848,20 @@ def _preserve_unknown_anchor() -> list:
     from novel.stages.stage4.grounding import assemble_preserve
 
     from contracts.schema.source import (
-        BlueprintsArtifactV17, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV18, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_facilities import v13_beat, v13_effect
     _checkpoint, errors = _assemble(
-        {'protocol_version': 'stage4-preserve-v7', 'obligations': [
+        {'protocol_version': 'stage4-preserve-v8', 'obligations': [
             {'kind': 'event_core', 'statement': 's', 'anchors': ['b09_99.e1'],
              'must_preserve': True, 'satisfaction': '明确呈现', 'requires': []}]},
         policy_id='preserve-default', policy_version=1,
-        characters=CharactersCore(characters={'ch1': CharacterEntry(
+        characters=CharactersCore(initial_knowledge=[], characters={'ch1': CharacterEntry(identity_bindings=[],
             canonical='苏姑娘',
             surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                     source_refs=('e01_01',)),))}),
-        blueprint=BlueprintsArtifactV17(source_expression=sample_blueprint_expression(), chapters=(
+        blueprint=BlueprintsArtifactV18(source_expression=sample_blueprint_expression(), chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat('b01_01', 'e', effects=(
                                  v13_effect({'kind': 'world'}, 'social_standing', '多舛'),)),),
@@ -894,7 +894,7 @@ def _design_lock_mode_escalation() -> list:
     wire = _design_wire(brief)
     wire['scenes'][0]['beats'][2]['target_delta'].append(
         {'domain': 'knowledge', 'subjects': [], 'holder': 'yun_niang',
-         'key': kp_y, 'op': 'set', 'value': '她确知婆母知情',
+         'key': kp_y, 'op': 'set', 'value': 'true',
          'scope': 'book', 'knowledge_mode': 'known'})
     _body, errors = _assemble(wire, brief)
     return errors
@@ -1025,7 +1025,7 @@ CASES.update({
     'source_evidence_conflict_routing': Case(
         'stage4', _conflict_anchor_unroutable, '不可解析'),
     'design_lock_acceptance': Case(
-        'stage4', _design_lock_mode_escalation, '无锁或模式越权'),
+        'stage4', _design_lock_mode_escalation, '无锁或操作/模式/极性越权'),
     'binding_series_collapse': Case(
         'stage4', _binding_series_same_beat, 'series_collapsed'),
     'binding_series_summary': Case(

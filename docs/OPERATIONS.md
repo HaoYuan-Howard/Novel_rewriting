@@ -43,7 +43,8 @@ blocked recovery 和诊断兼容，blocked action hash 本身不是恢复许可�
 
 ## AgentRun 与流水线恢复
 
-所有 LLM 节点正式执行版本升版后，免费查看并同步现有单元额度：
+所有 LLM 节点正式执行版本升版后，在当前契约允许写入的工作流内免费查看并同步现有单元额度；
+旧根历史账只读，额度同步不授权跨契约续跑：
 
 ```powershell
 conda run -n novel_refactor python -m novel.orchestrator.llm_budget_upgrade --base <Output目录> --sid <sid>
@@ -55,46 +56,23 @@ conda run -n novel_refactor python -m novel.orchestrator.llm_budget_upgrade --ba
 原调用及免费采用也会在执行边界同步；只读查看不写账。整书总闸与付费/正文外发授权不变。
 
 
-已登记的现役同根升级先免费预览，再应用同一计划（不需要 API key、`--yes` 或外发授权）：
+rc27 涉及人物身份、认知极性和写手材料的破坏性升版。旧根只读保留，使用独立
+`NOVEL_OUTPUT`／输出目录按当前契约重新生成；不得覆盖旧正文、响应、采用记录、
+费用或 unknown，不得改版本标签续跑、清理旧升级 pending 或从旧候选免费采用。
+新根的付费与正文外发仍分别授权，工程准备与免费检查完成后再执行真实调用。
 
-```powershell
-conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录>
-conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录> `
-  --apply --subject-sha256 <预览SHA> --actor <操作者> --reason <升级依据>
-```
+`contracts/contract_upgrades.py` 保留的 rc22～rc26 身份边是历史登记，不抵达 rc27；
+目标身份保持原值，不新增本批迁移边。当前 `contract-upgrade` 对这些历史根的
+preview／apply 明确拒绝，`--abort-pending` 也不能删除历史日志。已有升级计划、
+归档、pending 与回执作为原字节证据保留；需要审计或复读时配对原冻结旧代码，
+不能让当前引擎完成旧迁移或把旧资料换算成当前 wire。
 
-预览输出附带 `rebuild_budgets`（重建节点的工作单元内容轮剩余额度，易变状态、
-不进计划指纹）。**应用前先核对**：`content_remaining` 为 0 的付费重建节点
-（如 hook_design）升级后第一步就会 `WorkUnitBudgetExhausted`——先对账那轮
-delivered、经跑书页追加额度或人工处置，再 apply，避免已交付的书停在
-「成书已归档、Hook 重建不了」。
-
-仅接受登记身份边。原产物和 workflow 原字节留在书内 `runtime/upgrades/<SHA>/`；
-不中断账与额度。升级同时收口锚定被归档产物的 open 回派账（rc22→rc23 即
-hook_design），typed 问题与轮数在 resolved 记录里留账。prepared 中断后以相同
-SHA 重放；代码或源身份漂移时明确阻断——**尚未归档任何文件**的恢复日志可显式
-放弃后重新规划：
-
-```powershell
-conda run -n novel_refactor python -m novel.cli contract-upgrade <sid> --base <Output目录> `
-  --abort-pending --actor <操作者> --reason <放弃依据>
-```
-
-已开始归档的日志没有放弃出路，必须重放同一计划至完成。升级与在跑的节点执行
-互斥（workflow 锁）；撞上时命令以显式终态退出并提示先停/等待，本次未写任何
-字节。rc22→rc23 之后重建 Hook Design、免费 Stage4 compile、Hook，再运行
-Stage5 body（逐章沿用／免费重验／局部恢复）和 Stage7 assemble。付费节点先用
-`--check-only` 核已购响应；新请求仍须原有的 `--yes` 与 `--allow-egress`
-授权，不在升级命令中购买。
-
-rc24→rc25 的 `identity-text-rc24-rc25` 升级用于身份引用文本协议（历史升级边；存量根全部升级或只读归档后删除条件见
-REQUIREMENTS）。rc25→rc26 的 `naming-forward-rc25-rc26` 升级用于命名前移与普通正文主链：旧 Design、Hook
-Design、编译视图、正文及回执按协议字面量归档，保留 Stage2 源材料、Preserve
-checkpoint、NameMap、已购回答和成本历史；随后从 `str06.stage4.naming` 重建，当前协议
-的免费输入检查先于模型请求。旧候选可只读诊断，不能当作 v12 回答采用。
-在跑书页按原配置继续时会依次重建其余节点；本升级本身不发模型请求。
-若本次需要补充缺失称谓，应先从 Names owner 以源文证据登记到现有人物，
-再重建下游，不能让 Design 临时猜新称谓或身份。
+当前契约内恢复使用原候选根和请求身份：付费节点先以 `--check-only` 免费重验
+已购回答，接受规则与生产相同；合法已购回答优先免费重放或补提交，不重新购买。
+正式输出组全部落盘后才封存，写入或封存中断时重跑所属 owner 补尾；未封存半组
+不能被消费。机械校验版本变化可免费重验原正文，章包、协议或 renderer 身份变化
+必须准确失效，逐章核对范围，不把旧协议正文当成当前已验正文。源身份变化使用
+独立新根，不能借恢复绕过。新请求仍须 `--yes` 与 `--allow-egress` 两项授权。
 
 自动运行的暂停、恢复、停止和按原配置继续使用跑书页；Stage 页只读监控。工程诊断先查询
 `python -m novel.cli --help` 和目标子命令 `--help`。内部执行入口为

@@ -25,7 +25,7 @@ from copy import deepcopy
 import pytest
 
 from contracts.schema.grounding import PreserveCheckpoint, ReconstructionBrief
-from contracts.schema.source import BlueprintsArtifactV17, CharactersCore
+from contracts.schema.source import BlueprintsArtifactV18, CharactersCore
 from contracts.schema.workflow import route_owner_issue
 from novel.stages.stage4.design import assemble_body_design
 from novel.stages.stage4.grounding import (
@@ -51,11 +51,11 @@ def _assemble(wire, **kw):
     return assemble_preserve(wire, **kw)
 
 def _characters() -> CharactersCore:
-    return CharactersCore.model_validate({
+    return CharactersCore.model_validate({'initial_knowledge': [],
         'characters': {
-            'yun_niang': {'canonical': '云娘', 'surfaces': [
+            'yun_niang': {'identity_bindings': [], 'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'from_chapter': 1, 'source_refs': ['e01_01']}]},
-            'fu_jun': {'canonical': '夫君', 'surfaces': [
+            'fu_jun': {'identity_bindings': [], 'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'from_chapter': 1, 'source_refs': ['e01_01']}]},
         },
         'initial_state': [],
@@ -75,8 +75,8 @@ def _expression():
         'readings': sample_readings().model_dump(mode='json')})
 
 
-def _blueprint() -> BlueprintsArtifactV17:
-    return BlueprintsArtifactV17.model_validate({
+def _blueprint() -> BlueprintsArtifactV18:
+    return BlueprintsArtifactV18.model_validate({
         'source_expression': _expression().model_dump(mode='json'),
         'world_constraints': [],
         'chapters': [
@@ -88,17 +88,17 @@ def _blueprint() -> BlueprintsArtifactV17:
                               v13_effect({'kind': 'world'}, 'secret',
                                          '床底藏物属实',
                                          basis=BASIS),),
-                          cognition=({'proposition': {
+                          cognition=({'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False, 'proposition': {
                                           'ref': 'p_x', 'statement': '夫君像是看穿了什么'},
                                       'holder': 'yun_niang', 'mode': 'suspects',
                                       'basis': BASIS},)),
                  v13_beat('b01_02', '芸娘证实；读者获知', participants=('yun_niang',),
                           source_refs=('e01_02',),
                           cognition=(
-                              {'proposition': {'ref': 'p_x'},
+                              {'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'proposition': {'ref': 'p_x'},
                                'holder': 'yun_niang', 'mode': 'confirms',
                                'basis': CONFIRM_BASIS},
-                              {'proposition': {'ref': 'p_x'},
+                              {'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'proposition': {'ref': 'p_x'},
                                'holder': 'reader', 'mode': 'learns',
                                'basis': READER_BASIS})),
                  v13_beat(
@@ -146,7 +146,7 @@ def _blueprint() -> BlueprintsArtifactV17:
 
 
 def _preserve_wire() -> dict:
-    return {'protocol_version': 'stage4-preserve-v7', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v8', 'obligations': [
         {'kind': 'event_core', 'statement': '芸娘从起疑到证实同一件事',
          'anchors': ['b01_01.c1', 'b01_02.c1'],
          'must_preserve': True, 'satisfaction': '怀疑渐进到证实',
@@ -196,7 +196,7 @@ def _summary_design_fixture(placements, *, optional_instance=False):
         for index, (core, text) in enumerate((
             ('core_first', '第一次经历'), ('core_second', '第二次经历'),
             ('core_summary', '回顾两次经历')), 1))
-    brief = ReconstructionBrief(contract_version='str06-rc26',
+    brief = ReconstructionBrief(contract_version='str06-rc27',
         brief_id='br_summary', preserve_checkpoint_sha256='a' * 64,
         requirements=requirements, source_narration=sample_narration(),
         expression=sample_requirements(), expression_readings=sample_readings())
@@ -367,11 +367,11 @@ def _design_wire(brief: ReconstructionBrief, *, flashback: bool = False) -> dict
 
     def _knowledge(mode: str) -> dict:
         return {'domain': 'knowledge', 'subjects': [], 'holder': 'yun_niang',
-                'key': kp_x, 'op': 'set', 'value': f'她{mode}了此事',
+                'key': kp_x, 'op': 'set', 'value': 'true',
                 'scope': 'book', 'knowledge_mode': mode}
 
     return {
-        'protocol_version': 'stage4-design-v5',
+        'protocol_version': 'stage4-design-v6',
         'narration': {'person': 'third', 'focalizers': ['narrator']},
         'expression_decisions': [
             {'ex_id': 'ex_01', 'action': 'keep'},
@@ -401,7 +401,7 @@ def _design_wire(brief: ReconstructionBrief, *, flashback: bool = False) -> dict
                  {'event': '读者获知', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
-                       'key': kp_x, 'op': 'set', 'value': '床底藏物属实',
+                       'key': kp_x, 'op': 'set', 'value': 'true',
                        'scope': 'book', 'knowledge_mode': 'known', 'confirms': {'domain': 'world', 'key': 'secret'}}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '第一次现身', 'participants': [],
@@ -483,7 +483,7 @@ def test_initial_reader_confirmation_requires_an_actual_initial_fact():
     from novel.stages.stage4 import compile_execution_plan
     body, binding, brief = _green_graph_and_binding()
     confirmation = TargetDelta(domain='knowledge', key=_kp_x(brief), holder='reader',
-                               op='set', scope='book', value='开篇前已确认', knowledge_mode='known',
+                               op='set', scope='book', value='true', knowledge_mode='known',
                                confirms={'domain': 'world', 'key': 'secret'})
     fact = TargetDelta(domain='world', key='secret', op='set', scope='book',
                        value='证据已存在', modality='actual')
@@ -500,7 +500,8 @@ def test_initial_reader_confirmation_requires_an_actual_initial_fact():
 
 
 def test_v7_composite_obligation_preserves_cognitive_change_positions():
-    from contracts.schema.design import DesignWireV9
+    from novel.stages.stage4.slim import design_wire_model
+    from tests.str06_facilities import current_design_wire
     from novel.stages.stage4.grounding import design_obligation_index
     from novel.stages.stage4.slim import design_fact_marks, knowledge_change_index
     checkpoint, brief = _checkpoint(), _brief()
@@ -527,9 +528,10 @@ def test_v7_composite_obligation_preserves_cognitive_change_positions():
         if change.holder == 'reader':
             placement['confirms'] = {'domain': 'world', 'key': 'secret'}
         beats[position].setdefault('know', []).append(placement)
-    wire = {'protocol_version': 'stage4-design-v9', 'book_style': source['book_style'],
+    wire = {'protocol_version': 'stage4-design-v13', 'book_style': source['book_style'],
             'scenes': [{'driver': source['scenes'][0]['driver'], 'brief': '由起疑推进到证实',
                         'beats': beats}], 'chapters': source['chapters']}
+    wire = current_design_wire(wire, brief)
     body, errors = assemble_body_design(
         wire, known_char_ids={'yun_niang', 'fu_jun'}, expression_requirements=brief.expression,
         source_narration=brief.source_narration, brief=brief, obligations=obligations)
@@ -540,7 +542,7 @@ def test_v7_composite_obligation_preserves_cognitive_change_positions():
     binding, errors = derive_semantic_binding(
         {ob: [(0, i) for i, beat in enumerate(beats) if ob in beat['real']]
          for ob in obligations}, body, checkpoint,
-        design_fact_marks(DesignWireV9.model_validate(wire)))
+        design_fact_marks(design_wire_model(wire, brief)))
     assert not errors, errors
     assert check_epistemic_lock_order(body, binding) == []
 
@@ -690,11 +692,17 @@ def test_initial_state_knowledge_not_in_position_judgement():
     """initial_state 的 kp set 不进位置判据（初态＝开篇前成立，无披露时点；
     其锁面归 a4 接受校验）。"""
     brief = _brief()
+    from contracts.schema.grounding import BriefKnowledgeLock
+    initial = BriefKnowledgeLock(holder='yun_niang', kp=_kp_x(brief),
+                                 op='set', mode='known', polarity='positive')
+    brief = brief.model_copy(update={'requirements': (
+        brief.requirements[0].model_copy(update={'initial_knowledge': (initial,)}),
+        *brief.requirements[1:])})
     wire = _design_wire(brief)
     wire['initial_state'] = [
         {'domain': 'knowledge', 'subjects': [], 'holder': 'yun_niang',
-         'key': _kp_x(brief), 'op': 'set', 'value': '开篇前已知', 'scope': 'book',
-         'knowledge_mode': 'suspected'}]
+         'key': _kp_x(brief), 'op': 'set', 'value': 'true', 'scope': 'book',
+         'knowledge_mode': 'known'}]
     body, errors = assemble_body_design(
         wire, known_char_ids={'yun_niang', 'fu_jun'},
         expression_requirements=brief.expression,
@@ -762,7 +770,7 @@ def _a5_wires():
 
     wires = deepcopy(looped_full_chain_wires())
     wires['preserve'] = {
-        'protocol_version': 'stage4-preserve-v7',
+        'protocol_version': 'stage4-preserve-v8',
         'obligations': [
             # 命名前移批（policy 12）：目标姓名直书（yun_niang→柳婉；夫君保留）。
             {'kind': 'event_core', 'statement': '柳婉嫁入顾家且夫君立下旧约',
@@ -875,7 +883,7 @@ def test_preserve_model_validation_error_feeds_revision_not_crash():
     把 ValidationError 归入 errors（同节点修订轮带精确问题重问）。"""
     from novel.stages.stage4.grounding import assemble_preserve
     from contracts.schema.source import (
-        BlueprintsArtifactV17, ChapterBlueprint, CharacterEntry,
+        BlueprintsArtifactV18, ChapterBlueprint, CharacterEntry,
         CharactersCore, SurfaceWindow,
     )
     from tests.str06_expression_inputs import sample_blueprint_expression
@@ -888,16 +896,16 @@ def test_preserve_model_validation_error_feeds_revision_not_crash():
               'anchors': ['b01_01.e1']}
     try:
         checkpoint, errors = _assemble(
-            {'protocol_version': 'stage4-preserve-v7',
+            {'protocol_version': 'stage4-preserve-v8',
              'obligations': [entry, entry2],
              'series': [{'members': [1, 2], 'mechanism': None},
                         {'members': [1, 2], 'mechanism': None}]},  # 全员双 series
             policy_id='preserve-default', policy_version=1,
-            characters=CharactersCore(characters={'ch1': CharacterEntry(
+            characters=CharactersCore(initial_knowledge=[], characters={'ch1': CharacterEntry(identity_bindings=[],
                 canonical='苏姑娘',
                 surfaces=(SurfaceWindow(surface='苏姑娘', from_chapter=1,
                                         source_refs=('e01_01',)),))}),
-            blueprint=BlueprintsArtifactV17(
+            blueprint=BlueprintsArtifactV18(
                 source_expression=sample_blueprint_expression(),
                 chapters=(ChapterBlueprint(
                     chapter=1,

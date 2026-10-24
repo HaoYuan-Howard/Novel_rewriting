@@ -41,8 +41,9 @@
 ### 2.1 源书抽取与目标命名
 
 Stage2 继续拥有源人物身份、名称结构、亲属关系、事实及原始证据（`stage2/characters/characters.json`
-的 `name_structure`、`contracts/schema/source.py::CharactersArtifactV6`／`BlueprintsArtifactV17`）。
-目标命名不得修改这些源产物。
+的 `name_structure`、`contracts/schema/source.py::CharactersArtifactV7`／`BlueprintsArtifactV18`）。
+目标命名不得修改这些源产物。这里的符号已同步 rc27 身份／认知边界契约；
+本文件“Stage2 源字节保持不变”只描述命名前移批次范围，不授权 rc26 根跨版本沿用到 rc27。
 
 将原命名节点迁移为 `str06.stage4.naming`，置于 Stage2 compile 之后、Preserve 之前；唯一正式产物改为：
 

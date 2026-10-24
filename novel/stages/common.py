@@ -44,7 +44,7 @@ from contracts.schema.book_ir import (
     WriterBookIR,
 )
 from contracts.schema.context import (
-    KnowledgeEntry, ObligationCarrier, OpenThreadIR, PendingConfirmation,
+    KnowledgeEntry, ObligationCarrier, OpenThreadIR, PendingConfirmation, ProjectedDelta,
     PriorSeriesEvent, StateEntry, SupportingBeatEvent, SurfaceRelease, ThreadOpIR, UnansweredGuard, VerificationIR,
     WriterBrief, WriterContext, WriterDetail, WriterPacket, beats_ir,
 )
@@ -374,9 +374,9 @@ def _hook_render_parts(context: HookContext) -> tuple[tuple[MaterialPart, ...], 
 
     focalizers = '、'.join(_focal_face(f) for f in context.pov.focalizers)
     parts = MaterialLines()
-    parts.append_fragments('【起笔已成立的事实】（开场前已成立；自然带过，不作为任务交代）')
-    audiences = {'world': '世界已成立，人物未必知晓', 'pov': '视角人物可知',
-                 'reader': '读者获准知道，人物未必知晓'}
+    parts.append_fragments('【起笔背景基线】（自然带过；认知的模式和极性以逐条内容为准）')
+    audiences = {'world': '故事背景，具体认知按条目模式理解', 'pov': '视角人物的认知与经历',
+                 'reader': '读者可见，具体确认程度按条目内容理解'}
     for i, fact in enumerate(context.opening_facts):
         parts.append_fragments(f'- [{audiences[fact.audience]}] ', show(
             fact.text, f'opening_facts/{i}', source('projection', fact.established_by,
@@ -710,15 +710,30 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态、世界
    不得同时出现在 initial_state／known_at_start 中（引子内已完成的告知不算
    「开场拍首次产生」——S₀ 记结果、开场拍记过程，不构成重复登记）。
 1. characters：为每个有名字或反复出场的人物建条目，键为小写下划线 slug（如 yun_niang）：
+   先在内部逐章核对实际行动、说话、感知或被直接作用的角色，再做跨章人物同一性归并；
+   不能只收有姓名者，反复行动的父母长辈、仆从等称谓人物同样不能漏。归并完成后，
+   对后文命名或揭示身份的人物回扫命名前的匿名参与，确保既有条目接回其最早相关出场。
+   这一核对仍在本次抽取内完成，不另输出角色清单、核对报告或推理过程。
    - reader 是读者认知的保留字，不作为人物 slug；
    - canonical：全书最稳定的称呼（内部主键显示名，不承担"何时可公开"语义）；
      **必须逐字等于该人物 surfaces 中的某一项**——没登记的字面不能当 canonical；
    - surfaces：数组，每项 {{surface, source_refs}}。同一称呼多次复现的并成一条，
      不要按出现章各开一条；称谓转变本身承担剧情意义时（如临场改口），交由对应
      章节的 event 表达。source_refs 引用证据段 id（见下方清单），且**至少一段
-     逐字包含该称呼**——释放窗口（从哪章起可用）由 compiler 按证据锚点派生，
-     你不输出章号；
+     逐字包含该称呼**，并选择该字面确实指向本人物的最早证据，不可只引后期复现。
+     同字称谓可能指不同人，不能为求“更早”引用属于另一人物的段落。释放窗口
+     （从哪章起可用）由 compiler 按证据锚点派生，你不输出章号；
    - 同一人物 surfaces 内不得重复登记同一称呼。
+   - identity_bindings 必填数组。匿名先出场、后文命名或身份衔接有歧义时，每项
+     {{"description","appearance_refs","identity_refs"}}：description 只描述 appearance_refs
+     所指场景中有确认依据的本地表征；不能嵌入推断的病因、施事、安排者、转移路线或
+     后来才揭示的身份。例如“门边昏睡的旅客”不能改成“被仇家下药送来的旅客”，
+     除非本地证据确已确认后者的全部含义。
+     appearance_refs 须覆盖最早匿名参与或被直接作用的证据，而非只列后来更显眼的出场；
+     identity_refs 另选能证明与本人物同一的衔接段，不能以存在同一称谓代替同一性依据。
+     仅有普通明确指称给 []。称谓何时出现、人物何时参与、何时揭示身份分别处理；
+     后文才出现姓名不妨碍早章使用同一内部 slug，身份衔接不代表早章人物或读者知情。
+     “孩子”“他”“蒙面人”等指称按具体语境绑定，不作为全书唯一别名；同词可指不同人。
 2. initial_state：只收"第 1 章第一拍之前已经成立"的地基事实，每项
    {{target, key, value, persistence, source_refs}}（不输出编号，编号由
    compiler 生成）：
@@ -744,17 +759,47 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态、世界
 
 4. facts：全书关键命题词表——信息不对称相关、会约束后续行为/误解/隐瞒/揭示的命题陈述
    （身份与身世、秘密、约定、主张、关键事实）。后续各章的认知转移将以编号引用这些命题
-   （编号由程序派发，你不输出编号）。每项 {{"statement","evidence_refs","known_at_start"}}：
-   - statement：主谓宾完整的陈述句；同一命题只登记一条；
-   - evidence_refs：1-3 个证据段 id（该命题在源文中确立或被陈述的段）；
+   （编号由程序派发，你不输出编号）。每项 {{"statement","evidence","known_at_start"}}：
+   - statement：一个主谓宾完整、可独立确认或否定的原子命题，同一命题只登记一条。
+     逐项问：其中某一部分后来可能成立、其余部分却不成立吗？若可以，须拆为不同命题。
+     病症、行为施事、行动方式、因果理由、去向和对外身份分别有据，不能合成一条供后章
+     整体接受。例如“旅客昏迷”“有人给旅客下药”“某人把旅客带走”“旅客住在某处”
+     可各自得到确认或否认，不能因为它们涉及同一人，就以一个编号共享全部判断。
+     原子性不因 kind 降为 claim／inference 而豁免，不能用降低证据等级掩盖复合命题。
+     错误前提本身也应保留为原子 P，不能只留最终真相，更不能用“某人以为 P”这样的
+     元命题替代 P、使后章无法撤回同一内容。相信、听说、撤回等模式归章节 know；
+     反转前接受 P、后来否认或确认非 P，仍引用同一个 P，分别记录证据性质与正负极性。
+     例如“使者受店主委派”若早期只是推断，后来证实不成立，词表仍保留这条命题；
+     不把它删去或改写成“使者没有受委派”，也不把“受委派且为了护送且由某人带来”
+     拼成一条。与该误信相关的行动动机不能因最终被推翻而消失。
+   - evidence：非空数组，每项 {{"kind","polarity","holder","evidence_refs"}}。
+     kind=confirmed（叙述确认）／claim（人物说法）／inference（推测）；
+     polarity=positive（支持完整 statement）／negative（否定完整 statement）；
+     holder=相关人物 slug 或 null（无特定人物的叙述确认），evidence_refs 选实际承载
+     该判断的段，不抄原文。每条 evidence 引用的证据必须支持其对完整 statement 的
+     判断，不能只证明其中一个子主张，再把整条命题标为已证；不同子主张须先拆开。
+     逐项记录早期说法、推测与后文确认／否认，不给命题贴永久真假标签。
+     polarity 取决于 statement 的完整含义，包含其中的否定词，不取决于话语是否在“否认”。
+     例如对于“甲已交出钥匙”，“我没有交”是否定，记 negative；对于“甲没有交出钥匙”，
+     同一句“我没有交”是在支持命题，记 positive。人物否认首先只是 claim，不能仅凭
+     否认标为 confirmed；是否已获叙述确认仍须依据上下文判断。
    - known_at_start：故事开始（＝第 1 章第一拍开始，见第 0 条）那一刻已经知道
-     该命题的人物 slug 数组（按证据登记）；引子（e00）内已完成的告知，其知情人
+     该命题的 {{"holder":"人物slug","polarity":"positive或negative"}} 数组，
+     只收已确认的知识，不把信念登记为已知。**每一条**开场知识，无论依据来自引子、
+     正文前史还是晚章回述，都必须有同 holder、同 polarity、kind=confirmed 的 evidence
+     支持该人物在开场时已知，不能只为 e00 记录满足此要求。
+     同一源段若结合上下文明示不同人物都已确知，可以为各 holder 分别登记 confirmed
+     evidence。例如两人当面签署并各自确认约定，同一段可分别支持两人的知识；但旁白
+     说明某事为真，不代表所有在场者或相关人物都知道，不能把 null 或另一 holder 的
+     证据机械复制给他们，也不能为满足闭合而把推测改标 confirmed 或删除真实开场知识。
+     晚章回述开场已知可以作证，证据文字出现的章节不等于知识产生时间；
      照实登记；引子风格的后文预告／全书概括披露不算开场已知（其信息归正文对应
      章）；开场无人知晓（剧情中才揭示）给空数组 []；不写 reader；
    - 与 initial_state 的分工：initial_state 是（作用对象，键，值）的维度事实，facts 是
      命题陈述——同一信息不在两边重复登记；普通事件经过、即时动作、已在
      world_constraints 的世界观规则不进 facts。
-   没有就给空数组。
+   没有就给空数组。交卷前通读核对每项是否混入其他主张、源文是否只是在猜测，
+   并检查后文是否否认或纠正早先说法；不能为统一词表改写前文获知时点。
 
 5. expression：narration 为 {{person:first|third, focalizers:[人物 slug 或第三人称 narrator],
    statement, source_refs}}；第一人称恰好一个真实人物。statement 明确人称、叙述者与视角权限。
@@ -764,29 +809,44 @@ BOOK_PROMPT = """任务：通读全书，产出人物账、初始状态、世界
    表达陈述**不点名**：用称谓、角色或「其他人物」一类中性泛称指认人，不写任何
    姓名字面（叙述机制是全书规则，不绑定具体人物名）。
 
+【交卷前逐项语义自核】（在本次抽取内完成，只输出下面要求的 JSON）
+- 逐章回查角色覆盖：反复行动的称谓人物是否漏建？匿名参与者是否因尚无姓名而被漏掉？
+- 从最终人物条目向前回扫：最早匿名参与是否在 appearance_refs，后续身份衔接是否有据？
+  description 是否偷偷加入未知病因、安排者、路线或后知身份？同字称谓是否误并不同实体？
+- 每一 surface 的最早所引字面是否确属本人物，是否漏掉了更早的本人称谓证据？
+- 每一 statement 能否被独立确认或否定？每一 evidence 是否承载完整判断，而非只证实
+  复合陈述的一部分？同场出现、原因相关或共指同一人，都不自动成为同一命题。
+  被后文推翻的前提 P 是否仍独立保留，能让反转前的误信和反转后的撤回／非 P
+  指向同一命题，而非只留下最终真相或“某人曾经以为”的元命题？
+- 逐条按完整 statement 检查 polarity，尤其是否含“不／未”等否定；不按说话语气翻极性。
+- 每条 known_at_start 是否有该 holder／polarity 的 confirmed 依据并符合开场时刻？
+  同段多持有者是否各有确知依据，而非从世界为真或他人知情自动复制？后文反转是否仍保留？
+发现问题就在本次答案中修正，不将完整性或语义判断转交给编译器，不另建审查节点。
+
 【证据段 id 清单】（每行一个自然段，行首方括号内是该段的 id；source_refs 只能从中选）
 {evidence}
 
-输出 JSON 顶层：{{"protocol_version":"stage2-book-v10","characters":{{...}},"initial_state":[...],"world_constraints":[...],"facts":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
+输出 JSON 顶层：{{"protocol_version":"stage2-book-v11","characters":{{...}},"initial_state":[...],"world_constraints":[...],"facts":[...],"expression":{{"narration":{{...}},"mechanisms":[...]}}}}
 个人自述、某家长辈要求不得推广成普遍世界规则；无法由证据确认的规则不写。
 
 【证据段指针】（R10a a1）initial_state 与 world_constraints 的每个条目必须带 evidence_refs：
 ["e00_02", ...]（至少 1 条，只写段 id、不抄原文——逐字引文由程序按段全文切出）。
 evidence_refs 必须出自该条目自身的 source_refs（引你所引：先在 source_refs 里列段，
 再从中选 evidence_refs）；不拿人名或动作词凑数；判断依据含限定（以为／觉得／像是／
-预计／约／几天后）时，所选段必须实际承载该限定原文。facts 的证据面即 evidence_refs
-自身（无 source_refs），同样只写段 id。"""
+预计／约／几天后）时，所选段必须实际承载该限定原文。facts 每个 evidence 的证据面
+即自身 evidence_refs（无 source_refs），同样只写段 id。"""
 
 CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍是一次状态转移：event 是给人读的事件表述，需要延续的变化全部由三类转移承载——change（事实）、know（认知）、loops（悬念）。机械字段（拍号、默认值、区间覆盖、命题句柄等）由 compiler 派生，你只写判断与例外。
 
-【人物表】（on_stage / change 的 at / know 的 who 只能用这些 slug）
+【人物表】（on_stage / change 的 at / know 的 who 只能用这些 slug；canonical与slug是
+内部身份标识，不授予本章姓名／身份知情，叙述仍遵守本章已出现称谓）
 {glossary}
 {facts_block}{prior}
 【第 {ch} 章正文】（每行一个自然段，行首方括号内的 eXX_YY 是该段的证据 id）
 {evidence}
 {pre_chapter}
 【要求】
-1. beats：按故事顺序拆拍，每拍 {{"event","on_stage","start","scene_location","new_scene","iterative","access","change","know","loops"}}。
+1. beats：按故事顺序拆拍，每拍 {{"event","on_stage","start","scene_location","location_reader_visible","new_scene","iterative","access","change","know","loops"}}。
    **不输出拍号**：列表序即事件序：
    - event：写"发生了什么"，并保住足以正确演出这一事件的语义——必要前因、关键指代
      （如"他那里"须写明指什么）、已成立的站位（谁在床上/床边/门外）、公开行为与内心
@@ -799,7 +859,9 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    - 动作的范围与去向以原文为准：走了多远、去了哪里、交给了谁，原文写到哪就记到哪，
      不外推、不补全（没写"送出住处"就不得记成送离住处）；
    - on_stage：本拍中实际行动、说话、感知或被直接作用的人物 slug（可空数组）；
-     仅被提及者只留在 event，不进 on_stage；
+     仅被提及者只留在 event，不进 on_stage。匿名人物依据本章指称与人物表的
+     identity_bindings 使用稳定 slug；姓名未出现不构成删掉真实参与者的理由。
+     身体、印记和亲缘等事实继续归实际人物或关系，不得改挂 world 规避身份绑定；
    - start：本拍**起始**的本章证据段 id（单个，如 "e01_03"）。拍覆盖区间由程序派生：
      从本拍 start 到下一拍 start 的前一段，末拍到章末——**不写区间、不写数组**。
      start 必须按段号数值严格递增；首拍必须是本章第一段（第 1 章允许跳过开头的
@@ -808,6 +870,9 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      例外）：换景或首次交代位置时给，如 "scene_location":"饭厅"；位置没变就不写。
      **当前位置只写在这里，不写进 change**——程序会把它编成场景作用域的登记效应，
      换场后自动失效；长期居所才是 change 的 residence；
+   - location_reader_visible：每拍必填布尔值。仅当本拍给出 scene_location，且该
+     位置内容确实向读者披露时填 true；隐藏地点填 false，无 scene_location 时
+     也必须填 false。access 不能替代这个判断；
    - new_scene：本拍开新场景（旧场景的 scene 作用域状态就此失效）才写 true，缺省＝
      延续当前场景。全书第一个拍必须 new；第 1 章之后的章若开场直接延续上一章末尾的
      同一场景，第一拍不写 new_scene，否则写；
@@ -815,9 +880,9 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    - access（获知通道，只写例外；缺省＝witnessed 当场上演）：本拍内容若不经角色
      展演、由叙述者直接向读者陈述——回溯/往事交代、背景与世界观概括、跨时间
      综述、「叙述者点明」一类——写 "access":"narrated"；普通对话、动作、当场
-     转述都不写。程序据此派生读者知情（narrated＝读者直接得知本拍内容）。
+     转述都不写。access 只说明呈现通道，第一人称直陈也可能是误解，不能据此确认命题。
 2. change：事实的 postcondition——本拍结束后仍成立、且后续涉及该维度时必须以它为准的
-   **叙述确立的**事实。每项 {{"at","key","val"[,"op","modality","evidence_refs"]}}：
+   **叙述确立的**事实。每项 {{"at","key","val","reader_visible","evidence_refs"[,"op","modality"]}}：
    - at：作用地址——人物 slug｜关系 "subject+object"（顺序＝作用方向）｜"world"；
    - 只记叙述确立的事实（含 unknown）："谁认为、谁声称什么"只进 know；
      自述与行为、内心矛盾时，事实层只记行为与叙述确立的事实，自述记进 event；
@@ -838,19 +903,31 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    - 改变哪个维度就替换哪个键；场景性临时状态（借宿、暂住、暂离）在结束或转移时必须
      替换对应维度的新值——去向未知就写"去向未交代"或 unknown（op），不得留旧值让
      下游补造；不另开新键；
+   - reader_visible 必填布尔值：该事实的具体内容本拍已向读者展示才为 true；
+     隐瞒、内容未披露不能因叙述者知道而填 true。计划、预计、条件不因此变成已发生。
    - 无 postcondition 的拍 change 给空数组。
-3. know：认知的 postcondition——谁对哪条命题持什么模式。每项 {{"who","how","fact","what","evidence_refs"}}
+3. know：认知的 postcondition——谁对哪条命题持什么模式。每项 {{"who","op","how","polarity","support","reader_visible","fact","what","evidence_refs"}}
    （"fact" 与 "what" 恰写其一）：
-   - who：人物 slug——**不写 reader**（读者知情由程序按 access 派生，不进观察面）；
+   - who：人物 slug——**不写 reader**（读者知情由程序按条目证据与披露派生）；
+   - op 必填 set／unset。set 的 how 与 polarity 必填非空；unset 表示本人撤回对此命题
+     的当前接受，how／polarity 明确填 null，保留支持撤回的 evidence_refs。
+     误信被纠正时，先 unset 原命题，再记录新获知；不修改或抹去早期误信和由它触发的动机。
+   - polarity 必填 positive／negative（unset 填 null），指持有者接受、猜测或听到
+     命题本身还是其否定。负极性说法不等于世界已经确认命题为假。
+   - support 必填 confirmed／claim／inference：叙述确认、未经确认的说法、推测。
+     learns／confirms 只允许 confirmed；听到否认本身仍是 claim。对话承担正式揭示时，
+     须依据本章上下文确认叙述确已采纳，不能因为说话者语气坚定就认定。
+   - reader_visible 必填布尔值，命题具体内容在本拍向读者展示才为 true；只说“他已知道”
+     而未披露内容填 false。在场、叙述通道和人物确知都不自动代表读者确知。
    - how：learns(确凿得知)/suspects(起疑)/confirms(证实怀疑)/hears_claim(听到说法
      未知真假)/believes(以为为真，不代表世界为真)/asserts(公开主张)；
    - 命题优先引用书级词表：本章命题已在【书级命题词表】登记时，用 "fact":"f03"
-     引用其编号，**不重写文本**（跨章引用同一编号即同一命题——这是跨章同一性的
-     唯一正路）；只有词表外的命题才写 "what"；"fact" 与 "what" 恰写其一；
+     引用其编号，**不重写文本**。完整语义等价才复用，部分支持不准整体引用；
+     引用只确定命题身份，不赋予真假或确认权限。词表外或仅部分重合的命题写 what；
+     "fact" 与 "what" 恰一个非空；
    - what：命题本身（主谓宾完整的陈述句）。同一命题再次出现时**逐字重写同一句**——
      compiler 按文本归并句柄，改写一字即另一条命题。与前面章节相关的命题，不要猜
-     它们在别章的措辞——按本章视角写清本章可证的内容，措辞与词表近义的命题仍应
-     改用 fact 引用，配对归关联节点判定；
+     它们在别章的措辞——按本章视角写清可证内容，不能接受本章没有证据的附加判断；
    - 只收会约束后续行为、误解、隐瞒或揭示的信息不对称；普通在场见闻、例行告知、
      不影响这些边界的事实不建。隐瞒被发现、误解被纠正等关键揭示必须另记 know，
      event 的事件描述不能代替知情记录，即使本拍 change/loops 都为空也一样。
@@ -860,14 +937,21 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
      等于读者理解，不把第一人称叙述者与 reader 合并；
    - 公开的表态、改口、说辞属于 event，不得据此推导当事人内心偏好或决定已变，
      除非文本明确写出内心变化。
-4. loops：悬念的 postcondition——独立数组，每项 {{"ref","op","question"/"resolution"}}：
+4. loops：悬念的 postcondition——每项 {{"ref","op","question","answer_refs"}}：
    - open：新建悬念线，必填 question（问题文本只出现在 open 处，之后不可改写）；
      每个 question 只问一个能由具体答案收束的问题。是否接受安排、某次行动能否成功、
      人物是否离开是不同问题，不能概括成“事情与人物去留会如何发展”再建一条重复悬念。
      普通已确定的到来、转场或等待不自动构成悬念；只记录原文实际留下的未知问题；
-   - close：必填 resolution（收束内容）。本章 open 过的悬念用其本地句柄 close；
-     前文章节开启、本章收束的悬念，同样用一个本章新本地句柄落账（resolution 必填，
-     问题文本不必知道）——跨章开合配对由后续关联节点建立，你不输出任何正式编号；
+     open 的 answer_refs 填 []。
+   - close：question=null，answer_refs 为非空数组，每项 {{"kind":"change或know或scene_location","index":1}}。
+     change／know 的 index 选择本拍对应数组里的第几个条目（1-based，不含程序合成的场景位置）。
+     拍级地点答案独立使用 {{"kind":"scene_location","index":1}}，index 只许 1，且本拍必须
+     实际填写 scene_location 并且 location_reader_visible=true。叙述仅向读者公开地点时可以
+     直接选位置原子；不得为此伪造人物 know、public 或其它 world 键。
+     change 答案必须 actual／set／reader_visible=true；know 答案必须 set、
+     learns或confirms、support=confirmed、reader_visible=true。不填写 resolution 文本，
+     程序从选中的答案原子派生。人物猜到、自以为懂了、听到未经确认的答案都不能 close。
+     本章已 open 的用其句柄；前章开启、本章收束的用本章新本地句柄，跨章配对归关联节点；
      前文已提出的问题在本章有明确答案时，不能仅另开一个近似问题再自开自闭，遗漏
      原问题的 close。没有问句也可能已用行动回答；同一行动确实解决多个不同问题时，
      分别用不同句柄记录有证据的收束。收束必须回答同一个具体问题，普通到来、阶段推进
@@ -890,7 +974,9 @@ CHAPTER_PROMPT = """任务：把第 {ch} 章正文拆成有序 beats。每一拍
    认识限定（觉得像是／以为／听说）只进 know 的 how（suspects／believes／hears_claim），
    what 写命题本身；所选段必须实际承载该限定原文。
 
-输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v10","beats":[...]}}
+交卷前核对：每条确知有确认依据，每个 close 有本拍真实答案，误信纠正仍保留早期认知，
+匿名人物及其事实主体未被删去；后文命题不能倒灌成本章已经知道。
+输出 JSON 顶层：{{"protocol_version":"stage2-chapters-v11","beats":[...]}}
 不要把财富、位置等不同维度塞入同一个 key。"""
 
 #: 七类保存类别与 `contracts/schema/policy.py::PreserveKind` 同源（B2）：定义只在
@@ -924,7 +1010,7 @@ _PRESERVE_KIND_LINES = '\n'.join(
     f'- {kind}：{definition}' for kind, definition in PRESERVE_KIND_DEFS.items())
 
 PRESERVE_RULES = f"""任务：从源证据投影视图选择改写不可丢失的最小语义义务
-（保存策略 v12；wire 协议 stage4-preserve-v7）。
+（保存策略 v13；wire 协议 stage4-preserve-v8）。
 
 【目标名称表（命名前移批，v12）】输入里的「目标名称表」给出每个应改名人物的
 目标姓名与化名、保留人物的保留称谓。你写的 statement、satisfaction、details.text
@@ -935,9 +1021,11 @@ anchors、source/evidence 引用及源句保持原字节；不替源句补声明
 
 【输入的形状（源证据投影视图，R10a a2）】视图按「书级初态 → 世界约束 →
 逐章逐拍」给出源真值的原子，每原子一行：方括号内是**投影句柄**（书级初态
-s0_*、世界约束 wc_*、事件 b拍号.v1、拍内转移 b拍号.e序/.c序/.l序——e＝事实、c＝认知、
+s0_*、开场已确认知识 k0_*、世界约束 wc_*、事件 b拍号.v1、拍内转移 b拍号.e序/.c序/.l序——e＝事实、c＝认知、
 l＝悬念），随后是类型化内容（认知带持有者与模式 learns/suspects/confirms/
-hears_claim/believes/asserts；事实带 modality：actual＝已发生／planned＝已定
+hears_claim/believes/asserts，以及 set/unset、正负极性、证据性质与读者可见性；
+unset 是撤回当前接受，不代表世界为假，也不抹去此前曾经相信或听到的历史。
+事实带 modality：actual＝已发生／planned＝已定
 计划／expected＝预计／conditional＝条件性执行）
 和**逐字引文**（依据 e段号：「原句」）。文末证据窗口给被引句段全文（含同章
 前后各一句——邻句是上下文，不是该命题的证据）。锚定以引文为准，不以邻句为准。
@@ -970,6 +1058,11 @@ source_refs 所指窗口；邻句只供上下文，不能借它添加事件内�
 改写证据。
 
 【必须保住的两类反差】
+- 人物匿名存在、指称同一性与姓名/身份揭示分别保留：早已出场的人物不能因尚未
+  得名删除参与者，身体、血缘等事实不得改挂世界；同字面指称不自动是同一个人。
+- 猜测与纠正：believes/suspects/hears_claim 不等于命题为真；保住误信引起的
+  动机与行动，以及后文 unset 后接受有证据的新认知。否认只先是负极性说法，
+  confirmed 才是确认依据；不得把“谁以为P”概括成客观P，不把多个独立主张揉合。
 - 说辞与行为的反差：人物自称／对外表态（cognition 的 asserts／hears_claim／
   believes，或 event 里的自述）与实际行为（事实与 event 的行动）矛盾时，
   保的是这层反差本身——不得把自述升格为已成立的内在准则，也不得只留一面；
@@ -1056,6 +1149,8 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
 - 每项 kind,statement,anchors,must_preserve(布尔 true/false),satisfaction,
   requires；可选 details；
 - anchors 是**投影句柄数组**（闭集选择，至少 1 个）——该义务依赖的源原子；
+  其中 k0_* 是人物开场已确认的正／负知识；需要保留开场知情时必须选择该原子，
+  不把它改成后文才获知，也不凭人物后来相信倒推开场确知；
   不输出 lineage，来源由工程从 anchors 解析；
 - requires 用 **1-based 列表序号**引用其它义务（如第 2 项依赖第 1 项写 [1]），
   不得自指，只收必要先决条件——**只写因果或信息前提**（不承载它就立不起来），
@@ -1064,14 +1159,14 @@ setup/payoff 或结局条件中的任何一项，就填 true；否则填 false�
 - series 可选 summaries：[{{"member":回顾义务序号,"covers":[已发生实例序号,...]}}]。
   member 和 covers 都必须属于该组；covers 不得含回顾义务或自身。允许中途回顾，
   不要求回顾是全组最后一项；只回顾明确覆盖的实例。
-- wire 顶层：{{"protocol_version":"stage4-preserve-v7","obligations":[...],
+- wire 顶层：{{"protocol_version":"stage4-preserve-v8","obligations":[...],
   "series":[...],"evidence_conflicts":[...]}}（后两项可省略）。
 输出前将义务文本与所选原子核对一次：必要触发与响应、决定条件、说辞与真实
 想法的区别已进入源盲文本，未知未被补真。同一回答内完成核对，不输出自评分或核对表。
 返回一个 JSON object，不要围栏、不要解释。"""
 
 DESIGN_RULES = """任务：仅依据 Brief/义务清单/Identity/OutputConstraints 设计目标书
-（wire 协议 stage4-design-v12）。目标是使必保条件组成可演出的完整故事，而非按义务
+（wire 协议 stage4-design-v13）。目标是使必保条件组成可演出的完整故事，而非按义务
 逐条解释。你是整书一次调用的结构设计者：只表达**选择、
 结构与相对篇幅重点**——场景/拍编号、归章、线程编号、权重归一、默认值、
 知情增量的键与模式全部由 compiler 派生，你不输出任何 ID、编号或归一化数值
@@ -1109,13 +1204,15 @@ entry 的 recap/锚点缺省）也由代码派生——你只写判断与例外�
 Brief.requirements 以 obNN 为键，包含完整语义、依赖 requires、锁与 satisfaction。
 在**承载该义务的拍**上写 real:["obNN",…]：一条义务可标多拍——**末次标注拍**
 是它的接受拍（单一最终验收位），其余标注拍是支撑位。
-认知变化清单由代码给出短引用 obNN.kNN（持有者、命题与模式已固定）。在对应
+认知变化清单由代码给出短引用 obNN.kNN（持有者、命题、操作、模式与极性已固定）。在对应
 义务 real 承载拍写 know:[{ref:"obNN.kNN"}] 标出每次变化的实际发生拍：先怀疑、
-后证实必须分别落拍；每个引用恰好一次。你不重写持有者、命题、模式或机械 ID。
+后证实必须分别落拍；每个引用恰好一次。你不重写这些字段或机械 ID。
+set/positive 是接受正命题，set/negative 是接受“并非该命题”；unset 是撤回当前接受。
+纠正可在同拍依序先放 unset、再放相反极性的 set，不合并变化，也不抹去误会历史。
 条目里的 requires_released（必保揭名）：该 know 所在拍必须**已释放**所列称谓
 （同拍释放合法——本拍 release 引入即可，拍前不可用）；这类称谓不投影，承载
 章的正文必须出现该字面。
-读者 known 的变化必须另写 confirms:{domain,key,subjects,holder}，明确确认的
+读者 known 的 set（无论正负极性）必须另写 confirms:{domain,key,subjects,holder}，明确确认的
 目标事实地址；必须是该拍及之前已建立的实际事实。其它认知变化不写 confirms。
 - 每条**必保**（must_preserve=true）义务至少标注一拍，漏标即拒（机械校验）；
 - identity／initial_state／world_fact 同样遵守必保覆盖：initial_state、world_rules
@@ -1170,8 +1267,8 @@ progress／resolution 只结算该条目标、行动、问题或承诺，必须�
   时态锁（planned/expected/conditional）须标在同 modality 的 set 上（计划不得升格
   actual）；unknown_value 锁须标在 op=unknown 的状态上（不得补值）；unanswered 是
   禁区，不承载状态、不写 lock；同一个锁只标在一条状态上；
-- kp_* 键的知情增量一律经 know 标注派生；state 面只承载例外——
-  op=unknown（值未知）或 op=unset（显式解除该知情），at＝持有者。
+- kp_* 键的知情 set/unset 一律经 know 标注派生，不在 state 另写撤回。
+  state 面只允许明确的 op=unknown（值未知）例外，at＝持有者。
   知情 set 经 know 派生；读者 known 须在 know 标注 confirms 事实地址，且该
   地址必须**已实际建立**（此前有 set 值）——未知、已解除或 planned/expected
   的状态不能被读者确认（确认不得早于建立，防提前披露）。
@@ -1253,7 +1350,7 @@ Schema、必保 real、know、释放与引用闭集；不另输出核对表或�
 返回一个 JSON object，不要围栏、不要解释。
 """
 
-from contracts.schema.design import DesignWireV5, DesignWireV9, DesignWireV10, DesignWireV12, STAGE4_DESIGN_WIRE_PROTOCOL
+from contracts.schema.design import DesignWireV5, DesignWireV13, STAGE4_DESIGN_WIRE_PROTOCOL
 _DESIGN_INSTRUCTIONS = DESIGN_RULES
 
 
@@ -1266,20 +1363,18 @@ def design_wire_schema(*, known_char_ids: set[str] | None = None,
                  protocol: str = STAGE4_DESIGN_WIRE_PROTOCOL) -> dict:
     """模型 Schema 是唯一形状源；动态闭集与接受函数使用同一输入。
 
-    CS-3（2026-10-03）：形状源换瘦模型（现为 DesignWireV12）；闭集注入面随
+    CS-3（2026-10-03）：形状源换瘦模型（现为 DesignWireV13）；闭集注入面随
     之换名（who／可选 pov 的 anyOf 分支），语义与 v5 面一致。CS-F2：
     `fact_lock_ids` 是可被 `lock` 引用的事实锁句柄闭集（Brief.fact_locks 去掉
     unanswered 禁区）；空集合时 `lock` 只允许 null。rc26（命名前移批 C）：
     取消 name_candidates 参数（候选覆盖硬闸随 identity-text 协议退役）。
     """
-    if protocol not in (STAGE4_DESIGN_WIRE_PROTOCOL, 'stage4-design-v10', 'stage4-design-v9'):
+    if protocol != STAGE4_DESIGN_WIRE_PROTOCOL:
         raise ValueError(f'未登记 Design wire 协议 {protocol!r}')
-    current = protocol != 'stage4-design-v9'
-    schema = (DesignWireV12 if protocol == STAGE4_DESIGN_WIRE_PROTOCOL
-              else DesignWireV10 if current else DesignWireV9).model_json_schema()
-    beat_def = 'SlimDesignBeatV10' if current else 'SlimDesignBeat'
-    state_def = 'SlimDesignStateV10' if current else 'SlimDesignState'
-    scene_def = 'SlimDesignSceneV10' if current else 'SlimDesignScene'
+    schema = DesignWireV13.model_json_schema()
+    beat_def = 'SlimDesignBeatV10'
+    state_def = 'SlimDesignStateV10'
+    scene_def = 'SlimDesignSceneV10'
     if expression_ids is not None:
         allowed_expressions = sorted(expression_ids)
         props = schema['$defs'][beat_def]['properties']['ex']
@@ -1355,17 +1450,19 @@ def design_rules(*, known_char_ids: set[str] | None = None,
         known_char_ids=known_char_ids, registered_surfaces=registered_surfaces,
         knowledge_refs=knowledge_refs, detail_refs=detail_refs,
         expression_ids=expression_ids, fact_lock_ids=fact_lock_ids, protocol=protocol)
-    current = protocol != 'stage4-design-v9'
-    instructions = _DESIGN_INSTRUCTIONS.replace(STAGE4_DESIGN_WIRE_PROTOCOL, protocol)
-    if current:
-        instructions += '''
-【请求投影 v2】
+    instructions = _DESIGN_INSTRUCTIONS
+    instructions += '''
+【请求投影 v3】
 propositions 与 fact_locks 以 kp_／kf_ 加八位字符的短引用为键；所有引用只使用这些键。
 compiler 按完整 Brief 展开到 canonical 身份；不生成、不抄写长 hash。
 空集合与 null 字段省略：缺省表示无该项，must_preserve=false 仍是明确可选。
-每次知情变化完整列在所属义务 knowledge_changes 中，含持有者、命题、模式及揭名要求；
-知情授权是这些三元组的并集，再加 knowledge_locks 中的额外授权。缺省无额外授权。
-不把重复三元组的不同发生实例合并；满足条件、动机、因果与披露约束全部有效。
+每次知情变化完整列在所属义务 knowledge_changes 中，含持有者、命题、op、mode、polarity
+及揭名要求；unset 的 mode/polarity 为 null（请求可省略空值），不可解释成正或负命题。
+知情授权是这些五元组的并集，再加 knowledge_locks 中的额外授权。缺省无额外授权。
+义务 initial_knowledge 是开场知识授权，目标 initial_state 必须以 knowledge 的
+set＋true/false（正／负命题）兑现必保项；动态 knowledge_changes 不授权开场提前知情。
+不把相同五元组的不同发生实例合并；publicly_claimed_by 的 holder/polarity
+只表达公开声称或否认，不授权任何人物或读者 known。满足条件、动机、因果与披露约束全部有效。
 '''
     return instructions + '\n【wire JSON Schema（字段与分支以此为准）】\n' + json.dumps(
         schema, ensure_ascii=False, separators=(',', ':'))
@@ -1437,10 +1534,12 @@ NAME_VARIANTS_RULES = """任务：判定疑似姓名异写候选。程序已从�
 输出 JSON 顶层：{{"protocol_version":"{protocol}","variants":[{{"literal":"…","verdict":"same|unresolved|not_name","char_id":…,"surface":…,"evidence_refs":["…"],"reason":"…"}}]}}"""
 
 HOOK_DESIGN_RULES = """任务：从正式正文设计中选择一个能迅速吸引读者的冲突单元，设计楔子的进入、呈现与截断。只输出设计 JSON，不写楔子正文
-（wire 协议 stage4-hook-design-v4）。事实只选择输入 facts 目录中的 fact_ref；
+（wire 协议 stage4-hook-design-v5）。事实只选择输入 facts 目录中的 fact_ref；
 不得自行生成地址、人物组合、状态键或引用编号。材料位置只选择 scene/beat 分量。
 目录每条保留建立位置、原值、op、modality、holder 与 knowledge_mode；这些是不同
 维度。世界事实已成立不自动代表人物或读者已经知道，不把不同原值猜成同一事实。
+每个 fact_ref 定位具体原子；同拍同址的相信、听说、撤回可以分别存在。heard
+只记录听到过说法，正反说法均可保留；听到否认不自动撤回原先相信的命题。
 
 你看到的骨架是正文设计（BodyDesign）：唯一事件真相。楔子是高张力情节切片，
 不是完整场景的缩写版：默认选择一个清楚的冲突片段，通常取 2–4 拍、以其中一拍的
@@ -1468,7 +1567,7 @@ materials（按呈现序，不规定条数）：每条
 - 每份材料应推进同一冲突或补足理解所需的前提。末份材料是楔子的截断位置：
   可停在动作、回应或局面即将改变之处，不要求把该场结局写完，也不要求替读者发问。
 - 截断精度沿用现有拍引用：选择足够细的末拍，不虚构拍内动作地址。
-- withheld：只选该拍 fact_refs 中不呈现的事实引用（隐藏侧面时用）；
+- withheld：只选该拍 fact_refs 中不呈现的具体原子；同址另一认知不会随之隐藏；
 - presentation：只在该拍涉及隐藏身份（concealed 中人物）或需要隐藏侧面时给出，
   用一句话显式声明本材料呈现什么（不含隐藏人物的姓名字面）；否则省略，
   由系统直接投影该拍的 event 与 delta。
@@ -1481,17 +1580,19 @@ pov：{person: first|third, focalizers:[人物 id]}。first 恰好一人且不�
 opening_facts：按入口需要选择，允许合法空数组，不为凑条数补背景。每条
 {fact_ref:"输入目录引用", audience:"world|pov|reader"}。
 - 只能选择 op=set 的事实；未知、解除不等于已经成立。world 不选尚未发生的计划。
-- audience：world=世界已成立；pov=POV 人物已知；reader=读者获准知道。
+- audience：world=故事背景基线；pov=POV 人物的认知或经历；reader=读者获准看到。
+  audience 不决定命题真假。人物相信或听到过 P 本身可作为背景，仍按对应模式
+  呈现，不能把 P 当作已经客观成立。
   冷开起点＝materials[0] 的故事位置，倒叙不改变这个起点；材料视界＝全部材料的
   最大故事位置。world/pov 必须早于冷开起点且在该时点仍有效；reader 不晚于视界。
   POV 知情若引用 knowledge，holder 必须是本 Hook 的 focalizer，不借其他人的知情。
 - 不选材料拍本次新建立或揭示的事实，不选禁区中的本次建立。初态已经成立的事实，
   不因后续材料再次写入同地址就变成新揭示；但起点前的值变化、解除或场作用域失效
   会使旧事实失效。后续改变值的事实必须保留后续原值，不得搬到 init。
-- 目录条目的 later_writes 列出同地址的全部后续写入（系统已算好，直接查表）：
-  world/pov 起笔事实必须选该地址在冷开起点前的**最后一次**写入——若 later_writes
-  中某次写入的位置不晚于你的起点，本条旧值已失效，改选符合时序的那一次写入
-  （或避开该地址）；scope=scene 的事实只在其所在场内有效，跨场起点不得引用。
+- 目录条目的 later_writes 列出同一状态通道的后续写入（含同拍后续原子，系统
+  已算好）：接受的值、模式变化或 unset/unknown 会使原接受失效；连续相同 set
+  不改变状态。heard 是说法历史，不替代同址的当前接受，也不被接受或撤回删除。
+  world/pov 起笔基线必须在冷开起点仍可使用；scope=scene 只在该场内有效。
 
 concealed：需要隐藏身份的人物 id 列表（没有给空数组）。
 surface_releases：楔子中允许使用的称谓 [{char_id, surfaces}]——只能从正文设计已
@@ -1520,9 +1621,9 @@ local_focus：只写表现重点，例如人物严肃措辞与荒唐行动的反
 的落差。不得另行复述事件、增补动机、前史、桥接事实或结局。全书风格、人物声线与
 材料场景声线由正式设计投影，不再自拟 delivery_brief。
 
-只输出一个 JSON 对象（protocol_version 为 "stage4-hook-design-v4"；不要围栏、
+只输出一个 JSON 对象（protocol_version 为 "stage4-hook-design-v5"；不要围栏、
 不要解释）：
-{"protocol_version":"stage4-hook-design-v4","pov":{...},"opening_facts":[...],"materials":[...],"concealed":[...],
+{"protocol_version":"stage4-hook-design-v5","pov":{...},"opening_facts":[...],"materials":[...],"concealed":[...],
  "surface_releases":[...],"forbidden_reveals":[...],"reader_expectation":{...},"local_focus":"..."}"""
 
 HOOK_DESIGN_RULES += '''
@@ -1788,6 +1889,7 @@ def pending_reader_confirmations(
                     continue
                 items.append(PendingConfirmation(
                     fact=delta.value or '', key=delta.key,
+                    polarity='negative' if delta.value == 'false' else 'positive',
                     subjects=tuple(delta.confirms.subjects),
                     address=delta.confirms,
                     position=f'{graph.scenes[later].scene_id}#{beat.beat_id}',
@@ -1880,7 +1982,8 @@ def scene_read_views(*, scene, establishments: tuple[Establishment, ...],
         if read.domain is EffectDomain.KNOWLEDGE:
             probe = ('knowledge', read.subjects, read.holder, read.key)
             found = next((e for e in view_knowledge
-                          if ('knowledge', e.subjects, e.holder, e.key) == probe), None)
+                          if e.mode != 'heard'
+                          and ('knowledge', e.subjects, e.holder, e.key) == probe), None)
         else:
             probe = read.address()
             found = next((e for e in view_state if e.address() == probe), None)
@@ -1952,8 +2055,12 @@ def participant_background(
     knowledge: dict[tuple, KnowledgeEntry] = {}
     for entry in folded_prefix.entry_knowledge_view():
         probe = ('knowledge', entry.subjects, entry.holder, entry.key)
-        if entry.holder in participants and probe not in declared:
-            knowledge[probe] = entry
+        if entry.holder in participants and (probe not in declared or entry.mode == 'heard'):
+            # 声明读取的是当前接受；同址说法历史仍是独立背景，不能覆盖
+            # believes/known，也不能因接受已经送达而删除相反说法。
+            identity = ((*probe, 'heard', entry.polarity, entry.established_by)
+                        if entry.mode == 'heard' else (*probe, 'acceptance'))
+            knowledge[identity] = entry
     ordered = lambda d: tuple(d[k] for k in sorted(d, key=str))  # noqa: E731
     return ordered(state), ordered(knowledge)
 
@@ -2245,20 +2352,16 @@ def project_context(*, scene_id: str, graph: BodyDesign,
         for e in entries)
         for beat, entries in beat_reads.items()}
 
-    def _resolve_delta(d):
-        # knowledge 增量（含读者揭示 holder=reader）的 value 恒为 "true"；
-        # 命题内容回填进 value，渲染（_delta_line／pending 确认）因此拿到的
-        # 是命题文本而非 "true"（fold/plan 的 Establishment 不动——机械折叠
-        # 仍按句柄，I-16 单真相源）。world 规则键（wc_{nn}）同尺回填（CS-3）。
-        if d.op != 'set':
-            return type(d)(**d.model_dump())
-        statement = kp_statement(kp_statements, d.key) \
-            if d.domain is EffectDomain.KNOWLEDGE else (
-                world_statements.get(d.key)
-                if d.domain is EffectDomain.WORLD else None)
-        if statement is None:
-            return type(d)(**d.model_dump())  # 保持既有拷贝语义：IR 不与 graph 共享实例
-        return d.model_copy(update={'value': statement})
+    def _resolve_delta(d) -> ProjectedDelta:
+        # IR 专用字段承载命题文本；真源的 true/false 与 unset=None 原样保留。
+        # 撤回也必须带原命题，才能让写手知道撤回了哪项接受。
+        projected = ProjectedDelta(**d.model_dump())
+        if d.domain is EffectDomain.KNOWLEDGE:
+            return projected.model_copy(update={
+                'proposition_statement': kp_statement(kp_statements, d.key)})
+        statement = world_statements.get(d.key) \
+            if d.domain is EffectDomain.WORLD and d.op == 'set' else None
+        return projected if statement is None else projected.model_copy(update={'value': statement})
     # 跨场义务只携带明确的已完成支撑拍；绝不把整条复合义务当作先前真值。
     positions = {f'{s.scene_id}#{b.beat_id}': (i, j, b)
                  for i, s in enumerate(graph.scenes) for j, b in enumerate(s.beats)}
@@ -2300,10 +2403,9 @@ def project_context(*, scene_id: str, graph: BodyDesign,
         p.model_copy(update={'fact': statement}) if (
             statement := kp_statement(kp_statements, p.key)) is not None else p
         for p in pending_reader_confirmations(graph, scene_index))
-    beats = tuple(
-        b.model_copy(update={'target_delta': tuple(
-            _resolve_delta(d) for d in b.target_delta)})
-        for b in scene.beats)
+    projected_deltas = {b.beat_id: tuple(_resolve_delta(d) for d in b.target_delta)
+                        for b in scene.beats}
+    beats = scene.beats
     if faces is not None:
         # 拍级引入面同尺映射：BeatIR.release_introductions 进写手视图
         # （「第N拍起才可用称谓」），必须与监视行同面。
@@ -2318,6 +2420,7 @@ def project_context(*, scene_id: str, graph: BodyDesign,
     ir = VerificationIR(scene_id=scene_id, obligations=owned,
                         beats=beats_ir(scene_id, beats,
                                        reads_by_beat=beat_reads,
+                                       deltas_by_beat=projected_deltas,
                                        details_by_id={detail.detail_id: WriterDetail(
                                            detail_id=detail.detail_id, text=detail.text,
                                            obligation_id=obligation.obligation_id)
@@ -2507,8 +2610,14 @@ def _knowledge_entry_line(name, entry: KnowledgeEntry) -> str:
 
 
 def _knowledge_entry_fragments(name, entry: KnowledgeEntry) -> tuple[str, str, str]:
+    if entry.status != 'set':
+        action = '已撤回对' if entry.status == 'unset' else '尚不确定'
+        return f'{name(entry.holder)}{action}「', entry.proposition, '」的接受'
     mode = _KNOWLEDGE_WORDINGS[entry.mode]
-    return f'{name(entry.holder)}{mode}「', entry.proposition, '」'
+    prefix = '并非：' if entry.polarity == 'negative' else ''
+    suffix = ('」（说法历史，不代表当前接受或世界为真）'
+              if entry.mode == 'heard' else '」')
+    return f'{name(entry.holder)}{mode}「{prefix}', entry.proposition, suffix
 
 
 def _delta_line(name, delta) -> str:
@@ -2524,11 +2633,15 @@ def _delta_line(name, delta) -> str:
 
 def _delta_fragments(name, delta) -> tuple[str, str, str]:
     if delta.domain is EffectDomain.KNOWLEDGE:
+        statement = getattr(delta, 'proposition_statement', None)
         if delta.op != 'set':
-            action = '此项信息仍未知' if delta.op == 'unknown' else '解除此项知情状态'
-            return f'{name(delta.holder or "")}：{action}', '', ''
+            action = '尚不确定' if delta.op == 'unknown' else '撤回对'
+            return f'{name(delta.holder or "")}{action}「', statement or '', '」的接受'
         mode = _KNOWLEDGE_WORDINGS[delta.knowledge_mode or 'known']
-        return f'{name(delta.holder or "")}{mode}「', str(delta.value), '」'
+        prefix = '并非：' if delta.value == 'false' else ''
+        suffix = ('」（未经确认的说法）' if delta.knowledge_mode == 'heard' else '」')
+        return (f'{name(delta.holder or "")}{mode}「{prefix}',
+                statement if statement is not None else str(delta.value), suffix)
     who = _subjects_line(name, delta.subjects, delta.holder)
     head = f'{who}：' if who else ''
     if delta.op == 'set':
@@ -2649,7 +2762,8 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
     def fact_source(value, field, position):
         knowledge = isinstance(value, KnowledgeEntry) or (
             getattr(value, 'domain', None) is EffectDomain.KNOWLEDGE)
-        text = value.proposition if isinstance(value, KnowledgeEntry) else value.value
+        text = value.proposition if isinstance(value, KnowledgeEntry) else (
+            getattr(value, 'proposition_statement', None) or value.value)
         kind = 'knowledge' if knowledge and value.key.startswith('kp_') else (
             'world' if value.key.startswith('wc_') else 'design')
         return source(kind, value.key if kind != 'design' else getattr(value, 'established_by', position),
@@ -2880,12 +2994,13 @@ def _build_writer_packet(packet: ChapterWriterPacket) -> tuple[WriterPacket, dic
                     *fact_fragments(knowledge, f'background_knowledge/{entry_index}', context.scene_id))
         # 禁区：未到时点的读者确认＋受保护的问题线程
         for pending in ir.pending_reader_confirmations:
+            fact = ('并非：' if pending.polarity == 'negative' else '') + pending.fact
             if pending.in_scene:
                 no = beat_no[pending.position.rsplit('#', 1)[-1]]
-                guard_only.append(f'「{pending.fact}」须到本场第{no}拍起才可向读者'
+                guard_only.append(f'「{fact}」须到本场第{no}拍起才可向读者'
                                   '确认；此前不得作为已确认信息叙述，也不主动提及')
             else:
-                guard_only.append(f'「{pending.fact}」本章之内不得让读者确认'
+                guard_only.append(f'「{fact}」本章之内不得让读者确认'
                                   '（确认位置在后场）；不得提前兑现或主动提及')
         for thread in ir.open_threads:
             if thread.kind != 'question':

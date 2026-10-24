@@ -462,9 +462,9 @@ def _extraction_payload() -> dict:
     `stage2/characters/characters.json` 的 core view 与它同形（characters +
     initial_state）；`_provenance` 不进消费投影，其内字段取值不影响 freshness。
     """
-    return {
+    return {'initial_knowledge': [],
         'characters': {
-            'char_001': {
+            'char_001': {'identity_bindings': [],
                 'canonical': '甲',
                 'surfaces': [
                     {'surface': '甲', 'from_chapter': 1,
@@ -500,7 +500,7 @@ def _edit_extraction(view: dict, edited: str) -> None:
     elif edited == 'char_id':
         view['characters']['char_002'] = view['characters'].pop('char_001')
     elif edited == 'extra_character':
-        view['characters']['char_002'] = {
+        view['characters']['char_002'] = {'identity_bindings': [],
             'canonical': '乙',
             'surfaces': [{'surface': '乙', 'from_chapter': 1,
                           'source_refs': ['stage1/ch01']}],
@@ -631,7 +631,7 @@ def _book_observation_payload() -> dict:
     """`stage2/observations/book.json` 的合成样例（B2 观察 wire；窗口坐标不在
     wire——from_chapter/until_chapter 由 compiler 派生，I-21）。"""
     return {**sample_book_expression({
-            'char_001': {
+            'char_001': {'identity_bindings': [],
                 'canonical': '甲',
                 'surfaces': [
                     {'surface': '甲', 'source_refs': ['e01_01']},
@@ -639,9 +639,9 @@ def _book_observation_payload() -> dict:
                 ],
             },
         }),
-        'protocol_version': 'stage2-book-v7',
+        'protocol_version': 'stage2-book-v8',
         'characters': {
-            'char_001': {
+            'char_001': {'identity_bindings': [],
                 'canonical': '甲',
                 'surfaces': [
                     {'surface': '甲', 'source_refs': ['e01_01']},
@@ -677,7 +677,7 @@ def _edit_book_observation(view: dict, edited: str) -> None:
     elif edited == 'char_id':
         view['characters']['char_002'] = view['characters'].pop('char_001')
     elif edited == 'extra_character':
-        view['characters']['char_002'] = {
+        view['characters']['char_002'] = {'identity_bindings': [],
             'canonical': '乙',
             'surfaces': [{'surface': '乙', 'source_refs': ['e01_01']}],
         }
@@ -847,7 +847,7 @@ def test_characters_timing_edit_stales_even_without_attestation():
     """
     base = _book()
     view = _extraction_payload()
-    view['characters']['char_002'] = {
+    view['characters']['char_002'] = {'identity_bindings': [],
         'canonical': '乙',
         'surfaces': [{'surface': '乙', 'from_chapter': 1,
                       'source_refs': ['stage1/ch01']}],
@@ -914,7 +914,7 @@ def test_characters_payload_tracks_every_name_change(edited: str):
     base = _book()
     view = _extraction_payload()
     if edited == 'drop_character':
-        view['characters']['char_002'] = {
+        view['characters']['char_002'] = {'identity_bindings': [],
             'canonical': '乙',
             'surfaces': [{'surface': '乙', 'from_chapter': 1,
                           'source_refs': ['stage1/ch01']}],
@@ -1000,10 +1000,10 @@ def test_consumer_freshness_never_calls_damaged_upstream_fresh():
 
 @pytest.mark.parametrize('malformed', (
     None, 42, 'x', [], {}, {'entities': None}, {'entities': []}, {'entities': 'x'},
-    {'entities': {'characters': None}}, {'entities': {'characters': []}},
-    {'entities': {'characters': {'char_001': None}}},
-    {'entities': {'characters': {'char_001': {'address': 'x'}}}},
-    {'entities': {'characters': {'char_001': {'address': [None]}}}},
+    {'entities': {'initial_knowledge': [], 'characters': None}}, {'entities': {'initial_knowledge': [], 'characters': []}},
+    {'entities': {'initial_knowledge': [], 'characters': {'char_001': None}}},
+    {'entities': {'initial_knowledge': [], 'characters': {'char_001': {'address': 'x'}}}},
+    {'entities': {'initial_knowledge': [], 'characters': {'char_001': {'address': [None]}}}},
 ))
 def test_registered_projections_survive_malformed_upstream(malformed: object):
     """畸形上游只许算不出投影，不许抛。
@@ -1032,7 +1032,7 @@ def test_registered_projections_survive_malformed_upstream(malformed: object):
 @pytest.mark.parametrize('malformed', (
     {},
     {'entities': None},
-    {'entities': {'characters': None}},
+    {'entities': {'initial_knowledge': [], 'characters': None}},
 ))
 def test_projection_marks_missing_character_maps_empty(malformed: object):
     """缺地图与空地图分得开：前者算不出（None），后者是合法空值——都不许抛。
@@ -1045,7 +1045,7 @@ def test_projection_marks_missing_character_maps_empty(malformed: object):
     from novel.consumption import stage2_main_text
 
     # 畸形一律算不出，不许抛：`None` 是「算不出」，`[]` 是「空的」。
-    for payload in (malformed, {'characters': malformed}, {'root': [malformed]}):
+    for payload in (malformed, {'initial_knowledge': [], 'characters': malformed}, {'root': [malformed]}):
         assert stage2_main_text(payload) is None, payload
     # 合法空值不是错误：空章数组该给出空清单（与「缺地图」分得开）。
     assert stage2_main_text([]) == []
@@ -2654,7 +2654,7 @@ def test_the_waiver_switches_off_nothing_but_the_unknown_half(
         box.close()
 
 
-# ───────────────── 质量契约拒旧与 ExecutionPlan 无损适配 ─────────────────
+# ───────────────── 质量契约与 ExecutionPlan 拒旧 ─────────────────
 
 _QUALITY_CASES = (
     ('runtime/preserve_checkpoint.json', ('preserve',)),
@@ -2700,7 +2700,6 @@ def _sealed_repository(tmp_path: Path):
 def test_quality_artifacts_refuse_old_or_missing_payload_versions(tmp_path, rel, owners, version):
     """即使旧产物已有合法当前形状，也不能靠默认值把新证据当成已取得。"""
     from contracts.artifacts import STR06_ARTIFACT_RC_VERSIONS
-    from novel.store import _upgrade_rc12_payload
     from tests.str06_facilities import synthetic_ref
     repo = _sealed_repository(tmp_path / 'green')
     current = _quality_model(rel)
@@ -2714,13 +2713,12 @@ def test_quality_artifacts_refuse_old_or_missing_payload_versions(tmp_path, rel,
     else:
         old['contract_version'] = version
     before = copy.deepcopy(old)
-    assert _upgrade_rc12_payload(rel, old) is old, '质量产物已退出旧迁移白名单'
-    assert old == before, '不补 series/details，也不修改历史载荷'
     repo = _sealed_repository(tmp_path / 'old')
     repo.write(rel, old, owners=owners, refs=refs)
     original = repo.path(rel).read_bytes()
     with pytest.raises(ProvenanceRefused, match='质量契约版本不兼容'):
         repo.read_model(rel)
+    assert old == before, '拒读不补 series/details，也不修改历史载荷'
     assert repo.path(rel).read_bytes() == original, '拒读保持历史封存字节'
 
 
@@ -2755,40 +2753,37 @@ def _rc12_execution_payload(version: str) -> dict:
 
 
 @pytest.mark.parametrize('version', ['str06-rc12', 'str06-rc13'])
-def test_execution_plan_migration_is_pure_and_keeps_its_independent_version(version):
-    from contracts.schema.execution import ExecutionPlan
-    from contracts.schema.workflow import STR06_RC_VERSION
-    from novel.store import _upgrade_rc12_payload
+def test_execution_plan_current_read_refuses_historical_payload_without_mutation(tmp_path, version):
+    from contracts.schema.execution import ExecutionPlan, SceneExecutionPlan
+    from contracts.artifacts import STR06_ARTIFACT_RC_VERSIONS
+    rel = 'stage4/compiled/execution_plan.json'
+    current = ExecutionPlan(initial_establishments=(),
+                            scenes=(SceneExecutionPlan(scene_id='sc01'),))
+    assert current.contract_version == STR06_ARTIFACT_RC_VERSIONS[rel]
+    green = _sealed_repository(tmp_path / 'current')
+    green.write(rel, current)
+    assert green.read_model(rel) == current
     source = _rc12_execution_payload(version)
     original = copy.deepcopy(source)
-    migrated = _upgrade_rc12_payload('stage4/compiled/execution_plan.json', source)
-    assert source == original, '内存迁移不能修改输入或封存字节'
-    assert STR06_RC_VERSION == 'str06-rc26'
-    assert migrated['contract_version'] == 'str06-rc14', '全局版式头不决定独立产物版本'
-    scene = migrated['scenes'][0]
-    reader = scene['establishments'][0]
-    assert (reader['domain'], reader['holder'], reader['knowledge_mode']) == (
-        'knowledge', 'reader', 'known')
-    assert scene['planned_delta'][0]['knowledge_mode'] is None
-    assert scene['constraints'] == original['scenes'][0]['constraints']
-    assert all('confirms' not in row for row in migrated['initial_establishments']
-               + scene['establishments'] + scene['planned_delta'])
-    ExecutionPlan.model_validate(migrated)
-    assert _upgrade_rc12_payload('stage4/compiled/execution_plan.json', migrated) is migrated
-    outside = {'contract_version': version, 'domain': 'reader', 'key': 'untouched'}
-    assert _upgrade_rc12_payload('stage2/observations/book.json', outside) is outside
+    repo = _sealed_repository(tmp_path / 'historical')
+    repo.write(rel, source)
+    sealed = repo.path(rel).read_bytes()
+    with pytest.raises(ProvenanceRefused, match='质量契约版本不兼容'):
+        repo.read_model(rel)
+    assert source == original
+    assert repo.path(rel).read_bytes() == sealed
 
 
 @pytest.mark.parametrize('version', ['str06-rc12', 'str06-rc13'])
-def test_execution_plan_formal_read_migrates_without_rewriting_sealed_bytes(tmp_path, version):
-    from contracts.schema.execution import ExecutionPlan
-    from novel.store import _upgrade_rc12_payload
+def test_execution_plan_checks_refuse_old_versions_without_rewriting_sealed_bytes(tmp_path, version):
     repo = _sealed_repository(tmp_path)
     rel = 'stage4/compiled/execution_plan.json'
     source = _rc12_execution_payload(version)
     repo.write(rel, source)
     original = repo.path(rel).read_bytes()
-    assert repo.read_model(rel) == ExecutionPlan.model_validate(_upgrade_rc12_payload(rel, source))
+    for check in (repo.check_model, repo.inspect_sealed_model):
+        with pytest.raises(ProvenanceRefused, match='质量契约版本不兼容'):
+            check(rel)
     assert repo.path(rel).read_bytes() == original
 
 
@@ -2873,7 +2868,7 @@ def test_graph_body_consumption_keeps_body_version_and_ignores_hook_selection():
     project = projection_for('str06.stage5.body', 'stage4/design/presentation_graph.json')
     assert project is body_graph_payload
     assert project(raw) == body.model_dump(mode='json')
-    assert project(raw)['contract_version'] == 'str06-rc26'
+    assert project(raw)['contract_version'] == 'str06-rc27'
     changed_hook = copy.deepcopy(raw)
     changed_hook['hook']['local_focus'] = '以人物对答推进，落在荒唐计划提出的瞬间'
     assert project(changed_hook) == project(raw)

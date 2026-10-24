@@ -117,7 +117,8 @@ STR06_MIGRATION_DEPENDENCY_RULES: Final[tuple[DependencyRule, ...]] = (
     DependencyRule(
         module='novel.stages.stage4.hook_context',
         allows=('contracts.schema.*', 'novel.core.name_materials',
-                'novel.core.text', 'novel.stages.stage4.hook_validation'),
+                'novel.core.text', 'novel.stages.stage4.hook_validation',
+                'novel.stages.stage4.hook_facts'),
         forbids=('novel.llm', 'novel.llm.*', 'novel.stages.common')
         + tuple(m for m in _STAGE457 if m != 'novel.stages.stage4.hook_context')),
     # hook（Stage4 hook_design 的确定性臂与唯一 publisher）禁止 LLM 与

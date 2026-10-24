@@ -38,45 +38,52 @@ def stage0_machine_revise(book, new_clean: str):
     return rev.commit(store, transform, clean_text=new_clean)
 
 
-def current_hook_wire(coordinates: dict) -> dict:
+def current_hook_wire(coordinates: dict, body=None) -> dict:
     """测试用坐标式构造器：只换算引用，不替设计填入组织或阅读期待。
 
-    夹具必须显式提供 v3 的 emphasis／transition／local_focus／阅读期待。
+    夹具必须显式提供当前协议的 emphasis／transition／local_focus／阅读期待。
     不调用恢复 adapter 或待测验收函数，不把缺项或错误选择自动补成合法设计。
+    原子位置来自真实 BodyDesign 的唯一目录项，或显式 0-based atom_ordinal；
+    同拍同址歧义必须显式选择，不能从地址猜认知模式、极性或最终值。
     """
     from copy import deepcopy
-    from novel.stages.stage4.hook_facts import fact_ref_of
+    from novel.stages.stage4.hook_facts import fact_ref_of, hook_facts
     result = deepcopy(coordinates)
+    facts = hook_facts(body) if body is not None else ()
 
-    def handle(ref, address):
+    def handle(ref, address, atom_ordinal=None):
         if isinstance(ref, dict):
             ref = '#'.join((ref['scene'], ref['beat']))
         key = (address['domain'], tuple(address.get('subjects') or ()),
                address.get('holder') or '', address['key'])
-        return fact_ref_of(ref, key)
+        if atom_ordinal is None:
+            atom_ordinal = address.get('atom_ordinal')
+        if atom_ordinal is not None:
+            # 显式位置也能构造故意悬空的红例，交给真实生产判据拒绝。
+            return fact_ref_of(ref, key, atom_ordinal)
+        if body is None:
+            raise ValueError('坐标夹具缺 atom_ordinal，必须提供真实 body 或显式原子序号')
+        matches = [f for f in facts if f.ref == ref and f.delta.address() == key]
+        if len(matches) != 1:
+            raise ValueError('坐标对应的原子缺失或不唯一；歧义必须显式给 atom_ordinal')
+        return matches[0].fact_ref
 
     for row in result.get('opening_facts', []):
-        row['fact_ref'] = handle(row.pop('ref'), row.pop('address'))
+        if 'fact_ref' not in row:
+            row['fact_ref'] = handle(row.pop('ref'), row.pop('address'),
+                                     row.pop('atom_ordinal', None))
     for row in result['materials']:
-        row['withheld'] = [handle(row['beat_ref'], address) for address in row.get('withheld', [])]
+        row['withheld'] = [handle(row['beat_ref'], address) if isinstance(address, dict)
+                           else address for address in row.get('withheld', [])]
     for k, row in enumerate(result.get('forbidden_reveals', [])):
+        if 'fact_ref' in row and 'ref' not in row:
+            continue
         result['forbidden_reveals'][k] = (
-            {'kind': 'fact', 'fact_ref': handle(row['ref'], row['address'])}
+            {'kind': 'fact', 'fact_ref': handle(row['ref'], row['address'], row.get('atom_ordinal'))}
             if row.get('address') is not None else {'kind': 'event', 'beat_ref': row['ref']})
     expectation = result.get('reader_expectation')
     if expectation and expectation['kind'] == 'fact' and 'answer' in expectation:
         answer = expectation.pop('answer')
-        expectation['fact_ref'] = handle(answer['ref'], answer['address'])
-    result['protocol_version'] = 'stage4-hook-design-v4'
-    for row in result['materials']:
-        if isinstance(row.get('presentation'), str):
-            row['presentation'] = row['presentation']
-    if isinstance(expectation, dict) and isinstance(expectation.get('focus'), str):
-        expectation['focus'] = expectation['focus']
-    if isinstance(result.get('local_focus'), str):
-        result['local_focus'] = result['local_focus']
+        expectation['fact_ref'] = handle(answer['ref'], answer['address'], answer.get('atom_ordinal'))
+    result['protocol_version'] = 'stage4-hook-design-v5'
     return result
-
-
-# 历史 helper 名不代表旧协议；现役样例在一个 builder 中明确声明语义。
-hook_wire_v3 = current_hook_wire

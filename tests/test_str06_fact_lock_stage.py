@@ -33,7 +33,7 @@ def _wires(*, marked: bool = True, unknown: bool = False) -> dict:
         *wires['ch01']['beats'][0]['effects'],
         # CS-S 1b：effect 无 scope／proposition／disclosure——时态锁由
         # modality 派生（expected／unknown 本就独立于命题锚）。
-        {'target': {'kind': 'world'}, 'key': 'agreement',
+        {'reader_visible': False, 'target': {'kind': 'world'}, 'key': 'agreement',
          'op': 'unknown' if unknown else 'set', 'value': None if unknown else '约半月',
          'modality': 'actual' if unknown else 'expected',
          'basis': ({'segment': 'e01_01', 'quote': '苏芸娘嫁入陆家'},)})
@@ -84,7 +84,7 @@ def test_body_design_publishes_binding_with_lock_mapping_and_no_kf_state_key(tmp
     repo = ctx.repository
     body = repo.read_model('stage4/design/body_design.json')
     binding = repo.read_model('stage4/grounding/semantic_binding.json')
-    assert binding.contract_version == 'str06-rc26'
+    assert binding.contract_version == 'str06-rc27'
     [mapping] = binding.fact_bindings
     assert (mapping.kf_id, mapping.beat_ref) == (KF_PLAN, 'sc01#b03')
     assert (mapping.address.domain.value, mapping.address.key) == ('world', 'agreement')

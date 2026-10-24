@@ -31,8 +31,8 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from contracts.judges.str06 import PATCH_ROUTES
-from contracts.schema.design import DesignWireV9, DesignWireV10, DesignWireV12
-from contracts.schema.hook import HookDesignWire, HookDesignWireV3
+from contracts.schema.design import DesignWireV13
+from contracts.schema.hook import HookDesignWire
 from novel.core.repair import schema_at_path
 from novel.core.validation import ValidationIssue
 
@@ -80,11 +80,8 @@ def _walk(document: Any, path: Path) -> Any:
 def _wire_schema(wire: dict) -> dict | None:
     """只按登记协议取正式形状，未知协议不根据候选字段猜模型。"""
     model = {
-        'stage4-design-v9': DesignWireV9,
-        'stage4-design-v10': DesignWireV10,
-        'stage4-design-v12': DesignWireV12,
-        'stage4-hook-design-v3': HookDesignWireV3,
-        'stage4-hook-design-v4': HookDesignWire,
+        'stage4-design-v13': DesignWireV13,
+        'stage4-hook-design-v5': HookDesignWire,
     }.get(wire.get('protocol_version'))
     return model.model_json_schema() if model is not None else None
 
@@ -263,8 +260,7 @@ def locate_design_patches(wire: Any, errors: Sequence[object],
                 except ValueError:
                     return None
             issue_path = tuple(shape.get('issue_path') or ()) if shape else ()
-            if (schema is not None and wire.get('protocol_version') in (
-                    'stage4-hook-design-v3', 'stage4-hook-design-v4')):
+            if (schema is not None and wire.get('protocol_version') == 'stage4-hook-design-v5'):
                 parent = _hook_repair_owner(schema, path)
             elif (shape and getattr(error, 'code', None) == 'design_wire_shape'
                     and shape['error_type'] == 'extra_forbidden'

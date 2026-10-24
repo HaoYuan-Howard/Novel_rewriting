@@ -46,7 +46,7 @@ from novel.stages.stage2.chapters import (
 )
 from novel.stages.stage2.compile import (
     CompileOutcome, FoldResult, compile_source_truth, inspect_identity_associations,
-    evidence_metrics, first_appearance_anchors, first_appearance_issues,
+    evidence_metrics,
     initial_snapshot, source_fold,
 )
 from novel.stages.stage2.names import (
@@ -70,8 +70,7 @@ __all__ = [
     'NAMES_INPUT_VERSION', 'NamesObservation', 'ProbeFinding', 'PropositionCandidate',
     'PropositionHandle', 'ResolverIssue', 'SceneCandidate', 'SceneHandle',
     'STAGE2_ASSOCIATE_PROTOCOL', 'STAGE2_CHAPTERS_WIRE_PROTOCOL',
-    'expand_chapter_wire', 'first_appearance_anchors',
-    'first_appearance_issues', 'slim_chapter_wire',
+    'expand_chapter_wire', 'slim_chapter_wire',
     'associate_candidates_prompt', 'associate_patch_locate', 'book_observation_prompt',
     'associate_observation_issues', 'associate_unresolved_issues',
     'book_patch_locate', 'chapter_observation_prompt', 'chapter_prior_text',

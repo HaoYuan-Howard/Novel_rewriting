@@ -31,7 +31,7 @@ from tests.test_str06_candidate_preflight import _bad_design, _prepare
 # ───────────────────────── 定位策略（纯函数） ─────────────────────────
 
 WIRE = {
-    'protocol_version': 'stage4-design-v12',
+    'protocol_version': 'stage4-design-v13',
     'book_style': '风格', 'character_voices': [{'char_id': 'a', 'voice': 'v'}],
     'scenes': [
         {'driver': {'focal_actor': 'a'}, 'brief': '场景简报',
@@ -360,7 +360,7 @@ def test_item_patch_round_resends_only_the_failing_beats_and_merges_to_a_full_gr
     assert [b.event for b in body.scenes[0].beats[:2]] == [
         beat['ev'] for beat in wires['design']['scenes'][0]['beats'][:2]]
     assert not any('陆大哥' in b.event for s in body.scenes for b in s.beats)
-    assert repo.read_model('stage4/grounding/semantic_binding.json').contract_version == 'str06-rc26'
+    assert repo.read_model('stage4/grounding/semantic_binding.json').contract_version == 'str06-rc27'
     # 成本记账：原轮＋条目返修各一次实付，不是整份重写两遍的另一种计法。
     from novel.llm.ledger import read_cost_snapshot
     rows, _ = read_cost_snapshot(repo.root.parent)
@@ -613,26 +613,26 @@ def _confirm_wire():
     """v8 wire＋扩展 Brief：第 1 拍两个 know 行——先普通知情行、后带悬空 confirms
     的读者确认行（检验序数→wire 行号的映射不受非确认行穿插影响）。"""
     from contracts.schema.grounding import ReconstructionBrief
-    from tests.test_str06_design_slim import _brief, _v9_wire
+    from tests.test_str06_design_slim import _brief, _current_wire
 
     payload = _brief().model_dump(mode='json')
     payload['requirements'].append({
         'core_id': 'req_eeee', 'summary': '读者确知借种之计', 'kind': 'reveal',
         'must_preserve': True, 'satisfaction': '读者确认', 'participants': [],
         'requires_cores': [], 'locks': [],
-        'knowledge_changes': [{'change_id': 'kc_2222222222222222', 'holder': 'reader',
+        'knowledge_changes': [{'op': 'set', 'polarity': 'positive', 'change_id': 'kc_2222222222222222', 'holder': 'reader',
                                'kp': 'kp_2222222222222222', 'mode': 'known'}],
         'realize_locks': [], 'series_group': None, 'series_mechanism': None})
     payload['propositions'].append({'kp_id': 'kp_2222222222222222',
                                     'statement': '借种之计确有其事',
                                     'publicly_claimed_by': []})
-    payload['knowledge_locks'].append({'holder': 'reader', 'kp': 'kp_2222222222222222',
+    payload['knowledge_locks'].append({'op': 'set', 'polarity': 'positive', 'holder': 'reader', 'kp': 'kp_2222222222222222',
                                        'mode': 'known'})
     brief = ReconstructionBrief.model_validate(payload)
     by_core = {r.core_id: r for r in brief.requirements}
     obligations = {'ob01': by_core['req_aaaa'], 'ob02': by_core['req_bbbb'],
                    'ob03': by_core['req_cccc'], 'ob04': by_core['req_eeee']}
-    wire = _v9_wire()
+    wire = _current_wire()
     beat = wire['scenes'][0]['beats'][0]
     beat['real'] = ['ob01', 'ob04']
     beat['know'] = [
@@ -647,7 +647,7 @@ def test_read_and_confirm_closure_errors_carry_wire_paths_for_item_revision():
     """读取闭合→read 行；确认闭合→初始行／know 行（含非确认行穿插）；
     多处违例各自独立定位；混入无路径错误仍整份退回。"""
     from novel.stages.stage4.design import assemble_body_design
-    from tests.test_str06_design_slim import _brief, _obligations, _v9_wire
+    from tests.test_str06_design_slim import _brief, _obligations, _current_wire
 
     def assemble(wire, brief, obligations):
         return assemble_body_design(
@@ -657,7 +657,7 @@ def test_read_and_confirm_closure_errors_carry_wire_paths_for_item_revision():
             obligations=obligations)
 
     brief = _brief()
-    wire = _v9_wire()
+    wire = _current_wire()
     wire['scenes'][1]['reads'] = [{'domain': 'character', 'subjects': ['yun_niang'],
                                    'holder': None, 'key': 'ghost_state'}]
     body, errors = assemble(wire, brief, _obligations(brief))
@@ -678,9 +678,20 @@ def test_read_and_confirm_closure_errors_carry_wire_paths_for_item_revision():
 
     # 初始态违例路径指向 initial_state 的读者确认行（confirms 只能随 reader known
     # 知情行声明），与拍内违例互不牵连、各自成条目。
+    # 单独授权此开场知识，使反例只检验 confirms 的事实地址闭合。
+    from contracts.schema.grounding import ReconstructionBrief
+    payload = brief.model_dump(mode='json')
+    payload['requirements'][-1]['initial_knowledge'] = [{
+        'op': 'set', 'holder': 'reader', 'kp': 'kp_2222222222222222',
+        'mode': 'known', 'polarity': 'positive'}]
+    brief = ReconstructionBrief.model_validate(payload)
+    by_core = {requirement.core_id: requirement for requirement in brief.requirements}
+    obligations = {key: by_core[value.core_id] for key, value in obligations.items()}
+    from novel.stages.stage4.slim import design_reference_aliases
     wire['initial_state'].append({
         'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
-        'key': 'kp_2222222222222222', 'value': 'true', 'knowledge_mode': 'known',
+        'key': design_reference_aliases(brief)['kp_2222222222222222'],
+        'value': 'true', 'knowledge_mode': 'known',
         'confirms': {'domain': 'character', 'subjects': ['lu_fujun'], 'holder': None,
                      'key': 'secret'}})
     body, errors = assemble(wire, brief, obligations)
@@ -776,7 +787,7 @@ def test_hook_design_item_patch_round_fixes_only_the_failing_material(tmp_path):
     bad = deepcopy(wires['hook_design'])
     from novel.stages.stage4.hook_facts import fact_ref_of
     bad['materials'][0]['withheld'] = [fact_ref_of(
-        'init', ('character', ('yun_niang',), '', 'marital_status'))]
+        'init', ('character', ('yun_niang',), '', 'marital_status'), 0)]
     transport = PatchingTransport(wires, bad, owner='hook_design')
     repo, session, _ = _make_session(tmp_path, wires, transport=transport)
     ctx = ChainContext(repository=repo, ask=json_ask(session), ask_text=text_ask(session),

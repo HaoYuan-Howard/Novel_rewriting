@@ -1,30 +1,29 @@
-"""Hook v4 的确定性目录与 wire 展开；历史 v3 解码保留独立身份。
+"""Hook v5 的确定性目录与 wire 展开；只接受当前契约。
 
 模型仅选择已给出的引用与呈现策略；compiler 不补出旧版缺少的组织及读者期待。
 答案、后续承载位置只用于校验，不作为 Writer 的正向写作材料。
 
 【请求面派生标注（2026-10-10 裁决，方向一）】目录每条在原始事实字段之外附
 `later_writes`／`name_exposure` 两类 compiler 预推导标注，只进请求、不进 wire
-契约：判据可机械推导的部分（同地址覆盖时序、命题文本的专名暴露）由代码算好
+契约：判据可机械推导的部分（同状态通道更新时序、命题文本的专名暴露）由代码算好
 给模型查表，不再要求模型在全书事实上手工重放状态机（I-15/I-20）。
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from pydantic import ValidationError
 
 from contracts.schema.design import BodyDesign
-from contracts.schema.hook import HookDesignWire, HookDesignWireV3
+from contracts.schema.hook import HookDesignWire
 from novel.core.repair import shape_repair_paths
 from novel.stages.stage4.design_paths import design_issue
-from novel.stages.stage4.hook_facts import hook_facts
+from novel.stages.stage4.hook_facts import hook_facts, is_claim_history
 
 
-def hook_wire_model(wire: Mapping[str, Any]) -> HookDesignWire | HookDesignWireV3:
-    """历史 v3 仅在这里解码，不修改响应字节或冒充 v4 请求身份。"""
-    model = HookDesignWireV3 if wire.get('protocol_version') == 'stage4-hook-design-v3' else HookDesignWire
-    return model.model_validate(wire)
+def hook_wire_model(wire: Mapping[str, Any]) -> HookDesignWire:
+    """只解码当前协议；历史证据保留原字节，不进入生产读链。"""
+    return HookDesignWire.model_validate(wire)
 
 
 def ref_parts(ref: str) -> str | dict[str, str]:
@@ -79,10 +78,9 @@ def annotated_hook_catalog(body: BodyDesign, *,
                            ) -> dict[str, dict]:
     """hook_catalog + 请求面派生标注（later_writes／name_exposure）。
 
-    · `later_writes`——同地址在本条建立位置之后的全部写入（含 unset，阅读序）。
-      world/pov 起笔事实必须是冷开起点前该地址的**最后一次**写入；起点不早于
-      任一后续写入时旧值已失效（`hook_opening_stale`）。scene 作用域的有效性
-      由模型按 `scope`＋所在场核对，规则文本另有说明。
+    · `later_writes`——同一状态通道的后续操作（含同拍后续原子）。连续相同 set
+      不改变状态，解除/未知或不同值会替代当前状态；heard 为独立说法历史，
+      不替代接受或其他说法。scene 作用域按显式 scope 与所在场失效。
     · `name_exposure`——本条命题/取值文本命中的目标字面（按人物）。这些文本会
       原样进入写手视图；未释放且无显示面替换的人物字面即泄漏
       （`positive_material_leak`）。rc26：字面宇宙是目标字面表（`faces`）。
@@ -95,7 +93,8 @@ def annotated_hook_catalog(body: BodyDesign, *,
     for fact in facts:
         row = catalog[fact.fact_ref]
         later = [other for other in by_address[fact.delta.address()]
-                 if other.position > fact.position]
+                 if (other.position, other.atom_ordinal) > (fact.position, fact.atom_ordinal)
+                 and not is_claim_history(fact.delta) and not is_claim_history(other.delta)]
         if later:
             row['later_writes'] = [
                 {'fact_ref': other.fact_ref, 'at': ref_parts(other.ref)}
@@ -162,7 +161,7 @@ def project_hook_input(body: BodyDesign, *,
         return row
 
     return {
-        'input_version': 'stage4-hook-input-v4',
+        'input_version': 'stage4-hook-input-v5',
         'identity_surfaces': {char_id: sorted(set(literals) - {''})
                               for char_id, literals in faces.items()}
                              if faces is not None else {},
@@ -190,9 +189,7 @@ def expand_hook_wire(wire: dict[str, Any], body: BodyDesign) -> tuple[dict | Non
         parsed = hook_wire_model(wire)
     except ValidationError as exc:
         errors = []
-        model = (HookDesignWireV3 if wire.get('protocol_version') == 'stage4-hook-design-v3'
-                 else HookDesignWire)
-        entries = shape_repair_paths(model.model_json_schema(), wire,
+        entries = shape_repair_paths(HookDesignWire.model_json_schema(), wire,
                                      exc.errors(include_url=False))
         for entry in entries:
             path = entry['replace_path']
@@ -225,7 +222,7 @@ def expand_hook_wire(wire: dict[str, Any], body: BodyDesign) -> tuple[dict | Non
         return {key: getattr(fact.delta, key) for key in ('domain', 'key', 'subjects', 'holder')}
 
     for k, item in enumerate(data['opening_facts']):
-        fact = resolve(item.pop('fact_ref'), ('opening_facts', k))
+        fact = resolve(item['fact_ref'], ('opening_facts', k))
         if fact is not None:
             item.update(ref=fact.ref, address=address(fact))
     for k, item in enumerate(data['materials']):
@@ -239,21 +236,22 @@ def expand_hook_wire(wire: dict[str, Any], body: BodyDesign) -> tuple[dict | Non
                         f'材料 {item["beat_ref"]} 的 withheld 不属于该拍 delta：{handle}',
                         code='hook_withheld_ref', location=('materials', k, handle),
                         paths=(('materials', k),)))
-                hidden.append(address(fact))
+                hidden.append({**address(fact), 'fact_ref': fact.fact_ref})
         item['withheld'] = hidden
     for k, item in enumerate(data['forbidden_reveals']):
         if item.pop('kind') == 'fact':
-            fact = resolve(item.pop('fact_ref'), ('forbidden_reveals', k))
+            fact = resolve(item['fact_ref'], ('forbidden_reveals', k))
             if fact is not None:
                 item.update(ref=fact.ref, address=address(fact))
         else:
             ref = item.pop('beat_ref')
-            item.update(ref='#'.join((ref['scene'], ref['beat'])), address=None)
+            item.update(ref='#'.join((ref['scene'], ref['beat'])), address=None, fact_ref=None)
     expectation = data['reader_expectation']
     if expectation['kind'] == 'fact':
         fact = resolve(expectation.pop('fact_ref'), ('reader_expectation',))
         if fact is not None:
-            expectation['answer'] = {'ref': fact.ref, 'address': address(fact)}
+            expectation['answer'] = {'ref': fact.ref, 'address': address(fact),
+                                     'fact_ref': fact.fact_ref}
     else:
         expectation['followup_refs'] = [
             '#'.join((ref['scene'], ref['beat']))

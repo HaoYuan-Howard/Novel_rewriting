@@ -99,8 +99,8 @@ def test_observation_artifacts_are_registered_with_independent_versions():
     # rc15（RC-26/27 证据寻址）：携带段号的三类观察换身份；rc18（CS-S 1b）：
     # book／ch{nn} 观察 canonical 升 v5（死字段收口）再换身份；names 形状
     # 不变，保持 rc15。
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/book.json'] == 'str06-rc20'
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/ch{nn}.json'] == 'str06-rc20'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/book.json'] == 'str06-rc27'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/ch{nn}.json'] == 'str06-rc27'
     for rel in ('stage2/observations/ch{nn}.json',
                 'stage2/observations/names.json'):
         assert rel in ARTIFACT_PATHS and rel in ARTIFACT_SPECS
@@ -111,20 +111,20 @@ def test_observation_artifacts_are_registered_with_independent_versions():
     # rc17（CS-H H4，RC-65）：associate 协议升 v3（维度句柄）——同键配对按构造
     # 不可能、模型只配键不同但同维的维度；观察产物随协议换身份。
     assert ARTIFACT_SPECS['stage2/observations/associate.json']
-    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc20'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage2/observations/associate.json'] == 'str06-rc27'
     # R2（语义送达）起 RC 版式头升 rc10；associate 冻结在 rc9（R1 身份）不动。
-    assert STR06_RC_VERSION == 'str06-rc26'     # 命名前移批；Stage2 独立维持 rc20。
-    assert STR06_ARTIFACT_RC_VERSIONS['stage4/compiled/execution_plan.json'] == 'str06-rc14'
+    assert STR06_RC_VERSION == 'str06-rc27'     # 人物绑定与认知边界批，受影响消费链统一 rc27。
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/compiled/execution_plan.json'] == 'str06-rc27'
     for rel in ('runtime/preserve_checkpoint.json',
                 'stage4/grounding/reconstruction_brief.json',
                 'stage4/grounding/semantic_binding.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc26'
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc27'
     for rel in ('stage4/design/body_design.json', 'stage4/ir/writer_book_ir.json',
                 'stage4/design/presentation_graph.json'):
-        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc26'
+        assert STR06_ARTIFACT_RC_VERSIONS[rel] == 'str06-rc27'
     # rc16 续（CS-F2 Hook 称谓投影）：楔子上下文随绑定表换身份，旧 rc12 拒读。
     # rc17 续（CS-H H3）：hook 上下文增 display_faces/avoid_lines。
-    assert STR06_ARTIFACT_RC_VERSIONS['stage4/context/hook/hook.json'] == 'str06-rc26'
+    assert STR06_ARTIFACT_RC_VERSIONS['stage4/context/hook/hook.json'] == 'str06-rc27'
     for label in ('str06-rc6', 'str06-rc9', 'str06-rc10', 'str06-rc11'):
         assert label in STR06_RC_LABELS
     assert str06_chapter_observation_rel(3) == 'stage2/observations/ch03.json'
@@ -148,20 +148,20 @@ def _book_wire() -> dict:
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']},
                 {'surface': '他', 'source_refs': ['e01_01']},
-            ]},
+            ], 'identity_bindings': []},
             'yun_niang': {'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'source_refs': ['e01_02']},
-            ]},
+            ], 'identity_bindings': []},
         }),
-        'protocol_version': 'stage2-book-v7',
+        'protocol_version': 'stage2-book-v8',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'source_refs': ['e01_01']},
                 {'surface': '他', 'source_refs': ['e01_01']},
-            ]},
+            ], 'identity_bindings': []},
             'yun_niang': {'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'source_refs': ['e01_02']},
-            ]},
+            ], 'identity_bindings': []},
         },
         'initial_state': [
             {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
@@ -189,12 +189,12 @@ def _beat_wire(**over) -> dict:
         'effects': [{'target': {'kind': 'character', 'char_id': 'yun_niang'},
                      'key': 'attitude', 'op': 'set', 'value': '高',
                      'modality': 'actual',
-                     'basis': _basis('e01_01')}],
+                     'basis': _basis('e01_01'), 'reader_visible': True}],
         'cognition': [{'proposition': {'ref': 'p_secret',
                                        'statement': '借种之约是夫妻共同秘密'},
                        'holder': 'yun_niang', 'mode': 'learns',
-                       'basis': _basis('e01_01')}],
-        'loops': [{'ref': 'q_night', 'op': 'open', 'question': '夜半响动是谁？'}],
+                       'basis': _basis('e01_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True}],
+        'loops': [{'ref': 'q_night', 'op': 'open', 'question': '夜半响动是谁？', 'answer_refs': []}],
     }
     beat.update(over)
     return beat
@@ -241,16 +241,16 @@ def test_chapter_observation_rejects_unknown_fields():
 def test_transfer_semantics_carry_over_from_v13():
     """三类转移的形状闸逐字复用 v13 模型：悬念开闭；CS-S 1b 死字段（scope／
     disclosure／proposition）在 effect 面关闭式拒收。"""
-    # open 必带 question、close 必带 resolution 且不改写问题（R-2.11）
+    # open 必带 question、close 必选答案原子且不改写问题（R-2.11）
     with pytest.raises(ValidationError):
         ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
                                            'beats': [_beat_wire(loops=[
-                                               {'ref': 'q1', 'op': 'open'}])]})
+                                               {'ref': 'q1', 'op': 'open', 'answer_refs': []}])]})
     with pytest.raises(ValidationError):
         ChapterObservation.model_validate({'protocol_version': STAGE2_CHAPTERS_PROTOCOL,
                                            'beats': [_beat_wire(loops=[
                                                {'ref': 'q1', 'op': 'close',
-                                                'question': '改写问题', 'resolution': '是夫君'}])]})
+                                                'question': '改写问题', 'answer_refs': ['c1']}])]})
     # 死字段：scope／disclosure／proposition 携带即拒（extra_forbidden）
     for dead in ('scope', 'disclosure', 'proposition'):
         with pytest.raises(ValidationError):
@@ -263,7 +263,7 @@ def _dead_field_effect(dead: str) -> dict:
     """CS-S 1b：已删字段的直接构造（红例素材）。"""
     eff = {'target': {'kind': 'character', 'char_id': 'fu_jun'}, 'key': 'identity',
            'op': 'set', 'value': '养子', 'modality': 'actual',
-           'basis': _basis('e01_01')}
+           'basis': _basis('e01_01'), 'reader_visible': True}
     if dead == 'scope':
         eff['scope'] = 'scene'
     elif dead == 'disclosure':

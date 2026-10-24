@@ -110,6 +110,28 @@ def _failed_candidate_root(tmp_path) -> Path:
 
 # ─────────────────────────────── views 纯函数 ───────────────────────────────
 
+@pytest.mark.parametrize('damage', ['old_version', 'missing_identity_bindings',
+                                   'missing_initial_knowledge'])
+def test_characters_view_refuses_old_or_incomplete_contract_without_rewriting(base, damage):
+    """旧根和当前损坏根均显式 409；监控读口不迁移、不补空数组、不改原字节。"""
+    path = base / 'cand' / 'run' / 'stage2/characters/characters.json'
+    payload = json.loads(path.read_text(encoding='utf-8'))
+    if damage == 'old_version':
+        payload['contract_version'] = 'str06-rc26'
+    elif damage == 'missing_identity_bindings':
+        next(iter(payload['characters'].values())).pop('identity_bindings')
+    else:
+        payload.pop('initial_knowledge')
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
+    before = path.read_bytes()
+    with pytest.raises(ArtifactUnreadable, match='人物产物版本或形状不可读'):
+        views.characters_view(base, 'cand')
+    with TestClient(create_app(base)) as client:
+        response = client.get('/api/str06/candidates/cand/characters')
+        assert response.status_code == 409
+    assert path.read_bytes() == before
+
+
 def test_design_view_survives_pre_upgrade_hook_shape(base):
     """未升级旧根的 hook 早于当前契约形状：只读视图不 500，说明如实标不可推导。
 
@@ -218,7 +240,9 @@ def test_marker_like_text_is_shown_verbatim_over_http(base, endpoint):
 def test_views_cover_the_whole_delivered_chain(base):
     name = 'cand'
     chars = views.characters_view(base, name)
-    assert chars.present and chars.contract_version == 'str06-rc20'  # rc20 CS-S Phase 3 键闭集
+    assert chars.present and chars.contract_version == 'str06-rc27'
+    assert chars.initial_knowledge == ()
+    assert all(c.identity_bindings == () for c in chars.characters)
     assert {c.char_id for c in chars.characters} == {'fu_jun', 'yun_niang'}
     assert chars.name_structure is not None
     assert chars.name_structure.families == {'fam_lu': '陆', 'fam_su': '苏'}

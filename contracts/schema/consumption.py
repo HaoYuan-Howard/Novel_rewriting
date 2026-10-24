@@ -742,12 +742,13 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         note=_ID_PENDING),
     'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].status': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[]'
-              '.status', consumers=(_A,), scope=_SCENE,
-              mode=DeliveryMode.AUDIT_ONLY, note=_ID_PENDING)),
+              '.status', consumers=(_W,), scope=_SCENE,
+              mode=DeliveryMode.MUST_RESPECT,
+              note='入场当前接受、已撤回或未知分别送达；不得用模式缺省伪造确知')),
     'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].mode': _spec(
         'writer_book_ir.chapters[].scenes[].verification_ir.entry_knowledge[].mode',
         consumers=(_W,), scope=_SCENE, mode=DeliveryMode.MUST_RESPECT,
-        note='知情模态（known/suspected/heard/believes）'),
+        note='当前接受的模态；heard 说法历史不用于解析 StateRead'),
     # VerificationIR：编译器按参与者补齐的入场基线（R2 引擎批，background 档）
     'writer_book_ir.chapters[].scenes[].verification_ir.background_state[].domain': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.background_state[]'
@@ -816,7 +817,8 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
     'writer_book_ir.chapters[].scenes[].verification_ir.background_knowledge[].mode': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir'
               '.background_knowledge[].mode', consumers=(_W,), scope=_SCENE,
-              mode=DeliveryMode.BACKGROUND, note='知情模态（确知／怀疑／听说／以为）')),
+              mode=DeliveryMode.BACKGROUND,
+              note='当前接受与 heard 说法历史分行；正反说法保留来源，不自动纠正误信')),
     # VerificationIR：称谓与拍级效应的扁平投影
     'writer_book_ir.chapters[].scenes[].verification_ir.released_surfaces[].char_id': (
         _spec('writer_book_ir.chapters[].scenes[].verification_ir.released_surfaces[]'
@@ -995,7 +997,8 @@ STR06_FIELD_DELIVERY: dict[str, FieldDeliverySpec] = {
         note='视角人物（R2 解析为目标姓名后送达）'),
     'hook_context.opening_facts[].audience': _spec(
         'hook_context.opening_facts[].audience', consumers=(_H,), scope=_HOOK,
-        mode=DeliveryMode.MUST_RESPECT, note='世界成立、视角可知与读者获准知道分别送达'),
+        mode=DeliveryMode.MUST_RESPECT,
+        note='故事背景、视角认知或经历、读者可见分别送达；归属不授予命题真值'),
     'hook_context.opening_facts[].established_by': _spec(
         'hook_context.opening_facts[].established_by', consumers=(_A,),
         scope=_HOOK, mode=DeliveryMode.AUDIT_ONLY,         note='来源锚；' + _ID_PENDING),
@@ -1191,6 +1194,25 @@ for _field in ('summary_beat_ref', 'beat_ref', 'chapter_ordinal', 'event'):
         _path, consumers=(_W,) if _field in ('event', 'chapter_ordinal') else (_A,), scope=_SCENE,
         mode=DeliveryMode.MUST_RESPECT if _field in ('event', 'chapter_ordinal') else DeliveryMode.AUDIT_ONLY,
         note='显式回顾覆盖的目标实例；目标章号与事件在回顾拍送达，拍引用只审计')
+
+# rc27：极性与命题文本分离，机器值不能在材料层被正命题文本覆盖。
+for _suffix, _mode, _note in (
+    ('entry_knowledge[].polarity', DeliveryMode.MUST_RESPECT, '入场认知保留正负极性；撤回为 null'),
+    ('background_knowledge[].polarity', DeliveryMode.MUST_RESPECT, '补齐基线保留认知极性，不能渲染成正命题'),
+    ('beats[].deltas[].proposition_statement', DeliveryMode.MUST_RESPECT, '命题文本与操作、布尔值共同渲染相信／相信非／撤回'),
+    ('planned_delta[].proposition_statement', DeliveryMode.AUDIT_ONLY, '扁平副本；逐拍命题通过 beats[].deltas 送达'),
+    ('pending_reader_confirmations[].polarity', DeliveryMode.GUARD_ONLY, '未到时点的读者确认保留正负方向'),
+):
+    _path = f'{_QUALITY_IR_PREFIX}.{_suffix}'
+    STR06_FIELD_DELIVERY[_path] = _spec(
+        _path, consumers=(_A,) if _mode is DeliveryMode.AUDIT_ONLY else (_W,),
+        scope=_SCENE, mode=_mode, note=_note)
+for _anchor_part in ('anchors[]', 'details[].anchor'):
+    for _field in ('basis_segments', 'polarity', 'support', 'reader_visible'):
+        _path = f'{_QUALITY_IR_PREFIX}.obligations[].{_anchor_part}.{_field}'
+        STR06_FIELD_DELIVERY[_path] = _spec(
+            _path, consumers=(_A,), scope=_SCENE, mode=DeliveryMode.AUDIT_ONLY,
+            note='源原子的证据位置、极性、性质与披露资格；审计保留，不将后文证据倒灌为写手知识')
 
 #: 七档身份的闭环自检：R2 引擎批起七档全部有登记实例——background 落在
 #: `background_state`／`background_knowledge`（编译器按参与者补齐的入场基线）。

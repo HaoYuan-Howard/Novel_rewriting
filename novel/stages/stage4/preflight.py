@@ -7,7 +7,7 @@ from typing import Any, Literal, Mapping, Sequence
 from pydantic import ValidationError
 
 from contracts.schema.book_ir import WriterBookIR
-from contracts.schema.design import BodyDesign, DesignWireV9, STAGE4_DESIGN_WIRE_PROTOCOL
+from contracts.schema.design import BodyDesign, STAGE4_DESIGN_WIRE_PROTOCOL
 from contracts.schema.grounding import OutputConstraints, SemanticBinding
 from contracts.schema.hook import HookDesignWire
 from novel.core.material_trace import MaterialIssue
@@ -289,7 +289,8 @@ def hook_candidate_material_errors(wire: dict[str, Any], *, body: BodyDesign, ch
         else:
             lines = [beat.event] if beat.event else []
             for delta in beat.target_delta:
-                if delta.address() in hidden or delta.op != 'set':
+                if delta.address() in hidden or (delta.op != 'set'
+                        and delta.domain.value != 'knowledge'):
                     continue
                 try:
                     lines.append(render_hook_fact_text(display_projection, delta.address(),

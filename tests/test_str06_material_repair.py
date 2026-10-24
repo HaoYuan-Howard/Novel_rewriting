@@ -35,9 +35,9 @@ def _conflict(*, ch1_has_allowed_surface: bool = False):
     if not ch1_has_allowed_surface:
         updates['initial_surfaces'] = tuple(
             s for s in body.initial_surfaces if s.char_id != 'fu_jun')
-        chars = _characters().model_copy(update={'characters': {
+        chars = _characters().model_copy(update={'initial_knowledge': (), 'characters': {
             **_characters().characters,
-            'fu_jun': _characters().characters['fu_jun'].model_copy(update={
+            'fu_jun': _characters().characters['fu_jun'].model_copy(update={'identity_bindings': (),
                 'canonical': '陆大哥', 'surfaces': tuple(
                     s for s in _characters().characters['fu_jun'].surfaces
                     if s.surface != '夫君')})}})
@@ -176,17 +176,18 @@ def test_correction_preserves_history_and_refuses_stale_preview(tmp_path):
     from novel.stages.stage4 import assemble_hook_design, publish_graph
     from novel.stages.owner_revision import read_owner_issue_file, open_issue_record
     from tests.str06_facilities import make_context, synthetic_ref
-    from tests.factories import hook_wire_v3
+    from tests.factories import current_hook_wire
     from tests.test_str06_hook import _hook_wire
     body, binding, brief, chars = _conflict()
     hook, errors = assemble_hook_design(
-        hook_wire_v3(_hook_wire(
+        current_hook_wire(_hook_wire(
             opening_facts=[], forbidden_reveals=[],
             reader_expectation={
                 'kind': 'fact', 'focus': '所谓赴文会的真实目的是什么？',
                 'answer': {'ref': {'scene': 'sc02', 'beat': 'b02'},
                            'address': {'domain': 'knowledge', 'subjects': ['yun_niang'],
-                                       'holder': 'yun_niang', 'key': brief.propositions[0].kp_id}}})),
+                                       'holder': 'yun_niang', 'key': brief.propositions[0].kp_id}}}),
+                          body=body),
         body=body, known_char_ids=set(chars.characters),
         name_projection=chars.name_projection(), name_structure=chars.name_structure)
     assert not errors

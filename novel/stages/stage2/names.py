@@ -927,13 +927,13 @@ def normalize_name_observations(book, chapters, structure):
 def merge_name_structure(
     core: CharactersCore, structure: NameStructure,
 ) -> tuple[Any | None, list[str]]:
-    """core + name_structure → 完整 CharactersArtifactV6（发布前唯一合并点）。"""
+    """core + name_structure → 完整 CharactersArtifactV7（发布前唯一合并点）。"""
     from pydantic import ValidationError
-    from contracts.schema.source import CharactersArtifactV6
+    from contracts.schema.source import CharactersArtifactV7
     payload = core.model_dump()
     payload['name_structure'] = structure.model_dump()
     try:
-        return CharactersArtifactV6.model_validate(payload), []
+        return CharactersArtifactV7.model_validate(payload), []
     except ValidationError as exc:
         return None, [f'characters v4 合并名称结构失败：{exc}']
 

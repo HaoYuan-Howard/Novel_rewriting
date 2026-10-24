@@ -451,7 +451,7 @@ SEGMENTS = {'e01_01': {'chapter': 1, 'text': '夫君走进门来。云娘没有�
 
 def test_chapter_patch_locate_maps_and_guards():
     from novel.stages.stage2 import chapter_patch_locate, compile_chapter_observation
-    wire = {'protocol_version': 'stage2-chapters-v7', 'beats': [
+    wire = {'protocol_version': 'stage2-chapters-v8', 'beats': [
         {'event': 'a', 'participants': ['ghost'], 'source_refs': ['e01_01'],
          'scene_boundary': 'new', 'temporal_mode': 'single',
          'effects': [], 'cognition': [], 'loops': []}]}
@@ -479,12 +479,12 @@ def test_quote_repair_can_update_parent_refs_in_one_round(tmp_path):
         'e01_01': {'chapter': 1, 'text': '芸娘走进房内。'},
         'e01_02': {'chapter': 1, 'text': '夫君坦白自己不能生育。'},
     }
-    wire = {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL, 'beats': [{
+    wire = {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL, 'beats': [{'location_reader_visible': False,
         'event': '夫君向芸娘坦白不能生育。', 'on_stage': ['fu_jun', 'yun_niang'],
         'start': 'e01_01', 'new_scene': True,
-        'know': [{'who': 'yun_niang', 'how': 'learns', 'what': '夫君不能生育',
+        'know': [{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'who': 'yun_niang', 'how': 'learns', 'what': '夫君不能生育',
                   'evidence_refs': ['e01_02']}],
-    }, {'event': '夫君坦白。', 'on_stage': ['fu_jun'], 'start': 'e01_02'}]}
+    }, {'location_reader_visible': False, 'event': '夫君坦白。', 'on_stage': ['fu_jun'], 'start': 'e01_02'}]}
 
     def validate(value):
         return compile_chapter_observation(value, evidence_ids=evidence,
@@ -568,7 +568,7 @@ def test_book_missing_evidence_refs_field_is_repaired_path_locally():
     from tests.str06_expression_inputs import sample_book_expression
     chapters = [{'chapter_ordinal': 1, 'text': '夫君谋划向他表弟借种。'}]
     evidence = build_evidence(chapters)
-    characters = {'fu_jun': {'canonical': '夫君', 'surfaces': [
+    characters = {'fu_jun': {'identity_bindings': [], 'canonical': '夫君', 'surfaces': [
         {'surface': '夫君', 'source_refs': ['e01_01']}]}}
     wire = {'protocol_version': STAGE2_BOOK_WIRE_PROTOCOL,
             **sample_book_expression(characters), 'characters': characters,

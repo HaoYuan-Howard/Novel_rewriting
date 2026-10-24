@@ -104,7 +104,7 @@ from novel.stages.stage2 import (
     compile_names_observation, extend_name_surfaces,
     compile_name_variants, name_variant_candidates, name_variants_prompt,
     compile_source_truth, inspect_identity_associations, project_association_space,
-    first_appearance_anchors, first_appearance_issues, NAMES_INPUT_VERSION,
+    NAMES_INPUT_VERSION,
     names_evidence_view, normalize_name_observations, validate_name_resolutions,
     merge_name_structure,
 )
@@ -114,6 +114,7 @@ from contracts.schema.observation import (
 from contracts.schema.source import SourceNameResolution
 from novel.stages.owner_revision import (
     MechanicalDefectStop, OwnerRevisionRequired, OwnerRevisionStop,
+    chapter_source_revision_scope,
     discover_owner_issues, open_issue_record, owner_product_digest,
     resolve_owner_issues, complete_owner_dispatch, revision_gate, revision_prompt_for_owner,
 )
@@ -356,17 +357,6 @@ def _chapter_evidence(evidence: dict, chapter: int) -> dict:
             if v['chapter'] == chapter or (chapter == 1 and v.get('pre_chapter'))}
 
 
-def chapter_acceptance(wire, *, chapter: int, evidence_ids, character_slugs, anchors,
-                       fact_ids=None):
-    """生产章观察与只读预检共用接受闸；首现锚点由书级 core 派生。"""
-    observation, errors = compile_chapter_observation(
-        wire, evidence_ids=evidence_ids, chapter=chapter, character_slugs=character_slugs,
-        fact_ids=fact_ids)
-    if observation is not None:
-        errors.extend(first_appearance_issues(anchors, chapter=chapter, beats=observation.beats))
-    return observation, errors
-
-
 def _write_chapter_failures(repository, rel: str, *, requested: tuple[int, ...],
                             attempted: tuple[int, ...],
                             failures: dict[int, BaseException]) -> None:
@@ -400,43 +390,29 @@ def _chapter_execution_owners(ctx: ChainContext) -> tuple[str, ...]:
     return tuple(owner for owner in known if owner in selected)
 
 
-def prepare_chapter_request(repository, *, no, book, chapters, chapter_evidence, anchors, fact_ids):
+def prepare_chapter_request(repository, *, no, book, chapters, chapter_evidence, fact_ids):
     """生产与免费预检共用的章请求与完整接受闸；包含源冲突的真实窄修范围。"""
-    record = open_issue_record(repository, f'ch{no:02d}')
-    conflicts = [i for i in record.issues if i.code == 'source_evidence_conflict'] if record else []
-    previous, scope = None, set()
-    if conflicts:
-        # 上一版是本 owner 的修订主体，已由已购请求绑定；只验 seal/新鲜度，
-        # 不记为上游边。多章并发时消费它会把兄弟章旧版串入彼此的来源账。
-        previous = repository.check_model(str06_chapter_observation_rel(no))
-        for issue in conflicts:
-            anchor = str(issue.context.get('anchor') or '')
-            match = re.fullmatch(fr'b{no:02d}_(\d{{2}})(?:\.(?:[ecl]\d+|v1))?', anchor)
-            index = int(match[1]) - 1 if match else -1
-            if (not 0 <= index < len(previous.beats)
-                    or issue.context.get('segment') not in previous.beats[index].source_refs):
-                raise ValueError(f'章观察回派地址或证据归属无效：{anchor}')
-            scope.add(index)
+    previous, scope = chapter_source_revision_scope(repository, no)
     prompt = revision_prompt_for_owner(
         repository, f'ch{no:02d}',
         chapter_observation_prompt(chapter=no, book=book,
                                    chapters=chapters,
                                    evidence=chapter_evidence),
         str06_chapter_observation_rel(no),
-        previous_wire=slim_chapter_wire if conflicts else None)
-    if conflicts:
+        previous_wire=slim_chapter_wire if previous is not None else None)
+    if scope:
         prompt += ('\n本轮源证据窄修只允许修改以下拍：'
                    + '、'.join(f'b{no:02d}_{i + 1:02d}' for i in sorted(scope))
                    + '。拍数、顺序和所有 start 不变，其余拍原样保留；'
                    '你判断是否需要补足知情及其证据，程序不替你判定获知者。')
     def validate(w):
         # R10a a1：传完整段映射（含 text），basis 引文可逐字判定
-        observation, errors = chapter_acceptance(
+        observation, errors = compile_chapter_observation(
             w, evidence_ids=chapter_evidence, chapter=no,
-            character_slugs=frozenset(book.characters), anchors=anchors, fact_ids=fact_ids)
+            character_slugs=frozenset(book.characters), fact_ids=fact_ids)
         if observation is not None and not errors and previous is not None:
             errors.extend(chapter_revision_scope_issues(
-                previous, observation, beat_indexes=frozenset(scope)))
+                previous, observation, beat_indexes=scope))
         return observation, errors
     return prompt, validate
 
@@ -464,7 +440,6 @@ def run_chapters(ctx: ChainContext) -> dict:
     if core_errors:
         raise MechanicalDefectStop(f'书级称谓锚点无效：{core_errors}',
                                   node='str06.stage2.chapters', issues=tuple(core_errors))
-    anchors = first_appearance_anchors(core)
     # Phase 2：书级命题词表编号闭集（know 的 fact 引用按闭集核对）。
     fact_ids = frozenset(fact.fact_id for fact in book.facts)
     failures: dict[int, BaseException] = {}
@@ -479,7 +454,7 @@ def run_chapters(ctx: ChainContext) -> dict:
             chapter_evidence = _chapter_evidence(evidence, no)
             prompt, validate = prepare_chapter_request(
                 repository, no=no, book=book, chapters=ctx.chapters,
-                chapter_evidence=chapter_evidence, anchors=anchors, fact_ids=fact_ids)
+                chapter_evidence=chapter_evidence, fact_ids=fact_ids)
 
             def locate(w, errs, *, _ev=chapter_evidence, _no=no,
                        _slugs=frozenset(book.characters), _facts=fact_ids):
@@ -810,10 +785,11 @@ def _check_chapter_loops(repository, chapters, *, raised_by: str) -> None:
         if not issues:
             record = open_issue_record(repository, owner)
             if (record is not None and record.raised_by == raised_by
-                    and all(i.code == 'chapter_loop_conflict' for i in record.issues)):
+                    and all(i.code in ('chapter_loop_conflict', 'chapter_loop_answer_invalid')
+                            for i in record.issues)):
                 resolve_owner_issues(repository, owner=owner, raised_by=raised_by)
             continue
-        action, node = route_owner_issue('chapter_loop_conflict')
+        action, node = route_owner_issue(issues[0].code)
         assert action == 'revise_upstream'
         try:
             discover_owner_issues(repository, raised_by=raised_by, owner=owner, node=node,
@@ -1318,7 +1294,7 @@ def run_body_design(ctx: ChainContext) -> dict:
             {cid: {s.surface for s in c.surfaces} for cid, c in chars.characters.items()},
             chars.name_structure))
     def request_rules(protocol):
-        aliases = design_reference_aliases(brief) if protocol != 'stage4-design-v9' else {}
+        aliases = design_reference_aliases(brief)
         context = {**rules_context, 'fact_lock_ids': [aliases.get(f.kf_id, f.kf_id)
                    for f in brief.fact_locks if f.kind != 'unanswered']}
         rules = design_rules(**context, protocol=protocol)
@@ -1963,6 +1939,7 @@ def _backfill_epistemic_lock_order(repository, graph, binding) -> None:
     issues = [OwnerIssueV1(
         code='epistemic_lock_order', item=v.kp, message=v.message(),
         context={'holder': v.holder, 'kp': v.kp, 'mode': v.mode,
+                 'op': v.op, 'polarity': v.polarity,
                  'upgrade_position': v.upgrade_ref,
                  'authorized_position': v.auth_ref,
                  'authorized_core_id': v.core_id})

@@ -69,6 +69,7 @@ from contracts.schema.observation import (
 )
 from novel.core.text import norm
 from novel.core.validation import ValidationIssue
+from novel.stages.stage2.slim import loop_answer_atoms, loop_answer_resolution
 
 
 
@@ -187,7 +188,7 @@ def project_identity_candidates(
     """观察 → 身份判定候选（确定性；同一输入恒同一候选集）。
 
     • same_proposition：章命题×书级 facts（任何章——fact 是书级身份）、跨章
-      命题×命题；同章对不生成（章内同一性归章观察的 norm 归并）；
+      命题×命题；同章对不生成（逐字相同文本由章观察复用，词表身份经 fact 引用）；
     • loop_pairing：跨章 open×close 且 open 章严格早于 close 章（时序倒转的
       配对在 compile 必挂，不生成）；
     • scene_continuation：相邻章 seam（左＝前章最后场景，右＝后章首个场景
@@ -465,6 +466,11 @@ def project_association_space(
     """
     space = AssociationSpace()
     for chapter in sorted(chapters):
+        answer_statements = {fact.fact_id: fact.statement for fact in book.facts}
+        answer_statements.update({
+            cognition.proposition.ref: cognition.proposition.statement
+            for beat in chapters[chapter].beats for cognition in beat.cognition
+            if cognition.proposition.statement is not None})
         for beat_ordinal, beat in enumerate(chapters[chapter].beats, 1):
             where = f'ch{chapter:02d}.b{beat_ordinal}'
             space.beats[f'ch{chapter:02d}.b{beat_ordinal}'] = BeatHandle(
@@ -492,8 +498,11 @@ def project_association_space(
                         chapter=chapter, ref=ref, statement=statement)
             for loop in beat.loops:
                 handle = f'ch{chapter:02d}.{loop.ref}'
+                atoms, _issues = loop_answer_atoms(beat.model_dump(), loop.answer_refs)
                 entry = LoopHandle(chapter=chapter, ref=loop.ref, op=loop.op,
-                                   question=loop.question, resolution=loop.resolution,
+                                   question=loop.question,
+                                   resolution=loop_answer_resolution(
+                                       atoms, statements=answer_statements),
                                    event=beat.event)
                 if loop.op == 'open':
                     space.loop_opens.setdefault(handle, entry)
@@ -561,8 +570,10 @@ unresolved——不默认合并，也不默认不同。
 {scenes}
 
 【verdict 闭集】
-- same_proposition：same（同一命题——并入同一命题身份，书级编号一方为
-  canonical）／distinct（不同命题）／unresolved（拿不准）；
+- same_proposition：same（完整语义等价，可以在任何一次确认或否认中互换的同一
+  原子命题——并入同一命题身份，书级编号一方为 canonical）／distinct（不同
+  命题）／unresolved（拿不准）。只支持复合句的一部分、包含关系、共同人物、
+  因果关联和互为否定均不得判 same；词表编号只授予身份，不证明命题为真；
 - loop_pairing：pair（收束确实完整回答该 open 的同一个具体问题）／distinct
   （该候选对不是同一悬念；不妨碍该 close 与另一 open 配对）／unresolved；
 - scene_continuation：continue（右场景是左场景的延续，应并回同一场）／

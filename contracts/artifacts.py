@@ -233,6 +233,8 @@ def str06_book_rel(title: str) -> str:
 # know 短引用与 confirms 明确拍位和事实关联；五份受影响产物显式换身份。
 # 当时 rc12/rc13 无损字段经 store 集中迁移；rc21 质量批退役该旧质量迁移面，
 # 只保留形状未变化 ExecutionPlan 的登记适配，其它质量产物显式拒旧。
+# rc27：人物指称、带极性命题证据、认知撤回与答案原子引用贯通创作链；
+# 旧根只读，新根重建，不跨版本采用已购结果。
 STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc12（2026-10-01 R10a 收口，PLAN §二.4 全表）：关键语义交接批把源理解到
     # 正文的全链形状定格——Stage2 引文证据与事件时态（book v3／chapters v2／
@@ -256,8 +258,8 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc20（CS-S Phase 3）：book v7／chapters v7——initial_state 键入 CHANGE_KEYS
     # 闭集；chapters 增拍级 access（获知通道）、know.who 禁 reader（读者知情由
     # compile 派生）。旧 rc19 根只读拒收。
-    'stage2/observations/book.json': 'str06-rc20',
-    'stage2/observations/ch{nn}.json': 'str06-rc20',
+    'stage2/observations/book.json': 'str06-rc27',
+    'stage2/observations/ch{nn}.json': 'str06-rc27',
     # rc18（CS-S 1c）：names canonical 升 v4——构词 surface_forms 由 compiler
     # 派生、resolutions 来自变体窄调用（增 not_name）。Phase 2 形状未变不升。
     'stage2/observations/names.json': 'str06-rc18',
@@ -273,28 +275,28 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 零调用）；跨章因果独立窄调用 wire stage2-cross-cause-v1（D-2 A）。
     # rc20（CS-S Phase 3）：协议升 stage2-associate-v5——same_state_dimension
     # 消失（change 键闭集＝键即 canonical，维度句柄与整类合并面删除）。
-    'stage2/observations/associate.json': 'str06-rc20',
+    'stage2/observations/associate.json': 'str06-rc27',
     # v13（2026-09-26 质量改进批次二）：拍模型三类转移＋场景分段；v12 存量拒读。
     # Phase 2：cognition 命题引用可指向 f{nn}（词表编号）——值域扩展非形状变化，
     # 不升版（Blueprints 保持 rc18）。
     # rc20（CS-S Phase 3）：Blueprints 升 v17——Beat 增 access、效果键入
     # CHANGE_KEYS 闭集、cognition 的 reader 条目＝compile 派生读者知情。
-    'stage2/blueprints/chapter_blueprints.json': 'str06-rc20',
+    'stage2/blueprints/chapter_blueprints.json': 'str06-rc27',
     # v13 同批：fold 读数结构化（每章空转移拍比例＋书末未揭示 concealed）。
     # rc18：fold 删 concealed_unrevealed（concealed 效应已删）。
     # rc19：fold 增知情时间线读数（facts known_at_start 起步的逐命题知情读数，
     # T-5：结构化只读读数，不进下游 API）。
     # rc20：fold 时间线含派生 reader 条目（Phase 3 读者知情派生进 fold 读数）。
-    'stage2/acceptance/fold.json': 'str06-rc20',
+    'stage2/acceptance/fold.json': 'str06-rc27',
     # rc20（CS-S Phase 3）：Characters 升 v6——initial_state 键入 CHANGE_KEYS
     # 闭集（schema 层兜底直接构造的表外键）。
-    'stage2/characters/characters.json': 'str06-rc20',
+    'stage2/characters/characters.json': 'str06-rc27',
     # rc21 创作材料批：六类质量产物增可选细节/显式系列概括与目标前情。
     # rc22 事件锚点批：ObligationAnchor 增独立事件与正式证据窗口，六类质量
     # 产物同批显式升版；rc21/v4 不做隐式迁移，FREE owner patch 全量复验。
     # checkpoint 也携带 contract_version；旧版/缺版本不可补空值作为新证据。
     # 旧五质量产物迁移退役，仅未变化 ExecutionPlan 保留登记的 rc12/13 适配。
-    'runtime/preserve_checkpoint.json': 'str06-rc26',
+    'runtime/preserve_checkpoint.json': 'str06-rc27',
     # rc13（2026-10-03 CS-3 余项，D5 统一＋world 规则 id）：读者揭示统一走
     # knowledge(holder=reader)（TargetDelta 删 reader 域与 confirms；Brief 知
     # 情锁同写法）；Brief.book_constraints 升 WorldConstraint（wc_{nn} 稳定
@@ -303,12 +305,12 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc17（2026-10-06 CS-H H3，RC-61）：Brief 认知变化条目新增 requires_released
     # （必保揭名派生，随认知增量携带）；缺省读入兼容旧盘，身份随 rc17 换。
     # rc18：ObligationAnchor.visibility 删（effect 命题锚只在 cognition）。
-    'stage4/grounding/reconstruction_brief.json': 'str06-rc26',
+    'stage4/grounding/reconstruction_brief.json': 'str06-rc27',
     # rc16（2026-10-04 CS-F2）：Binding 增 fact_bindings（事实锁→已有目标状态的
     # 映射，只存引用不复制 value）；旧 rc12 Binding 缺该映射、无损推不回，拒读。
     # rc17（2026-10-06 CS-H H3，RC-63）：BriefFactLock 增 subjects（主体包含判定）。
-    'stage4/grounding/semantic_binding.json': 'str06-rc26',
-    'stage4/compiled/execution_plan.json': 'str06-rc14',
+    'stage4/grounding/semantic_binding.json': 'str06-rc27',
+    'stage4/compiled/execution_plan.json': 'str06-rc27',
     'stage4/acceptance/guard/compile.json': 'str06-rc12',
     'stage4/acceptance/guard/report.json': 'str06-rc12',
     # rc10 同批新增（R2.8 引擎批）：compile 落盘的 WriterPacket 指标（audit_only）。
@@ -321,9 +323,9 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # （threads）、书级 world_rules、章级 entry；四个静态跨章列表删除（AUD-04）。
     # rc26（2026-10-18 命名前移批 C）：identity-text 协议退役，canonical Design/Hook
     # 自有自然语言为普通目标文本（无标记、无区间）；Design wire v12。
-    'stage4/design/body_design.json': 'str06-rc26',
+    'stage4/design/body_design.json': 'str06-rc27',
     # rc23：Hook 组织与阅读期待改为正式选择，正文载荷仍是 rc22。
-    'stage4/design/presentation_graph.json': 'str06-rc26',
+    'stage4/design/presentation_graph.json': 'str06-rc27',
     # rc16（2026-10-05 CS-F2）：HookContext 增 withheld_bindings（按 Hook 自选
     # surface_releases 算好的唯一绑定称谓表，渲染期投影）；旧 rc12 楔子上下文
     # 拒读，免费重编译。正文与楔子投影同尺（RC-40/41）。
@@ -336,7 +338,7 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 不回到 rc22 前对全书写死的 280/360。旧上下文免费重编译。
     # rc26（2026-10-18 命名前移批 C）：取消 name_candidates，禁用字面与监视行
     # 合并为 name_watch；称谓材料切目标字面（compile 经 NameMap 映射）。
-    'stage4/context/hook/hook.json': 'str06-rc26',
+    'stage4/context/hook/hook.json': 'str06-rc27',
     # rc7 同批：BookBrief 带整书风格与稳定人物声线；PendingConfirmation 带事实
     # 地址（D4），投影按地址精确到消费该地址的章包。
     # rc8（2026-09-27 B4，D2）：ChapterIR 增章级验证材料（称谓许可、禁用字面
@@ -354,9 +356,9 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # rc26（2026-10-18 命名前移批次 C）：取消 name_candidates＋禁用字面合并为
     # name_watch；称谓材料（released/withheld/bindings/display/requires_released）
     # 切目标字面。免费重编译。
-    'stage4/ir/writer_book_ir.json': 'str06-rc26',
+    'stage4/ir/writer_book_ir.json': 'str06-rc27',
     'stage5/hook/hook.txt': 'str06-rc12',
-    'stage5/hook/receipt.json': 'str06-rc26',
+    'stage5/hook/receipt.json': 'str06-rc27',
     'stage5/body/ch{nn}.txt': 'str06-rc12',
     # rc5（rc8 同批）：回执改绑章包摘要＋请求身份＋验证版本＋改名前正文摘要，
     # 不再绑定全书 IR 与前文链（D2）；各章独立有效，支持集合恢复。
@@ -368,7 +370,7 @@ STR06_ARTIFACT_RC_VERSIONS: Final[dict[str, str]] = {
     # 字面与场景标记进章级机械校验，回执 validator_version 随行。
     # rc26（2026-10-18 命名前移批次 C）：identity-text 协议退役——回执取消
     # 人物提及/普通义两类区间表与 name_text 检查项；prose_sha256 绑定最终正文。
-    'stage5/acceptance/body/ch{nn}.json': 'str06-rc26',
+    'stage5/acceptance/body/ch{nn}.json': 'str06-rc27',
     # rc26（2026-10-18 命名前移批）：str06.stage4.naming 前移，NameMap v6 落
     # stage4/naming/name_map.json；旧 stage7 末端路径与 NameMapV5 字节拒读。
     'stage4/naming/name_map.json': 'str06-rc26',

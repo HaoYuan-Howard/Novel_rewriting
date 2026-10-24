@@ -39,7 +39,9 @@ from pydantic import ValidationError
 from contracts.schema.observation import (
     STAGE2_BOOK_PROTOCOL, STAGE2_BOOK_WIRE_PROTOCOL, BookObservation, BookObservationWire,
 )
-from contracts.schema.source import CHANGE_KEYS, CharactersCore, CharacterEntry
+from contracts.schema.source import (
+    CHANGE_KEYS, CharactersCore, CharacterEntry, InitialKnowledgeAtom,
+)
 from novel.stages.common import BOOK_PROMPT, group_located_errors
 #: 变化键闭集的 prompt 渲染（CHANGE_KEYS 同一张表；Phase 3）。
 _CHANGE_KEYS_SET = frozenset(CHANGE_KEYS)
@@ -81,6 +83,14 @@ def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...],
                 pairs.append((f'{slug} surface {s.get("surface")}',
                               tuple(s.get('source_refs') or ()),
                               ('characters', slug, 'surfaces', s_index)))
+            bindings = (c or {}).get('identity_bindings') if isinstance(c, Mapping) else None
+            for index, binding in enumerate(bindings or ()):
+                if not isinstance(binding, Mapping):
+                    continue
+                for key in ('appearance_refs', 'identity_refs'):
+                    pairs.append((f'{slug} identity_bindings[{index}] {key}',
+                                  tuple(binding.get(key) or ()),
+                                  ('characters', slug, 'identity_bindings', index)))
     raw_initial = wire.get('initial_state')
     for atom_index, atom in enumerate(raw_initial or []):
         if not isinstance(atom, Mapping):
@@ -98,13 +108,15 @@ def _iter_book_refs(wire: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...],
     for fact_index, fact in enumerate(_fact_items(wire)):
         if not isinstance(fact, Mapping):
             continue
-        # 展开后是 basis 形；未展开的 wire 形（evidence_refs）兜底同查。
-        refs = tuple(str(b.get('segment') or '') for b in fact.get('basis') or ()
-                     if isinstance(b, Mapping) and b.get('segment'))
-        if not refs:
-            refs = tuple(fact.get('evidence_refs') or ())
-        pairs.append((f'fact {str(fact.get("statement"))[:20]}', refs,
-                      ('facts', fact_index)))
+        for index, item in enumerate(fact.get('evidence') or ()):
+            if not isinstance(item, Mapping):
+                continue
+            refs = tuple(str(b.get('segment') or '') for b in item.get('basis') or ()
+                         if isinstance(b, Mapping) and b.get('segment'))
+            if not refs:
+                refs = tuple(item.get('evidence_refs') or ())
+            pairs.append((f'fact {str(fact.get("statement"))[:20]} evidence[{index}]', refs,
+                          ('facts', fact_index, 'evidence', index)))
     expression = wire.get('expression')
     if isinstance(expression, Mapping):
         for index, item in enumerate([expression.get('narration'), *(expression.get('mechanisms') or [])]):
@@ -159,13 +171,15 @@ def _expand_wire_basis(wire: dict) -> dict:
                 continue
             item = dict(fact)
             item['fact_id'] = f'f{index:02d}'
-            raw_refs = fact.get('evidence_refs')
-            if isinstance(raw_refs, list):
-                item['basis'] = [{'segment': ref, 'quote': None}
-                                 if isinstance(ref, str) else ref
-                                 for ref in raw_refs]
-                item.pop('evidence_refs', None)
-            item.setdefault('known_at_start', ())
+            for evidence in item.get('evidence') or ():
+                if not isinstance(evidence, dict):
+                    continue
+                raw_refs = evidence.get('evidence_refs')
+                if isinstance(raw_refs, list):
+                    evidence['basis'] = [{'segment': ref, 'quote': None}
+                                         if isinstance(ref, str) else ref
+                                         for ref in raw_refs]
+                    evidence.pop('evidence_refs', None)
             expanded_facts.append(item)
         expanded['facts'] = expanded_facts
     return expanded
@@ -198,19 +212,21 @@ def _derive_basis_quotes(
     for fact_index, fact in enumerate(_fact_items(wire)):
         if not isinstance(fact, dict):
             continue
-        refs = tuple(basis.get('segment') for basis in (fact.get('basis') or ())
-                     if isinstance(basis, dict))
-        for basis_index, basis in enumerate(fact.get('basis') or ()):
-            if not isinstance(basis, dict) or basis.get('segment') is None:
+        for evidence_index, item in enumerate(fact.get('evidence') or ()):
+            if not isinstance(item, dict):
                 continue
-            quote, issue = resolver.basis_quote(
-                str(basis.get('segment') or ''), refs)
-            if issue is None:
-                basis['quote'] = quote
-            else:
-                issues.append((
-                    ('facts', fact_index, 'basis', basis_index),
-                    f'{_basis_label("facts", fact)}：{issue.message}'))
+            refs = tuple(basis.get('segment') for basis in (item.get('basis') or ())
+                         if isinstance(basis, dict))
+            for basis_index, basis in enumerate(item.get('basis') or ()):
+                if not isinstance(basis, dict) or basis.get('segment') is None:
+                    continue
+                quote, issue = resolver.basis_quote(str(basis.get('segment') or ''), refs)
+                if issue is None:
+                    basis['quote'] = quote
+                else:
+                    issues.append((
+                        ('facts', fact_index, 'evidence', evidence_index),
+                        f'{_basis_label("facts", fact)} evidence[{evidence_index}]：{issue.message}'))
     return issues
 
 
@@ -238,18 +254,20 @@ def _shape_view(wire: dict) -> dict:
             atom['basis'] = [{'segment': _UNLOCATED_SEGMENT,
                               'quote': _UNDERIVED_QUOTE}]
 
-    for group in ('initial_state', 'world_constraints', 'facts'):
-        items = _fact_items(view) if group == 'facts' else view.get(group) or ()
+    for group in ('initial_state', 'world_constraints'):
+        items = view.get(group) or ()
         for atom_index, atom in enumerate(items):
             if not isinstance(atom, dict):
                 continue
             _fill(atom)
-            if group == 'facts':
-                if not atom.get('fact_id'):
-                    # 按位置补占位编号：模型级「编号唯一连续」不变量不因占位而
-                    # 追加噪声错误（真实重复／跳号仍照常报告）。
-                    atom['fact_id'] = f'f{atom_index + 1:02d}'
-                atom.setdefault('known_at_start', ())
+    for index, fact in enumerate(_fact_items(view)):
+        if not isinstance(fact, dict):
+            continue
+        if not fact.get('fact_id'):
+            fact['fact_id'] = f'f{index + 1:02d}'
+        for item in fact.get('evidence') or ():
+            if isinstance(item, dict):
+                _fill(item)
     return view
 
 
@@ -422,16 +440,41 @@ def _compile_book_view(
     for fact_index, fact in enumerate(_fact_items(wire)):
         if not isinstance(fact, Mapping):
             continue
-        holders = fact.get('known_at_start')
-        if not isinstance(holders, (list, tuple)):
-            continue  # 非数组的形状错误由协议模型报告，不提前迭代或推断。
-        for holder in holders:
+        starts = fact.get('known_at_start')
+        seen_holders: set[str] = set()
+        for index, entry in enumerate(starts if isinstance(starts, (list, tuple)) else ()):
+            holder = entry.get('holder') if isinstance(entry, Mapping) else None
             if not isinstance(holder, str):
-                continue  # list/dict 等非法元素不作 set 查询，保留条目级形状修复。
-            if holder == 'reader' or holder not in slugs:
+                continue
+            if holder not in slugs:
                 message = (f'fact {str(fact.get("statement"))[:16]} 的 known_at_start '
                            f'引用未知人物 {holder}（持有者闭集＝人物 slug，不写 reader）')
+                fail(('facts', fact_index, 'known_at_start', index), message)
+                errors.append(message)
+            polarity = entry.get('polarity')
+            if holder in seen_holders:
+                message = ('同一命题的开场知识不得重复持有者或同时接受正反结论：'
+                           f'{holder}')
                 fail(('facts', fact_index), message)
+                errors.append(message)
+            seen_holders.add(holder)
+            if polarity in ('positive', 'negative') and not any(
+                    isinstance(item, Mapping) and item.get('kind') == 'confirmed'
+                    and item.get('holder') == holder and item.get('polarity') == polarity
+                    for item in fact.get('evidence') or ()):
+                message = (f'fact {str(fact.get("statement"))[:16]} 的开场知识 '
+                           f'{holder}/{polarity} 缺少同持有者、同极性的 confirmed 证据；'
+                           '说法、推测或其他人物的确认不能授予开场知识')
+                # 依据与起步声明语义耦合：返修能力必须允许补正 evidence，不能
+                # 只替换 known_at_start 一条，迫使模型删除真实的开场知识。
+                fail(('facts', fact_index), message)
+                errors.append(message)
+        for index, entry in enumerate(fact.get('evidence') or ()):
+            holder = entry.get('holder') if isinstance(entry, Mapping) else None
+            if holder is not None and isinstance(holder, str) and holder not in slugs:
+                message = (f'fact {str(fact.get("statement"))[:16]} evidence[{index}] '
+                           f'引用未知人物 {holder}（证据归属只能是人物 slug 或 null）')
+                fail(('facts', fact_index, 'evidence', index), message)
                 errors.append(message)
 
     # ④b R10a a1：初态/约束/facts 的 basis 判定（段属自身 source_refs ＋ 引文
@@ -456,18 +499,20 @@ def _compile_book_view(
     for fact_index, fact in enumerate(_fact_items(wire)):
         if not isinstance(fact, Mapping):
             continue
-        fact_refs = tuple(str(basis.get('segment') or '')
-                          for basis in fact.get('basis') or ()
-                          if isinstance(basis, Mapping) and basis.get('segment'))
-        for basis_index, basis in enumerate(fact.get('basis') or ()):
-            if isinstance(basis, Mapping) and basis.get('segment') is not None \
-                    and basis.get('quote') is not None:
-                basis_entries.append((
-                    _basis_label('facts', fact),
-                    str(basis.get('segment') or ''),
-                    str(basis.get('quote') or ''),
-                    fact_refs))
-                basis_paths.append(('facts', fact_index, 'basis', basis_index))
+        for evidence_index, item in enumerate(fact.get('evidence') or ()):
+            if not isinstance(item, Mapping):
+                continue
+            fact_refs = tuple(str(basis.get('segment') or '')
+                              for basis in item.get('basis') or ()
+                              if isinstance(basis, Mapping) and basis.get('segment'))
+            for basis_index, basis in enumerate(item.get('basis') or ()):
+                if isinstance(basis, Mapping) and basis.get('segment') is not None \
+                        and basis.get('quote') is not None:
+                    basis_entries.append((
+                        f'{_basis_label("facts", fact)} evidence[{evidence_index}]',
+                        str(basis.get('segment') or ''),
+                        str(basis.get('quote') or ''), fact_refs))
+                    basis_paths.append(('facts', fact_index, 'evidence', evidence_index))
     # 标签可能重复（同键初态、前 16 字相同的约束）：按条目序消费路径，与
     # verify_bases 的逐条产出序对齐。
     by_label: dict[str, list[tuple]] = {}
@@ -542,8 +587,33 @@ def character_core_view(
                              'source_refs': list(mention.source_refs)})
         if not surfaces:
             continue
-        characters[slug] = CharacterEntry(canonical=candidate.canonical,
-                                          surfaces=surfaces)  # type: ignore[arg-type]
+        characters[slug] = CharacterEntry(
+            canonical=candidate.canonical, surfaces=surfaces,
+            identity_bindings=candidate.identity_bindings)  # type: ignore[arg-type]
     if errors or not characters:
         return None, errors or ['book 观察没有可投影的人物条目']
-    return CharactersCore(characters=characters, initial_state=()), []
+    return CharactersCore(characters=characters, initial_state=(), initial_knowledge=()), []
+
+
+def compile_initial_knowledge(book: BookObservation) -> tuple[InitialKnowledgeAtom, ...]:
+    """从已接受的开场知识声明复制正式原子；不以证据章节推断故事时间。
+
+    Book 的接受闸要求同持有者、同极性的 confirmed 证据；发布时再次防御，
+    不用人物说法或词表主张文本补足证据。编号按词表、声明的稳定顺序派发。
+    """
+    result: list[InitialKnowledgeAtom] = []
+    for fact in book.facts:
+        for known in fact.known_at_start:
+            selected = [quote for item in fact.evidence
+                        if item.kind == 'confirmed' and item.holder == known.holder
+                        and item.polarity == known.polarity for quote in item.basis]
+            basis = tuple({(quote.segment, quote.quote): quote
+                           for quote in selected}.values())
+            if not basis:
+                raise ValueError(f'开场知识 {fact.fact_id}/{known.holder}/{known.polarity} '
+                                 '缺少同持有者、同极性的 confirmed 证据')
+            result.append(InitialKnowledgeAtom(
+                knowledge_id=f'k0_{len(result) + 1:02d}', holder=known.holder,
+                proposition={'ref': fact.fact_id, 'statement': fact.statement},
+                polarity=known.polarity, basis=basis))
+    return tuple(result)

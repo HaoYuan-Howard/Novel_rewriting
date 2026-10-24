@@ -1,11 +1,66 @@
 # STR-06 终态架构契约（Stage2–Stage7，Stage6 退役）
 
+rc27 的 Characters 开场基线含 initial_knowledge（k0_NN）：已确认知识保留持有者、
+命题与正负极性，经 Preserve 初始知识锚点、Brief 初始锁与目标 initial_state 送达写手。
+它与剧情中的 knowledge_changes 分开，不能以晚拍补获知代替开场知识。位置披露另有
+SlimBeat.location_reader_visible 必填标记，内部场景位置不自动赋予读者确知。
+
 本文件唯一登记 STR-06 的目标架构与现役 RC 契约。**2026-09-27 起目标架构按用户裁决的
 职责解耦计划（D1–D10，各行见 `docs/DECISIONS.md` 2026-09-27）改写**：重建生成、编译、
 执行和恢复边界，产品范围固定短篇小说（中文约 2 万字，永不做长篇，D7）。批次进度、
 验收与删除条件唯一见 `docs/REQUIREMENTS.md`；架构裁决见 `docs/DECISIONS.md`。
 
-**实施边界**：B0–B5 全部 fake transport、零模型调用，付费与正文外发只在 B6 按实际
+## rc27 现役身份与认知边界
+
+当前版式为 `str06-rc27`。Stage2 book／chapters canonical v8、wire v11，正式源产物为
+`CharactersArtifactV7`／`BlueprintsArtifactV18`；Names 与 NameMap 形状不变。
+Preserve wire v8／policy v13，Design canonical v6／wire v13，Hook Design v5，
+正文 renderer v15／写手协议 v14。各产物 RC 身份以 `contracts/artifacts.py` 为准，
+执行版本从 `contracts/llm_versions.py` 唯一投影；旧契约根只读，新根重新生成，不新增
+跨版本续跑／迁移／已购回答套用。当前契约内的免费复验、合法已购重放与提交恢复继续保留。
+下文带日期和历史版本的批次说明只解释演进，不覆盖本节及对应领域契约。
+
+- 人物身份归 Book：`identity_bindings` 保留语境描述、appearance_refs、identity_refs。
+  姓名窗口只约束称谓，不推定人物首次存在；匿名早出场合法，“孩子”等同词可指不同人。
+  实体证据定位、人物闭集与引用由代码验证，同一性语义保持 unver；身体、血缘事实保留主体。
+- facts 为原子命题词表：证据逐项记录 confirmed/claim/inference、positive/negative、holder、
+  basis；开场知识为 holder＋polarity。编号引用不赋予真值，same 只接受完整语义等价，
+  章节不借后文证据获得当前确知；compiler 不拆自然语言复合句或猜真相。
+- 认知显式 set/unset、模式、极性、支持性质及 reader_visible；unset 的模式／极性为 null，
+  只撤回当前接受并保留历史。learns/confirms 仅用 confirmed，听到否认先保留负极性说法。
+  access 只表示呈现通道；读者确认只从可见 actual/set 事实或可见 confirmed 确知原子派生，
+  可见说法保留说法层，猜测、相信、撤回及收束文本不自动变为读者真相。
+
+可见状态派生的读者命题在 Stage2 保留含主体、键与 JSON 值的机器文本供审计。
+Stage4 仅以同拍 actual/set/reader_visible 正式 effect 精确重算并全等关联该文本，
+从类型化主体查正式 NameMap 目标姓名、从 STATE_KEY_LABELS 查既定显示标签，值不改写；
+普通自然语言命题保持原样，不解析关键词、不全局替换源 ID、不跨拍借事实。Brief 和
+正文／Hook 材料使用该确定性阅读投影，未释放姓名沿现有称谓绑定与拍级许可投影，
+缺少合法显示面则明确阻断，不自动提前揭名、删除主体或购买源观察迁就投影缺陷。
+已答悬念的机器 resolution 继续只作源审计；选择 loop 锚点不会自动生成 Brief 知情锁，
+目标收束按原有 Preserve／Design 语义职责转述，不恢复 close 文本无条件派生读者确知。
+
+- 悬念 close 只选本拍 change/know 及 1-based 序号，代码映射 eN/cN 到正式拍原子并派生
+  resolution。答案必须已成立、已确认且可见；人物自以为得到答案不构成正式收束。
+- Preserve／Brief 的知情锁与逐次变化保留 op／polarity，公开主张保留 holder＋polarity。
+  Design 的 knowledge set 用字符串 value="true"／"false" 表达正／负命题，unset 的 value
+  与 knowledge_mode 为 null；Guard 按操作和极性匹配。IR 用派生 proposition_statement
+  呈现原命题，保留真源操作和值；正文及 Hook 显示“相信 P／相信非 P／已撤回”，不得把
+  负命题或撤回无条件投影成正命题。`known_at_start` 与说法历史继续区分当前接受。
+- 目标执行计划按阅读序保留全部认知操作。`FoldedState` 从同一 Design 派生当前接受与
+  说法历史：known／suspected／believes 更新当前接受，heard 按地址、极性、建立锚与
+  作用域保留历史，unset／unknown 只解除或标记当前接受；两份相反的说法可以共存。
+  `StateRead` 读取当前接受，不能用 heard 证明该命题已被接受；同址说法继续以独立背景
+  送达。听到否认不自动纠正误信，撤回后仍能看到曾经听到的正反说法。
+- Hook 的所有事实选择都定位具体原子：`fact_ref` 由位置、0-based 拍内 delta 序号与
+  地址派生，canonical 起笔／事实禁区／事实期待／withheld 均保留该引用。隐藏某次说法
+  不隐藏同拍同址的另一认知。“起笔背景基线”逐条显示模式与极性，audience 不授予真值。
+
+真实验证范围、反例与工程／质量验收分开登记于
+[Stage2 修复执行计划](../specs/stage2_identity_cognition_repair.md)。新增机械硬闸沿现有 owner
+提供免费重验、人工采用与有界返修入口，不增加独立 Judge 或第三份故事真源。
+
+**历史实施边界**：B0–B5 全部 fake transport、零模型调用，付费与正文外发只在 B6 按实际
 报价分别授权。**B5（2026-09-28）已落地产品接入与旧路径删除（S-05）**：
 上传→autostart→Supervisor→**真实 `run_step`／`novel.cli` 子进程**→Repository→
 Stage7 交付、页面刷新与服务重启读回一致的 fake 全链钉在
@@ -69,7 +124,8 @@ ChapterEntry 的 immediate_continuation／flashback 必须带较早事件拍 anc
 
 全链字符计数使用 `novel/core/text.py::count_non_whitespace_chars`（标点计入、空白不计），
 预算仅来自 MainText 正文，不含系统章标题或 Hook；Hook 字符数只作统计，无固定目标或上限。Design 接受与 compile
-共用读取闭包，单章接受与 Stage2 compile 共用首现判据。ValidationStop／机械缺陷／
+共用读取闭包；单章接受与 Stage2 compile 共用人物闭集、证据、认知和答案引用判据，
+不再以最早姓名章限制实体出场。ValidationStop／机械缺陷／
 owner 停止保留 node、item 与问题坐标，CLI 负结论 exit 1，程序错误仍为 exit 70。
 
 人工修订／重采记录为 `OwnerRevisionRecordV1`／`SamplingSelectionV1`，原补丁字节
@@ -105,15 +161,16 @@ compile／Stage4 compile／Stage7 assemble 才 resolve。无登记或后续手�
 
 ### R10 关键语义交接（2026-10-01，D8 修订三；a1–a5＋收口已落地）
 
-现役版式为 `str06-rc25`（2026-10-17 身份引用、补充称谓与来源闭合；此前为 rc24）。
+**历史快照（2026-10-17）**：当时版式为 `str06-rc25`（身份引用、补充称谓与来源闭合；此前为 rc24）；
+当前版本见本文件 rc27 现役段。
 BodyDesign、PresentationGraph、WriterBookIR、HookContext 及成文回执升 rc25，
 checkpoint／Brief／Binding 保持 rc22；每类版本以 `contracts/artifacts.py` 为准，
 冻结身份由 `tests/test_str06_f7e_freeze.py` 守卫。节点共 13 个，运行配置未变。
 book 观察 `stage2-book-v7`、chapters 独立 `stage2-chapters-v7`、names 独立
 `stage2-names-v5`（wire v7，补充称谓证据）、associate `stage2-associate-v5`（输入投影变经 RC 表换身份）；
-Preserve 当前 `stage4-preserve-v7`＋policy 12、Design 内部展开 `stage4-design-v5`
-（瘦 wire 现役 v11）；
-Hook Design 为 `stage4-hook-design-v4`；正式输入／呈现协议显式换身份。当前正文 renderer v13／写手协议 v12（2026-10-10 自然混称逐次投影、必要骨架联合交接；有限情节补桥归 Design，写手呈现自然移步与转场；历史 R10b 升 v7）。
+当时 Preserve `stage4-preserve-v7`＋policy 12、Design 内部展开 `stage4-design-v5`
+（当时瘦 wire v11）；
+Hook Design 为 `stage4-hook-design-v4`；正式输入／呈现协议显式换身份。当时正文 renderer v13／写手协议 v12（2026-10-10 自然混称逐次投影、必要骨架联合交接；有限情节补桥归 Design，写手呈现自然移步与转场；历史 R10b 升 v7）。
 
 **章观察瘦 wire（CS-2 第一步，2026-10-03）**：`str06.stage2.chapters` 的
 LLM 输出面升 `stage2-chapters-v3`（`contracts/schema/observation.py` 瘦模型：
@@ -148,19 +205,19 @@ RC-26～29，反例 `tests/test_stage2_evidence_addressing.py`、
 `tests/test_str06_chapter_slim.py`。
 
 **设计瘦 wire（CS-3 审阅修复，2026-10-03；事实锁引用升 v8，2026-10-04）**：LLM 输出为
-`stage4-design-v12`（`contracts/schema/design.py::DesignWireV12`；rc26 命名前移批次 C 起自有自然语言一律普通目标文本＋v11 及更早已购候选只读存档）。`real` 保留
+`stage4-design-v13`（`contracts/schema/design.py::DesignWireV13`；rc27 的认知操作／极性显式交接，rc26 起自有自然语言使用普通目标文本；旧候选只读存档）。`real` 保留
 义务接受拍/支撑拍；Brief 每条 requirement 的 `knowledge_changes` 从正式
-anchor 派生，完整保留每次变化的盲身份、holder、kp、mode。代码按盲身份排序
+anchor 派生，完整保留每次变化的盲身份、holder、kp、op、mode、polarity。代码按盲身份排序
 派发 `obNN.kNN` 短引用，模型在对应义务 real 拍的 `know:[{ref}]` 声明实际
 认知时点。每个必保变化恰好一次；已经承载的非必保义务也须标全其认知变化。
-同一拍同一命题不能同时给多个模式；先怀疑、后证实分别落拍。
+相同认知变化按盲身份精确承载；先怀疑、后撤回、再确认分别落账，不能只留最终正命题。
 
 读者 known 的 know 标注须另带 `confirms` 目标事实地址，代码派生
 knowledge(holder=reader) 增量并保留该关联。确认只能引用此刻已实际建立且未
 解除/未知的事实，计划不能充当已发生。pending 禁区进入事实建立/读取场和
 确认场；按完整地址匹配，kp 句柄与自由事实键可以不同。世界规则成立断言
 默认 actual；immediate_continuation 锚点按每章场数取上一章末场末拍。
-机械默认值和书级派生继续由 compiler 完成，v5 只是内部展开形状。
+机械默认值和书级派生继续由 compiler 完成；现役内部展开形状为 v6，保留操作与正负值。
 
 **事实锁引用（CS-F2，rc16，RC-36～39）**：v7 把 Brief 事实锁当状态键另写一条复述事实的状态，
 《夫君的报恩》第三份回答因此把锁原文（含第 2 章尚未释放的全名）连同 8 条重复状态抄进自己的 val。
@@ -233,7 +290,7 @@ SourceTruth，不把猜测当原文事实，不新增重大前史、身份、人
 能完整表达当前反例，新增结构尚无独立闭包消费者；schema 完整不代签文学合理性。
 先组织目标故事，再附承载标注，原子条件仍不与自然叙事拍一一对应。
 
-现役 Preserve policy v11、正文 renderer v13、写手协议 v12；身份声明与 rc25 的
+现役 Preserve policy v13、正文 renderer v15、写手协议 v14；rc27 保留认知操作与极性。
 rc26（命名前移批 C）起正文为普通目标文本：疑似旧名与提前揭名只形成定位报告（BACKEND_CONTRACT R-7.9）。自然概括、局部视角省略和藏身突现不自动视为事实错误，既有锁与知情边界仍
 不可越过。旧 checkpoint 仍绑定旧 policy，不静默套用新版交接判据；修订、采用和下游
 恢复沿现役身份、材料变化与完整预检闭合。首答完整可用率、设计阅读效果、正文质量
@@ -433,6 +490,10 @@ publisher（`novel/stages/stage4/hook.py`）与 HookContext 编译
   投影进引用该地址的章包，并标注确认拍（现役 `R-6.11` 的逐场全量清单升级为按地址投影）。
 - 状态读取定位到入场或具体拍，按「先读旧值、后写新值」解析；「本场会写该地址就
   删除全部入场读取」的旧行为已取消（B3 后半，`novel/stages/common.py::scene_read_views`）。
+  知情读取只解析当前接受或显式撤回／未知标记，不以听到的说法代替接受。后者保留
+  为按来源与极性分别标注的背景；即使同址接受已在 entry 送达，说法历史也不被删除。
+  `planned_delta` 对事实保留场末净变化，对认知保留逐次操作与原序，避免压缩时吞掉
+  早期误信、中间撤回或不同极性的说法。
 - 初态保留 unknown、unset、未建立与合法空值的区别，非 set 初态不再无条件丢弃
   （B3 后半，`novel/stages/stage4/compile.py::init_establishments`）；Design 词汇同时
   分开「值未知」与「人物不知道」（后者用知情缺席或 believes 表达）。F5e「用 unknown
@@ -788,12 +849,12 @@ seal → 标记采用（可由 seal 重建）。任一窗口中断优先免费�
 
 | 模块 | 承载 | 关键不变量（构造期表达） |
 |---|---|---|
-| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v11）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
+| `contracts/schema/policy.py` | `PreservationPolicy`（版本化策略，现役 v13）、`PreserveKind` 闭集 | 类别集或判据变化必须升版；现役版本唯一为 `STAGE4_PRESERVE_POLICY_VERSION`；执行身份不进 Policy |
 | `contracts/schema/grounding.py` | `SourceObligation` / `PreserveCheckpoint` / `ReconstructionBrief` / `IdentityProjection` / `OutputConstraints` / `SemanticBinding` | 必保义务必有非空 `satisfaction`；checkpoint 无 Design/Bind 字段；Brief 无源章/源拍/叙述顺序/证据定位字段；Binding 是完整 snapshot |
 | `contracts/schema/design.py` | `BodyDesign`（rc11：narration、expression_decisions、可定位 entry；保留拍上线程、world_rules）／`PresentationGraph(BodyDesign)+hook` | source-blind；章号连续 1..N、场景全覆盖；POV 服从正文人称许可；表达决定恰好覆盖；entry 锚满足分支条件；hook 引用与线程生命周期闭合 |
 | `contracts/schema/hook.py` | `HookDesign`／`HookContext`／`HookReceipt` | 有序材料组织与阅读期待显式选择；起笔事实只引用已建立目标事实；声线同源；first 恰一人且非 narrator；篇幅包络按章预算派生（目标区间不拒稿、硬上限机械拒收），回执 semantic 恒 unverified |
 | `contracts/schema/naming.py` | `NameMapV5`／`NameAssignment`／`TargetName` | name 与 keep_reason 恰好一个；full 由 compiler 拼接；char_ref 唯一 |
-| `contracts/schema/source.py` | Characters v6（`CharactersCore`＋`name_structure`）／Blueprints v17（拍三类转移＋场景分段＋带证据源表达） | 名称结构 surface 恰好覆盖、模板渲染逐字相等；canonical 逐字等于某个已登记 surface；from_chapter 由证据锚点派生（`R-2.10`）；命题引用闭合与同拍两遍解析（`R-2.12`）；登记键作用域由 compiler 绑定；表达编号及读数由 compiler 生成 |
+| `contracts/schema/source.py` | Characters v7（`CharactersCore`＋`name_structure`＋指称绑定）／Blueprints v18（显式认知操作／极性／可见性＋答案引用） | 名称结构 surface 恰好覆盖、模板渲染逐字相等；canonical 逐字等于某个已登记 surface；from_chapter 由证据锚点派生（`R-2.10`）；命题引用闭合与同拍两遍解析（`R-2.12`）；登记键作用域由 compiler 绑定；表达编号及读数由 compiler 生成 |
 | `contracts/schema/execution.py` | `ExecutionPlan`（establishment/constraint/dependency/reinforcement）与 `ExecutionSlice` | 必保只落 establishment/constraint；依赖边禁自指 |
 | `contracts/schema/context.py` | ChapterIR 双视图（`VerificationIR`＋`WriterBrief`）与写手层 `WriterPacket`（rc11 六分区，带人称与表达） | IR 带 `beats` 逐拍定位（`BeatIR.reads` 挂拍级读取解析值）与 `prohibitions`、`thread_ops`／`open_threads` 投影；Brief 只承载呈现；两视图 scene_id 与 slice 身份同源；WriterPacket 全自然语言、机械拒识内部 ID 与未释放正向字面 |
 | `contracts/schema/book_ir.py` | `WriterBookIR`＝`BookBrief`＋`ChapterIR[]`；`ChapterWriterPacket` 章包三件套 | BookBrief 确定性投影 world_rules、人称及表达决定，不调 LLM 总结或补造文风；章预算 largest-remainder 分配；验证材料 compile 时计算；`ChapterContinuity` 投影 entry、anchor_event 与前章末拍，不猜时地语义 |
@@ -849,7 +910,7 @@ Writer 禁 Body prose、源 Hook 和源小说。Stage7 只消费正式契约与�
 提交顺序：原响应耐久保存 → 编译与检查 → 选定候选 → 原子写正文 → 原子写章回执；
 各章经共享总槽并发执行，恢复按有效提交集合补缺。
 
-### Hook 的正式选择与确定性投影（现役；Hook wire v4）
+### Hook 的正式选择与确定性投影（现役；Hook wire v5）
 
 Hook 是同一目标故事的另一种呈现。Stage4 负责选材、入场、详略、转换、截断与阅读期待；
 Stage5 负责对白、即时反应、句法、措辞与节奏。楔子是高张力情节切片，不是完整场景的
@@ -876,19 +937,28 @@ kind／focus。
 引用存在和时序合法不证明它确实回答该问题，也不证明期待具有吸引力。
 独立显式选择的禁区继续负向投影；期待引用不自动转成禁区答案全文。
 
-当前模型协议为 `stage4-hook-design-v4`，PresentationGraph、HookContext、BodyDesign
-及正文章包为 rc25；篇幅包络三字段沿用 rc24（见下）。正式输入从 BodyDesign 投影完整
-故事决策材料和事实目录；`fact_ref` 由 compiler 根据建立位置／地址计算，目录保留
-op／value／modality／knowledge_mode／scope，不是第二份事实真源。材料 withheld
-必须属于该拍；起笔与事实禁区只能指向唯一 set。完整目录与分支 schema 进入初答和
+当前模型协议为 `stage4-hook-design-v5`，PresentationGraph、HookContext、BodyDesign
+及正文章包为 rc27；篇幅包络三字段沿用 rc24（见下）。正式输入从 BodyDesign 投影完整
+故事决策材料和事实目录；`fact_ref` 由 compiler 根据建立位置／拍内原子序号／地址
+计算，原子序号为初态数组或该拍 `target_delta` 的 0-based 下标。完整输入摘要绑定
+各原子的语义内容；相同位置的字段编辑不另造真源，同拍重复的相同 set 仍有不同引用。
+目录保留 op／value／modality／knowledge_mode／scope，不是第二份事实真源。
+canonical `OpeningFact` 保留 ref／address／fact_ref，事实 `ForbiddenReveal` 及事实
+期待的 answer 同样保留三者；事件禁区的 address 与 fact_ref 显式为 null。
+`HookMaterial.withheld` 的每项保留 StateAddress 与 fact_ref，只屏蔽所选具体原子，
+不得把同拍同址的 believes 与 heard 一起删掉。材料 withheld 必须属于该拍；起笔与
+事实禁区只能指向具体 set。完整目录与分支 schema 进入初答和
 窄返修合法取值，模型不拼状态地址，也不生成可机械推导的引用。
 
 HookContext 从正式输入投影 POV、起笔事实、事件与状态、组织选择、禁区、称谓许可，
 以及 `book_style`、出场人物 `character_voices` 和材料场 `scene_voices`；正式
 `expression_decisions` 的已选 statement 投影为 Derived `expression_mechanisms`，
 不再作决定或复制理由，ex_id 只用于归因。场声线注明适用材料编号，不暴露内部场引用。
-阅读期待只携带呈现部分。认知渲染保留 holder／knowledge_mode，人物相信、怀疑不当成世界
-确认事实。写手只消费 Context，不读正文、源 Hook 或额外小说。
+阅读期待只携带呈现部分。认知渲染保留 holder／knowledge_mode、操作与极性；人物相信、
+怀疑、负命题与撤回不混成世界确认事实，也不丢掉误信的历史。heard 明确显示为说法
+历史，不代表当前接受或世界为真。起笔分区用中性“起笔背景基线”：world／pov／reader
+指定背景归属或呈现获准面，不决定 P 的真假；“某人曾相信／听到 P”本身可用作背景，
+不因此确认 P。写手只消费 Context，不读正文、源 Hook 或额外小说。
 正文编译独立读取 BodyDesign，背景消费闭包不含 Hook 选择；改 Hook 组织或期待只
 影响 Hook 与交付，不改变已接受章的写手／验证身份。
 
@@ -902,10 +972,13 @@ Context 字节与请求身份（换预算即换请求，不沿用旧结论）；
 输出 token 预算是执行边界。回执 semantic 恒 unverified，不新增生产审稿节点或
 Stage5 段落 patch；现有 Stage4 条目窄修继续。
 
-一次建立以（位置、地址）定位；后续同地址更新不等于同一次揭示，不由代码猜两个值的
+一次建立以（位置、原子序号、地址）定位；后续同地址更新不等于同一次揭示，不由代码猜两个值的
 语义等价。world/pov 事实必须早于**呈现序第一材料**的故事位置，且在该起点前仍有效；
 book 底值与 scene 覆盖按显式 scope 重放，unknown/unset、值/时态/知情模式变化与场末
-过期均不得当成有效旧事实。world 不得把 planned/expected/conditional 当作已发生，POV
+过期均不得当成有效旧事实。连续相同 set 可维持同一状态；被 unset／unknown 或
+不同状态打断后，再次建立同值不能复活先前原子。heard 在其作用域内保持说法历史，
+不覆盖当前接受，也不因后续接受或撤回而丢失；请求目录 later_writes 只列会更新同一
+状态通道的后续操作，含同拍后续原子。world 不得把 planned/expected/conditional 当作已发生，POV
 知情 holder 必须是视角人物；非知情事实的 POV 可知性仍由语义选择负责，不机械推断。
 reader 可以使用材料视界（最大故事位置）以内的事实；视界与冷开起点分开。起笔事实不得
 与某材料的**同一次增量**或某禁区的**同一次建立**重叠。Context 保留尚未发生的时态措辞。

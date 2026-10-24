@@ -59,10 +59,10 @@ def _chars():
 
 
 def _rich_wire() -> dict:
-    """stage4-design-v5：threads（四条线覆盖开启前/推进/收束/结尾仍开放）、
+    """stage4-design-v6：threads（四条线覆盖开启前/推进/收束/结尾仍开放）、
     world_rules、entry、拍级读取与读者确认。线程文本避开第 1 章禁用字面。"""
     return {**sample_design_expression(('yun_niang',)),
-        'protocol_version': 'stage4-design-v5',
+        'protocol_version': 'stage4-design-v6',
         'book_style': '冷峻克制的限知叙事，重日常细节里的异样。',
         'world_rules': ['术法须以寿命为代价', '官府不涉异事'],
         'character_voices': [
@@ -697,8 +697,8 @@ def test_render_has_six_partitions_and_protocol_v5():
     for name in SECTIONS:
         assert f'【{name}】' in text
     # 协议 v13 按三类用法组织（六分区仍在）；版本常量由契约批登记
-    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v13'
-    assert RENDERER_VERSION == 'str06-render-v14'     # rc26：普通正文主链（无身份标记）
+    assert WRITER_PROTOCOL_VERSION == 'str06-body-protocol-v14'
+    assert RENDERER_VERSION == 'str06-render-v15'     # rc26：普通正文主链（无身份标记）
     for name in SECTIONS:
         assert name in WRITER_PROTOCOL
     # 同章包 ⇒ 同字节
@@ -835,11 +835,11 @@ def _hook_pair():
         'reader_expectation': {'kind': 'action', 'focus': '她怎样查清夜行缘由',
                                'followup_refs': [{'scene': 'sc02', 'beat': 'b02'}]},
     }
-    from tests.factories import hook_wire_v3
+    from tests.factories import current_hook_wire
     from novel.core.name_materials import target_face_table
     from tests.test_str06_hook import _hook_map
     faces, _face_errors = target_face_table(_chars().name_structure, _hook_map())
-    hook, errors = assemble_hook_design(hook_wire_v3(wire), body=body,
+    hook, errors = assemble_hook_design(current_hook_wire(wire, body=body), body=body,
                                         known_char_ids={'yun_niang', 'fu_jun'},
                                         name_projection=_chars().name_projection(),
                                         faces=faces)

@@ -281,8 +281,35 @@ function CharactersPane({ chars }: { chars: NonNullable<Monitor['characters']['d
               {c.surfaces.map((s) => `${s.surface}（第${s.from_chapter}章起${
                 s.until_chapter ? `·至第${s.until_chapter}章` : ''}）`).join('、')}
             </span>
+            {c.identity_bindings.length ? (
+              <ul className={'m-0 flex list-none flex-col gap-4 p-0 text-tag text-ink-3'}>
+                {c.identity_bindings.map((binding, index) => (
+                  <li key={index} className={'flex flex-col gap-2'}>
+                    <span>身份指称：{binding.description}</span>
+                    <span className={'text-ink-4'}>
+                      出场证据 <Mono>{binding.appearance_refs.join('、')}</Mono>
+                      {' · '}同一性证据 <Mono>{binding.identity_refs.join('、')}</Mono>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         ))}
+        {chars.initial_knowledge.length ? (
+          <div className={'flex flex-col gap-4'}>
+            <SectionTitle>开场已确认知识</SectionTitle>
+            <ul className={'m-0 flex list-none flex-col gap-4 p-0 text-tag text-ink-3'}>
+              {chars.initial_knowledge.map((knowledge) => (
+                <li key={knowledge.knowledge_id}>
+                  持有者 <Mono>{knowledge.holder}</Mono>
+                  {' · '}确知{knowledge.polarity === 'negative' ? '非' : ''}「{knowledge.proposition.statement}」
+                  {' · '}{knowledge.polarity === 'negative' ? '负命题' : '正命题'}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         {chars.name_structure ? (
           <span className={'text-tag text-ink-4'}>
             家族 {Object.entries(chars.name_structure.families).map(([id, literal]) => `${id}=${literal}`).join('、') || '无'}
@@ -290,6 +317,49 @@ function CharactersPane({ chars }: { chars: NonNullable<Monitor['characters']['d
         ) : null}
       </div>
     </Panel>
+  )
+}
+
+const COGNITION_MODES: Record<string, string> = {
+  learns: '确知',
+  confirms: '确认',
+  suspects: '怀疑',
+  hears_claim: '听到说法',
+  believes: '相信',
+  asserts: '公开主张',
+}
+
+const EVIDENCE_SUPPORT: Record<string, string> = {
+  confirmed: '已确认',
+  claim: '仅说法',
+  inference: '推测',
+}
+
+function readerVisibilityLabel(value: unknown): string {
+  return value === true ? '读者可见' : value === false ? '未向读者展示' : '读者可见性未知'
+}
+
+/** 只翻译显式操作与极性；撤回不派生相反命题，也不从证据性质推断读者知情。 */
+function CognitionLine({ cognition }: { cognition: Record<string, unknown> }) {
+  const proposition = cognition.proposition
+  const statement = proposition && typeof proposition === 'object' && 'statement' in proposition
+    ? String(proposition.statement)
+    : '未知命题'
+  const polarity = cognition.polarity === 'negative' ? '非' : cognition.polarity === 'positive' ? '' : '〔极性未知〕'
+  const mode = COGNITION_MODES[String(cognition.mode)] ?? '未知模式'
+  return (
+    <>
+      <Mono>{String(cognition.holder)}</Mono>{' '}
+      {cognition.op === 'unset'
+        ? <>已撤回对「{statement}」的接受</>
+        : cognition.op === 'set'
+          ? <>{mode}{polarity}「{statement}」</>
+          : <>未知操作「{statement}」</>}
+      <span className={'text-ink-4'}>
+        {' · '}证据性质：{EVIDENCE_SUPPORT[String(cognition.support)] ?? '未知'}
+        {' · '}{readerVisibilityLabel(cognition.reader_visible)}
+      </span>
+    </>
   )
 }
 
@@ -323,6 +393,7 @@ function BlueprintPane({ blueprint }: { blueprint: NonNullable<Monitor['blueprin
                           {String((eff as Record<string, unknown>).op)}
                           {' '}
                           {String((eff as Record<string, unknown>).value ?? '')}
+                          {' · '}{readerVisibilityLabel(eff.reader_visible)}
                         </span>
                       ))}
                     </span>
@@ -331,13 +402,9 @@ function BlueprintPane({ blueprint }: { blueprint: NonNullable<Monitor['blueprin
                     <span className={'pl-12 text-tag text-ink-3'}>
                       认知：
                       {beat.cognition.map((cog, i) => (
-                        <span key={i}>
+                        <span key={i} data-testid={`str06-cognition-${beat.beat_id}-${i}`}>
                           {i ? '；' : ''}
-                          <Mono>{String((cog as Record<string, unknown>).proposition && JSON.stringify((cog as Record<string, unknown>).proposition))}</Mono>
-                          {' → '}
-                          {String((cog as Record<string, unknown>).holder)}
-                          {' '}
-                          {String((cog as Record<string, unknown>).mode)}
+                          <CognitionLine cognition={cog} />
                         </span>
                       ))}
                     </span>

@@ -24,7 +24,7 @@ from pydantic import ValidationError
 
 from contracts.schema.naming import NameAssignment, NameMapV6, TargetName
 from contracts.schema.source import (
-    CharactersArtifactV6, CharactersCore, NameStructure,
+    CharactersArtifactV7, CharactersCore, NameStructure,
 )
 from novel.core.name_materials import target_face_table, target_old_literals
 from novel.stages.stage2.names import (
@@ -44,7 +44,7 @@ SRC = ('皇甫珩执剑护院。陈砚与陈松是亲兄弟，住在陈家。赵
 
 # ───────────────────────── 名称结构夹具 ─────────────────────────
 
-def _chars(**people_over) -> CharactersArtifactV6:
+def _chars(**people_over) -> CharactersArtifactV7:
     people = {
         'huang_fu_heng': {'family_id': 'fam_hpf', 'given': '珩', 'aliases': [],
                           'surface_forms': {'皇甫珩': '{family}{given}',
@@ -64,17 +64,17 @@ def _chars(**people_over) -> CharactersArtifactV6:
                    'surface_forms': {'夫人': None}},
     }
     people.update(people_over)
-    return CharactersArtifactV6.model_validate({
+    return CharactersArtifactV7.model_validate({'initial_knowledge': [],
         'characters': {
-            'huang_fu_heng': {'canonical': '皇甫珩', 'surfaces': [
+            'huang_fu_heng': {'identity_bindings': [], 'canonical': '皇甫珩', 'surfaces': [
                 _surface('皇甫珩'), _surface('皇甫公子')]},
-            'chen_yan': {'canonical': '陈砚', 'surfaces': [
+            'chen_yan': {'identity_bindings': [], 'canonical': '陈砚', 'surfaces': [
                 _surface('陈砚'), _surface('砚哥')]},
-            'chen_song': {'canonical': '陈松', 'surfaces': [_surface('陈松')]},
-            'zhao_a': {'canonical': '赵老大', 'surfaces': [_surface('赵老大')]},
-            'zhao_b': {'canonical': '赵老二', 'surfaces': [_surface('赵老二')]},
-            'ju_shi': {'canonical': '云溪居士', 'surfaces': [_surface('云溪居士')]},
-            'fu_ren': {'canonical': '夫人', 'surfaces': [_surface('夫人')]},
+            'chen_song': {'identity_bindings': [], 'canonical': '陈松', 'surfaces': [_surface('陈松')]},
+            'zhao_a': {'identity_bindings': [], 'canonical': '赵老大', 'surfaces': [_surface('赵老大')]},
+            'zhao_b': {'identity_bindings': [], 'canonical': '赵老二', 'surfaces': [_surface('赵老二')]},
+            'ju_shi': {'identity_bindings': [], 'canonical': '云溪居士', 'surfaces': [_surface('云溪居士')]},
+            'fu_ren': {'identity_bindings': [], 'canonical': '夫人', 'surfaces': [_surface('夫人')]},
         },
         'initial_state': [],
         'name_structure': {
@@ -139,9 +139,9 @@ def test_name_structure_compile_green_and_refusals():
         'fu_ren': {'family_id': 'fam_chen', 'given': None, 'aliases': [],
                    'form_overrides': {'陈夫人': None}}}}
     from contracts.schema.source import CharactersCore
-    core_with_surface = CharactersCore.model_validate({
+    core_with_surface = CharactersCore.model_validate({'initial_knowledge': [],
         'characters': {**core.model_dump()['characters'],
-                       'fu_ren': {'canonical': '夫人', 'surfaces': [
+                       'fu_ren': {'identity_bindings': [], 'canonical': '夫人', 'surfaces': [
                            {'surface': '夫人', 'from_chapter': 1,
                             'until_chapter': None, 'source_refs': ['e01_01']},
                            {'surface': '陈夫人', 'from_chapter': 1,
@@ -480,7 +480,7 @@ def test_released_surfaces_close_over_the_target_face_table():
     registered = {cid: {s.surface for s in entry.surfaces}
                   for cid, entry in chars.characters.items()}
     design_wire = {**sample_design_expression(('huang_fu_heng',)),
-        'protocol_version': 'stage4-design-v5',
+        'protocol_version': 'stage4-design-v6',
         'book_style': '平实克制的第三人称叙事。',
         'initial_state': [],
         'scenes': [{

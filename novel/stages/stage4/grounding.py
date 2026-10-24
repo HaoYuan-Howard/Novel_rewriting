@@ -32,7 +32,7 @@ CS-3 bind LLM 退役）。
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Final, Iterable
+from typing import Any, Final, Iterable, Mapping
 
 from contracts.schema.design import BodyDesign
 from contracts.schema.grounding import (
@@ -40,14 +40,15 @@ from contracts.schema.grounding import (
     BriefDetail, EventEvidence, FactLockBinding, IdentityProjection, ObligationAnchor, ObligationDetail,
     ObligationSeries, PreserveCheckpoint, SeriesSummary, SourceDetail,
     ReconstructionBrief, SemanticBinding, SourceLineage, SourceObligation,
-    BookConstraint, _lock_id,
+    BookConstraint, PublicClaim, _lock_id,
 )
 from contracts.schema.source import (
-    BlueprintsArtifactV17, CharactersCore,
+    BlueprintsArtifactV18, CharactersCore, Effect,
 )
 from contracts.schema.workflow import STAGE4_PRESERVE_PROTOCOL
 from contracts.schema.naming import NameMapV6
 from novel.core.name_materials import target_face_table
+from novel.core.state_proposition import state_proposition_text, state_statement
 from novel.core.validation import ValidationIssue
 from novel.stages.common import check_binding_covers_checkpoint
 from novel.stages.stage4.design_paths import design_issue
@@ -104,7 +105,7 @@ def _render_target(target: Any) -> str:
 
 
 def _anchor_index(
-    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV18,
 ) -> dict[str, ObligationAnchor]:
     """投影句柄 → 类型化拷贝（compiler 拷贝，模型不复述；I-15/I-21）。
 
@@ -118,11 +119,22 @@ def _anchor_index(
         index[atom.state_id] = ObligationAnchor(
             handle=atom.state_id, source_kind='initial_state',
             address=f'{_render_target(atom.target)}.{atom.key}', value=atom.value,
+            basis_segments=tuple(b.segment for b in atom.basis),
+            quotes=tuple(b.quote for b in atom.basis))
+    for atom in characters.initial_knowledge:
+        index[atom.knowledge_id] = ObligationAnchor(
+            handle=atom.knowledge_id, source_kind='initial_knowledge',
+            holder=atom.holder, op='set', mode='learns', polarity=atom.polarity,
+            support='confirmed', reader_visible=False,
+            proposition_ref=atom.proposition.ref,
+            proposition_statement=atom.proposition.statement,
+            basis_segments=tuple(b.segment for b in atom.basis),
             quotes=tuple(b.quote for b in atom.basis))
     for rule in blueprint.world_constraints:
         index[rule.constraint_id] = ObligationAnchor(
             handle=rule.constraint_id, source_kind='world_constraint',
             address=f'{rule.kind}:{rule.constraint_id}', value=rule.statement,
+            basis_segments=tuple(b.segment for b in rule.basis),
             quotes=tuple(b.quote for b in rule.basis))
     for chapter_bp in sorted(blueprint.chapters, key=lambda c: c.chapter):
         for beat in chapter_bp.beats:
@@ -135,21 +147,24 @@ def _anchor_index(
                                          for ref in beat.source_refs))
             for n, effect in enumerate(beat.effects, 1):
                 handle = f'{beat.beat_id}.e{n}'
-                # CS-S 1b：effect 删 disclosure／proposition——锚点不再拷贝
-                # 可见性与命题（命题锚只在 cognition 上）。
+                # 效应明确复制本原子的可见性；命题锚只在 cognition 上。
                 index[handle] = ObligationAnchor(
                     handle=handle, source_kind='effect',
                     address=f'{_render_target(effect.target)}.{effect.key}',
                     value=effect.value, modality=effect.modality,
-                    op=effect.op,
+                    op=effect.op, reader_visible=effect.reader_visible,
+                    basis_segments=tuple(b.segment for b in effect.basis),
                     quotes=tuple(b.quote for b in effect.basis))
             for n, cognition in enumerate(beat.cognition, 1):
                 handle = f'{beat.beat_id}.c{n}'
                 index[handle] = ObligationAnchor(
                     handle=handle, source_kind='cognition',
                     holder=cognition.holder, mode=cognition.mode,
+                    op=cognition.op, polarity=cognition.polarity,
+                    support=cognition.support, reader_visible=cognition.reader_visible,
                     proposition_ref=cognition.proposition.ref,
                     proposition_statement=cognition.proposition.statement,
+                    basis_segments=tuple(b.segment for b in cognition.basis),
                     quotes=tuple(b.quote for b in cognition.basis))
             for n, loop in enumerate(beat.loops, 1):
                 handle = f'{beat.beat_id}.l{n}'
@@ -161,7 +176,7 @@ def _anchor_index(
 
 def _derive_lineage(
     handles: tuple[str, ...], index: dict[str, ObligationAnchor],
-    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV18,
 ) -> SourceLineage:
     """义务 anchors → SourceLineage（I-15/I-21：compiler 派生，wire 不再输出）。
 
@@ -172,6 +187,7 @@ def _derive_lineage(
     blueprint_refs: list[str] = []
     character_ids: list[str] = []
     initial_by_handle = {atom.state_id: atom for atom in characters.initial_state}
+    initial_by_handle.update({atom.knowledge_id: atom for atom in characters.initial_knowledge})
     transfers: dict[str, Any] = {}
     for chapter_bp in blueprint.chapters:
         for beat in chapter_bp.beats:
@@ -194,7 +210,7 @@ def _derive_lineage(
             continue
         if anchor.source_kind == 'event':
             character_ids.extend(transfer.participants)
-        elif anchor.source_kind == 'cognition':
+        elif anchor.source_kind in ('cognition', 'initial_knowledge'):
             # reader 是知情持有者，人物表没有它；其锁仍由 cognition anchor
             # 派生，不能经 lineage 变成 Brief 的参演人物。
             if transfer.holder != 'reader' and transfer.holder in characters.characters:
@@ -223,7 +239,7 @@ def _derive_lineage(
 
 
 def project_preserve_view(
-    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV18,
 ) -> str:
     """R10a a2：Preserve 的源证据投影（确定性渲染，取代 Blueprint JSON 倾倒）。
 
@@ -233,18 +249,23 @@ def project_preserve_view(
     I-20/I-21 机械渲染归 compiler）。R10-0.3 实证旧形态整份 Blueprint JSON
     倾倒 29.9k token/轮——本投影只给语义判断实际需要的原子与证据。
     """
-    lines: list[str] = ['输入版本：stage4-preserve-input-v3']
+    lines: list[str] = ['输入版本：stage4-preserve-input-v4']
     cited: set[str] = set()
     if characters.initial_state:
         lines.append('【书级初始事实（故事开始前成立）】')
         for atom in characters.initial_state:
             cited.update(atom.source_refs)
-            # CS-S 1b：初始已知后缀删（initial_state.knowledge 已删）。语义缺口
-            # 如实登记：Phase 2 的 facts `known_at_start` 只落在 fold 知情时间线读数
-            # （T-5：只读读数，不进下游 API），Stage4 的 Preserve／Brief 仍看不到
-            # 「开场前已知」——是否把它渲染进 Preserve 视图待产品裁决（REQUIREMENTS）。
             lines.append(f'[{atom.state_id}] {_render_target(atom.target)}.'
                          f'{atom.key} = {atom.value!r}（{atom.persistence}）')
+            for basis in atom.basis:
+                lines.append(f'  依据 {basis.segment}：「{basis.quote}」')
+    if characters.initial_knowledge:
+        lines.append('【书级开场知识（人物已确认，读者披露另由拍内原子决定）】')
+        for atom in characters.initial_knowledge:
+            cited.update(b.segment for b in atom.basis)
+            lines.append(f'[{atom.knowledge_id}] {atom.holder} 开场已确认 '
+                         f'{atom.polarity} 命题 {atom.proposition.ref}：'
+                         f'{atom.proposition.statement}')
             for basis in atom.basis:
                 lines.append(f'  依据 {basis.segment}：「{basis.quote}」')
     if blueprint.world_constraints:
@@ -301,10 +322,13 @@ def _transfer_line(kind: str, transfer: Any) -> str:
     """直接投影正式转移；锚点摘要不含完整作用域，不能充当输入真相。"""
     if kind == 'e':
         return (f'事实 {_render_target(transfer.target)}.{transfer.key}'
-                f' {transfer.op} {transfer.value!r}（{transfer.modality}）')
+                f' {transfer.op} {transfer.value!r}（{transfer.modality}；'
+                f'读者可见={transfer.reader_visible}）')
     if kind == 'c':
         p = transfer.proposition
-        return (f'认知 {transfer.holder} {transfer.mode} 命题 {p.ref}'
+        return (f'认知 {transfer.holder} {transfer.op} {transfer.mode} '
+                f'{transfer.polarity}（依据={transfer.support}；'
+                f'读者可见={transfer.reader_visible}）命题 {p.ref}'
                 + (f'「{p.statement}」' if p.statement is not None else '（引用）'))
     return (f'悬念 {transfer.ref} {transfer.op}：'
             f'{transfer.question if transfer.op == "open" else transfer.resolution}')
@@ -417,7 +441,7 @@ def _preserve_shape_errors(wire: Any) -> list[str]:
 def assemble_preserve(
     wire: Any, *,
     policy_id: str, policy_version: int,
-    characters: CharactersCore, blueprint: BlueprintsArtifactV17,
+    characters: CharactersCore, blueprint: BlueprintsArtifactV18,
     name_map: NameMapV6, name_map_sha256: str,
     provider: str, model: str, request_sha256: str,
 ) -> tuple[PreserveCheckpoint | None, list[str]]:
@@ -474,7 +498,7 @@ def assemble_preserve(
                         (('obligations', ordinal - 1),)))
                 else:
                     errors.append(f'义务 {ordinal} anchors 引用未知句柄：{handle!r}'
-                                  '（只能取投影视图给出的 s0_*/wc_*/b拍.v1|e|c|l 句柄）')
+                                  '（只能取投影视图给出的 s0_*/k0_*/wc_*/b拍.v1|e|c|l 句柄）')
         for di, detail in enumerate(item.get('details') or ()):
             if detail['anchor'] not in index:
                 errors.append(_preserve_issue(
@@ -731,7 +755,7 @@ def fact_lock_subjects(obligations: Iterable[SourceObligation]) -> dict[str, fro
 
 
 def _unanswered_loops(
-    blueprint: BlueprintsArtifactV17,
+    blueprint: BlueprintsArtifactV18,
 ) -> list[tuple[str, str]]:
     """canonical 里 open 而从未 close 的悬念（原文未回答锁的输入，§二.1）。
 
@@ -756,13 +780,13 @@ def _unanswered_loops(
 def _requires_released_surfaces(
     obligation: SourceObligation, anchor: ObligationAnchor, *,
     characters: CharactersCore | None, structure,
-    first_appearance: dict[str, str], prop_segments: dict[str, set[str]],
+    first_appearance: dict[tuple[str, str], str],
     faces: Mapping[str, Mapping[str, str]] | None = None,
 ) -> tuple[str, ...]:
     """必保揭名识别（CS-H H3，RC-61）——三项类型化信号**合取**：
 
     ① 所属义务是 identity／reveal 类**必保**义务（类别来自义务 kind，不用文本）；
-    ② 该命题的源证据句段（Blueprint 里该命题 basis 的句段）正是某**带名**称谓
+    ② 本次认知原子的证据句段正是某**带名**称谓
       在源文首次出现的句段（Characters 的 SurfaceWindow.source_refs[0]；
       带名＝名称结构构词非 null）；
     ③ 命题文本含该称谓的**目标字面**（rc26：义务文本已按目标姓名转述，
@@ -775,7 +799,7 @@ def _requires_released_surfaces(
         return ()
     if characters is None or structure is None or not anchor.proposition_ref:
         return ()
-    segments = prop_segments.get(anchor.proposition_ref)
+    segments = set(anchor.basis_segments)
     statement = anchor.proposition_statement or ''
     if not segments:
         return ()
@@ -789,16 +813,38 @@ def _requires_released_surfaces(
             surface = window.surface
             bearing = person.surface_forms.get(surface) is not None
             target = table.get(surface, surface)
-            if (bearing and first_appearance.get(surface) in segments
+            if (bearing and first_appearance.get((char_id, surface)) in segments
                     and target in statement):
                 matched.add(target)
     return tuple(sorted(matched))
 
 
+
+def _state_proposition_sources(blueprint: BlueprintsArtifactV18) -> dict[str, Effect]:
+    """同拍正式已披露状态与完全相同机器命题的确定性 join。
+
+    不解析自然语言、不跨拍借事实；相同完整机器文本只对应同一主体、键及
+    JSON 值。认知的 mode/op/polarity 仍由其正式条目决定，join 不授予确知。
+    """
+    result: dict[str, Effect] = {}
+    for chapter in blueprint.chapters:
+        for beat in chapter.beats:
+            states: dict[str, Effect] = {}
+            for effect in beat.effects:
+                if effect.reader_visible and effect.modality == 'actual' and effect.op == 'set':
+                    states.setdefault(state_statement(effect.model_dump(mode='json')), effect)
+            for index, cognition in enumerate(beat.cognition, 1):
+                statement = cognition.proposition.statement
+                if statement in states:
+                    result[f'{beat.beat_id}.c{index}'] = states[statement]
+    return result
+
+
 def _derive_brief_locks(
-    checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV17,
+    checkpoint: PreserveCheckpoint, blueprint: BlueprintsArtifactV18,
     characters: CharactersCore | None = None, structure=None,
     faces: Mapping[str, Mapping[str, str]] | None = None,
+    *, target_names: Mapping[str, str],
 ) -> tuple[tuple[BriefProposition, ...], tuple[BriefKnowledgeLock, ...],
            tuple[BriefFactLock, ...], dict[str, dict[str, tuple]]]:
     """义务 anchors＋canonical loops → Brief 锁定项（a4 唯一派生点）。
@@ -817,65 +863,68 @@ def _derive_brief_locks(
       （`_requires_released_surfaces`），随认知变化条目携带。
     """
     propositions: dict[str, BriefProposition] = {}
-    knowledge: dict[tuple[str, str, str], BriefKnowledgeLock] = {}
+    state_sources = _state_proposition_sources(blueprint)
+    knowledge: dict[tuple, BriefKnowledgeLock] = {}
     facts: dict[str, BriefFactLock] = {}
     per_obligation: dict[str, dict[str, tuple]] = {}
-    # 必保揭名的两项索引：带名称谓的首次出现句段；命题 → 源证据句段集
-    # （Blueprint 里该命题全部 basis 的句段——anchors 的 quotes 只有引文字面，
-    # 句段身份在 blueprint 的 basis 上）。
-    first_appearance: dict[str, str] = {}
+    # 同字面可属于不同人物；只用本次原子的依据与该人物称谓窗口核对。
+    first_appearance: dict[tuple[str, str], str] = {}
     if characters is not None:
-        for entry in characters.characters.values():
+        for char_id, entry in characters.characters.items():
             for window in entry.surfaces:
                 if window.source_refs:
-                    first_appearance.setdefault(window.surface, window.source_refs[0])
-    # CS-S 1b：prop_segments 只收 cognition（effect 不再带命题锚）。
-    prop_segments: dict[str, set[str]] = {}
-    for chapter_bp in blueprint.chapters:
-        for beat in chapter_bp.beats:
-            for cognition in beat.cognition:
-                if cognition.proposition.ref:
-                    prop_segments.setdefault(cognition.proposition.ref, set()).update(
-                        basis.segment for basis in cognition.basis)
-
+                    first_appearance.setdefault((char_id, window.surface), window.source_refs[0])
     def _register_proposition(anchor: ObligationAnchor) -> str | None:
         if not anchor.proposition_ref:
             return None
         kp = _lock_id('kp_', anchor.proposition_ref)
         if kp not in propositions:
-            propositions[kp] = BriefProposition(
-                kp_id=kp,
-                statement=anchor.proposition_statement or anchor.proposition_ref)
+            statement = anchor.proposition_statement or anchor.proposition_ref
+            if anchor.handle in state_sources:
+                effect = state_sources[anchor.handle]
+                if statement != state_statement(effect.model_dump(mode='json')):
+                    raise ValueError(f'状态命题锚点与正式来源不一致：{anchor.handle}')
+                statement = state_proposition_text(effect.model_dump(mode='json'), names=target_names)
+            propositions[kp] = BriefProposition(kp_id=kp, statement=statement)
         return kp
 
     for obligation in checkpoint.obligations:
         derived: list[str] = []
         knowledge_changes: dict[str, BriefKnowledgeChange] = {}
+        initial_knowledge: dict[tuple, BriefKnowledgeLock] = {}
         realize_locks: list[str] = []
         for anchor in obligation.anchors:
-            if anchor.source_kind == 'cognition':
+            if anchor.source_kind in ('cognition', 'initial_knowledge'):
                 kp = _register_proposition(anchor)
                 if kp is None:
                     continue
                 derived.append(kp)
                 mode = KNOWLEDGE_LOCK_MODE.get(anchor.mode or '')
-                if mode is not None and anchor.holder not in (None, 'public'):
-                    knowledge[(anchor.holder, kp, mode)] = \
-                        BriefKnowledgeLock(holder=anchor.holder, kp=kp, mode=mode)
+                if (mode is not None or anchor.op == 'unset') \
+                        and anchor.holder not in (None, 'public'):
+                    identity = (anchor.holder, kp, anchor.op, mode, anchor.polarity)
+                    knowledge[identity] = BriefKnowledgeLock(
+                        holder=anchor.holder, kp=kp, op=anchor.op,
+                        mode=mode, polarity=anchor.polarity)
+                    if anchor.source_kind == 'initial_knowledge':
+                        initial_knowledge[identity] = knowledge[identity]
+                        continue
                     change_id = _lock_id('kc_', anchor.handle)
                     knowledge_changes[change_id] = BriefKnowledgeChange(
-                        change_id=change_id, holder=anchor.holder, kp=kp, mode=mode,
+                        change_id=change_id, holder=anchor.holder, kp=kp,
+                        op=anchor.op, mode=mode, polarity=anchor.polarity,
                         requires_released=_requires_released_surfaces(
                             obligation, anchor, characters=characters,
                             structure=structure, first_appearance=first_appearance,
-                            prop_segments=prop_segments, faces=faces))
+                            faces=faces))
                 elif anchor.mode == 'asserts' and anchor.holder \
                         and anchor.holder != 'public':
                     entry = propositions[kp]
-                    if anchor.holder not in entry.publicly_claimed_by:
+                    claim = PublicClaim(holder=anchor.holder, polarity=anchor.polarity)
+                    if claim not in entry.publicly_claimed_by:
                         propositions[kp] = entry.model_copy(update={
                             'publicly_claimed_by': (*entry.publicly_claimed_by,
-                                                    anchor.holder)})
+                                                    claim)})
             elif anchor.source_kind == 'effect':
                 lock = _anchor_fact_lock(anchor)
                 if lock is not None:
@@ -890,13 +939,14 @@ def _derive_brief_locks(
         per_obligation[obligation.obligation_id] = {
             'locks': tuple(deduped),
             'knowledge_changes': tuple(knowledge_changes[k] for k in sorted(knowledge_changes)),
+            'initial_knowledge': tuple(initial_knowledge[k] for k in sorted(initial_knowledge)),
             'realize_locks': tuple(realize_locks)}
     for ref, question in _unanswered_loops(blueprint):
         kf = _lock_id('kf_', ref)
         facts[kf] = BriefFactLock(kf_id=kf, kind='unanswered', statement=question)
     return (
         tuple(propositions[k] for k in sorted(propositions)),
-        tuple(knowledge[key] for key in sorted(knowledge)),
+        tuple(knowledge[key] for key in sorted(knowledge, key=str)),
         tuple(facts[k] for k in sorted(facts)),
         per_obligation,
     )
@@ -924,7 +974,7 @@ def target_name_faces(
 
 
 def project_target_names(
-    name_map: NameMapV6, characters: CharactersArtifactV6,
+    name_map: NameMapV6, characters: CharactersArtifactV7,
 ) -> dict[str, Any]:
     """命名前移批（rc26）：Preserve 输入的「目标名称表」（确定性投影，不落盘）。
 
@@ -961,7 +1011,7 @@ def project_target_names(
 
 def project_brief(
     checkpoint: PreserveCheckpoint, characters: CharactersCore,
-    blueprint: BlueprintsArtifactV17, structure=None, *, name_map: NameMapV6,
+    blueprint: BlueprintsArtifactV18, structure=None, *, name_map: NameMapV6,
 ) -> tuple[ReconstructionBrief, tuple[IdentityProjection, ...]]:
     """checkpoint → (Brief, IdentityProjection)。Design 的全部语义输入。
 
@@ -981,10 +1031,13 @@ def project_brief(
     # 不以源义务序号暴露叙述顺序；所有类型与满足条件等量投影，依赖闭合。
     core_ids = {o.obligation_id: obligation_core_id(o.obligation_id)
                 for o in checkpoint.obligations}
+    name_faces = target_name_faces(name_map, characters)
+    target_names = {char_id: name_faces[char_id][0] if char_id in name_faces else entry.canonical
+                    for char_id, entry in characters.characters.items()}
     propositions, knowledge_locks, fact_locks, derived_locks = \
         _derive_brief_locks(checkpoint, blueprint, characters, structure,
                             faces=(target_face_table(structure, name_map)[0]
-                                   if structure is not None else {}))
+                                   if structure is not None else {}), target_names=target_names)
     series_group: dict[str, str] = {}
     series_mechanism: dict[str, str | None] = {}
     summarizes: dict[str, tuple[str, ...]] = {}
@@ -1003,6 +1056,7 @@ def project_brief(
             requires_cores=tuple(sorted(core_ids[r] for r in o.requires)),
             locks=derived_locks[o.obligation_id]['locks'],
             knowledge_changes=derived_locks[o.obligation_id]['knowledge_changes'],
+            initial_knowledge=derived_locks[o.obligation_id]['initial_knowledge'],
             realize_locks=derived_locks[o.obligation_id]['realize_locks'],
             series_group=series_group.get(o.obligation_id),
             series_mechanism=series_mechanism.get(o.obligation_id),
@@ -1138,9 +1192,12 @@ def _anchor_line(anchor: ObligationAnchor) -> str:
     """锚点类型化拷贝 → 切片里的人读原子行（与投影视图同一语法，不新造语义）。"""
     if anchor.source_kind == 'event':
         return f'事件：{anchor.event_statement}'
-    if anchor.source_kind == 'cognition':
+    if anchor.source_kind in ('cognition', 'initial_knowledge'):
         statement = anchor.proposition_statement or ''
-        return (f'认知 {anchor.holder} {anchor.mode or ""} 命题 '
+        label = '开场知识' if anchor.source_kind == 'initial_knowledge' else '认知'
+        return (f'{label} {anchor.holder} {anchor.op} {anchor.mode or ""} '
+                f'{anchor.polarity or ""}（依据={anchor.support}；'
+                f'读者可见={anchor.reader_visible}）命题 '
                 f'{anchor.proposition_ref or ""}'
                 + (f'「{statement}」' if statement else ''))
     if anchor.source_kind == 'effect':
@@ -1158,7 +1215,7 @@ def _anchor_line(anchor: ObligationAnchor) -> str:
 
 def preserve_patch_slice(
     wire: dict[str, Any], characters: CharactersCore,
-    blueprint: BlueprintsArtifactV17, indices: Iterable[int],
+    blueprint: BlueprintsArtifactV18, indices: Iterable[int],
 ) -> dict[str, Any]:
     """Preserve 条目返修的依赖切片（RC-64）：目标义务的源原子与证据窗口。
 
@@ -1189,19 +1246,19 @@ def preserve_patch_slice(
     return {'input_version': 'stage4-preserve-slice-v2', 'targets': slices}
 
 
-def required_releases(brief: ReconstructionBrief) -> dict[tuple[str, str, str], tuple[str, ...]]:
-    """必保揭名 → IR compile 的映射面：(holder, kp, mode) → 必现字面。
+def required_releases(brief: ReconstructionBrief) -> dict[tuple, tuple[str, ...]]:
+    """必保揭名 → IR compile 的映射面：完整认知五元组 → 必现字面。
 
-    认知增量在 canonical BodyDesign 里按 (holder, kp, mode) 展开（change_id
-    不进目标侧）；同三元组若对应多条变化，取并集（重复三元组罕见，取并集
+    认知增量在 canonical BodyDesign 里按操作、模式和极性展开（change_id
+    不进目标侧）；同五元组若对应多条变化，取并集（重复五元组罕见，取并集
     只会多担不会漏担）。承载章正文必现该字面（RC-61 正文面）。
     """
-    result: dict[tuple[str, str, str], tuple[str, ...]] = {}
+    result: dict[tuple, tuple[str, ...]] = {}
     for requirement in brief.requirements:
         for change in requirement.knowledge_changes:
             if not change.requires_released:
                 continue
-            key = (change.holder, change.kp, change.mode)
+            key = (change.holder, change.kp, change.op, change.mode, change.polarity)
             merged = set(result.get(key, ())) | set(change.requires_released)
             result[key] = tuple(sorted(merged))
     return result

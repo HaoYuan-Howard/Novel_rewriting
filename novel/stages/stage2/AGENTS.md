@@ -8,9 +8,8 @@
 `str06.stage2.book`／`chapters`／`names`／`associate`（付费观察与关联）＋
 `str06.stage2.compile`（免费确定性编译）；`str06.stage2.source`（book＋chNN
 联合抽取）退役。观察与关联协议在 `contracts/schema/observation.py`
-（三类观察分立字面量——book `stage2-book-v7`／chapters `stage2-chapters-v7`／
-names `stage2-names-v4`；R1 起 associate 独立版本，CS-S Phase 3 起
-`stage2-associate-v5`——**条目级窄 resolver**：候选由代码给出（确定性相似度＋
+（三类观察分立，当前版本以该契约登记为准；associate 是独立的
+**条目级窄 resolver**：候选由代码给出（确定性相似度＋
 结构投影）、逐候选恰答一次 verdict、无候选＝零调用；跨章因果独立窄调用
 `stage2-cross-cause-v1`（D-2 A：候选＝loop 配对拍对＋facts 流拍对，模型只选
 kind 或否决）；Phase 3 起 `same_state_dimension` 消失——change 键入
@@ -43,7 +42,7 @@ Canonical = truth → Projection = expose → Validator = enforce。
 | S2-5 | `str06.stage2.compile` 是 Characters（`stage2/characters/characters.json`）与 Blueprint（`stage2/blueprints/chapter_blueprints.json`）两份真源的**唯一 writer**（D9）：解析证据、生成 ID、执行关联后以同一提交记录发布；存在未决项时拒绝发布并按 item 报告（D8），恢复走 owner patch 或 associate 定向修订。派生输入 `stage2/compiled/book_extraction.json` 与逐章输入快照已退役（D3/D9），Stage4 一律改读 canonical（人物 core 由 Characters 投影）。下游 owner 的单节点输入从盘面闭合，不靠内存传递。 |
 | S2-6 | Stage2 只产出 artifact、projection 与机械证明。是否进入下一节点由 orchestrator 决定；producer／compile 不得顺手启动下游节点。 |
 | S2-7 | `str06.stage2.associate` 只建立同一性与引用（D8）：输入是 compiler 给出的**未决候选＋最小文本**（近义命题对／跨章 open×close／相邻章 seam——Phase 3 起无维度候选：change 键闭集＝键即 canonical），输出逐候选恰答一次 verdict——答案只能是已给候选，漏答／多答／编造即机械缺陷；缺项、歧义、冲突保持未决——不默认合并，也不默认不同；不移动事实成立、角色知情或读者揭示时点。跨章因果是同节点内独立窄调用（D-2 A），候选同样由代码给出。 |
-| S2-8 | Book／Chapters／Names／Associate 均为中间观察或解析产物，不得成为 Characters／Blueprints 之外的第三套 canonical story state。Book 的 facts 是后续抽取的**共享命题词表**（Phase 2）：F 编号代码派发，下游经章观察 know.fact 引用与 fold 知情时间线读数消费（T-5：读数不进下游 API），不作独立真源（S2-1／S2-5 补「词表不是真源」）。Phase 3：change 键入 `CHANGE_KEYS` 闭集（键即 canonical）＋拍级 `access` 获知通道（witnessed 默认／narrated 叙述直陈例外）；观察面不自写读者知情——wire 的 know.who 禁 reader，reader cognition 由 compile 按 access 派生注入蓝图。 |
+| S2-8 | Book／Chapters／Names／Associate 均为中间观察或解析产物，不得成为 Characters／Blueprints 之外的第三套 canonical story state。Book 的 facts 是后续抽取的**共享命题词表**：F 编号代码派发，下游经章观察 know.fact 引用与 fold 知情时间线读数消费，不作独立真源。change 键入 `CHANGE_KEYS` 闭集；拍级 `access` 只表达呈现通道，不证明真实性或完整披露。wire 的 know.who 禁 reader；compiler 仅从明确向读者展示的已确认原子派生确知，并保留极性；展示说法只形成说法层记录。相信、猜测、撤回与悬念收束本身均不授予读者确认。 |
 | S2-9 | （已落地，2026-10-07 Phase 2）正常路径中 Associate 不重新理解整章或整书；只消费 compile 无法确定性闭合的 unresolved candidates，做条目级窄解析；候选由代码给出，无候选＝零调用。跨章同一性的正路是 chapters 的 know.fact 引用（引用即同一），候选只兜转写漂移。 |
 | S2-10 | Names＝词面解析，人物同一性归 Book：names 不得增删或拆合人物；归一只按显式 `same`＋证据段内局部替换，不全局替换、不模糊匹配、不猜笔误；变体候选由代码给出，未判定者保持 `unresolved` 并阻断发布；构词模板由 compiler 派生。变体判定材料含同章邻段上下文与代码派生机械事实（出现次数/姓名结构/同姓清单，2026-10-08 修复「裴知远」单次笔误死锁），same＝字面相似＋上下文证据（正名复指/同姓唯一/称呼链）两轴缺一不可——材料缺失或标准不自洽会把单次笔误推向必然 unresolved。 |
 

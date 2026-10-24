@@ -251,7 +251,7 @@ def test_released_name_order_and_request_identity_are_stable_across_hashseeds():
         from novel.stages.stage4.hook import assemble_hook_design, publish_graph
         from novel.stages.stage4.hook_context import compile_hook_context
         from novel.stages.stage5 import build_hook_user_prompt, context_sha256
-        from tests.factories import hook_wire_v3
+        from tests.factories import current_hook_wire
         from tests.str06_facilities import name_map_of
         from tests.str06_expression_inputs import (
             sample_narration, sample_requirements)
@@ -288,7 +288,7 @@ def test_released_name_order_and_request_identity_are_stable_across_hashseeds():
             source_narration=sample_narration())
         assert body is not None and not errors, errors
         hook, errors = assemble_hook_design(
-            hook_wire_v3(_hook_wire()), body=body, known_char_ids=known,
+            current_hook_wire(_hook_wire()), body=body, known_char_ids=known,
             name_projection=chars.name_projection(),
             name_structure=chars.name_structure, faces=faces)
         assert hook is not None and not errors, errors
@@ -454,10 +454,10 @@ _INJECTED_ENTRY = StateEntry(domain=EffectDomain.CHARACTER, key='marital_status'
                              subjects=('yun_niang',), holder=None,
                              value='变异入场九九', status='set',
                              established_by='sc01#b02')
-_INJECTED_KNOWLEDGE = KnowledgeEntry(
+_INJECTED_KNOWLEDGE = KnowledgeEntry(polarity='positive',
     holder='yun_niang', proposition='变异知情九九', established_by='sc01#b02',
     subjects=('fu_jun',), key='debt_agreement', status='set', mode='known')
-_INJECTED_PENDING = PendingConfirmation(
+_INJECTED_PENDING = PendingConfirmation(polarity='positive',
     fact='变异悬念九九', key='jade_secret', subjects=(),
     address=StateAddress(domain=EffectDomain.KNOWLEDGE, key='jade_secret',
                          subjects=('fu_jun',), holder='yun_niang'),
@@ -496,7 +496,12 @@ def _inject_supporting_event(ir: WriterBookIR, **updates) -> WriterBookIR:
 def _inject_source_detail(ir: WriterBookIR, *, anchor=None, anchor_updates=None,
                           **detail_updates) -> WriterBookIR:
     source = _scene(ir, 1, 'sc01').verification_ir.obligations[0]
-    anchor = (anchor or source.anchors[0]).model_copy(update=anchor_updates or {})
+    if anchor is None:
+        # 固定基底先携带引文所属段与显式可见性，source_kind 单字段变异为
+        # effect 时仍是合法锚点；不能让新形状校验替代审计面隔离断言。
+        anchor = source.anchors[0].model_copy(update={
+            'basis_segments': ('e01_01',), 'reader_visible': False})
+    anchor = anchor.model_copy(update=anchor_updates or {})
     detail = SourceDetail(detail_id='dt_2222222222222222', anchor=anchor,
                           text='未选中的源细节只作审计').model_copy(update=detail_updates)
     obligation = source.model_copy(update={'obligation_id': 'ob_source_detail',
@@ -575,12 +580,26 @@ def _body_mutations() -> list[_BodyMutation]:
         mutated = _INJECTED_KNOWLEDGE.model_copy(update={'mode': 'suspected'})
         return _patch_scene_ir(ir, 2, 'sc02', entry_knowledge=(mutated,))
 
+    def knowledge_polarity(ir):
+        mutated = _INJECTED_KNOWLEDGE.model_copy(update={'polarity': 'negative'})
+        return _patch_scene_ir(ir, 2, 'sc02', entry_knowledge=(mutated,))
+
+    def knowledge_status(ir):
+        mutated = KnowledgeEntry.model_validate({
+            **_INJECTED_KNOWLEDGE.model_dump(),
+            'status': 'unset', 'mode': None, 'polarity': None})
+        return _patch_scene_ir(ir, 2, 'sc02', entry_knowledge=(mutated,))
+
     def pending(ir):
         return _patch_scene_ir(ir, 1, 'sc01',
                                pending_reader_confirmations=(_INJECTED_PENDING,))
 
     def pending_fact(ir):
         mutated = _INJECTED_PENDING.model_copy(update={'fact': '再变异悬念八八'})
+        return _patch_scene_ir(ir, 1, 'sc01', pending_reader_confirmations=(mutated,))
+
+    def pending_polarity(ir):
+        mutated = _INJECTED_PENDING.model_copy(update={'polarity': 'negative'})
         return _patch_scene_ir(ir, 1, 'sc01', pending_reader_confirmations=(mutated,))
 
     def beats(ir):
@@ -608,6 +627,24 @@ def _body_mutations() -> list[_BodyMutation]:
         scene = _scene(ir, 1, 'sc01')
         deltas = list(scene.verification_ir.planned_delta)
         deltas[0] = deltas[0].model_copy(update={'value': '变异计划九九'})
+        return _patch_scene_ir(ir, 1, 'sc01', planned_delta=tuple(deltas))
+
+    def knowledge_delta(ir):
+        # 该叶子仅在知情域渲染：固定持有者、模式与机器值，变异只改命题文本。
+        return _patch_first_delta(ir, 1, 'sc01', 'sc01#b01',
+                                  domain=EffectDomain.KNOWLEDGE,
+                                  holder='yun_niang', knowledge_mode='believes',
+                                  value='true', proposition_statement='夫君身负旧约')
+
+    def delta_proposition(ir):
+        return _patch_first_delta(ir, 1, 'sc01', 'sc01#b01',
+                                  proposition_statement='变异逐拍命题九九')
+
+    def planned_proposition(ir):
+        scene = _scene(ir, 1, 'sc01')
+        deltas = list(scene.verification_ir.planned_delta)
+        deltas[0] = deltas[0].model_copy(update={
+            'proposition_statement': '审计扁平命题九九'})
         return _patch_scene_ir(ir, 1, 'sc01', planned_delta=tuple(deltas))
 
     def slice_sha(ir):
@@ -821,6 +858,9 @@ def _body_mutations() -> list[_BodyMutation]:
     def bgk_mode(ir):
         return bgk(ir, mode='suspected')
 
+    def bgk_polarity(ir):
+        return bgk(ir, polarity='negative')
+
     def bgk_proposition(ir):
         return bgk(ir, proposition='debt_agreement=变异命题九九')
 
@@ -852,7 +892,7 @@ def _body_mutations() -> list[_BodyMutation]:
     quality_path = 'writer_book_ir.chapters[].scenes[].verification_ir'
     source_anchor_mutations = (
         ('handle', 'b99_99.e1', 'b99_99.e1'),
-        ('source_kind', 'cognition', None),
+        ('source_kind', 'effect', None),
         ('holder', '审计细节持有者九九', '审计细节持有者九九'),
         ('mode', 'suspected', None),
         ('op', 'unknown', None),
@@ -863,6 +903,10 @@ def _body_mutations() -> list[_BodyMutation]:
         ('modality', 'planned', None),
         ('question', '审计细节问题九九', '审计细节问题九九'),
         ('quotes', ('审计细节引文九九',), '审计细节引文九九'),
+        ('basis_segments', ('审计原子证据九九',), '审计原子证据九九'),
+        ('polarity', 'negative', None),
+        ('support', 'claim', None),
+        ('reader_visible', True, None),
     )
 
     def event_detail(ir, **updates):
@@ -991,6 +1035,12 @@ def _body_mutations() -> list[_BodyMutation]:
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.planned_delta[].value', 1, '变异计划九九', planned_delta),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.beats[].deltas[].proposition_statement', 1,
+                      '变异逐拍命题九九', delta_proposition, knowledge_delta),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.planned_delta[].proposition_statement', 1,
+                      '审计扁平命题九九', planned_proposition),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.obligations[].statement', 1, '变异义务九九', obligation),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.obligations[].obligation_id', 1, None, obligation_id),
@@ -1006,6 +1056,12 @@ def _body_mutations() -> list[_BodyMutation]:
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.entry_knowledge[].mode', 2, None, knowledge_mode),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.entry_knowledge[].polarity', 2, '并非：变异知情九九',
+                      knowledge_polarity, entry_knowledge),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.entry_knowledge[].status', 2, '已撤回对「变异知情九九」的接受',
+                      knowledge_status, entry_knowledge),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.released_surfaces[].surfaces', 1, '变异称谓九九',
                       scene_release),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
@@ -1014,6 +1070,9 @@ def _body_mutations() -> list[_BodyMutation]:
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.pending_reader_confirmations[].fact', 1, '再变异悬念八八',
                       pending_fact),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.pending_reader_confirmations[].polarity', 1,
+                      '并非：变异悬念九九', pending_polarity, pending),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.prohibitions', 2, '变异禁区九九',
                       lambda ir: _patch_scene_ir(ir, 2, 'sc02',
@@ -1092,6 +1151,9 @@ def _body_mutations() -> list[_BodyMutation]:
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.background_knowledge[].mode', 2, None, bgk_mode),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
+                      '.background_knowledge[].polarity', 2,
+                      '并非：变异知情九九', bgk_polarity, bgk),
+        _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
                       '.background_knowledge[].proposition', 2, '变异命题九九',
                       bgk_proposition),
         _BodyMutation('writer_book_ir.chapters[].scenes[].verification_ir'
@@ -1158,10 +1220,20 @@ def test_quality_field_mutation_cases_cover_each_new_registered_leaf_without_wai
         '.beats[].details[].', '.prior_series_events[].', '.obligations[].details[].'))
     registered = {path for path in STR06_FIELD_DELIVERY if path.startswith(families)}
     cases = [case for case in _body_mutations() if case.path.startswith(families)]
-    assert len(cases) == len(registered) == 24, '3 个拍细节叶子、4 个系列叶子、17 个源细节叶子'
+    assert len(cases) == len(registered) == 28, '3 个拍细节叶子、4 个系列叶子、21 个源细节叶子'
     assert {case.path for case in cases} == registered
     assert all(case.located == 2 for case in cases), '新增材料的变异只定位第 2 章 sc02'
     assert not (registered & set(_WRITER_CASE_WAIVERS))
+
+
+def test_withdrawn_entry_status_has_an_explicit_writer_delivery_mutation():
+    path = ('writer_book_ir.chapters[].scenes[].verification_ir'
+            '.entry_knowledge[].status')
+    cases = [case for case in _body_mutations() if case.path == path]
+    assert len(cases) == 1 and cases[0].located == 2
+    assert STR06_FIELD_DELIVERY[path].delivery_mode is DeliveryMode.MUST_RESPECT
+    assert {consumer.value for consumer in STR06_FIELD_DELIVERY[path].consumers} == {'writer_packet'}
+    assert path not in _WRITER_CASE_WAIVERS
 
 
 def test_selected_details_and_prior_series_reach_only_their_declared_writer_sections(green_ir):
@@ -1246,7 +1318,7 @@ def green_hook() -> HookContext:
     from novel.stages.stage4.design import assemble_body_design
     from novel.stages.stage4.hook import assemble_hook_design, publish_graph
     from novel.stages.stage4.hook_context import compile_hook_context
-    from tests.factories import hook_wire_v3
+    from tests.factories import current_hook_wire
     from tests.str06_expression_inputs import sample_narration, sample_requirements
     from tests.str06_facilities import name_map_of
     from tests.test_str06_hook import _body_wire, _characters, _hook_wire
@@ -1259,7 +1331,7 @@ def green_hook() -> HookContext:
         source_narration=sample_narration())
     assert body is not None and not errors, errors
     hook, errors = assemble_hook_design(
-        hook_wire_v3(_hook_wire()), body=body, known_char_ids=known,
+        current_hook_wire(_hook_wire()), body=body, known_char_ids=known,
         name_projection=chars.name_projection(),
         name_structure=chars.name_structure, faces=faces)
     assert hook is not None and not errors, errors

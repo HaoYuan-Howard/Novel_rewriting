@@ -66,13 +66,13 @@ def _beat(event, refs, **over):
 def _book_wire(*, extra_characters: dict | None = None) -> dict:
     characters = {
         'fu_jun': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'source_refs': ['e01_01']}]},
+            {'surface': '夫君', 'source_refs': ['e01_01']}], 'identity_bindings': []},
         'yun_niang': {'canonical': '云娘', 'surfaces': [
-            {'surface': '云娘', 'source_refs': ['e01_02']}]},
+            {'surface': '云娘', 'source_refs': ['e01_02']}], 'identity_bindings': []},
     }
     characters.update(extra_characters or {})
     # CS-S Phase 2：canonical v6 带 facts 字段（默认空词表；facts 用例另行注入）。
-    return {**sample_book_expression(characters), 'protocol_version': 'stage2-book-v7',
+    return {**sample_book_expression(characters), 'protocol_version': 'stage2-book-v8',
             'characters': characters,
             'initial_state': [], 'world_constraints': [], 'facts': []}
 
@@ -83,7 +83,7 @@ def _hide_effect(*, ref: str = 'e01_01') -> dict:
     return {'target': {'kind': 'character', 'char_id': 'fu_jun'},
             'key': 'scene_location', 'op': 'set', 'value': '床底',
             'modality': 'actual',
-            'basis': _basis(ref)}
+            'basis': _basis(ref), 'reader_visible': True}
 
 
 def _chapter_wires() -> dict[str, dict]:
@@ -93,29 +93,29 @@ def _chapter_wires() -> dict[str, dict]:
               effects=[_hide_effect()],
               cognition=[{'proposition': {'ref': 'p_hide', 'statement': '夫君藏身床底'},
                           'holder': 'yun_niang', 'mode': 'suspects',
-                          'basis': _basis('e01_01')}]),
+                          'basis': _basis('e01_01'), 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': True}]),
         _beat('床底是谁的悬念开场', ('e01_02',), scene_boundary='continue',
-              loops=[{'ref': 'q_id', 'op': 'open', 'question': '床底的人是谁？'}]),
+              loops=[{'ref': 'q_id', 'op': 'open', 'question': '床底的人是谁？', 'answer_refs': []}]),
     ]}
     ch02 = {'protocol_version': CPV, 'beats': [
         _beat('同义命题：床底有人这件事再次被确认', ('e02_01',),
               participants=('yun_niang',),
               cognition=[{'proposition': {'ref': 'p_known', 'statement': '床底藏着人'},
                           'holder': 'yun_niang', 'mode': 'learns',
-                          'basis': _basis('e02_01')}]),
+                          'basis': _basis('e02_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True}]),
     ]}
     ch03 = {'protocol_version': CPV, 'beats': [
         _beat('床底的人现身', ('e03_01',), participants=('fu_jun',),
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                         'key': 'scene_location', 'op': 'set', 'value': '床沿',
                         'modality': 'actual',
-                        'basis': _basis('e03_01')}]),
+                        'basis': _basis('e03_01'), 'reader_visible': True}]),
         _beat('读者与云娘确认床底的人是夫君', ('e03_01',), scene_boundary='continue',
               participants=('yun_niang', 'fu_jun'),
               cognition=[{'proposition': {'ref': 'p_hide'},
                           'holder': 'yun_niang', 'mode': 'confirms',
-                          'basis': _basis('e03_01')}],
-              loops=[{'ref': 'q_id', 'op': 'close', 'resolution': '床底的人是夫君'}]),
+                          'basis': _basis('e03_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True}],
+              loops=[{'ref': 'q_id', 'op': 'close', 'answer_refs': ['c1']}]),
     ]}
     return {'ch01': ch01, 'ch02': ch02, 'ch03': ch03}
 
@@ -353,7 +353,7 @@ def test_same_name_two_persons_stay_separate(tmp_path):
     wires['book'] = _book_wire(extra_characters={
         # 「大夫」式同名：第 3 章另有一个「夫君」称呼的人物（同名字面、不同人）
         'fu_jun_jr': {'canonical': '夫君', 'surfaces': [
-            {'surface': '夫君', 'source_refs': ['e03_01']}]}})
+            {'surface': '夫君', 'source_refs': ['e03_01']}], 'identity_bindings': []}})
     wires['names']['people']['fu_jun_jr'] = {
         'family_id': 'f_lu', 'given': None, 'aliases': [], 'additional_surfaces': []}
     repo, _ask, _report = _run_stage2(tmp_path, 'two_persons', wires)
@@ -403,6 +403,11 @@ def test_paired_normalized_identical_statements_merge_into_one_formal_id(tmp_pat
 def test_paired_synonymous_statements_merge_without_moving_disclosure(tmp_path):
     """同义判断归 associate；compile 干跑、发布与 fold 不因措辞差异拒收。"""
     wires = _full_stage2_wires()
+    # 本例保护延后披露：前两章的人物接受不向读者展示，第三章才确认。
+    for owner in ('ch01', 'ch02'):
+        for beat in wires[owner]['beats']:
+            for atom in (*beat['effects'], *beat['cognition']):
+                atom['reader_visible'] = False
     # 近义措辞（过确定性相似度筛）：候选已给，模型只判 same/distinct。
     wires['ch02']['beats'][0]['cognition'][0]['proposition']['statement'] = '夫君藏身于床底'
     wires['associate']['same_proposition'] = _all_same_verdicts()
@@ -533,7 +538,7 @@ def test_without_pairing_same_text_props_stay_separate(tmp_path):
         _beat('床底有人这件事再次被独立建立', ('e02_01',), participants=('yun_niang',),
               cognition=[{'proposition': {'ref': 'p_hide2', 'statement': '夫君藏身床底'},
                           'holder': 'yun_niang', 'mode': 'learns',
-                          'basis': _basis('e02_01')}])]}  # 同 statement 文本、新本地句柄
+                          'basis': _basis('e02_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True}])]}  # 同 statement 文本、新本地句柄
     # 候选已给（norm 全等），判定 distinct＝不是同一命题——语义判断归模型。
     wires['associate']['same_proposition'] = [
         {'left': 'ch01.p_hide', 'right': 'ch02.p_hide2', 'verdict': 'distinct'},
@@ -572,13 +577,19 @@ def test_loop_open_close_pairing_across_chapters(tmp_path):
     # 章内自开自闭：ch2 自开自收，不需要配对。
     wires = _full_stage2_wires()
     wires['ch02']['beats'][0]['loops'] = [
-        {'ref': 'q_local', 'op': 'open', 'question': '今晚还有响动吗？'}]
+        {'ref': 'q_local', 'op': 'open', 'question': '今晚还有响动吗？', 'answer_refs': []}]
     # ch02.q_local 章内自开自闭后，不再与 ch03.q_id 生成跨章候选（2026-10-08
     # pairable_opens 对称排除——旧候选面曾把它交给模型判 distinct，真实书曾因
     # 同款形态撞 loop_already_closed 烧尽重问轮），wire 无需作答。
     wires['ch02']['beats'].append(
         _beat('今夜安静', ('e02_01',), scene_boundary='continue',
-              loops=[{'ref': 'q_local', 'op': 'close', 'resolution': '没有响动'}]))
+              cognition=[{'proposition': {'ref': 'p_quiet', 'statement': '没有响动'},
+                          'holder': 'yun_niang', 'op': 'set', 'mode': 'learns',
+                          'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True,
+                          'basis': _basis('e02_01')}],
+              loops=[{'ref': 'q_local', 'op': 'close', 'answer_refs': ['c1']}]))
+    wires['associate']['same_proposition'].append(
+        {'left': 'ch03.p_hide', 'right': 'ch02.p_quiet', 'verdict': 'distinct'})
     repo2, _ask2, report2 = _run_stage2(tmp_path, 'local_loop', wires)
     assert report2['undecided'] == 0
     bp2 = repo2.inspect('stage2/blueprints/chapter_blueprints.json')
@@ -633,8 +644,8 @@ def test_later_confirmation_does_not_rewrite_earlier_facts(tmp_path):
     # 揭示时点由认知转移承载）
     fold = repo.inspect('stage2/acceptance/fold.json')
     knowledge = [line for line in fold['snapshots']['3'] if line.startswith('prop')]
-    assert any('reader=learns(b03_02)' in line for line in knowledge), knowledge
-    assert any('yun_niang=learns(b02_01)' in line for line in knowledge), \
+    assert any('reader=learns[positive](b03_02)' in line for line in knowledge), knowledge
+    assert any('yun_niang=learns[positive](b02_01)' in line for line in knowledge), \
         'ch2 的知情记录保留在自己的拍上'
     # 建立拍未被移动：ch1 的怀疑记录仍锚在 b01_01
     assert bp['chapters'][0]['beats'][0]['beat_id'] == 'b01_01'
@@ -650,6 +661,11 @@ def test_dangling_cross_chapter_reference_stays_undecided_and_blocks(tmp_path):
     R3 左移：未决在 associate 验收的 compile 干跑即报（作为它自己的问题），
     canonical 照旧不落半份；compile 侧的拒绝发布保留为防御（同判据）。"""
     wires = _full_stage2_wires()
+    # 本例只测悬空命题；悬念的答案另由同拍完整事实提供，避免同时引入答案缺陷。
+    wires['ch03']['beats'][1]['effects'] = [
+        _plain_effect({'kind': 'character', 'char_id': 'fu_jun'},
+                      'body_state', '已经现身床沿', ref='e03_01')]
+    wires['ch03']['beats'][1]['loops'][0]['answer_refs'] = ['e1']
     # 候选判 distinct：ch3 对 p_hide 的引用悬空（引用未配对 → 未决，不默认丢弃）。
     wires['associate']['same_proposition'] = [
         {'left': 'ch01.p_hide', 'right': 'ch03.p_hide', 'verdict': 'distinct'},
@@ -684,9 +700,13 @@ def test_unpaired_cross_chapter_loop_close_is_undecided(tmp_path):
 def test_pairing_class_without_any_statement_is_undecided(tmp_path):
     """冲突保持未决：配对类里没有任何 statement（两处都是引用）→ 不猜文本。"""
     wires = _full_stage2_wires()
+    wires['ch03']['beats'][1]['effects'] = [
+        _plain_effect({'kind': 'character', 'char_id': 'fu_jun'},
+                      'body_state', '已经现身床沿', ref='e03_01')]
+    wires['ch03']['beats'][1]['loops'][0]['answer_refs'] = ['e1']
     wires['ch02']['beats'][0]['cognition'] = [
         {'proposition': {'ref': 'p_ghost'}, 'holder': 'yun_niang', 'mode': 'suspects',
-         'basis': _basis('e02_01')}]
+         'basis': _basis('e02_01'), 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': True}]
     wires['associate']['same_proposition'] = [
         {'left': 'ch01.p_hide', 'right': 'ch03.p_hide', 'verdict': 'distinct'},
         {'left': 'ch02.p_ghost', 'right': 'ch01.p_hide', 'verdict': 'distinct'},
@@ -704,10 +724,10 @@ def test_time_inverted_pairing_is_undecided(tmp_path):
     wires = _full_stage2_wires()
     wires['ch01']['beats'][1]['cognition'] = [
         {'proposition': {'ref': 'p_fwd'}, 'holder': 'yun_niang', 'mode': 'suspects',
-         'basis': _basis('e01_02')}]
+         'basis': _basis('e01_02'), 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': True}]
     wires['ch03']['beats'][0]['cognition'] = [
         {'proposition': {'ref': 'p_late', 'statement': '夫君现身床沿'},
-         'holder': 'yun_niang', 'mode': 'learns', 'basis': _basis('e03_01')}]
+         'holder': 'yun_niang', 'mode': 'learns', 'basis': _basis('e03_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True}]
     from contracts.schema.observation import ChapterObservation
     mutated = {n: ChapterObservation.model_validate(wires[f'ch{n:02d}'])
                for n in (1, 2, 3)}
@@ -730,7 +750,7 @@ def _chain_of_three_propositions(verdicts: list[tuple[str, str, str]]):
 
     def cognition(ref: str, statement: str, mode: str, segment: str) -> dict:
         return {'proposition': {'ref': ref, 'statement': statement},
-                'holder': 'yun_niang', 'mode': mode, 'basis': _basis(segment)}
+                'holder': 'yun_niang', 'mode': mode, 'basis': _basis(segment), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True}
 
     chapters = {
         1: {'protocol_version': CPV, 'beats': [_beat(
@@ -816,36 +836,42 @@ def test_cross_chapter_cause_from_beat_must_exist():
         == [('b01_02', 'b03_02')]
 
 
-def test_first_appearance_gate_stops_as_typed_mechanical_defect(tmp_path):
-    """首现闸（R8c）判出即 typed 停止：MechanicalDefectStop 而非裸 ValueError。
-
-    canary 20260930 实证：裸 ValueError 在单节点子进程穿透成 exit 70（「结论
-    未知」），把「查出确定性缺陷」记成「压根没跑成」；typed 后 CLI 翻译
-    exit 1（landed_red），恢复走该章观察重问或 owner patch。"""
+def test_anonymous_participant_before_name_evidence_publishes(tmp_path):
+    """实体可先匿名出场后命名；称谓锚点不限制内部人物引用。"""
     wires = _full_stage2_wires()
-    # late_kid 最早称谓锚在 ch03（e03_02「陆家宅子恢复安静」）；ch01 引用它
-    # 即首现早于任何称谓证据。
     wires['book'] = _book_wire(extra_characters={
         'late_kid': {'canonical': '陆家', 'surfaces': [
-            {'surface': '陆家', 'source_refs': ['e03_02']}]}})
+            {'surface': '陆家', 'source_refs': ['e03_02']}],
+            'identity_bindings': [{'description': '前章匿名出现的人物',
+                                  'appearance_refs': ['e01_01'],
+                                  'identity_refs': ['e03_02']}]}})
     wires['names']['people']['late_kid'] = {
-        'family_id': 'f_lu', 'given': None, 'aliases': [],
-        'additional_surfaces': []}
+        'family_id': 'f_lu', 'given': None, 'aliases': [], 'additional_surfaces': []}
     wires['ch01']['beats'][0]['participants'] = ['fu_jun', 'late_kid']
-    with pytest.raises(MechanicalDefectStop,
-                       match='participant_before_first_appearance\\[late_kid@ch01\\]'):
-        # 注入已采用但有错的回答，验证 producer 的同规则兜底保持 typed 停止。
-        _run_stage2(tmp_path, 'first_appear', wires, bypass_acceptance=('ch01',))
-    assert not (tmp_path / 'first_appear/stage2/characters/characters.json').exists(), \
-        '机械缺陷时不写半份 canonical'
-    assert not (tmp_path / 'first_appear/stage2/blueprints/chapter_blueprints.json').exists()
+    repository, _, report = _run_stage2(tmp_path, 'anonymous_early', wires)
+    assert report['undecided'] == 0
+    characters = repository.read_model('stage2/characters/characters.json')
+    blueprint = repository.read_model('stage2/blueprints/chapter_blueprints.json')
+    assert characters.characters['late_kid'].surfaces[0].from_chapter == 3
+    assert characters.characters['late_kid'].identity_bindings[0].appearance_refs == ('e01_01',)
+    assert 'late_kid' in blueprint.chapters[0].beats[0].participants
+
+
+def test_unknown_anonymous_participant_stops_as_typed_mechanical_defect(tmp_path):
+    """人物闭集仍为机械硬闸，缺陷不发布半份正式真源。"""
+    wires = _full_stage2_wires()
+    wires['ch01']['beats'][0]['participants'] = ['fu_jun', 'ghost']
+    with pytest.raises(MechanicalDefectStop, match='未知人物 ghost'):
+        _run_stage2(tmp_path, 'unknown_participant', wires, bypass_acceptance=('ch01',))
+    assert not (tmp_path / 'unknown_participant/stage2/characters/characters.json').exists()
+    assert not (tmp_path / 'unknown_participant/stage2/blueprints/chapter_blueprints.json').exists()
 
 
 def test_duplicate_loop_close_is_undecided(tmp_path):
     """R-2.11：已 close 的悬念不得重复 close——第二个 close 配到同一 open 即未决。"""
     wires = _full_stage2_wires()
     wires['ch02']['beats'][0]['loops'] = [
-        {'ref': 'q_again', 'op': 'close', 'resolution': '又一次收束'}]
+        {'ref': 'q_again', 'op': 'close', 'answer_refs': ['c1']}]
     wires['associate']['loop_pairing'] = [
         {'open': 'ch01.q_id', 'close': 'ch02.q_again', 'verdict': 'pair'},
         {'open': 'ch01.q_id', 'close': 'ch03.q_id', 'verdict': 'pair'}]
@@ -858,17 +884,17 @@ def _loop_pairing_conflict(kind: str) -> tuple[dict, dict, str]:
     wires = _full_stage2_wires()
     if kind == 'shared_close':
         wires['ch02']['beats'][0]['loops'] = [
-            {'ref': 'q_other', 'op': 'open', 'question': '另一件事会如何？'}]
+            {'ref': 'q_other', 'op': 'open', 'question': '另一件事会如何？', 'answer_refs': []}]
         wires['associate']['loop_pairing'].append(
             {'open': 'ch02.q_other', 'close': 'ch03.q_id', 'verdict': 'pair'})
         message = '重复占用 close'
     else:
         wires['ch03']['beats'][0]['loops'] = [
-            {'ref': 'q_id', 'op': 'open', 'question': '本场还有什么动静？'}]
+            {'ref': 'q_id', 'op': 'open', 'question': '本场还有什么动静？', 'answer_refs': []}]
         message = '章内自开自闭'
     corrected = deepcopy(wires)
     corrected['ch03']['beats'][1]['loops'].append(
-        {'ref': 'q_extra', 'op': 'close', 'resolution': '另一件事也已收束'})
+        {'ref': 'q_extra', 'op': 'close', 'answer_refs': ['c1']})
     corrected['associate']['loop_pairing'][-1]['close'] = 'ch03.q_extra'
     return wires, corrected, message
 
@@ -981,10 +1007,10 @@ def test_compound_loop_observations_recover_at_chapter_owner_without_purchase(tm
     book = repo.read_model('stage2/observations/book.json')
     bad = _chapter_wires()
     bad['ch01']['beats'][1]['loops'].extend([
-        {'ref': 'q_confirm', 'op': 'open', 'question': '云娘会弄清实情吗？'},
-        {'ref': 'q_compound', 'op': 'open', 'question': '床底的人是谁、现身后事情会如何发展？'}])
+        {'ref': 'q_confirm', 'op': 'open', 'question': '云娘会弄清实情吗？', 'answer_refs': []},
+        {'ref': 'q_compound', 'op': 'open', 'question': '床底的人是谁、现身后事情会如何发展？', 'answer_refs': []}])
     bad['ch02']['beats'][0]['loops'] = [
-        {'ref': 'r_question', 'op': 'close', 'resolution': '云娘已经发出质问'}]
+        {'ref': 'r_question', 'op': 'close', 'answer_refs': ['c1']}]
     bad_chapters = {n: ChapterObservation.model_validate(bad[f'ch{n:02d}'])
                     for n in (1, 2, 3)}
     faulty = _associate_wire()
@@ -1021,7 +1047,7 @@ def test_compound_loop_observations_recover_at_chapter_owner_without_purchase(tm
     corrected['ch01']['beats'][1]['loops'].pop()  # 撤掉重复概括的复合问题。
     corrected['ch02']['beats'][0]['loops'] = []   # 质问本身没有回答未知问题。
     corrected['ch03']['beats'][1]['loops'].append(
-        {'ref': 'r_confirm', 'op': 'close', 'resolution': '云娘已确认实情'})
+        {'ref': 'r_confirm', 'op': 'close', 'answer_refs': ['c1']})
     good_chapters = {n: ChapterObservation.model_validate(corrected[f'ch{n:02d}'])
                      for n in (1, 2, 3)}
     # owner patch 只修悬念记录，不改事件、段指针或其他转移。
@@ -1050,9 +1076,9 @@ def test_loop_pairing_to_later_open_is_undecided(tmp_path):
     book, chapters = _space_pair()
     wires = _full_stage2_wires()
     wires['ch02']['beats'][0]['loops'] = [
-        {'ref': 'q_early', 'op': 'close', 'resolution': '提前收束'}]
+        {'ref': 'q_early', 'op': 'close', 'answer_refs': ['c1']}]
     wires['ch03']['beats'][0]['loops'] = [
-        {'ref': 'q_late', 'op': 'open', 'question': '更晚才开的悬念'}]
+        {'ref': 'q_late', 'op': 'open', 'question': '更晚才开的悬念', 'answer_refs': []}]
     mutated = {n: ChapterObservation.model_validate(wires[f'ch{n:02d}'])
                for n in (1, 2, 3)}
     observation = AssociateObservation.model_validate(_associate_wire(
@@ -1143,7 +1169,7 @@ WORLD = {'kind': 'world'}
 def _plain_effect(target: dict, key: str, value,
                   ref: str = 'e01_01') -> dict:
     return {'target': dict(target), 'key': key, 'op': 'set', 'value': value,
-            'modality': 'actual', 'basis': _basis(ref)}
+            'modality': 'actual', 'basis': _basis(ref), 'reader_visible': True}
 
 
 def _initial_atom(target: dict, key: str, value) -> dict:
@@ -1217,9 +1243,9 @@ def test_stage4_reads_only_canonical(tmp_path, synonymous):
     assert '夫君' in preserve_prompt and '床底' in preserve_prompt
     # Design 的身份投影来自 Characters core（不含名称结构变更面）。
     checkpoint, errors = __import__('novel.stages.stage4.grounding', fromlist=['assemble_preserve']).assemble_preserve(
-            {'protocol_version': 'stage4-preserve-v7', 'obligations': [
+            {'protocol_version': 'stage4-preserve-v8', 'obligations': [
                 {'kind': 'event_core',
-                 'statement': '[[name:fu_jun|夫君]]藏身床底',
+                 'statement': '夫君藏身床底',
                  'anchors': ['b01_01.e1'],
                  'must_preserve': True, 'satisfaction': '呈现藏身', 'requires': []}]},
             policy_id='p', policy_version=3, characters=core, blueprint=blueprint,

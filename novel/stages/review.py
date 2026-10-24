@@ -11,6 +11,7 @@ from contracts.schema.source import SourceNameResolution
 from contracts.schema.receipt import HOOK_MECHANICAL_CHECKS, HOOK_VALIDATOR_VERSION
 from contracts.schema.workflow import STR06_RUNTIME_CONFIG, STAGE4_PRESERVE_POLICY_VERSION
 from novel.stages.stage2 import (
+    chapter_revision_scope_issues,
     associate_observation_issues, character_core_view, compile_book_observation,
     compile_chapter_observation, compile_cross_cause,
     compile_name_variants, compile_names_observation, compile_source_truth,
@@ -19,6 +20,7 @@ from novel.stages.stage2 import (
     normalize_name_observations, project_association_space, project_cause_candidates,
     validate_name_resolutions,
 )
+from novel.stages.owner_revision import chapter_source_revision_scope
 from novel.stages.stage4 import (
     assemble_preserve, assemble_hook_design,
     design_obligation_index, project_brief, inspect_design_candidate,
@@ -79,6 +81,11 @@ def dry_run_patch(repository, owner, candidate, *, evidence, budget,
                                                            if v['chapter'] == n or n == 1 and v['chapter'] == 0},
                         character_slugs=book.characters,
                         fact_ids=(fact.fact_id for fact in book.facts))
+                    if not errors:
+                        previous, scope = chapter_source_revision_scope(repository, n)
+                        if previous is not None:
+                            errors.extend(chapter_revision_scope_issues(
+                                previous, chapters[n], beat_indexes=scope))
                     if errors:
                         return {'node': 'str06.stage2.compile', 'status': 'ran', 'errors': errors}
                 else:

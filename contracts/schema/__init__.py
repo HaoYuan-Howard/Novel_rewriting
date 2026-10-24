@@ -109,7 +109,7 @@ from contracts.schema.stage1 import HookCopy, MainText, MainTextSection
 
 # ── STR-06 新链契约模型（F8a 激活；F8c 分流至正式 stageN 模块后改 import）──
 from contracts.schema.source import (
-    BlueprintsArtifactV17, CharactersArtifactV6, CharactersCore,
+    BlueprintsArtifactV18, CharactersArtifactV7, CharactersCore,
 )
 from contracts.schema.observation import (
     STAGE2_ASSOCIATE_PROTOCOL, AssociateObservation,
@@ -203,10 +203,10 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # 【版本口径】新链产物全部 current_version=1：三级路径是切换时新建的命名
     #   空间，盘上没有旧信封字节可读（旧路径已整体退役，见 RETIRED_ARTIFACT_PATHS）。
     #   形状破坏史不在信封上累加，而由两条线承载：① 模型自带 `contract_version`
-    #   字面量（Characters v6／Brief／Binding／Plan／Graph／BookIR／HookContext／
+    #   字面量（Characters v7／Brief／Binding／Plan／Graph／BookIR／HookContext／
     #   ChapterReceipt／NameMap v5，与候选产物表逐字对账）；② 候选产物表的
     #   `schema_version` RC 标签（rc2→rc3→rc4 的批次定格）。未声明
-    #   `contract_version` 的模型（Blueprints v17）按 F8
+    #   `contract_version` 的模型（Blueprints v18）按 F8
     #   义务在本注册表登记形状（即本表条目自身），不进模型——往模型加非 exclude
     #   字段会改 `model_dump` 字节，从而改 prompt 与已购请求身份，F7a 的历史
     #   采用会当场失配（`_provenance` 用 exclude=True 正是为守住这条）。
@@ -223,8 +223,8 @@ ARTIFACT_SPECS: dict[str, ArtifactSpec] = {
     # names 按新协议重建后，compile 免费重建 Characters，旧根保留证据不原地猜迁。
     'stage2/observations/names.json': ArtifactSpec(NamesObservation, 2),
     'stage2/observations/associate.json': ArtifactSpec(AssociateObservation, 1),
-    'stage2/blueprints/chapter_blueprints.json': ArtifactSpec(BlueprintsArtifactV17, 1),
-    'stage2/characters/characters.json': ArtifactSpec(CharactersArtifactV6, 2),
+    'stage2/blueprints/chapter_blueprints.json': ArtifactSpec(BlueprintsArtifactV18, 1),
+    'stage2/characters/characters.json': ArtifactSpec(CharactersArtifactV7, 2),
     # Stage4：目标命名（命名前移批，rc26）与目标故事设计、确定性编译
     'stage4/naming/name_map.json': ArtifactSpec(NameMapV6, 1),
     'runtime/preserve_checkpoint.json': ArtifactSpec(PreserveCheckpoint, 1),

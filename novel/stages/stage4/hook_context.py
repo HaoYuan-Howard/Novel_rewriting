@@ -53,6 +53,7 @@ from novel.core.name_materials import (
 )
 from novel.core.text import kp_statement
 from novel.stages.stage4.hook_validation import validate_hook_design
+from novel.stages.stage4.hook_facts import established_fact, hook_facts
 
 
 def _display(projection: NameProjection, char_id: str) -> str:
@@ -122,8 +123,8 @@ def _render_fact(projection: NameProjection, key: tuple, delta,
     只渲染「主体：key=value」会把「夫君怀疑」压成「夫君知道」（F7e 评估实证：
     渲染丢掉 holder 与 knowledge_mode 后，presentation 与引用拍脱钩）。
 
-    knowledge 增量（含读者揭示 holder=reader，D5 统一）的 `value` 恒为
-    "true"（命题成立性），命题内容在 kp 句柄——经 `kp_statements`
+    knowledge 增量（含读者揭示 holder=reader）的 `value` 为 true/false，
+    unset 则为空；命题内容在 kp 句柄——经 `kp_statements`
     （Brief.propositions）回填为命题文本；kp 句柄缺表即悬空引用，fail fast
     （不渲染「确知：true」这类零信息禁区，2026-10-03 D6 渲染修复；与正文侧
     `project_context` 同一张表、同一规则）。
@@ -131,15 +132,23 @@ def _render_fact(projection: NameProjection, key: tuple, delta,
     domain, subjects, holder, name = key
     head = f'{_render_subjects(projection, subjects)}的' if subjects else ''
     if domain == 'knowledge':
-        mode = _KNOWLEDGE_MODES[delta.knowledge_mode or 'known']
         if holder == 'reader':
             who = '读者'
         else:
             who = _display(projection, holder) if holder else '未登记持有人'
         statement = kp_statement(kp_statements, name)
         content = statement if statement is not None else delta.value
-        return f'{who}{mode}：{content}（人物未必知晓）' if holder == 'reader' \
-            else f'{who}{mode}：{content}'
+        if delta.op == 'unset':
+            return f'{who}撤回对「{content}」的接受'
+        if delta.op == 'unknown':
+            return f'{who}尚不确定「{content}」'
+        mode = _KNOWLEDGE_MODES[delta.knowledge_mode or 'known']
+        if delta.value == 'false':
+            content = f'并非：{content}'
+        suffix = '（说法历史，不代表当前接受或世界为真）' \
+            if delta.knowledge_mode == 'heard' else ''
+        return f'{who}{mode}：{content}{suffix}（人物未必知晓）' if holder == 'reader' \
+            else f'{who}{mode}：{content}{suffix}'
     modality = {'planned': '已定计划，尚未发生', 'expected': '预计，尚未发生',
                 'conditional': '条件成立时才发生'}.get(delta.modality)
     suffix = f'（{modality}）' if modality else ''
@@ -269,20 +278,15 @@ def compile_hook_context(
             return None
 
     # 起笔事实：解析 ref 处该地址的建立值。
+    fact_index = hook_facts(graph)
     facts: list[HookOpeningFact] = []
     for item in hook.opening_facts:
         key = item.address.address()
-        if item.ref == 'init':
-            established = [d for d in graph.initial_state
-                           if d.address() == key and d.op == 'set']
-        else:
-            beat = graph.beat(*item.ref.split('#', 1))
-            established = [d for d in (beat.target_delta if beat else ())
-                           if d.address() == key and d.op == 'set']
-        if not established:
+        established = established_fact(fact_index, item.ref, key, fact_ref=item.fact_ref)
+        if established is None:
             errors.append(f'起笔事实在 {item.ref} 未建立：{key}')
             continue
-        text = _render_or_error(display_projection, key, established[0],
+        text = _render_or_error(display_projection, key, established.delta,
                                 f'起笔事实 {item.ref}')
         if text is not None:
             facts.append(HookOpeningFact(
@@ -300,10 +304,13 @@ def compile_hook_context(
         if beat is None:
             errors.append(f'材料引用不存在的拍：{item.beat_ref}')
             continue
-        withheld = {d.address() for d in item.withheld}
+        withheld = {d.fact_ref for d in item.withheld}
         rendered = []
-        for d in beat.target_delta:
-            if d.address() in withheld or d.op != 'set':
+        material_facts = (fact for fact in fact_index if fact.ref == item.beat_ref)
+        for fact in material_facts:
+            d = fact.delta
+            if fact.fact_ref in withheld or (d.op != 'set'
+                    and d.domain is not EffectDomain.KNOWLEDGE):
                 continue
             text = _render_or_error(display_projection, d.address(), d,
                                     f'材料 {item.beat_ref}')
@@ -319,15 +326,9 @@ def compile_hook_context(
     for item in hook.forbidden_reveals:
         if item.address is not None:
             key = item.address.address()
-            if item.ref == 'init':
-                established = [d for d in graph.initial_state
-                               if d.address() == key and d.op == 'set']
-            else:
-                beat = graph.beat(*item.ref.split('#', 1))
-                established = [d for d in (beat.target_delta if beat else ())
-                               if d.address() == key and d.op == 'set']
-            if established:
-                line = _render_or_error(projection, key, established[0],
+            established = established_fact(fact_index, item.ref, key, fact_ref=item.fact_ref)
+            if established is not None:
+                line = _render_or_error(projection, key, established.delta,
                                         f'禁止揭示 {item.ref}')
                 if line is not None:
                     forbidden.append(line)

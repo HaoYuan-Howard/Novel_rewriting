@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Design v11 的确定性编译层：real 声明验收/支撑拍，know 声明每次认知变化，
+"""Design v13 的确定性编译层：real 声明验收/支撑拍，know 声明每次认知变化，
 lock 在已选状态上标注事实锁。
 
-v11 自有自然语言使用身份引用文本。编译保留作者标记，不补造旧文本的人物或普通义；
-v10/v9 集中读取只供历史诊断，当前生产采用必须具有 v11 的明确语义声明。
+自有自然语言使用普通目标文本；当前协议之外的历史回答只读保留，不进入展开或采用。
 
 Brief.knowledge_changes 从 Preserve 正式 anchor 派生盲身份与完整三元组；
 代码派发 obNN.kNN 短引用，模型只标拍位。读者 known 另标 confirms 事实地址。
-不按最终验收拍猜中间模式，不按自由事实键和 kp 句柄猜同义。v9→v5 中间形状
-只服务同一次编译；正式输出是 rc22 BodyDesign，Binding 同源双产物发布。
-请求 v2 的 kp/kf 八位短引用按完整 Brief 确定性展开；已购 v9 解码集中在此。
+不按最终验收拍猜中间模式，不按自由事实键和 kp 句柄猜同义。wire→canonical 中间形状
+只服务同一次编译；正式输出是当前 BodyDesign，Binding 同源双产物发布。
+请求 v3 的 kp/kf 八位短引用按完整 Brief 确定性展开；不提供旧协议转换。
 
 事实锁（CS-F2）：模型在**已选状态**上写 `lock: kf_*`，只做引用选择；本模块
 把标注投影成 `FactLockMark`（拍位、状态下标与由 `at`/`key` 派生的状态地址），
@@ -28,14 +27,15 @@ from typing import Any, Iterable, Mapping, Sequence
 from pydantic import ValidationError
 
 from contracts.schema.design import (
-    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV9, DesignWireV10, DesignWireV12,
+    STAGE4_DESIGN_WIRE_PROTOCOL, DesignWireV13, ResolvedDesign,
 )
 from contracts.schema.grounding import ReconstructionBrief
 from contracts.schema.state import EffectDomain, StateAddress
+from contracts.schema.workflow import STAGE4_DESIGN_PROTOCOL
 
 
-# v12/v10/v9 历史诊断解码集中在此（删除条件登记在 REQUIREMENTS）；新生成只走 v12。
-DESIGN_READ_PROTOCOLS = (STAGE4_DESIGN_WIRE_PROTOCOL, 'stage4-design-v10', 'stage4-design-v9')
+# 运行代码只支持当前协议；旧根只读归档，不在本层迁移或继续解码。
+DESIGN_READ_PROTOCOLS = (STAGE4_DESIGN_WIRE_PROTOCOL,)
 
 
 def design_reference_aliases(brief: ReconstructionBrief) -> dict[str, str]:
@@ -57,18 +57,9 @@ class DesignReferenceError(ValueError):
         self.path = path
 
 
-def design_wire_model(wire: Any, brief: ReconstructionBrief | None = None) -> DesignWireV9 | DesignWireV10 | DesignWireV12:
-    """集中解码 v11 与历史 v10/v9；只展开引用字段，绝不替换自然语言文本。
-
-    无 Brief 只验证传输形状（候选兼容性）；有 Brief 时返回使用 canonical
-    引用的同构 v9 内部模型，供同一 compiler/validator 消费。原始 wire 不变，
-    已购请求/响应摘要及 patch 基底身份不变。
-    """
-    protocol = wire.get('protocol_version') if isinstance(wire, dict) else None
-    if protocol == 'stage4-design-v9':
-        return DesignWireV9.model_validate(wire)
-    model = (DesignWireV12 if protocol == STAGE4_DESIGN_WIRE_PROTOCOL
-             else DesignWireV10).model_validate(wire)
+def design_wire_model(wire: Any, brief: ReconstructionBrief | None = None) -> DesignWireV13 | ResolvedDesign:
+    """只解码当前 wire；有 Brief 时确定性展开短引用，原始响应字节不改。"""
+    model = DesignWireV13.model_validate(wire)
     if brief is None:
         return model
     canonical = {short: full for full, short in design_reference_aliases(brief).items()}
@@ -97,8 +88,7 @@ def design_wire_model(wire: Any, brief: ReconstructionBrief | None = None) -> De
             for ki, row in enumerate(beat['know']):
                 if isinstance(row.get('confirms'), dict):
                     expand(row['confirms'], 'key', ('scenes', si, 'beats', bi, 'know', ki, 'confirms'))
-    data['protocol_version'] = 'stage4-design-v9'
-    return DesignWireV9.model_validate(data)
+    return ResolvedDesign.model_validate(data)
 
 
 def _compact(value: Any) -> Any:
@@ -170,10 +160,10 @@ def _fact_row(state) -> tuple[dict[str, Any] | None, str | None]:
     列表派生（wire 面不写）。
     """
     if state.key.startswith('kp_'):
-        if state.op not in ('unknown', 'unset'):
+        if state.op != 'unknown':
             return None, (f'kp 键 {state.key} 的知情增量经 know 标注派生；'
-                          'state 面只承载 op=unknown（值未知）／op=unset'
-                          '（显式解除）的例外')
+                          'state 面只承载 op=unknown（值未知）例外；'
+                          '撤回须选择对应 unset 的 know 引用')
         return ({'domain': 'knowledge', 'subjects': (), 'holder': state.at,
                  'key': state.key, 'op': state.op, 'value': None,
                  'scope': 'book', 'knowledge_mode': None,
@@ -263,7 +253,7 @@ def project_hook_semantics(body, brief: ReconstructionBrief) -> dict[str, Any]:
 
 
 def _project_requirement(ob: str, obligations: Mapping[str, Any], *,
-                         aliases: Mapping[str, str] | None = None) -> dict[str, Any]:
+                         aliases: Mapping[str, str]) -> dict[str, Any]:
     """单条义务的源盲投影（`project_design_input` 与窄返修切片共用一把尺）。
 
     ``requires`` 翻成 ob 编号、``knowledge_changes`` 换成 obNN.kNN 短引用；
@@ -285,7 +275,7 @@ def _project_requirement(ob: str, obligations: Mapping[str, Any], *,
             ref: change.model_dump(mode='json', exclude={'change_id'})
             for ref, (owner, change) in changes.items() if owner == ob},
     }
-    return _compact(_alias_references(result, aliases)) if aliases is not None else result
+    return _compact(_alias_references(result, aliases))
 
 
 def project_design_input(
@@ -296,7 +286,7 @@ def project_design_input(
 
     仅撤去审计 hash／机械 core、change 身份；完整满足条件、锁、认知变化、
     依赖、表达和世界约束不截断。空集合/None 的省略与知情授权并集由 v2 明示。
-    正式 Brief 不变，输入版本及内容参与请求摘要。v1 只为登记的已购 v9 窄复核。
+    正式 Brief 不变，输入版本及内容参与请求摘要；只有当前请求投影。
     """
     by_core = {r.core_id: r for r in brief.requirements}
     cores = {r.core_id: ob for ob, r in obligations.items()}
@@ -306,23 +296,22 @@ def project_design_input(
         raise ValueError('Design 输入义务映射与正式 Brief 不一致')
     projection = brief.model_dump(mode='json', exclude={
         'brief_id', 'preserve_checkpoint_sha256', 'requirements'})
-    aliases = design_reference_aliases(brief) if protocol != 'stage4-design-v9' else None
+    aliases = design_reference_aliases(brief)
     if protocol not in DESIGN_READ_PROTOCOLS:
         raise ValueError(f'未登记 Design 请求协议 {protocol!r}')
-    projection['input_version'] = 'stage4-design-input-v2' if aliases is not None else 'stage4-design-input-v1'
+    projection['input_version'] = 'stage4-design-input-v3'
     projection['requirements'] = {ob: _project_requirement(ob, obligations, aliases=aliases)
                                   for ob in sorted(obligations)}
-    if aliases is not None:
-        # 知情授权是变化三元组的并集。保留额外授权（显式差集），不丢认知实例。
-        derived = {(c.holder, c.kp, c.mode) for r in obligations.values()
-                   for c in r.knowledge_changes}
-        projection['knowledge_locks'] = [k.model_dump(mode='json') for k in brief.knowledge_locks
-                                         if (k.holder, k.kp, k.mode) not in derived]
-        projection['propositions'] = {aliases[p.kp_id]: p.model_dump(mode='json', exclude={'kp_id'})
-                                      for p in brief.propositions}
-        projection['fact_locks'] = {aliases[f.kf_id]: f.model_dump(mode='json', exclude={'kf_id'})
-                                    for f in brief.fact_locks}
-        projection = _compact(_alias_references(projection, aliases))
+    # 知情授权是变化三元组的并集。保留额外授权（显式差集），不丢认知实例。
+    derived = {(c.holder, c.kp, c.op, c.mode, c.polarity) for r in obligations.values()
+               for c in r.knowledge_changes}
+    projection['knowledge_locks'] = [k.model_dump(mode='json') for k in brief.knowledge_locks
+                                     if (k.holder, k.kp, k.op, k.mode, k.polarity) not in derived]
+    projection['propositions'] = {aliases[p.kp_id]: p.model_dump(mode='json', exclude={'kp_id'})
+                                  for p in brief.propositions}
+    projection['fact_locks'] = {aliases[f.kf_id]: f.model_dump(mode='json', exclude={'kf_id'})
+                                for f in brief.fact_locks}
+    projection = _compact(_alias_references(projection, aliases))
     return projection
 
 
@@ -330,7 +319,7 @@ def expand_design_wire(
     wire: Any, *, brief, obligations: Mapping[str, Any] | None = None,
     source_narration=None,
 ) -> tuple[dict | None, list[tuple[tuple | None, str]]]:
-    """v9 瘦 wire → (v5 wire dict, 条目级 issues)。
+    """当前瘦 wire → (canonical wire dict, 条目级 issues)。
 
     `brief` 是 ReconstructionBrief（世界约束／知情锁／表达项的派生源）；
     `obligations` 是 ob 编号 → 需求（knowledge_changes）映射——v9 wire 必须
@@ -381,7 +370,7 @@ def expand_design_wire(
                 issues.append((('scenes', scene_i, 'beats', beat_i),
                                f'real 引用闭集外义务编号：{ob!r}'
                                f'（只能取义务清单给出的 {sorted(obligations)[:8]}…）'))
-        pair_modes: dict[tuple[str, str], str] = {}
+        pair_modes: dict[tuple[str, str], tuple] = {}
         for placement in beat.know:
             where = ('scenes', scene_i, 'beats', beat_i, 'know')
             selected = changes.get(placement.ref)
@@ -398,21 +387,27 @@ def expand_design_wire(
                 # 只开 know 级窄修会禁止模型改 real，语义正确的答案修不动。
                 issues.append((('scenes', scene_i, 'beats', beat_i),
                                f'{placement.ref} 必须落在对应义务 {ob} 的 real 承载拍'))
-            is_confirmation = change.holder == 'reader' and change.mode == 'known'
+            is_confirmation = (change.holder == 'reader' and change.op == 'set'
+                               and change.mode == 'known')
             if is_confirmation != (placement.confirms is not None):
                 issues.append((where, f'{placement.ref} 读者确认必须写 confirms，其它变化不得写'))
             pair = (change.holder, change.kp)
-            if pair in pair_modes and pair_modes[pair] != change.mode:
-                issues.append((where, f'同拍不能表达同一命题的多个认知模式：{pair}；请分拍'))
-            pair_modes[pair] = change.mode
+            identity = (change.op, change.mode, change.polarity)
+            # 撤回后建立相反认知在同一拍允许，顺序由 know 数组明确给出。
+            if (pair in pair_modes and pair_modes[pair][0] != 'unset'
+                    and change.op != 'unset' and pair_modes[pair] != identity):
+                issues.append((where, f'同拍不能直接建立同一命题的冲突认知：{pair}；先撤回再建立'))
+            pair_modes[pair] = identity
             row = {'domain': 'knowledge', 'key': change.kp,
-                   'subjects': (), 'holder': change.holder, 'op': 'set',
-                   'value': 'true', 'scope': 'book',
+                   'subjects': (), 'holder': change.holder, 'op': change.op,
+                   'value': ('true' if change.polarity == 'positive' else 'false')
+                   if change.op == 'set' else None, 'scope': 'book',
                    'knowledge_mode': change.mode, 'modality': None,
                    'confirms': placement.confirms.model_dump(mode='json')
                    if placement.confirms is not None else None}
-            if row not in rows:
-                rows.append(row)
+            # 短引用身份已经查重；相同值的不同变化仍按给定顺序保留。
+            # 全拍按值去重会让 unset→set→unset 丢掉最后一次撤回。
+            rows.append(row)
         return rows
 
     # 义务 → 承载拍（全书阅读序）；知情变化的具体拍位另由 know 声明。
@@ -550,7 +545,7 @@ def expand_design_wire(
     if issues:
         return None, issues
     return {
-        'protocol_version': 'stage4-design-v5',
+        'protocol_version': STAGE4_DESIGN_PROTOCOL,
         'narration': narration.model_dump(mode='json')
         if hasattr(narration, 'model_dump') else dict(narration),
         'expression_decisions': decisions,
@@ -567,7 +562,7 @@ def expand_design_wire(
     }, []
 
 
-def design_placements(model: DesignWireV9) -> dict[str, list[tuple[int, int]]]:
+def design_placements(model: ResolvedDesign | DesignWireV13) -> dict[str, list[tuple[int, int]]]:
     """义务承载标注的机械投影：ob → 标注拍（scene 序, beat 序）阅读序。
 
     bind 退役（CS-3 后续子批）的落点地基：接受拍＝末次标注拍、支撑拍＝
@@ -581,7 +576,7 @@ def design_placements(model: DesignWireV9) -> dict[str, list[tuple[int, int]]]:
     return placements
 
 
-def design_fact_marks(model: DesignWireV9) -> tuple[FactLockMark, ...]:
+def design_fact_marks(model: ResolvedDesign | DesignWireV13) -> tuple[FactLockMark, ...]:
     """事实锁标注的机械投影：每个带 `lock` 的已选状态一条，按阅读序。
 
     与 `design_placements` 对称：只读、不校验闭集与语义（句柄是否登记、状态
@@ -666,7 +661,9 @@ def design_patch_slice(
     raw_chapters = wire.get('chapters')
     chapters = rows(raw_chapters)
     protocol = wire.get('protocol_version')
-    aliases = design_reference_aliases(brief) if protocol != 'stage4-design-v9' else None
+    if protocol != STAGE4_DESIGN_WIRE_PROTOCOL:
+        raise ValueError(f'未登记 Design 窄返修协议 {protocol!r}')
+    aliases = design_reference_aliases(brief)
     canonical_refs = {short: full for full, short in (aliases or {}).items()}
 
     def canonical(ref: str) -> str:
@@ -877,21 +874,21 @@ def design_patch_slice(
             involved.update(fact_locks[key].get('subjects', ()))
     for key in referenced_keys:
         if key in propositions:
-            involved.update(propositions[key].get('publicly_claimed_by', ()))
+            involved.update(claim['holder'] for claim in
+                            propositions[key].get('publicly_claimed_by', ()))
     knowledge_locks = [row.model_dump(mode='json') for row in brief.knowledge_locks
                        if row.kp in referenced_keys]
     for row in knowledge_locks:
         involved.add(row['holder'])
-    if aliases is not None:
-        projection = project_design_input(brief, obligations)
-        propositions = projection.get('propositions', {})
-        fact_locks = projection.get('fact_locks', {})
-        referenced_keys = {aliases.get(key, key) for key in referenced_keys}
-        referenced_locks = {aliases.get(key, key) for key in referenced_locks}
-        # 每次认知变化的授权已在 requirements 内；只补正式 Brief 中的额外授权，
-        # 与整份输入使用同一差集，不能让场级修订遗失合法的初始知情模式。
-        knowledge_locks = [row for row in projection.get('knowledge_locks', ())
-                           if row.get('kp') in referenced_keys]
+    projection = project_design_input(brief, obligations)
+    propositions = projection.get('propositions', {})
+    fact_locks = projection.get('fact_locks', {})
+    referenced_keys = {aliases.get(key, key) for key in referenced_keys}
+    referenced_locks = {aliases.get(key, key) for key in referenced_locks}
+    # 每次认知变化的授权已在 requirements 内；只补正式 Brief 中的额外授权，
+    # 与整份输入使用同一差集，不能让场级修订遗失合法的初始知情模式。
+    knowledge_locks = [row for row in projection.get('knowledge_locks', ())
+                       if row.get('kp') in referenced_keys]
 
     # 到可编辑末拍为止的释放前缀；整场／整章与拍目标使用同一集合，避免场级
     # 替换没有任何 target_beats 而把全部前缀遗漏。前缀主体同样进入身份依赖。
@@ -931,8 +928,7 @@ def design_patch_slice(
         'state_history': state_history,
         'identities': identity_rows,
     }
-    if aliases is not None:
-        slice_payload.pop('knowledge_changes')  # 所属义务已带完整逐次变化，不重复发送。
+    slice_payload.pop('knowledge_changes')  # 所属义务已带完整逐次变化，不重复发送。
     if want_initial:
         slice_payload['initial_state'] = wire.get('initial_state')
     if wanted_chapters:

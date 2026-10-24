@@ -30,17 +30,25 @@ class FoldedState:
 
     def __init__(self) -> None:
         self._overlay = StateOverlay()
+        # 听到过某种说法是历史，不是对该命题的当前接受。两者从同一批正式
+        # Establishment 派生；正反说法、不同建立锚均保留，撤回只作用于接受。
+        self._heard = StateOverlay()
 
     def apply(self, scene_id: str, establishments: Iterable[Establishment]) -> 'FoldedState':
-        self._overlay.apply(scene_id, [
-            OverlayChange(address=e.address(), op=e.op, value=e.value,
-                          scope=e.scope, source=e.established_by,
-                          mode=e.knowledge_mode)
-            for e in establishments])
+        for e in establishments:
+            change = OverlayChange(address=e.address(), op=e.op, value=e.value,
+                                   scope=e.scope, source=e.established_by,
+                                   mode=e.knowledge_mode)
+            if e.domain is EffectDomain.KNOWLEDGE and e.knowledge_mode == 'heard':
+                identity = (*e.address(), e.value, e.established_by, e.scope)
+                self._heard.apply(scene_id, [change._replace(address=identity)])
+            else:
+                self._overlay.apply(scene_id, [change])
         return self
 
     def expire_scene_scope(self, scene_id: str) -> 'FoldedState':
         self._overlay.expire_scene_scope(scene_id)
+        self._heard.expire_scene_scope(scene_id)
         return self
 
     def with_scene_changes(self, scene_id: str,
@@ -50,12 +58,13 @@ class FoldedState:
         后写新值；`common.scene_read_views` 消费本入口）。"""
         clone = FoldedState()
         clone._overlay = self._overlay.copy()
+        clone._heard = self._heard.copy()
         clone.apply(scene_id, changes)
         return clone
 
     def _entry_of(self, change: OverlayChange) -> Establishment:
         """规范变化还原成 Establishment（地址四段从 address 元组拆回）。"""
-        domain, subjects, holder, key = change.address
+        domain, subjects, holder, key = change.address[:4]
         return Establishment(
             domain=EffectDomain(domain), key=key, subjects=tuple(subjects),
             holder=holder or None, op=change.op, value=change.value,
@@ -74,13 +83,15 @@ class FoldedState:
             if e.domain in domains)
 
     def entry_knowledge_view(self) -> tuple[KnowledgeEntry, ...]:
-        # 非 set（解除/未知）的 knowledge 项无知情模式可消费；mode 只在 set 上有
-        # 语义，这里按 inert 'known' 兜底，防 None 炸 KnowledgeEntry 构造。
+        # 撤回只解除当前接受，既不伪造 known，也不删除此前发生过的认知变化。
         return tuple(KnowledgeEntry(
             holder=e.holder, subjects=e.subjects, key=e.key,
-            mode=e.knowledge_mode or 'known',
+            mode=e.knowledge_mode,
+            polarity=('negative' if e.value == 'false' else 'positive')
+            if e.op == 'set' else None,
             proposition=f'{e.key}={e.value}', status=e.op, established_by=e.established_by)
-            for e in (self._entry_of(c) for c in self._overlay.entries())
+            for e in (self._entry_of(c)
+                      for c in (*self._overlay.entries(), *self._heard.entries()))
             if e.domain is EffectDomain.KNOWLEDGE)
 
     def value_of(self, domain: EffectDomain, key: str, *, subjects=(), holder=None) -> str | None:

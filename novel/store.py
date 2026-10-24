@@ -148,7 +148,7 @@ def _inherited_llm_provenance(raw: bytes, rel: str):
             f'免费重验的原回执来源账损坏：{rel}（{exc.errors(include_url=False)}）') from exc
 
 
-# ── 质量契约拒旧；未变化的 ExecutionPlan 独立保留登记迁移 ─────────────
+# ── 质量契约拒旧 ─────────────────────────────────────────────
 # 新增系列回顾与细节证据无法从旧盘面机械推导；显式检查载荷版本，防止模型
 # 默认值把缺失的旧版本标记补成当前版。版本值只取 contracts/artifacts.py。
 _QUALITY_CONTRACT_SITES = frozenset({
@@ -157,6 +157,7 @@ _QUALITY_CONTRACT_SITES = frozenset({
     'stage4/grounding/semantic_binding.json',
     'stage4/design/body_design.json',
     'stage4/design/presentation_graph.json',
+    'stage4/compiled/execution_plan.json',
     'stage4/context/hook/hook.json',
     'stage4/ir/writer_book_ir.json',
 })
@@ -173,41 +174,6 @@ def _require_current_quality_contract(spec: str | None, data: dict) -> None:
             f'{spec} 的质量契约版本不兼容：载荷 {found!r}，当前 {expected}。'
             '旧产物或缺版本标记的产物不能补成当前语义选择与证据；'
             '保留旧盘只读，按当前契约从所属 owner 重建')
-
-
-def _upgrade_rc12_payload(spec: str | None, data: dict) -> dict:
-    """只迁移形状未变的 ExecutionPlan；历史质量产物不再进入迁移面。
-
-    已折叠执行项的 reader 地址归一、删除不被执行消费的 confirms；约束类别
-    标签保留。迁移只在内存进行，删除条件见 REQUIREMENTS 的存量适配表。
-    """
-    if spec != 'stage4/compiled/execution_plan.json' or data.get('contract_version') not in (
-            'str06-rc12', 'str06-rc13'):
-        return data
-    out = copy.deepcopy(data)
-
-    def establishments(rows) -> None:
-        if not isinstance(rows, list):
-            return
-        for row in rows:
-            if not isinstance(row, dict):
-                continue  # 非法形状交正式模型拒绝，不尝试修复。
-            if row.get('domain') == 'reader':
-                row.update(domain='knowledge', holder='reader', subjects=[],
-                           knowledge_mode='known' if row.get('op') == 'set' else None)
-            row.pop('confirms', None)
-
-    establishments(out.get('initial_establishments'))
-    scenes = out.get('scenes')
-    if isinstance(scenes, list):
-        for scene in scenes:
-            if isinstance(scene, dict):
-                establishments(scene.get('establishments'))
-                establishments(scene.get('planned_delta'))
-    out['contract_version'] = STR06_ARTIFACT_RC_VERSIONS[spec]
-    return out
-
-
 
 
 #: 产物里那个来源账字段的**盘上键名**。模型侧字段叫 `provenance`（`_` 开头在 Pydantic 里
@@ -2528,7 +2494,6 @@ class Str06Repository:
         if isinstance(data, dict):
             data = {k: v for k, v in data.items() if k != '_provenance'}
             _require_current_quality_contract(spec, data)
-            data = _upgrade_rc12_payload(spec, data)
         return model.model_validate(data)
 
     def read_graph_hook(self):

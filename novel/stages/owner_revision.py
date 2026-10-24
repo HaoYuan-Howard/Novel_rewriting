@@ -35,10 +35,13 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Callable, NoReturn
 
 from contracts.invariants import CASCADE_REWIND_LIMIT, OWNER_REVISION_MAX_ROUNDS
+from contracts.artifacts import str06_chapter_observation_rel
+from contracts.schema.observation import ChapterObservation
 from contracts.schema.workflow import (
     OWNER_PRODUCT_RELS, OwnerIssueFileV3, OwnerIssueV1,
     owner_issue_record_of_payload, owner_issues_rel,
@@ -51,6 +54,7 @@ __all__ = [
     'discover_owner_issues', 'open_issue_record', 'open_issue_targets_node',
     'owner_product_digest', 'owner_product_digest_at', 'read_owner_issue_file',
     'resolve_owner_issues', 'complete_owner_dispatch', 'revision_gate', 'revision_prompt_for_owner',
+    'chapter_source_revision_scope',
 ]
 
 
@@ -93,8 +97,8 @@ class OwnerRevisionStop(ExecutionError):
 class MechanicalDefectStop(ExecutionError):
     """机械缺陷停止：确定性编译查出形状/闭集/时序缺陷，且没有回派路由。
 
-    与 :class:`OwnerRevisionStop` 的区别：这类缺陷（如首现闸
-    ``participant_before_first_appearance``，R8c）不登记回派 owner——
+    与 :class:`OwnerRevisionStop` 的区别：这类缺陷（如产物的闭集引用损坏）
+    不登记回派 owner——
     恢复走该章观察重问或 owner patch（人工修订 wire），不自动重跑。
     CLI 把它翻译成 exit 1（typed negative：查出确定性缺陷＝跑完且结论
     落盘不通过），stderr 全文随 `_service/logs/<job>.log` 留证，编排器按
@@ -251,6 +255,32 @@ def open_issue_record(repository, owner: str) -> OwnerIssueFileV3 | None:
     if record is None or record.status != 'open':
         return None
     return record
+
+
+def chapter_source_revision_scope(
+    repository, chapter: int,
+) -> tuple[ChapterObservation | None, frozenset[int]]:
+    """读取章观察的源冲突窄修许可；生产、人工采用及免费预览共用。
+
+    上一版是本 owner 的修订主体，仅核验 seal/新鲜度，不成为新的上游边。
+    本函数只解析已登记的责任范围；候选是否越界由章观察的纯机械比较判定。
+    """
+    record = open_issue_record(repository, f'ch{chapter:02d}')
+    conflicts = [issue for issue in record.issues if issue.code == 'source_evidence_conflict'] \
+        if record is not None else []
+    if not conflicts:
+        return None, frozenset()
+    previous = repository.check_model(str06_chapter_observation_rel(chapter))
+    scope: set[int] = set()
+    for issue in conflicts:
+        anchor = str(issue.context.get('anchor') or '')
+        match = re.fullmatch(fr'b{chapter:02d}_(\d{{2}})(?:\.(?:[ecl]\d+|v1))?', anchor)
+        index = int(match[1]) - 1 if match else -1
+        if (not 0 <= index < len(previous.beats)
+                or issue.context.get('segment') not in previous.beats[index].source_refs):
+            raise ValueError(f'章观察回派地址或证据归属无效：{anchor}')
+        scope.add(index)
+    return previous, frozenset(scope)
 
 
 def discover_owner_issues(repository, *, raised_by: str, owner: str, node: str,

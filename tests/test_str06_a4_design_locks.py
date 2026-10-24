@@ -27,7 +27,7 @@ from contracts.schema.grounding import (
     ReconstructionBrief,
 )
 from contracts.schema.source import (
-    BlueprintsArtifactV17, CharactersCore, SourceExpression,
+    BlueprintsArtifactV18, CharactersCore, SourceExpression,
 )
 from novel.stages.stage4.design import assemble_body_design, inspect_body_design
 from novel.stages.stage4.grounding import (
@@ -46,11 +46,11 @@ BASIS = ({'segment': 'e01_01', 'quote': '夫君藏进床底'},)
 
 
 def _characters() -> CharactersCore:
-    return CharactersCore.model_validate({
+    return CharactersCore.model_validate({'initial_knowledge': [],
         'characters': {
-            'yun_niang': {'canonical': '云娘', 'surfaces': [
+            'yun_niang': {'identity_bindings': [], 'canonical': '云娘', 'surfaces': [
                 {'surface': '云娘', 'from_chapter': 1, 'source_refs': ['e01_01']}]},
-            'fu_jun': {'canonical': '夫君', 'surfaces': [
+            'fu_jun': {'identity_bindings': [], 'canonical': '夫君', 'surfaces': [
                 {'surface': '夫君', 'from_chapter': 1, 'source_refs': ['e01_01']}]},
         },
         'initial_state': [],
@@ -69,8 +69,8 @@ def _expression() -> SourceExpression:
         'readings': sample_readings().model_dump(mode='json')})
 
 
-def _blueprint() -> BlueprintsArtifactV17:
-    return BlueprintsArtifactV17.model_validate({
+def _blueprint() -> BlueprintsArtifactV18:
+    return BlueprintsArtifactV18.model_validate({
         'source_expression': _expression().model_dump(mode='json'),
         'world_constraints': [],
         'chapters': [
@@ -87,38 +87,44 @@ def _blueprint() -> BlueprintsArtifactV17:
                               v13_effect({'kind': 'character', 'char_id': 'fu_jun'},
                                          'residence', None, op='unknown',
                                          basis=BASIS),),
-                          cognition=({'proposition': {'ref': 'p_x',
+                          cognition=({'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False, 'proposition': {'ref': 'p_x',
                                                       'statement': '夫君像是看穿了什么'},
                                       'holder': 'yun_niang', 'mode': 'suspects',
                                       'basis': BASIS},
-                                     {'proposition': {'ref': 'p_return',
+                                     {'op': 'set', 'polarity': 'positive', 'support': 'claim', 'reader_visible': False, 'proposition': {'ref': 'p_return',
                                                       'statement': '夫君约半月后归家'},
                                       'holder': 'yun_niang', 'mode': 'hears_claim',
                                       'basis': BASIS},),
-                          loops=({'ref': 'q_a', 'op': 'open',
+                          loops=({'ref': 'q_a', 'op': 'open', 'answer_refs': [],
                                   'question': '床底箱子里是什么？'},)),
                  v13_beat('b01_02', '芸娘证实猜测；夫君公开声称',
                           participants=('yun_niang', 'fu_jun'), source_refs=('e01_02',),
                           effects=(),
                           cognition=(
-                              {'proposition': {'ref': 'p_x'},
+                              {'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'proposition': {'ref': 'p_x'},
                                'holder': 'yun_niang', 'mode': 'confirms',
                                'basis': ({'segment': 'e01_02', 'quote': '芸娘终于证实'},)},
-                              {'proposition': {'ref': 'p_x'},
+                              {'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'proposition': {'ref': 'p_x'},
                                'holder': 'reader', 'mode': 'learns',
                                'basis': ({'segment': 'e01_02', 'quote': '芸娘终于证实'},)},
-                              {'proposition': {'ref': 'p_claim',
+                              {'op': 'set', 'polarity': 'positive', 'support': 'claim', 'reader_visible': False, 'proposition': {'ref': 'p_claim',
                                                'statement': '夫君声称此行是去营商'},
                                'holder': 'fu_jun', 'mode': 'asserts',
-                               'basis': ({'segment': 'e01_02', 'quote': '他只说是去营商'},)},),
+                               'basis': ({'segment': 'e01_02', 'quote': '他只说是去营商'},)},
+                              {'op': 'set', 'polarity': 'positive', 'support': 'confirmed',
+                               'reader_visible': True, 'proposition': {'ref': 'p_box',
+                               'statement': '箱底是报恩旧约的凭据。'},
+                               'holder': 'yun_niang', 'mode': 'learns',
+                               'basis': ({'segment': 'e01_02', 'quote': '箱底是报恩旧约的凭据。'},)},),
                           loops=({'ref': 'q_a', 'op': 'close',
+                                  'answer_refs': ['b01_02.c4'],
                                   'resolution': '箱底是报恩旧约的凭据。'},)),
                  v13_beat('b01_03', '芸娘另起一疑', source_refs=('e01_03',),
-                          cognition=({'proposition': {'ref': 'p_y',
+                          cognition=({'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False, 'proposition': {'ref': 'p_y',
                                                       'statement': '婆母似乎知情'},
                                       'holder': 'yun_niang', 'mode': 'suspects',
                                       'basis': ({'segment': 'e01_03', 'quote': '婆母似乎知情'},)},),
-                          loops=({'ref': 'q_secret', 'op': 'open',
+                          loops=({'ref': 'q_secret', 'op': 'open', 'answer_refs': [],
                                   'question': '婆母到底瞒着什么？'},)),
              ],
              'scenes': [{'scene_id': 'sc01',
@@ -126,13 +132,13 @@ def _blueprint() -> BlueprintsArtifactV17:
              'causal_edges': []},
         ],
         'evidence': {'e01_01': '夫君藏进床底，只说约半月便回。',
-                     'e01_02': '芸娘终于证实；他只说是去营商。',
+                     'e01_02': '芸娘终于证实；他只说是去营商。箱底是报恩旧约的凭据。',
                      'e01_03': '婆母似乎知情。'},
     })
 
 
 def _preserve_wire() -> dict:
-    return {'protocol_version': 'stage4-preserve-v7', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v8', 'obligations': [
         {'kind': 'event_core', 'statement': '芸娘从起疑到证实同一件事',
          'anchors': ['b01_01.c1', 'b01_02.c1'],
          'must_preserve': True, 'satisfaction': '正文呈现怀疑渐进到证实',
@@ -203,7 +209,8 @@ def test_brief_derives_propositions_locks_and_fact_locks():
     assert kp_claim.startswith('kp_') and kp_x.startswith('kp_')
     # asserts 转公开声称标记：命题登记带 publicly_claimed_by，不产生任何
     # 持有者知情锁（说辞不是确知）。
-    assert by_statement['夫君声称此行是去营商'].publicly_claimed_by == ('fu_jun',)
+    assert [(p.holder, p.polarity) for p in
+            by_statement['夫君声称此行是去营商'].publicly_claimed_by] == [('fu_jun', 'positive')]
     # 知情锁唯一映射：learns/confirms→known、suspects→suspected；
     # reader 持有者进锁；public 无（本例未用）。
     locks = {(l.holder, l.kp, l.mode) for l in brief.knowledge_locks}
@@ -275,11 +282,11 @@ def test_reader_knowledge_keeps_locks_without_becoming_a_character():
 def test_reader_lineage_defense_ignores_forged_character_entry_and_keeps_proxy():
     """人物模型先拒 reader；绕过模型的坏对象也不能污染 lineage，proxy 人物正常保留。"""
     characters = _characters()
-    characters = CharactersCore.model_validate({
+    characters = CharactersCore.model_validate({'initial_knowledge': [],
         **characters.model_dump(mode='json'),
         'characters': {**characters.model_dump(mode='json')['characters'],
                        'reader_proxy': characters.characters['fu_jun'].model_dump(mode='json')}})
-    forged = characters.model_copy(update={'characters': {
+    forged = characters.model_copy(update={'initial_knowledge': (), 'characters': {
         **characters.characters, 'reader': characters.characters['fu_jun']}})
     blueprint = _blueprint()
     first = blueprint.chapters[0].beats[0]
@@ -315,7 +322,7 @@ def _design_wire(brief: ReconstructionBrief) -> dict:
     kp_x = _kp(brief, '夫君像是看穿了什么')
     kp_reader = kp_x  # reader learns 的同一命题
     return {
-        'protocol_version': 'stage4-design-v5',
+        'protocol_version': 'stage4-design-v6',
         'narration': {'person': 'third', 'focalizers': ['narrator']},
         'expression_decisions': [
             {'ex_id': 'ex_01', 'action': 'keep'},
@@ -339,13 +346,13 @@ def _design_wire(brief: ReconstructionBrief) -> dict:
                  {'event': '芸娘起疑', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'yun_niang',
-                       'key': kp_x, 'op': 'set', 'value': '她怀疑夫君看穿了什么',
+                       'key': kp_x, 'op': 'set', 'value': 'true',
                        'scope': 'book', 'knowledge_mode': 'suspected'}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '芸娘证实', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'yun_niang',
-                       'key': kp_x, 'op': 'set', 'value': '她证实了此事',
+                       'key': kp_x, 'op': 'set', 'value': 'true',
                        'scope': 'book', 'knowledge_mode': 'known'}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '错解的玩笑', 'participants': ['yun_niang', 'fu_jun'],
@@ -354,7 +361,7 @@ def _design_wire(brief: ReconstructionBrief) -> dict:
                  {'event': '读者获知实证', 'participants': ['yun_niang'],
                   'delivery_hint': '', 'target_delta': [
                       {'domain': 'knowledge', 'subjects': [], 'holder': 'reader',
-                       'key': kp_reader, 'op': 'set', 'value': '床底藏物属实',
+                       'key': kp_reader, 'op': 'set', 'value': 'true',
                        'scope': 'book', 'knowledge_mode': 'known', 'confirms': {'domain': 'world', 'key': 'secret'}}],
                   'expression_refs': [], 'surface_introductions': []},
                  {'event': '约定归期', 'participants': ['fu_jun'],
@@ -420,10 +427,10 @@ def test_c1_knowledge_mode_upgrade_without_known_lock_rejected():
     wire = _design_wire(brief)
     wire['scenes'][0]['beats'][2]['target_delta'].append(
         {'domain': 'knowledge', 'subjects': [], 'holder': 'yun_niang',
-         'key': kp_y, 'op': 'set', 'value': '她确知婆母知情',
+         'key': kp_y, 'op': 'set', 'value': 'true',
          'scope': 'book', 'knowledge_mode': 'known'})
     _, errors = _assemble(wire, brief)
-    assert any('无锁或模式越权' in e and kp_y in e for e in errors), errors
+    assert any('无锁或操作/模式/极性越权' in e and kp_y in e for e in errors), errors
     # 绿对照：写 suspected（授权模式内）通过。
     wire['scenes'][0]['beats'][2]['target_delta'][-1]['knowledge_mode'] = 'suspected'
     body, errors = _assemble(wire, brief)
@@ -464,7 +471,7 @@ def test_c6_reader_confirmation_without_known_lock_rejected():
     wire = _design_wire(brief)
     wire['scenes'][0]['beats'][4]['target_delta'][0]['key'] = kp_y
     _, errors = _assemble(wire, brief)
-    assert any('无锁或模式越权' in e and kp_y in e for e in errors), errors
+    assert any('无锁或操作/模式/极性越权' in e and kp_y in e for e in errors), errors
 
 
 # ───────────────────────── 必保锁兑现 ─────────────────────────
@@ -509,7 +516,7 @@ def test_brief_validators_reject_dangling_lock_references():
     # knowledge_changes 引用无锁行。
     reqs = list(good.requirements)
     reqs[0] = reqs[0].model_copy(update={'knowledge_changes': (
-        BriefKnowledgeChange(change_id='kc_0000000000000000', holder='fu_jun',
+        BriefKnowledgeChange(op='set', polarity='positive', change_id='kc_0000000000000000', holder='fu_jun',
                              kp='kp_0000000000000000', mode='known'),)})
     bad2 = good.model_copy(update={'requirements': tuple(reqs)})
     try:
@@ -532,7 +539,7 @@ def test_lock_models_shape_constants():
         raise AssertionError('unanswered 不带 modality')
     except ValueError:
         pass
-    BriefKnowledgeLock(holder='reader', kp='kp_' + '0' * 16, mode='heard')
+    BriefKnowledgeLock(op='set', polarity='positive', holder='reader', kp='kp_' + '0' * 16, mode='heard')
 
 
 # ═════════ CS-F2（RC-36／RC-38）：事实锁在已选状态上标注引用，不再复制第二份状态 ═════════
@@ -542,7 +549,8 @@ def test_lock_models_shape_constants():
 # 引用不复制 value。「承载状态的内容在语义上是否满足锁」（例如把暂缓和离绑到
 # 赏花）需要标定的语义核验，不在此处，也不由结构通过来宣称（I-42）。
 
-from contracts.schema.design import DesignWireV9
+from novel.stages.stage4.slim import design_wire_model
+from tests.str06_facilities import current_design_wire
 
 
 def _obligations_v8(brief: ReconstructionBrief) -> dict:
@@ -561,7 +569,7 @@ def _design_wire_v8(brief: ReconstructionBrief) -> dict:
     """
     obligations = _obligations_v8(brief)
     return {
-        'protocol_version': 'stage4-design-v9',
+        'protocol_version': 'stage4-design-v13',
         'book_style': '克制的限知叙事。',
         'scenes': [{
             'driver': {'focal_actor': 'yun_niang', 'immediate_want': '查明床底',
@@ -594,14 +602,14 @@ def _design_wire_v8(brief: ReconstructionBrief) -> dict:
 
 def _inspect_v8(wire: dict, brief: ReconstructionBrief):
     return inspect_body_design(
-        wire, known_char_ids={'yun_niang', 'fu_jun'},
+        current_design_wire(wire, brief), known_char_ids={'yun_niang', 'fu_jun'},
         expression_requirements=brief.expression,
         source_narration=brief.source_narration, brief=brief,
         obligations=_obligations_v8(brief))
 
 
-def _derive_binding_v8(wire: dict, body):
-    model = DesignWireV9.model_validate(wire)
+def _derive_binding_v8(wire: dict, body, brief):
+    model = design_wire_model(current_design_wire(wire, brief), brief)
     return derive_semantic_binding(
         design_placements(model), body, _checkpoint(), design_fact_marks(model))
 
@@ -614,7 +622,7 @@ def test_fact_lock_green_v8_marks_existing_states_and_binding_keeps_references_o
     assert body is not None and not errors, errors
     assert not any(d.key.startswith('kf_') for s in body.scenes for b in s.beats
                    for d in b.target_delta), 'kf 句柄不再是状态键'
-    binding, errors = _derive_binding_v8(wire, body)
+    binding, errors = _derive_binding_v8(wire, body, brief)
     assert binding is not None and not errors, errors
     by_lock = {f.kf_id: f for f in binding.fact_bindings}
     assert set(by_lock) == {_kf(brief, 'expected'), _kf(brief, 'unknown_value')}
@@ -654,7 +662,7 @@ def test_planned_state_may_become_actual_later_without_the_old_lock_forbidding_i
     body, errors = _inspect_v8(wire, brief)
     assert body is not None and not errors, errors
     assert body.scenes[0].beats[7].target_delta[0].modality == 'actual'
-    binding, errors = _derive_binding_v8(wire, body)
+    binding, errors = _derive_binding_v8(wire, body, brief)
     assert binding is not None and not errors, errors
 
 
@@ -688,9 +696,9 @@ def test_fact_lock_dangling_duplicate_and_unrealized_are_rejected_precisely():
     brief = _brief()
     # 悬空句柄：Brief 未登记的 kf（RC-36「悬空目标」的引用面）。
     wire = _design_wire_v8(brief)
-    wire['scenes'][0]['beats'][5]['state'][0]['lock'] = 'kf_' + 'f' * 16
+    wire['scenes'][0]['beats'][5]['state'][0]['lock'] = 'kf_' + 'f' * 8
     _, errors = _inspect_v8(wire, brief)
-    assert any(getattr(e, 'code', '') == 'fact_lock_unregistered' and 'kf_' + 'f' * 16 in e
+    assert any(getattr(e, 'code', '') == 'design_wire_expand' and 'kf_' + 'f' * 8 in e
                for e in errors), errors
     # 一个锁只由一条已选状态承载：不为同一事实再写一条状态。
     wire = _design_wire_v8(brief)
@@ -741,7 +749,7 @@ def test_binding_refuses_a_mapping_that_points_at_no_state_in_the_body():
     wire = _design_wire_v8(brief)
     body, errors = _inspect_v8(wire, brief)
     assert body is not None and not errors, errors
-    model = DesignWireV9.model_validate(wire)
+    model = design_wire_model(current_design_wire(wire, brief), brief)
     moved = tuple(replace(m, beat=0) if m.kf_id == _kf(brief, 'expected') else m
                   for m in design_fact_marks(model))
     binding, errors = derive_semantic_binding(
@@ -778,7 +786,7 @@ def test_fact_lock_address_is_unique_in_its_carrier_beat_and_locatable(kind, bea
     next_issue = next(e for e in next_errors if getattr(e, 'code', '') == 'fact_lock_ambiguous')
     assert next_issue.identity == issue.identity
     assert wire == before
-    binding, errors = _derive_binding_v8(wire, body)
+    binding, errors = _derive_binding_v8(wire, body, brief)
     assert binding is None, 'Binding 派生也必须防御，不能只依赖上层接受校验'
     assert any(getattr(e, 'code', '') == 'fact_lock_ambiguous' for e in errors), errors
 
@@ -795,7 +803,7 @@ def test_fact_lock_does_not_ban_same_address_updates_in_other_beats_or_unlocked_
             {'at': 'world', 'key': 'intent', 'val': '完成'}]})
     body, errors = _inspect_v8(wire, brief)
     assert body is not None and not errors, errors
-    binding, errors = _derive_binding_v8(wire, body)
+    binding, errors = _derive_binding_v8(wire, body, brief)
     assert binding is not None and not errors, errors
     assert len(binding.fact_bindings) == 2
 
@@ -808,7 +816,7 @@ def test_canonical_fact_binding_is_rechecked_by_execution_plan(fault):
     wire = _design_wire_v8(brief)
     body, errors = _inspect_v8(wire, brief)
     assert body is not None and not errors, errors
-    binding, errors = _derive_binding_v8(wire, body)
+    binding, errors = _derive_binding_v8(wire, body, brief)
     assert binding is not None and not errors, errors
     kind = 'unknown_value' if fault == 'unknown_value' else 'expected'
     mapping = next(f for f in binding.fact_bindings if f.kf_id == _kf(brief, kind))
@@ -864,7 +872,7 @@ def test_fact_lock_outside_its_obligation_carriers_is_rejected_in_acceptance_and
     located = locate_design_patches(wire, [issue])
     assert {path for path, _ in located} == {
         ('scenes', 0, 'beats', target_i), ('scenes', 0, 'beats', source_i)}
-    binding, binding_errors = _derive_binding_v8(wire, body)
+    binding, binding_errors = _derive_binding_v8(wire, body, brief)
     assert binding is None
     same = next(e for e in binding_errors
                 if getattr(e, 'code', '') == 'fact_lock_outside_obligation')
@@ -884,7 +892,7 @@ def test_fact_lock_on_explicit_support_beat_is_valid(kind, source_i, ob):
     beats[0]['real'] = [ob]
     body, errors = _inspect_v8(wire, brief)
     assert body is not None and not errors, errors
-    binding, errors = _derive_binding_v8(wire, body)
+    binding, errors = _derive_binding_v8(wire, body, brief)
     assert binding is not None and not errors, errors
     entry = next(e for e in binding.entries if e.obligation_id == ob)
     assert entry.supporting_beat_refs == ('sc01#b01',)
@@ -901,7 +909,7 @@ def test_canonical_fact_lock_coverage_and_obligation_position_are_rechecked(miss
     wire = _design_wire_v8(brief)
     body, errors = _inspect_v8(wire, brief)
     assert body is not None and not errors, errors
-    binding, errors = _derive_binding_v8(wire, body)
+    binding, errors = _derive_binding_v8(wire, body, brief)
     assert binding is not None and not errors, errors
     kf = _kf(brief, 'expected')
     if missing:
@@ -974,7 +982,7 @@ def test_shared_fact_lock_carrier_belongs_to_any_sharing_obligation(
         del wire['scenes'][0]['beats'][5]['state'][0]['lock']
     body, acceptance_errors = _inspect_v8(wire, brief)
     assert body is not None
-    model = DesignWireV9.model_validate(wire)
+    model = design_wire_model(current_design_wire(wire, brief), brief)
     binding, binding_errors = derive_semantic_binding(
         design_placements(model), body, checkpoint, design_fact_marks(model))
     if passed:
@@ -1008,7 +1016,7 @@ def test_fact_lock_subject_must_be_contained_in_the_carrier_state_subjects():
     issue = next(e for e in errors if getattr(e, 'code', '') == 'fact_lock_subject')
     assert _kf(brief, 'unknown_value') in str(issue)
     assert issue.context['wire_paths'] == [['scenes', 0, 'beats', 6, 'state', 0]]
-    binding, binding_errors = _derive_binding_v8(wire, body)
+    binding, binding_errors = _derive_binding_v8(wire, body, brief)
     assert binding is None and any(
         getattr(e, 'code', '') == 'fact_lock_subject' for e in binding_errors)
 
@@ -1037,7 +1045,7 @@ def test_shared_fact_lock_carrier_later_than_a_sharing_obligation_is_locatable()
     body, acceptance_errors = _inspect_v8(wire, brief)
     assert body is not None
     from novel.stages.stage4.compile import compile_execution_plan
-    model = DesignWireV9.model_validate(wire)
+    model = design_wire_model(current_design_wire(wire, brief), brief)
     binding, binding_errors = derive_semantic_binding(
         design_placements(model), body, checkpoint, design_fact_marks(model))
     codes = lambda errs: sorted({getattr(e, 'code', str(e)[:40]) for e in errs})   # noqa: E731

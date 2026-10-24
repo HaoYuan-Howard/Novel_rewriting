@@ -62,9 +62,9 @@ def _beat_deltas(body: BodyDesign) -> dict[str, tuple[tuple, ...]]:
     return out
 
 
-def _established_at(body: BodyDesign, ref: str, key: tuple) -> bool:
-    """地址为 key 的事实是否确实在 ref 处建立（init 或该拍 delta）。"""
-    return established_fact(hook_facts(body), ref, key) is not None
+def _established_at(body: BodyDesign, ref: str, key: tuple, fact_ref: str | None) -> bool:
+    """具体事实原子是否确实在 ref 处建立（init 或该拍 delta）。"""
+    return established_fact(hook_facts(body), ref, key, fact_ref=fact_ref) is not None
 
 
 def _validate_transitions(materials: list[dict], positions: dict) -> list[str]:
@@ -114,7 +114,8 @@ def _validate_reader_expectation(expectation: dict, *, facts, positions: dict,
         answer = expectation.get('answer') or {}
         ref = answer.get('ref')
         key = _address_key(answer.get('address'))
-        fact = established_fact(facts, ref, key) if key is not None else None
+        fact = (established_fact(facts, ref, key, fact_ref=answer.get('fact_ref'))
+                if key is not None else None)
         if fact is None:
             errors.append(_issue('事实期待的答案必须引用一次真实 set 建立，且带具体地址',
                                  'hook_expectation_fact', path, path))
@@ -212,7 +213,8 @@ def validate_hook_payload(
                 errors.append(_issue(
                     f'材料 {ref} 的 withheld 形状非法：{raw}', 'hook_withheld_shape',
                     ('materials', k, 'withheld'), ('materials', k)))
-            elif key not in beat_keys:
+            elif not any(fact.fact_ref == raw.get('fact_ref') and fact.ref == ref
+                         and fact.delta.address() == key for fact in facts):
                 errors.append(_issue(
                     f'材料 {ref} 的 withheld 不属于该拍 delta：{key}',
                     'hook_withheld_ref', ('materials', k, 'withheld', key),
@@ -237,7 +239,7 @@ def validate_hook_payload(
                             ('materials', k)))
 
     # 禁止揭示：引用真实；无 address 是整拍禁区，同拍不得作为材料。
-    # 具体事实只禁止该地址；presentation 替代全拍投影，或 withheld 隐藏该地址
+    # 具体事实只禁止该原子；presentation 替代全拍投影，或 withheld 隐藏该原子
     # 后仍可使用同拍其余材料，未隐藏的事实才与材料冲突。
     forbidden_refs: list[str] = []
     forbidden_addresses: list[tuple] = []
@@ -252,8 +254,8 @@ def validate_hook_payload(
                     'hook_forbidden_address', ('forbidden_reveals', k),
                     ('forbidden_reveals', k)))
                 continue
-            forbidden_addresses.append((ref, key))
-            if not _established_at(body, ref, key):
+            forbidden_addresses.append((ref, key, item.get('fact_ref')))
+            if not _established_at(body, ref, key, item.get('fact_ref')):
                 errors.append(_issue(
                     f'禁止揭示的事实在 {ref} 未建立：{key}', 'hook_forbidden_unestablished',
                     ('forbidden_reveals', k), ('forbidden_reveals', k)))
@@ -271,16 +273,17 @@ def validate_hook_payload(
             continue
         leaked_paths = [('materials', j) for j, other in enumerate(materials)
                         if other.get('beat_ref') == ref and not other.get('presentation')
-                        and key not in {wk for wk in (_address_key(w)
-                                                      for w in other.get('withheld') or ())
-                                         if wk is not None}]
+                        and item.get('fact_ref') not in {
+                            w.get('fact_ref') for w in other.get('withheld') or ()
+                            if isinstance(w, dict)}]
         if leaked_paths:
             errors.append(_issue(
                 f'禁止揭示与材料冲突：{ref} 的 {key} 被材料未隐藏地呈现',
                 'hook_forbidden_leak', ('forbidden_reveals', k, key),
                 ('forbidden_reveals', k), *leaked_paths))
 
-    # 一次建立由（位置、地址）定位；冷开起点按呈现序第一份材料，视界按最大故事位置。
+    # 一次建立由（位置、原子序号、地址）的 fact_ref 定位；同拍同址不吞掉原子。
+    # 冷开起点按呈现序第一份材料，视界按最大故事位置。
     # 后续同地址更新不等于同一次揭示；起点前已失效的旧值仍须拒绝。
     material_positions = [positions.get(r) for r in material_refs]
     timing_known = all(p is not None for p in material_positions) if material_positions else False
@@ -301,7 +304,7 @@ def validate_hook_payload(
                 f'起笔事实引用不存在的拍：{ref}', 'hook_opening_ref',
                 ('opening_facts', k, ref), ('opening_facts', k)))
             continue
-        fact = established_fact(facts, ref, key)
+        fact = established_fact(facts, ref, key, fact_ref=item.get('fact_ref'))
         if fact is None:
             errors.append(_issue(
                 f'起笔事实在 {ref} 未建立：{key}（只能引用已存在的目标事实）',
@@ -334,7 +337,7 @@ def validate_hook_payload(
                 errors.append(_issue(
                     f'起笔事实（reader）不得晚于材料视界：{ref}',
                     'hook_opening_horizon', ('opening_facts', k), ('opening_facts', k)))
-        if (ref, key) in forbidden_addresses or (ref in forbidden_refs and
+        if (ref, key, item.get('fact_ref')) in forbidden_addresses or (ref in forbidden_refs and
                 any(row.get('ref') == ref and row.get('address') is None
                     for row in wire.get('forbidden_reveals') or ())):
             errors.append(_issue(

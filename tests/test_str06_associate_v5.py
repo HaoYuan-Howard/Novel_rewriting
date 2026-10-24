@@ -39,6 +39,14 @@ from tests.test_str06_stage2_publish import (
 )
 
 
+def _confirmed_answer(loop: str, statement: str, segment: str) -> dict:
+    """候选与生命周期测试的明确答案原子，不从close文本隐式造知情。"""
+    return {'proposition': {'ref': f'p_{loop}_answer', 'statement': statement},
+            'holder': 'yun_niang', 'op': 'set', 'mode': 'learns',
+            'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True,
+            'basis': _basis(segment)}
+
+
 def _answer_wire(candidates, **over) -> dict:
     """恰答全部候选的默认答案（全部 distinct），测试按需覆写个别类。"""
     wire = {
@@ -95,14 +103,14 @@ def test_in_chapter_self_closed_close_is_not_pairable():
     book = _book_wire()
     ch01 = {'protocol_version': CPV, 'beats': [
         _beat('悬念开场', ('e01_01',), loops=[
-            {'ref': 'q_open', 'op': 'open', 'question': '床底的人是谁？'}]),
+            {'ref': 'q_open', 'op': 'open', 'question': '床底的人是谁？', 'answer_refs': []}]),
         _beat('跨章悬念开', ('e01_02',), scene_boundary='continue', loops=[
-            {'ref': 'q_far', 'op': 'open', 'question': '借种之约如何收场？'}])]}
+            {'ref': 'q_far', 'op': 'open', 'question': '借种之约如何收场？', 'answer_refs': []}])]}
     ch02 = {'protocol_version': CPV, 'beats': [
         _beat('章内自开自闭', ('e02_01',), loops=[
-            {'ref': 'q_local', 'op': 'open', 'question': '今晚还有响动吗？'}]),
+            {'ref': 'q_local', 'op': 'open', 'question': '今晚还有响动吗？', 'answer_refs': []}]),
         _beat('章内收束', ('e02_02',), scene_boundary='continue', loops=[
-            {'ref': 'q_local', 'op': 'close', 'resolution': '没有响动'}])]}
+            {'ref': 'q_local', 'op': 'close', 'answer_refs': ['c1']}], cognition=[_confirmed_answer('q_local', '没有响动', 'e02_02')])]}
     book_obs, chapters = _observations(book, {1: ch01, 2: ch02})
     space = project_association_space(book_obs, chapters)
     assert 'ch02.q_local' in space.loop_closes
@@ -117,7 +125,7 @@ def test_in_chapter_self_closed_close_is_not_pairable():
     # 绿对照：真正跨章的 close（ch1 开、ch3 收）仍生成候选。
     ch03 = {'protocol_version': CPV, 'beats': [
         _beat('跨章收束', ('e03_01',), loops=[
-            {'ref': 'q_far', 'op': 'close', 'resolution': '约成身退'}])]}
+            {'ref': 'q_far', 'op': 'close', 'answer_refs': ['c1']}], cognition=[_confirmed_answer('q_far', '约成身退', 'e03_01')])]}
     book_obs, chapters = _observations(book, {1: ch01, 2: ch02, 3: ch03})
     space = project_association_space(book_obs, chapters)
     candidates = project_identity_candidates(space, book_obs)
@@ -135,11 +143,11 @@ def test_unordered_candidates_accept_swapped_left_right():
     book = _book_wire()
     book['facts'] = [
         {'fact_id': 'f01', 'statement': '夫君藏身床底',
-         'basis': _basis('e01_01'), 'known_at_start': []}]
+         'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'basis': _basis('e01_01')}], 'known_at_start': []}]
     ch01 = {'protocol_version': CPV, 'beats': [_quiet_beat('开场', 'e01_01')]}
     ch02 = {'protocol_version': CPV, 'beats': [
         _beat('词表外转写', ('e02_01',), participants=('yun_niang',),
-              cognition=[{'proposition': {'ref': 'p_drift', 'statement': '夫君藏身于床底'},
+              cognition=[{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'proposition': {'ref': 'p_drift', 'statement': '夫君藏身于床底'},
                           'holder': 'yun_niang', 'mode': 'learns',
                           'basis': _basis('e02_01')}])]}
     ch03 = {'protocol_version': CPV, 'beats': [_quiet_beat('收尾', 'e03_01')]}
@@ -161,16 +169,16 @@ def test_loop_candidates_keep_endpoint_events_and_request_identity():
     wires = {
         1: {'protocol_version': CPV, 'beats': [
             _beat('云娘尚未决定是否接受安排', ('e01_01',), loops=[
-                {'ref': 'q_accept', 'op': 'open', 'question': '她会接受安排吗？'}]),
+                {'ref': 'q_accept', 'op': 'open', 'question': '她会接受安排吗？', 'answer_refs': []}]),
             _quiet_beat('与配对无关的灯火描写', 'e01_02')]},
         2: {'protocol_version': CPV, 'beats': [
             _beat('云娘决定照安排做；夫君提出具体行动', ('e02_01',),
                   scene_boundary='continue', loops=[
-                      {'ref': 'r_accept', 'op': 'close', 'resolution': '她接受安排'},
-                      {'ref': 'q_attempt', 'op': 'open', 'question': '这次行动能成功吗？'}])]},
+                      {'ref': 'r_accept', 'op': 'close', 'answer_refs': ['c1']},
+                      {'ref': 'q_attempt', 'op': 'open', 'question': '这次行动能成功吗？', 'answer_refs': []}], cognition=[_confirmed_answer('r_accept', '她接受安排', 'e02_01')])]},
         3: {'protocol_version': CPV, 'beats': [
             _beat('具体行动因拒绝而失败', ('e03_01',), scene_boundary='continue', loops=[
-                {'ref': 'r_attempt', 'op': 'close', 'resolution': '行动失败'}])]},
+                {'ref': 'r_attempt', 'op': 'close', 'answer_refs': ['c1']}], cognition=[_confirmed_answer('r_attempt', '行动失败', 'e03_01')])]},
     }
     book, chapters = _observations(_book_wire(), wires)
     before = {n: c.model_dump(mode='json') for n, c in chapters.items()}
@@ -260,21 +268,21 @@ def test_proposition_fact_candidates_and_cause_candidates_from_identity():
     book = _book_wire()
     book['facts'] = [
         {'fact_id': 'f01', 'statement': '夫君藏身床底',
-         'basis': _basis('e01_01'), 'known_at_start': []}]
+         'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'basis': _basis('e01_01')}], 'known_at_start': []}]
     ch01 = {'protocol_version': CPV, 'beats': [
         _beat('云娘起疑', ('e01_01',), participants=('yun_niang',),
-              cognition=[{'proposition': {'ref': 'f01', 'statement': None},
+              cognition=[{'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False, 'proposition': {'ref': 'f01', 'statement': None},
                           'holder': 'yun_niang', 'mode': 'suspects',
                           'basis': _basis('e01_01')}],
-              loops=[{'ref': 'q_id', 'op': 'open', 'question': '床底的人是谁？'}])]}
+              loops=[{'ref': 'q_id', 'op': 'open', 'question': '床底的人是谁？', 'answer_refs': []}])]}
     ch02 = {'protocol_version': CPV, 'beats': [
         _beat('词表外转写', ('e02_01',), participants=('yun_niang',),
-              cognition=[{'proposition': {'ref': 'p_drift', 'statement': '夫君藏身于床底'},
+              cognition=[{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'proposition': {'ref': 'p_drift', 'statement': '夫君藏身于床底'},
                           'holder': 'yun_niang', 'mode': 'learns',
                           'basis': _basis('e02_01')}])]}
     ch03 = {'protocol_version': CPV, 'beats': [
         _beat('跨章收束', ('e03_01',),
-              loops=[{'ref': 'q_id', 'op': 'close', 'resolution': '床底的人是夫君'}])]}
+              loops=[{'ref': 'q_id', 'op': 'close', 'answer_refs': ['c1']}], cognition=[_confirmed_answer('q_id', '床底的人是夫君', 'e03_01')])]}
     book_obs, chapters = _observations(book, {1: ch01, 2: ch02, 3: ch03})
     space = project_association_space(book_obs, chapters)
     assert 'ch01.f01' not in space.propositions, 'fact 引用不是章内命题'
@@ -317,25 +325,25 @@ def test_cause_fact_flow_keeps_every_local_reference_and_deduplicates_loop_pairs
     book = _book_wire()
     book['facts'] = [
         {'fact_id': 'f01', 'statement': '夫君藏身床底',
-         'basis': _basis('e01_01'), 'known_at_start': []}]
+         'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'basis': _basis('e01_01')}], 'known_at_start': []}]
     chapter_wires = {
         1: {'protocol_version': CPV, 'beats': [
             _beat('先获知床底藏人', ('e01_01',), participants=('yun_niang',),
-                  cognition=[{'proposition': {'ref': 'p_drift', 'statement': '夫君藏身于床底'},
+                  cognition=[{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'proposition': {'ref': 'p_drift', 'statement': '夫君藏身于床底'},
                               'holder': 'yun_niang', 'mode': 'learns',
                               'basis': _basis('e01_01')}],
-                  loops=[{'ref': 'q_id', 'op': 'open', 'question': '床底是谁？'}]),
+                  loops=[{'ref': 'q_id', 'op': 'open', 'question': '床底是谁？', 'answer_refs': []}]),
             _beat('再次确认同一命题', ('e01_02',), participants=('yun_niang',),
                   scene_boundary='continue',
-                  cognition=[{'proposition': {'ref': 'p_drift'},
+                  cognition=[{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'proposition': {'ref': 'p_drift'},
                               'holder': 'yun_niang', 'mode': 'confirms',
                               'basis': _basis('e01_02')}])]},
         2: {'protocol_version': CPV, 'beats': [
             _beat('翌日事实得到确认', ('e02_01',), participants=('yun_niang',),
-                  cognition=[{'proposition': {'ref': 'f01'},
+                  cognition=[{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True, 'proposition': {'ref': 'f01'},
                               'holder': 'yun_niang', 'mode': 'confirms',
                               'basis': _basis('e02_01')}],
-                  loops=[{'ref': 'q_id', 'op': 'close', 'resolution': '床底是夫君'}])]}}
+                  loops=[{'ref': 'q_id', 'op': 'close', 'answer_refs': ['c1']}])]}}
     book_obs, chapters = _observations(book, chapter_wires)
     space = project_association_space(book_obs, chapters)
     candidates = project_identity_candidates(space, book_obs)
@@ -370,18 +378,18 @@ def test_cause_fact_flow_uses_same_transitive_closure_only(bridge_verdict, rever
     book = _book_wire()
     book['facts'] = [
         {'fact_id': 'f01', 'statement': '夫君藏身床底',
-         'basis': _basis('e01_01'), 'known_at_start': []}]
+         'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'basis': _basis('e01_01')}], 'known_at_start': []}]
     statements = {1: '夫君藏身于床底', 2: '藏身于床底的夫君'}
     chapter_wires = {
         no: {'protocol_version': CPV, 'beats': [
             _beat(f'第{no}章确认', (f'e{no:02d}_01',), participants=('yun_niang',),
-                  cognition=[{'proposition': {'ref': 'p_drift', 'statement': statement},
+                  cognition=[{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'proposition': {'ref': 'p_drift', 'statement': statement},
                               'holder': 'yun_niang', 'mode': 'learns',
                               'basis': _basis(f'e{no:02d}_01')}])]}
         for no, statement in statements.items()}
     chapter_wires[3] = {'protocol_version': CPV, 'beats': [
         _beat('末章引用词表', ('e03_01',), participants=('yun_niang',),
-              cognition=[{'proposition': {'ref': 'f01'},
+              cognition=[{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'proposition': {'ref': 'f01'},
                           'holder': 'yun_niang', 'mode': 'confirms',
                           'basis': _basis('e03_01')}])]}
     book_obs, chapters = _observations(book, chapter_wires)
@@ -713,15 +721,15 @@ def test_pairable_opens_exclude_locally_closed_loops():
     book = _book_wire()
     ch01 = {'protocol_version': CPV, 'beats': [
         _beat('开合都在本章', ('e01_01',), loops=[
-            {'ref': 'q1', 'op': 'open', 'question': '本章自问'},
-            {'ref': 'q1', 'op': 'close', 'resolution': '本章自答'}]),
+            {'ref': 'q1', 'op': 'open', 'question': '本章自问', 'answer_refs': []},
+            {'ref': 'q1', 'op': 'close', 'answer_refs': ['c1']}], cognition=[_confirmed_answer('q1', '本章自答', 'e01_01')]),
         _beat('未闭合的悬念', ('e01_02',), loops=[
-            {'ref': 'q2', 'op': 'open', 'question': '跨章悬念'}]),
+            {'ref': 'q2', 'op': 'open', 'question': '跨章悬念', 'answer_refs': []}]),
     ]}
     ch02 = {'protocol_version': CPV, 'beats': [
         _beat('两笔跨章收束', ('e02_01',), loops=[
-            {'ref': 'q3', 'op': 'close', 'resolution': '异名收束'},
-            {'ref': 'q2', 'op': 'close', 'resolution': '同名收束'}]),
+            {'ref': 'q3', 'op': 'close', 'answer_refs': ['c1']},
+            {'ref': 'q2', 'op': 'close', 'answer_refs': ['c2']}], cognition=[_confirmed_answer('q3', '异名收束', 'e02_01'), _confirmed_answer('q2', '同名收束', 'e02_01')]),
     ]}
     book_obs, chapters = _observations(book, {1: ch01, 2: ch02})
     space = project_association_space(book_obs, chapters)

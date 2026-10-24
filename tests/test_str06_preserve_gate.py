@@ -146,7 +146,7 @@ def _checkpoint_with(statement: str):
         ObligationAnchor, PreserveCheckpoint, SourceLineage, SourceObligation,
     )
     from contracts.schema.policy import PreserveKind
-    anchor = ObligationAnchor(
+    anchor = ObligationAnchor(basis_segments=['e01_01'], op='set', polarity='positive', support='confirmed', reader_visible=True,
         handle='b01_01.c1', source_kind='cognition', holder='hero', mode='learns',
         proposition_ref='p_x', proposition_statement='x', quotes=('x',))
     obligation = SourceObligation(
@@ -254,16 +254,16 @@ def test_preserve_registered_forms_are_accepted_without_mutating_evidence():
     """已证明同人的多个登记面不因共现被拒；validator 保持条件、关系与证据。"""
     from novel.stages.stage4 import preserve_name_issues
     from tests.test_str06_display_surface import _characters
-    from contracts.schema.source import CharactersArtifactV6
+    from contracts.schema.source import CharactersArtifactV7
     data = _characters().model_dump(mode='json')
-    data['characters']['pei_shuyuan'] = {'canonical': '裴书远', 'surfaces': [
+    data['characters']['pei_shuyuan'] = {'identity_bindings': [], 'canonical': '裴书远', 'surfaces': [
         {'surface': s, 'from_chapter': 1, 'source_refs': ['e01_01']}
         for s in ('裴书远', '书远', '表弟')]}
     data['name_structure']['families']['fam_pei'] = {'literal': '裴', 'forms': []}
     data['name_structure']['people']['pei_shuyuan'] = {
         'family_id': 'fam_pei', 'given': '书远', 'aliases': [],
         'surface_forms': {'裴书远': '{family}{given}', '书远': '{given}', '表弟': None}}
-    chars = CharactersArtifactV6.model_validate(data)
+    chars = CharactersArtifactV7.model_validate(data)
     from tests.str06_facilities import hook_naming_map
     name_map = hook_naming_map()
     checkpoint = _checkpoint_with('表弟来了')
@@ -329,7 +329,7 @@ def test_normal_name_reveal_is_not_rewritten_by_preserve_portability_gate(tmp_pa
     from contracts.schema.workflow import STAGE4_PRESERVE_POLICY_VERSION
     from novel.stages.stage4 import assemble_preserve, preserve_name_issues, project_brief
     wires = _wires()
-    wires['ch01']['beats'][0]['cognition'] = [{
+    wires['ch01']['beats'][0]['cognition'] = [{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False,
         'proposition': {'ref': 'p_name', 'statement': '顾大哥正是被称作顾兄的人'},
         'holder': 'yun_niang', 'mode': 'learns',
         'basis': [{'segment': 'e01_01', 'quote': '唤夫君为陆大哥'}]}]

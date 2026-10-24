@@ -51,6 +51,7 @@ from novel.stages.common import CHAPTER_PROMPT, PRE_CHAPTER_RULE
 from novel.stages.stage2.resolver import EvidenceResolver, render_evidence_block
 from novel.stages.stage2.slim import (
     chapter_segment_sequence, expand_chapter_wire, slim_chapter_wire,
+    loop_answer_atoms, segment_sort_key,
 )
 from novel.core.validation import ValidationIssue
 
@@ -86,6 +87,7 @@ def chapter_loop_issues(beats: list[Any], *, chapter: int | None = None) -> list
     """本地悬念生命周期；接受、关联输入预检和最终编译共用，只读且不猜跨章配对。"""
     actions: list[tuple[int, int, str, str]] = []
     first_opens: dict[str, tuple[int, int]] = {}
+    issues: list[ValidationIssue] = []
     for bi, beat in enumerate(beats):
         if not isinstance(beat, dict):
             continue
@@ -98,10 +100,21 @@ def chapter_loop_issues(beats: list[Any], *, chapter: int | None = None) -> list
             actions.append((bi, li, ref, op))
             if op == 'open':
                 first_opens.setdefault(ref, (bi, li))
+            else:
+                _atoms, answer_issues = loop_answer_atoms(beat, loop.get('answer_refs') or ())
+                for answer_ref, message in answer_issues:
+                    issues.append(ValidationIssue(
+                        f'第{chapter}章拍{bi + 1} loops[{li}] {answer_ref}：{message}',
+                        code='chapter_loop_answer_invalid',
+                        location=('loops', ref, 'answer', answer_ref),
+                        owner=f'ch{chapter:02d}' if chapter is not None else 'chapter',
+                        scope=f'chapter:{chapter}',
+                        context={'path': ('beats', bi),
+                                 'loop_path': ('beats', bi, 'loops', li),
+                                 'loop_ref': ref, 'answer_ref': answer_ref}))
 
     first_actions: dict[tuple[str, str], tuple[int, int]] = {}
     counts: dict[tuple[str, str], int] = {}
-    issues: list[ValidationIssue] = []
     for bi, li, ref, op in actions:
         key = (ref, op)
         first = first_actions.setdefault(key, (bi, li))
@@ -154,17 +167,29 @@ def chapter_prior_text(chapters: list[dict], before_chapter: int) -> str:
             '不带证据 id，不要求引用）\n\n' + '\n\n'.join(parts) + '\n')
 
 
-def chapter_facts_block(book: Any) -> str:
-    """书级命题词表块（Phase 2）：know 的 fact 引用闭集的请求面。
-
-    词表是书级观察的产物（book owner 通读全书后登记）；本章请求只看到
-    编号与命题文本——不携带证据段（证据已由 book owner 验收）。
-    """
+def chapter_facts_block(book: Any, *, chapter: int | None = None) -> str:
+    """共享命题只授予引用身份；仅投影本章证据性质，不泄入后章确认。"""
     facts = list(getattr(book, 'facts') or ())
     if not facts:
         return ('【书级命题词表】（无——本书未登记词表，know 只写 what）\n')
-    lines = '\n'.join(f'[{fact.fact_id}] {fact.statement}' for fact in facts)
-    return ('【书级命题词表】（know 的 fact 只能引用这些编号）\n' + lines + '\n')
+    lines = []
+    for fact in facts:
+        evidence = []
+        for item in fact.evidence:
+            basis = [entry.model_dump(mode='json') for entry in item.basis
+                     if chapter is not None and segment_sort_key(entry.segment)[0]
+                     in ({0, 1} if chapter == 1 else {chapter})]
+            if basis:
+                evidence.append({'kind': item.kind, 'polarity': item.polarity,
+                                 'holder': item.holder, 'basis': basis})
+        lines.append(f'[{fact.fact_id}] ' + json.dumps(
+            {'statement': fact.statement, 'evidence_in_this_chapter': evidence,
+             'known_at_start': [entry.model_dump(mode='json')
+                                for entry in fact.known_at_start]},
+            ensure_ascii=False, sort_keys=True))
+    return ('【书级命题词表】（只登记命题身份，不保证成立；fact 只能引用这些编号。'
+            '证据仅含本章，不得把命题文本或别章确认当成本章确知。）\n'
+            + '\n'.join(lines) + '\n')
 
 
 def chapter_observation_prompt(*, chapter: int, book: Any, chapters: list[dict],
@@ -176,16 +201,27 @@ def chapter_observation_prompt(*, chapter: int, book: Any, chapters: list[dict],
     （源章数组，书级观察，章序）决定——同章请求因此逐字节可复算，`D3` 的
     互不依赖由构造函数签名保证，不靠调用顺序。
     """
-    glossary = json.dumps(
-        {slug: {'canonical': c.canonical,
-                'surfaces': [m.surface for m in c.surfaces]}
-         for slug, c in sorted(book.characters.items())},
-        ensure_ascii=False, sort_keys=True, indent=1)
+    glossary_items = {}
+    for slug, candidate in sorted(book.characters.items()):
+        bindings = []
+        for binding in candidate.identity_bindings:
+            appearance = [ref for ref in binding.appearance_refs
+                          if segment_sort_key(ref)[0] in ({0, 1} if chapter == 1 else {chapter})]
+            if appearance:
+                bindings.append({'description': binding.description,
+                                 'appearance_refs': appearance})
+        glossary_items[slug] = {
+            'canonical': candidate.canonical,
+            'surfaces': [mention.surface for mention in candidate.surfaces
+                         if any(segment_sort_key(ref)[0] <= chapter
+                                for ref in mention.source_refs)],
+            'identity_bindings_in_this_chapter': bindings}
+    glossary = json.dumps(glossary_items, ensure_ascii=False, sort_keys=True, indent=1)
     chapter_evidence = render_evidence_block(evidence)
     return CHAPTER_PROMPT.format(
         ch=chapter,
         glossary=glossary,
-        facts_block=chapter_facts_block(book),
+        facts_block=chapter_facts_block(book, chapter=chapter),
         prior=chapter_prior_text(chapters, chapter),
         evidence=chapter_evidence,
         pre_chapter=PRE_CHAPTER_RULE if chapter == 1 else '',
@@ -366,8 +402,8 @@ def _chapter_issues(canonical: Any, resolver: EvidenceResolver,
                     if slugs is not None and holder == 'reader':
                         issues.append((beat_path + (label, index - 1),
                                        f'{where} {label}[{index}] cognition holder 是 reader'
-                                       '——观察面禁 reader（读者知情由 compile 按拍级 '
-                                       'access 派生，wire 禁自写）'))
+                                       '——观察面禁 reader（读者知情由 compile 按原子 '
+                                       '可见性与证据性质派生，wire 禁自写）'))
                     elif slugs is not None and holder not in slugs:
                         issues.append((beat_path + (label, index - 1),
                                        f'{where} {label}[{index}] cognition holder 引用未知人物 '

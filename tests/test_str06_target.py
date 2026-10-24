@@ -11,7 +11,7 @@ from __future__ import annotations
 from contracts.schema.grounding import SemanticBinding
 from contracts.schema.policy import PreserveKind
 from contracts.schema.source import (
-    BlueprintsArtifactV17, ChapterBlueprint, CharactersCore,
+    BlueprintsArtifactV18, ChapterBlueprint, CharactersCore,
 )
 from tests.str06_facilities import name_map_of, v13_beat
 from novel.stages.stage4.grounding import (
@@ -24,12 +24,12 @@ from tests.str06_expression_inputs import (
 
 
 def _source_pair():
-    chars = CharactersCore(
+    chars = CharactersCore(initial_knowledge=[],
         characters={
-            'fu_jun': {'canonical': '夫君',
+            'fu_jun': {'identity_bindings': [], 'canonical': '夫君',
                        'surfaces': [{'surface': '夫君', 'from_chapter': 1,
                                      'until_chapter': None, 'source_refs': ['e01_01']}]},
-            'yun': {'canonical': '云娘',
+            'yun': {'identity_bindings': [], 'canonical': '云娘',
                     'surfaces': [{'surface': '云娘', 'from_chapter': 1,
                                   'until_chapter': None, 'source_refs': ['e01_01']}]}},
         initial_state=[{'state_id': 's0_01',
@@ -37,19 +37,19 @@ def _source_pair():
                         'key': 'identity', 'value': '养子', 'persistence': 'stable',
                         'source_refs': ['e01_01'],
                         'basis': [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}])
-    bp = BlueprintsArtifactV17(source_expression=sample_blueprint_expression(),
+    bp = BlueprintsArtifactV18(source_expression=sample_blueprint_expression(),
         world_constraints=[], chapters=(
             ChapterBlueprint(chapter=1,
                              beats=(v13_beat(
                                  'b01_01', '开篇', participants=('fu_jun', 'yun'),
-                                 effects=({'target': {'kind': 'relation',
+                                 effects=({'reader_visible': False, 'target': {'kind': 'relation',
                                                       'subject': 'fu_jun', 'object': 'yun'},
                                            'key': 'agreement', 'op': 'set',
                                            'value': '成立',
                                            'modality': 'actual',
                                            'basis': ({'segment': 'e01_01',
                                                       'quote': '夫君藏进床底'},)},),
-                                 cognition=({'proposition': {'ref': 'p_known',
+                                 cognition=({'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'proposition': {'ref': 'p_known',
                                                              'statement': '借种之约是共同秘密'},
                                              'holder': 'yun', 'mode': 'learns',
                                              'basis': ({'segment': 'e01_01',
@@ -61,9 +61,9 @@ def _source_pair():
 
 
 def _preserve_wire():
-    """stage4-preserve-v7 形状（命名前移批）：义务以 anchors 引用投影句柄
+    """stage4-preserve-v8 形状（命名前移批）：义务以 anchors 引用投影句柄
     （b拍.e序/.c序/.l序、s0_*、wc_*），lineage 不再由模型输出。"""
-    return {'protocol_version': 'stage4-preserve-v7', 'obligations': [
+    return {'protocol_version': 'stage4-preserve-v8', 'obligations': [
         {'kind': 'event_core', 'statement': '借种之约成立',
          'anchors': ['b01_01.e1'],
          'must_preserve': True, 'satisfaction': '正文呈现约定被提出且被接受',
@@ -141,7 +141,7 @@ def test_assemble_preserve_rejects_dangling_and_cycles():
         name_map=name_map_of(chars), name_map_sha256='n' * 64)
     assert any('未知句柄' in e for e in errors)
 
-    cyclic = {'protocol_version': 'stage4-preserve-v7', 'obligations': [
+    cyclic = {'protocol_version': 'stage4-preserve-v8', 'obligations': [
         {'kind': 'event_core', 'statement': 'a',
          'anchors': ['b01_01.e1'],
          'must_preserve': False, 'satisfaction': '', 'requires': [2]},
@@ -220,15 +220,15 @@ def test_identity_stable_constraints_come_only_from_the_fact_layer():
     # 已删，改按观察协议直接构造同一形状）；其文本若泄漏进身份约束，下面两条
     # 断言会红。
     observation = ChapterObservation.model_validate({
-        'protocol_version': 'stage2-chapters-v7', 'beats': [{
+        'protocol_version': 'stage2-chapters-v8', 'beats': [{
             'event': '试探', 'participants': ['fu_jun', 'yun'],
             'source_refs': ['e01_01'], 'scene_boundary': 'new',
             'temporal_mode': 'single',
-            'effects': [{'target': {'kind': 'character', 'char_id': 'fu_jun'},
+            'effects': [{'reader_visible': False, 'target': {'kind': 'character', 'char_id': 'fu_jun'},
                          'key': 'scene_location', 'op': 'set', 'value': '床底',
                          'modality': 'actual',
                          'basis': [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}],
-            'cognition': [{'proposition': {'ref': 'p_believe',
+            'cognition': [{'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': False, 'proposition': {'ref': 'p_believe',
                                            'statement': '芸娘以为夫君已离开'},
                            'holder': 'yun', 'mode': 'believes',
                            'basis': [{'segment': 'e01_01',
@@ -277,7 +277,7 @@ def test_binding_derivation_full_denominator():
 # ───────────────────────── Design 组装 ─────────────────────────
 
 def _design_wire(kp_known: str = '__KP_KNOWN__'):
-    """stage4-design-v5 形状（R2）：模型不输出任何 ID／归章引用／归一权重。
+    """stage4-design-v6 形状（R2）：模型不输出任何 ID／归章引用／归一权重。
 
     a4：被必保义务锚定的知情（ob02 的 realize 分母）用 kp 键承载。命题正式
     ref 由 stage2 compile 按序派发，离线单测不持 Brief 时给占位键（锁面只在
@@ -285,7 +285,7 @@ def _design_wire(kp_known: str = '__KP_KNOWN__'):
     真实句柄。
     """
     return {**sample_design_expression(('yun',)),
-        'protocol_version': 'stage4-design-v5',
+        'protocol_version': 'stage4-design-v6',
         'book_style': '冷峻克制的第三人称叙事，重对话张力。',
         'initial_state': [],
         'scenes': [
@@ -426,7 +426,7 @@ def test_design_rules_pin_pov_shape():
     # 缺省值与 kp 例外通道）。
     assert 'op 缺省 set' in DESIGN_RULES
     assert 'scope 缺省 book' in DESIGN_RULES
-    assert 'kp_* 键的知情增量一律经 know 标注派生' in DESIGN_RULES
+    assert 'kp_* 键的知情 set/unset 一律经 know 标注派生' in DESIGN_RULES
 
 
 def test_design_surface_release_must_be_registered():

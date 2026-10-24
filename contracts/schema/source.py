@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""source —— Characters v6／Blueprints v17 两份 Source Truth canonical（CS-S rc20）。
+"""source —— Characters v7／Blueprints v18 两份 Source Truth canonical（rc27）。
 
 【职责与发布边界】Characters 保存人物条目（canonical＋surfaces 时间窗）、
 人物/关系 initial_state 与名称结构；Blueprints 保存逐章拍、三类转移、场景、
@@ -10,9 +10,10 @@ writer `novel/stages/stage2/compile.py` 编译发布，两份产物是下游真�
 【拍模型】每一拍是一次状态转移：event 给人读，需延续的变化进入三类转移——
   • effects（事实）：叙述确立的事实变化，modality 区分 actual／planned／
     expected／conditional；变化键入闭集，作用域读时按 REGISTERED_STATE_KEYS 派生；
-  • cognition（认知）：持有者对命题的 learns／suspects／confirms／hears_claim／
-    believes／asserts；reader 条目由 compiler 按 access 与转移派生，观察面禁自写；
-  • loops（悬念）：open 带问题，close 带非空 resolution，开闭形状独立。
+  • cognition（认知）：set 登记带极性的认知，unset 撤回当前接受；证据性质与
+    读者可见性独立表达，reader 条目由 compiler 派生，观察面禁自写；
+  • loops（悬念）：open 带问题，close 引用本拍已确认且读者可见的答案原子，
+    resolution 仅由 compiler 派生。
 拍另有 scene_boundary（new／continue）、temporal_mode（single／iterative）与
 access（witnessed／narrated）。场景、命题、loop 等正式 ID 由 compiler 生成
 （I-21）；章观察使用本地命题句柄或书级 facts 编号，跨章关联经正式观察协议。
@@ -51,6 +52,10 @@ def _character_key_is_not_reader(key: str) -> str:
 # 三种人物载体共用同一保留字闸；dict key 的错误仍定位到 characters.<key>，
 # 不用顶层 model_validator 把付费 wire 的一个条目错误扩大为整份返修。
 CharacterKey = Annotated[str, AfterValidator(_character_key_is_not_reader)]
+
+# 命题的极性与证据性质分属不同轴：否认首先也是说法，不自动成为负命题确知。
+Polarity = Literal['positive', 'negative']
+EvidenceSupport = Literal['confirmed', 'claim', 'inference']
 
 # ───────────────────── 变化键闭集与固定作用域（D8；CS-S Phase 3）─────────────────────
 #
@@ -102,6 +107,39 @@ REGISTERED_STATE_KEYS: Final[dict[str, str]] = {
     'scene_location': 'scene',
 }
 
+
+#: 状态阅读标签：复用现役键的既定含义，不扩展维度；未知标签不得猜补。
+STATE_KEY_LABELS: Final[dict[str, str]] = {
+    'intent': '意图与计划',
+    'relationship': '关系与亲疏',
+    'residence': '长期居所',
+    'body_state': '身体与外观',
+    'body_occupancy': '身体与意识归属',
+    'marital_status': '婚姻状态',
+    'pregnancy': '孕产状态',
+    'attitude': '态度',
+    'kinship': '亲缘',
+    'identity': '身份',
+    'children': '子女状况',
+    'occupation': '职业与差事',
+    'engagement': '婚约状态',
+    'health': '健康状态',
+    'emotional_state': '情绪',
+    'agreement': '约定',
+    'paternity': '生父母身份',
+    'reputation': '名声与舆论',
+    'fertility': '生育力',
+    'secret': '秘密与隐瞒状态',
+    'conflict': '交恶与冲突状态',
+    'social_standing': '地位与处境',
+    'wealth': '财产与产业',
+    'age': '年龄',
+    'possession': '持有物',
+    'address_term': '称呼方式',
+    'daily_training': '日常修习',
+    'scene_location': '当前所在',
+}
+
 #: 变化键的 schema 模式（含 compiler 合成的 `scene_location`——合成效应也走
 #: `Effect` 模型）。
 STATE_KEY_PATTERN: Final = '^(?:' + '|'.join(REGISTERED_STATE_KEYS) + r')$'
@@ -141,9 +179,18 @@ class SurfaceWindow(StrictModel):
         return self
 
 
+class IdentityBinding(StrictModel):
+    """语境指称与人物的同一性证据；不是通用别名或姓名释放许可。"""
+
+    description: str = Field(min_length=1)
+    appearance_refs: tuple[str, ...] = Field(min_length=1)
+    identity_refs: tuple[str, ...] = Field(min_length=1)
+
+
 class CharacterEntry(StrictModel):
     canonical: str = Field(min_length=1, description='全书最稳定称呼（内部主键显示名）')
     surfaces: tuple[SurfaceWindow, ...] = Field(min_length=1)
+    identity_bindings: tuple[IdentityBinding, ...]
 
     @model_validator(mode='after')
     def _unique_surfaces(self) -> 'CharacterEntry':
@@ -192,6 +239,26 @@ class InitialStateAtom(StrictModel):
     basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
 
 
+class InitialKnowledgeAtom(StrictModel):
+    """开场前已经确认的知识；来源为 Book 的有据 known_at_start 声明。
+
+    不表示读者已经获知，也不制造一次剧情中的 learns 转移。正负命题共用
+    同一正式命题身份，证据章节不决定故事中的确认时间。
+    """
+
+    knowledge_id: str = Field(pattern=r'^k0_\d{2,}$')
+    holder: CharacterKey
+    proposition: PropositionRef
+    polarity: Polarity
+    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _has_statement(self) -> 'InitialKnowledgeAtom':
+        if not self.proposition.statement or not self.proposition.statement.strip():
+            raise ValueError('开场知识必须包含已闭合的正式命题文本')
+        return self
+
+
 class WorldConstraint(StrictModel):
     """写手若不知道就可能写错世界观的规则；人物判断/单次教训不收。"""
 
@@ -210,6 +277,7 @@ class CharactersCore(StrictModel):
     名称结构修订不会连带使已购结果失效（F6 裁决）。"""
     characters: dict[CharacterKey, CharacterEntry] = Field(min_length=1)
     initial_state: tuple[InitialStateAtom, ...] = Field(default=(), min_length=0)
+    initial_knowledge: tuple[InitialKnowledgeAtom, ...]
 
     @model_validator(mode='after')
     def _refs_close(self) -> 'CharactersCore':
@@ -217,6 +285,17 @@ class CharactersCore(StrictModel):
         if len(set(ids)) != len(ids):
             raise ValueError('state_id 重复')
         slugs = set(self.characters)
+        knowledge_ids = [atom.knowledge_id for atom in self.initial_knowledge]
+        if len(set(knowledge_ids)) != len(knowledge_ids):
+            raise ValueError('knowledge_id 重复')
+        knowledge = set()
+        for atom in self.initial_knowledge:
+            if atom.holder not in slugs:
+                raise ValueError(f'initial_knowledge {atom.knowledge_id} 引用未知人物 {atom.holder}')
+            identity = (atom.holder, atom.proposition.ref)
+            if identity in knowledge:
+                raise ValueError('开场知识的持有者/命题不得重复或同时接受正反结论')
+            knowledge.add(identity)
         for atom in self.initial_state:
             t = atom.target
             refs = [t.char_id] if t.kind == 'character' else [t.subject, t.object]
@@ -436,16 +515,17 @@ class NameProjection(StrictModel):
         return next((e for e in self.by_person if e.char_id == char_id), None)
 
 
-class CharactersArtifactV6(CharactersCore):
-    """`stage2/characters/characters.json` 目标 v6（CS-S Phase 3，rc20）。
+class CharactersArtifactV7(CharactersCore):
+    """`stage2/characters/characters.json` 目标 v7（rc27）。
 
     `name_structure` 是 RC 字段，经反例定版；core view（characters +
     initial_state）形状与 RC2 相同。v5：initial_state 原子删 `knowledge`
     （初始知情由 Phase 2 的 facts known_at_start 承载）。v6：initial_state 键入
     `CHANGE_KEYS` 闭集（schema 层兜底直接构造的表外键）；rc20 起旧根按
-    rc 关闭式拒读。
+    rc 关闭式拒读。v7：显式登记匿名或歧义指称的 identity_bindings；实体出场
+    不再由姓名首次出现推断。旧根只读，新根重建。
     """
-    contract_version: str = Field(default='str06-rc20', pattern=r'^str06-rc[0-9]+$')
+    contract_version: Literal['str06-rc27'] = 'str06-rc27'
     name_structure: NameStructure | None = None
     #: 来源账（F7a）：盘上键 `_provenance`。`exclude=True` 让内存态 dump 不带
     #: 它——prompt／请求字节与 F5e 已购身份逐字不变；落盘由 repository 注入。
@@ -466,10 +546,11 @@ class CharactersArtifactV6(CharactersCore):
         """core view（characters + initial_state）：Preserve/章节编译的唯一消费面。"""
         return CharactersCore.model_validate(
             {'characters': {k: v.model_dump() for k, v in self.characters.items()},
-             'initial_state': [a.model_dump() for a in self.initial_state]})
+             'initial_state': [a.model_dump() for a in self.initial_state],
+             'initial_knowledge': [a.model_dump() for a in self.initial_knowledge]})
 
     @model_validator(mode='after')
-    def _structure_closes(self) -> 'CharactersArtifactV6':
+    def _structure_closes(self) -> 'CharactersArtifactV7':
         ns = self.name_structure
         if ns is None:
             return self
@@ -550,6 +631,7 @@ class Effect(StrictModel):
     #: R10a a1（C2）：事实的时态身份——计划／预计／条件执行不是已发生；
     #: 「约半个月便回」是 expected，不是 actual 的既成时长。
     modality: str = Field(pattern=r'^(actual|planned|expected|conditional)$')
+    reader_visible: bool
     value: Any = None
     #: R10a a1：逐字证据（必填 ≥1）——条目声称的判断必须能在所引句段内
     #: 逐字定位；缺引文的判断不被接受。
@@ -567,22 +649,38 @@ class Effect(StrictModel):
 
 
 class Cognition(StrictModel):
-    """认知转移（D1/D2）：谁对哪条命题持什么模式。取代 v12 的 reveals。
+    """人物对命题的接受或撤回；接受携带模式、极性与证据性质。
 
-    CS-S Phase 3：wire 的 holder 禁 `reader`（读者知情由 compile 按拍级
-    `access` 派生注入 canonical——蓝图里的 reader 条目全部是派生物）。
+    unset 只撤回当前接受，不删除认知历史或证明世界命题为假。wire 的 holder
+    禁 reader；正式 reader 条目由 compiler 从明确可见的原子派生，access
+    仅表示呈现通道，不能代替真实性或可见性判定。
     """
 
     proposition: PropositionRef
     holder: str = Field(min_length=1)
-    mode: str = Field(pattern=r'^(' + '|'.join(COGNITION_MODES) + r')$')
+    op: Literal['set', 'unset']
+    mode: str | None = Field(pattern=r'^(' + '|'.join(COGNITION_MODES) + r')$')
+    polarity: Polarity | None
+    support: EvidenceSupport
+    reader_visible: bool
     #: R10a a1（C1）：逐字证据（必填 ≥1）——「觉得像是看穿了」的怀疑必须
     #: 引到含限定的原句，防把猜测升格为确知后无法回溯。
     basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
 
+    @model_validator(mode='after')
+    def _op_shape(self) -> 'Cognition':
+        if self.op == 'unset':
+            if self.mode is not None or self.polarity is not None:
+                raise ValueError('认知 unset 的 mode／polarity 必须为 null')
+        elif self.mode is None or self.polarity is None:
+            raise ValueError('认知 set 必须显式给出 mode／polarity')
+        if self.mode in ('learns', 'confirms') and self.support != 'confirmed':
+            raise ValueError('learns／confirms 只接受 confirmed 证据，推测和说法不得升级确知')
+        return self
+
 
 class LoopAction(StrictModel):
-    """悬念转移（D10）：新建（open 带问题）或引用已有 loop（close 带 resolution）。
+    """悬念转移：open 带问题；close 引用本拍答案原子，文本由代码派生。
 
     loop 只能 open 一次；问题文本只出现在 open 处，之后不可改写——v12 把 loop
     挂成 effect（op open/close）时，模型反复用 set 改写问题文本（F9 与本轮实证），
@@ -593,6 +691,8 @@ class LoopAction(StrictModel):
     op: str = Field(pattern=r'^(open|close)$')
     question: str | None = None
     resolution: str | None = None
+    answer_refs: tuple[Annotated[str, Field(
+        pattern=r'^(?:b\d+_\d+\.)?[ec][1-9]\d*$')], ...]
 
     @model_validator(mode='after')
     def _op_shape(self) -> 'LoopAction':
@@ -601,9 +701,15 @@ class LoopAction(StrictModel):
                 raise ValueError('open 必须带悬念的问题内容（question 非空）')
             if self.resolution is not None:
                 raise ValueError('open 不得带 resolution')
+            if self.answer_refs:
+                raise ValueError('open 不得带答案引用')
         else:
-            if not (isinstance(self.resolution, str) and self.resolution.strip()):
-                raise ValueError('close 必须带 resolution（收束内容）')
+            if not self.answer_refs:
+                raise ValueError('close 必须引用本拍答案原子')
+            if len(set(self.answer_refs)) != len(self.answer_refs):
+                raise ValueError('close 答案原子引用重复')
+            if self.resolution is not None and not self.resolution.strip():
+                raise ValueError('派生 resolution 不得为空白')
             if self.question is not None:
                 raise ValueError('close 不得改写问题文本')
         return self
@@ -684,8 +790,8 @@ class ChapterBlueprint(StrictModel):
 from contracts.schema.expression import SourceExpression
 
 
-class BlueprintsArtifactV17(StrictModel):
-    """`stage2/blueprints/chapter_blueprints.json` 目标 v17（CS-S Phase 3，rc20）。
+class BlueprintsArtifactV18(StrictModel):
+    """`stage2/blueprints/chapter_blueprints.json` 目标 v18（rc27）。
 
     v13（质量改进批次二）：拍模型从 effects/reveals 改为 effects／cognition／loops
     三类转移，拍上带场景边界与时间模式，章蓝图带 compiler 生成的场景分段。跨章
@@ -700,6 +806,9 @@ class BlueprintsArtifactV17(StrictModel):
     v17（CS-S Phase 3，2026-10-08）：Beat 增 `access`（获知通道闭集）；效果键入
     `CHANGE_KEYS` 闭集；cognition 的 reader 条目＝compile 按拍级 access 派生的
     读者知情（wire 禁 reader——蓝图里的 reader 全部是派生物）。
+    v18（rc27）：认知增加接受／撤回、极性、证据性质和读者可见性；效应显式
+    标明可见性；悬念答案引用本拍确定成立且可见的原子，resolution 由代码派生。
+    读者确知不再由通道或自由文本收束推断，旧版只读、新根重建。
     """
 
     provenance: FreeProvenance | LlmProvenance | None = Field(
@@ -712,8 +821,33 @@ class BlueprintsArtifactV17(StrictModel):
     evidence: dict[str, str] = Field(min_length=1)
 
     @model_validator(mode='after')
-    def _chapters_contiguous(self) -> 'BlueprintsArtifactV17':
+    def _chapters_contiguous(self) -> 'BlueprintsArtifactV18':
         ordinals = [c.chapter for c in self.chapters]
         if sorted(ordinals) != list(range(1, len(ordinals) + 1)):
             raise ValueError(f'章号必须从 1 连续，实得 {sorted(ordinals)}')
+        for chapter in self.chapters:
+            for beat in chapter.beats:
+                atoms = {
+                    **{f'{beat.beat_id}.e{index}': atom
+                       for index, atom in enumerate(beat.effects, 1)},
+                    **{f'{beat.beat_id}.c{index}': atom
+                       for index, atom in enumerate(beat.cognition, 1)},
+                }
+                for action in beat.loops:
+                    if action.op != 'close':
+                        continue
+                    if not action.resolution or not action.resolution.strip():
+                        raise ValueError(f'{beat.beat_id} 悬念 close 缺少代码派生 resolution')
+                    for ref in action.answer_refs:
+                        atom = atoms.get(ref)
+                        if atom is None:
+                            raise ValueError(f'{beat.beat_id} 悬念答案必须引用本拍正式原子：{ref}')
+                        if not atom.reader_visible:
+                            raise ValueError(f'{beat.beat_id} 悬念答案未向读者展示：{ref}')
+                        if isinstance(atom, Effect):
+                            if atom.modality != 'actual' or atom.op != 'set':
+                                raise ValueError(f'{beat.beat_id} 悬念答案不是已成立事实：{ref}')
+                        elif (atom.op != 'set' or atom.mode not in ('learns', 'confirms')
+                              or atom.support != 'confirmed'):
+                            raise ValueError(f'{beat.beat_id} 悬念答案不是已确认认知：{ref}')
         return self

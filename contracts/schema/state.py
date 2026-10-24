@@ -41,7 +41,12 @@ def change_schema(schema: dict) -> None:
         {'if': {'properties': {'op': {'const': 'set'}, 'domain': {'const': 'knowledge'}}},
          'then': {'required': ['knowledge_mode'],
                   'properties': {'knowledge_mode': {'not': {'type': 'null'}}}}},
+        {'if': {'properties': {'op': {'const': 'set'}, 'domain': {'const': 'knowledge'},
+                              'key': {'pattern': '^kp_'}}},
+         'then': {'properties': {'value': {'enum': ['true', 'false']}}}},
         {'if': {'properties': {'op': {'const': 'set'}, 'domain': {'not': {'const': 'knowledge'}}}},
+         'then': {'properties': {'knowledge_mode': {'type': 'null'}}}},
+        {'if': {'properties': {'op': {'enum': ['unset', 'unknown']}}},
          'then': {'properties': {'knowledge_mode': {'type': 'null'}}}}])
 
 
@@ -106,6 +111,11 @@ class StateChange(StateAddress):
         # （F5e 真书 wire 实证——模型在 unknown 解除项上留 null；此为解除项的合法形态）。
         if self.op == 'set' and (self.domain is EffectDomain.KNOWLEDGE) != (self.knowledge_mode is not None):
             raise ValueError('knowledge 的 set 必须声明知情模式；其它域不得带模式')
+        if self.op != 'set' and self.knowledge_mode is not None:
+            raise ValueError('unset/unknown 不得携带知情模式')
+        if (self.domain is EffectDomain.KNOWLEDGE and self.op == 'set'
+                and self.key.startswith('kp_') and self.value not in ('true', 'false')):
+            raise ValueError('命题知情值必须是 true/false，极性不得混入自由文本')
         return self
 
 

@@ -62,8 +62,8 @@ def _ident_setup(*, kind=PreserveKind.IDENTITY, must=True, first_segment='e01_01
 
     命题 p_x 的源证据句段＝a4 蓝图 b01_01 认知 basis 的 e01_01（带名面首次
     出现句段与之重合即命中识别②）。"""
-    characters = CharactersCore.model_validate({
-        'characters': {'cousin': {'canonical': '裴书远', 'surfaces': [
+    characters = CharactersCore.model_validate({'initial_knowledge': [],
+        'characters': {'cousin': {'identity_bindings': [], 'canonical': '裴书远', 'surfaces': [
             {'surface': '裴书远', 'from_chapter': 1, 'source_refs': [first_segment]},
             {'surface': '表弟', 'from_chapter': 1, 'source_refs': ['e01_02']}]}},
         'initial_state': []})
@@ -73,6 +73,8 @@ def _ident_setup(*, kind=PreserveKind.IDENTITY, must=True, first_segment='e01_01
                               'surface_forms': {'裴书远': '{family}{given}',
                                                 '表弟': None}}}})
     anchor = ObligationAnchor(
+        basis_segments=['e01_01'], op='set', polarity='positive',
+        support='confirmed', reader_visible=True,
         handle='b01_01.c1', source_kind='cognition', holder='hero', mode='learns',
         proposition_ref='p_x', proposition_statement=statement,
         quotes=('原来是裴家书远',))
@@ -111,23 +113,23 @@ def test_requires_released_needs_all_three_typed_signals():
     # 无名称结构不判定（带名判定缺输入，不猜）。
     assert _ident_setup(structure=False)\
         .requirements[0].knowledge_changes[0].requires_released == ()
-    # IR 映射面：(holder, kp, mode) → 必现字面。
+    # IR 映射面：持有者、命题、操作、模式和极性共同定位。
     assert required_releases(_ident_setup()) == {
-        ('hero', change.kp, 'known'): ('裴书远',)}
+        ('hero', change.kp, 'set', 'known', 'positive'): ('裴书远',)}
 
 
 # ───────────────────────── Design 闸：know 拍位必须已释放所列称谓 ─────────────────────────
 
 def _gate_wires():
     from copy import deepcopy
-    from tests.test_str06_design_slim import _brief, _obligations, _v9_wire
+    from tests.test_str06_design_slim import _brief, _obligations, _current_wire
     brief = _brief()
     change = brief.requirements[0].knowledge_changes[0]
     brief = brief.model_copy(update={'requirements': (
         brief.requirements[0].model_copy(update={'knowledge_changes': (
             change.model_copy(update={'requires_released': ('陆大哥',)}),)}),
         *brief.requirements[1:],)})
-    return brief, _obligations(brief), _v9_wire(), deepcopy(_v9_wire())
+    return brief, _obligations(brief), _current_wire(), deepcopy(_current_wire())
 
 
 def _gate_errors(brief, obligations, wire):
@@ -184,7 +186,7 @@ def test_chapter_ir_carries_requires_released_for_the_carrier_chapter():
         length_band=(plain_ir.book_brief.length_band_low,
                      plain_ir.book_brief.length_band_high),
         projection=chars.name_projection(), structure=chars.name_structure,
-        required_releases={('yun_niang', 'intent', 'known'): ('苏芸娘',)},
+        required_releases={('yun_niang', 'intent', 'set', 'known', 'positive'): ('苏芸娘',)},
         name_map=name_map_of(chars))
     assert ir.chapters[0].requires_released == ('苏芸娘',)
     packet = project_chapter_packet(ir, 1)

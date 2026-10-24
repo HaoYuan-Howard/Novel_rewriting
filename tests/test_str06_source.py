@@ -26,7 +26,7 @@ from novel.stages.stage2 import (
 from tests.str06_facilities import complete_associate_fixture
 
 PV = 'stage2-names-v4'   # 名称同一性留证协议
-CPV = 'stage2-chapters-v7'     # 章观察（CS-S Phase 3：闭集 change 与 reader 派生）
+CPV = 'stage2-chapters-v8'     # 章观察（CS-S Phase 3：闭集 change 与 reader 派生）
 
 
 def _outcome(*, book=None, chapters=None, names=None, associate=None):
@@ -139,14 +139,14 @@ def test_same_beat_establish_and_reference_is_legal():
                                    'object': 'yun_niang'},
                         'key': 'relationship', 'op': 'set', 'value': '所言不虚',
                         'modality': 'actual',
-                        'basis': _basis('e02_01')}],
+                        'basis': _basis('e02_01'), 'reader_visible': True}],
               cognition=[{'proposition': {'ref': 'p_trust'},
                           'holder': 'yun_niang', 'mode': 'suspects',
-                          'basis': _basis('e02_01')},
+                          'basis': _basis('e02_01'), 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': True},
                          {'proposition': {'ref': 'p_trust',
                                           'statement': '夫君的话可信'},
                           'holder': 'yun_niang', 'mode': 'confirms',
-                          'basis': _basis('e02_01')}])]}
+                          'basis': _basis('e02_01'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True}])]}
     outcome = _outcome(chapters=chapters)
     assert outcome.errors == [] and outcome.undecided == [], (outcome.errors,
                                                               outcome.undecided)
@@ -193,12 +193,12 @@ def test_fold_scene_scope_expires_but_book_scope_persists():
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                         'key': 'scene_location', 'op': 'set', 'value': '正厅',
                         'modality': 'actual',
-                        'basis': _basis('e02_01')}]),
+                        'basis': _basis('e02_01'), 'reader_visible': True}]),
         _beat('场景二', ['e02_01'],
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                         'key': 'residence', 'op': 'set', 'value': '陆家',
                         'modality': 'actual',
-                        'basis': _basis('e02_01')}]),
+                        'basis': _basis('e02_01'), 'reader_visible': True}]),
     ]}
     outcome = _outcome(chapters=chapters)
     assert outcome.errors == [] and outcome.undecided == []
@@ -221,11 +221,15 @@ def test_fold_reports_stable_rewrite_and_loop_lifecycle():
                                    'object': 'yun_niang'},
                         'key': 'marital_status', 'op': 'set', 'value': '破裂',
                         'modality': 'actual',
-                        'basis': _basis('e02_01')}],
-              loops=[{'ref': 'mystery', 'op': 'open', 'question': '谁在暗中窥伺'}])]}
+                        'basis': _basis('e02_01'), 'reader_visible': True}],
+              loops=[{'ref': 'mystery', 'op': 'open', 'question': '谁在暗中窥伺', 'answer_refs': []}])]}
     chapters['ch03']['beats'] = [
         _beat('收束悬念', ['e03_01'],
-              loops=[{'ref': 'mystery', 'op': 'close', 'resolution': '是管家'}])]
+              cognition=[{'proposition': {'ref': 'p_steward', 'statement': '是管家'},
+                          'holder': 'yun_niang', 'op': 'set', 'mode': 'learns',
+                          'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True,
+                          'basis': _basis('e03_01')}],
+              loops=[{'ref': 'mystery', 'op': 'close', 'answer_refs': ['c1']}])]
     # 跨章 close 走 associate 配对（D8）：ch02.mystery ↔ ch03.mystery。
     associate = _unpaired_associate()
     associate['loop_pairing'] = [{'open': 'ch02.mystery', 'close': 'ch03.mystery',
@@ -245,7 +249,7 @@ def test_fold_counts_empty_transition_beats_per_chapter():
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                         'key': 'emotional_state', 'op': 'set', 'value': '沉',
                         'modality': 'actual',
-                        'basis': _basis('e02_01')}]),
+                        'basis': _basis('e02_01'), 'reader_visible': True}]),
         _beat('空转移一', ['e02_01'], scene_boundary='continue'),
         _beat('空转移二', ['e02_01'], scene_boundary='continue'),
     ]}
@@ -263,17 +267,17 @@ def test_fold_keeps_unset_and_unknown_distinct_from_never_established():
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                         'key': 'health', 'op': 'set', 'value': '风寒',
                         'modality': 'actual',
-                        'basis': _basis('e02_01')}]),
+                        'basis': _basis('e02_01'), 'reader_visible': True}]),
         _beat('解', ['e02_01'], scene_boundary='continue',
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                         'key': 'health', 'op': 'unset', 'value': None,
                                                 'modality': 'actual',
-                                                'basis': _basis('e02_01')}]),
+                                                'basis': _basis('e02_01'), 'reader_visible': True}]),
         _beat('未知', ['e02_01'], scene_boundary='continue',
               effects=[{'target': {'kind': 'character', 'char_id': 'fu_jun'},
                         'key': 'scene_location', 'op': 'unknown', 'value': None,
                                                 'modality': 'actual',
-                                                'basis': _basis('e02_01')}]),
+                                                'basis': _basis('e02_01'), 'reader_visible': True}]),
     ]}
     outcome = _outcome(chapters=chapters)
     assert outcome.errors == [] and outcome.undecided == []
@@ -318,7 +322,7 @@ def test_fold_reads_opening_beat_reestablishing_initial_state():
                                          'object': 'yun_niang'},
                               'key': 'marital_status', 'op': 'set', 'value': '夫妻',
                                     'modality': 'actual',
-                                    'basis': _basis('e00_01')}])
+                                    'basis': _basis('e00_01'), 'reader_visible': True}])
     outcome = _outcome(book=_e00_book(), chapters=_e00_chapters(opening),
                        associate=_unpaired_associate())
     assert outcome.errors == [] and outcome.undecided == []
@@ -331,7 +335,7 @@ def test_fold_reads_opening_beat_reestablishing_initial_state():
                                        'object': 'yun_niang'},
                             'key': 'marital_status', 'op': 'set', 'value': '夫妻',
                                 'modality': 'actual',
-                                'basis': _basis('e01_01')}])
+                                'basis': _basis('e01_01'), 'reader_visible': True}])
     outcome = _outcome(book=_e00_book(), chapters=_e00_chapters(quiet))
     assert not any('同键 set 同值' in e for e in outcome.fold['events'])
 
@@ -380,7 +384,7 @@ def test_effect_dead_fields_are_refused_at_the_schema_layer():
     base = {'target': {'kind': 'character', 'char_id': 'fu_jun'},
             'key': 'secret', 'op': 'set', 'value': 'x',
             'modality': 'actual',
-            'basis': _basis('e01_01')}
+            'basis': _basis('e01_01'), 'reader_visible': True}
     Effect.model_validate(base)
     for dead in ({'scope': 'scene'},
                  {'disclosure': {'visibility': 'on_page'}},
@@ -390,12 +394,12 @@ def test_effect_dead_fields_are_refused_at_the_schema_layer():
 
 
 def test_loop_question_text_cannot_be_rewritten_at_close():
-    """close 只许 resolution：借机改写问题文本在 schema 层即拒。"""
+    """close 选择答案原子；借机改写问题文本在 schema 层即拒。"""
     from contracts.schema.source import LoopAction
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         LoopAction.model_validate({'ref': 'loop01', 'op': 'close',
-                                   'resolution': 'x', 'question': '改写'})
+                                   'question': '改写', 'answer_refs': ['c1']})
 
 
 # ───────────────────────── 开发路径源输入（C 批） ─────────────────────────
@@ -413,38 +417,16 @@ def test_dev_source_requires_explicit_hook_copy():
             load_dev_source(bad)
 
 
-def test_first_appearance_gate_flags_only_pre_anchor_chapters():
-    """R8c 首现闸：判出「参与者早于最早称谓锚」的章；锚点后合法出场不误报
-    （canary：daughter 锚 ch10 ⇒ 只判 ch09，不判 ch10/11）；无锚不判。"""
-    from types import SimpleNamespace
-
-    from novel.stages.stage2.compile import first_appearance_anchors, first_appearance_issues
-
-    def surface(ch):
-        return SimpleNamespace(from_chapter=ch)
-
-    def beat(participants=(), holder=None):
-        cognition = (SimpleNamespace(holder=holder),) if holder else ()
-        return SimpleNamespace(participants=tuple(participants), cognition=cognition)
-
-    def chapter(no, beats):
-        return SimpleNamespace(chapter=no, beats=beats)
-
-    characters = SimpleNamespace(characters={
-        'daughter': SimpleNamespace(surfaces=[surface(10)]),
-        'yun_niang': SimpleNamespace(surfaces=[surface(1)]),
-        'no_anchor': SimpleNamespace(surfaces=[]),
-    })
-    blueprint = SimpleNamespace(chapters=[
-        chapter(9, [beat(participants=('daughter', 'yun_niang'))]),
-        chapter(10, [beat(participants=('daughter',), holder='daughter')]),
-        chapter(11, [beat(participants=('daughter', 'no_anchor'))]),
-    ])
-    anchors = first_appearance_anchors(characters)
-    issues = [issue for ch in blueprint.chapters
-              for issue in first_appearance_issues(anchors, chapter=ch.chapter, beats=ch.beats)]
-    assert issues == [
-        'participant_before_first_appearance[daughter@ch09]：'
-        'daughter 在第 9 章作为参与者/认知持有者出场，但其最早称谓锚点在'
-        '第 10 章——首现早于任何称谓证据（QP-01 同类：观察把既有人物误绑到'
-        '晚出场角色）；恢复走该章观察重问或 owner patch'], issues
+def test_identity_binding_evidence_is_closed_without_name_time_gate():
+    """同一性由语义证据支持；机械层只核对证据闭集，不从姓名章推导存在章。"""
+    from copy import deepcopy
+    book = _book_wire()
+    book['characters']['fu_jun']['identity_bindings'] = [{
+        'description': '早期未命名的男人', 'appearance_refs': ['e00_01'],
+        'identity_refs': ['e03_01']}]
+    observation, errors = compile_book_observation_of(book)
+    assert not errors and observation is not None, errors
+    bad = deepcopy(book)
+    bad['characters']['fu_jun']['identity_bindings'][0]['identity_refs'] = ['e99_99']
+    observation, errors = compile_book_observation_of(bad)
+    assert observation is None and any('e99_99' in error for error in errors), errors

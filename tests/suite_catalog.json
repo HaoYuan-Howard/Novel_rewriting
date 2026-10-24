@@ -67,6 +67,37 @@
     "stage7": []
   },
   "modules": {
+    "tests/test_str06_initial_knowledge.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4"
+      ],
+      "cases": {
+        "test_initial_negative_knowledge_reaches_published_truth_design_ir_and_hook": "stage"
+      }
+    },
+    "tests/test_str06_identity_cognition.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2"
+      ],
+      "cases": {
+        "test_real_stage2_producers_publish_identity_and_corrected_cognition": "stage",
+        "test_free_preview_and_production_share_chapter_revision_scope_without_writes": "stage"
+      }
+    },
+    "tests/test_str06_cognition_projection.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_correction_reaches_design_ir_body_and_hook_without_losing_negative_or_withdrawal": "stage"
+      }
+    },
     "tests/test_repair_plan.py": {
       "layer": "unit_contract",
       "stages": [
@@ -682,20 +713,22 @@
     "tests/test_contract_upgrade.py": {
       "layer": "unit_contract",
       "stages": [
+        "stage2",
         "stage4",
         "stage5",
         "stage7"
       ],
       "cases": {
-        "test_upgrade_rebuilds_registered_consumers_and_preserves_archived_body_bytes": "stage",
-        "test_upgrade_from_rejected_body_design_candidate_runs_current_author_protocol": "stage",
-        "test_cli_subprocess_preview_and_apply_are_free_and_reachable": "stage",
+        "test_new_root_current_commit_recovery_keeps_old_root_readonly": "stage",
+        "test_historical_rejected_design_evidence_is_not_adopted_in_new_root": "stage",
+        "test_cli_historical_preview_and_apply_refuse_for_free_without_writes": "stage",
         "test_recompile_changes_only_one_chapter_and_keeps_other_commit": "stage",
-        "test_unknown_call_and_accumulated_budget_survive_upgrade": "stage",
-        "test_operator_and_agent_resume_same_root_to_delivery": "stage",
+        "test_historical_unknown_and_accumulated_cost_survive_new_root_rebuild": "stage",
+        "test_operator_and_agent_rebuild_new_root_and_replay_without_new_purchase": "stage",
         "test_validation_only_change_rechecks_original_prose_and_preserves_adoption": "stage",
         "test_ir_upstream_stale_keeps_overview_alive_and_points_to_compile": "stage",
-        "test_open_hook_design_issue_is_resolved_when_product_archived": "stage"
+        "test_historical_open_issue_remains_unchanged_when_new_root_rebuilds": "stage",
+        "test_current_purchased_replay_after_session_restart_keeps_adoptions_and_cost": "stage"
       }
     },
     "tests/test_str06_body.py": {
@@ -1396,6 +1429,34 @@
       ],
       "cases": {
         "test_paid_boundary_resets_exhausted_upgraded_node_without_new_grant": "stage"
+      }
+    },
+    "tests/test_str06_claim_history.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_real_compile_ir_and_writer_keep_belief_and_denial_in_separate_roles": "stage",
+        "test_hook_wire_canonical_and_renderer_preserve_belief_and_claim_without_truth_upgrade": "stage",
+        "test_hook_withheld_and_forbidden_select_only_one_same_address_atom": "stage"
+      }
+    },
+    "tests/test_str06_state_proposition_projection.py": {
+      "layer": "unit_contract",
+      "stages": [
+        "stage2",
+        "stage4",
+        "stage5",
+        "stage7"
+      ],
+      "cases": {
+        "test_stage2_to_body_and_hook_material_gates_keep_structural_subject_and_json_value": "stage",
+        "test_unreleased_target_name_projects_to_registered_context_appellation_without_early_name": "stage",
+        "test_no_available_appellation_blocks_without_early_name_or_paid_source_repair": "stage",
+        "test_closed_loop_machine_answer_stays_audit_and_semantic_target_materials_do_not_leak": "stage"
       }
     }
   },

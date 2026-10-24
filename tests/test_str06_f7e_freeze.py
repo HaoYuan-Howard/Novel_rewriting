@@ -169,7 +169,7 @@ from novel.llm.paid_requests import candidate_contract_identity
 # RC 版式头与全链统一 rc26 随批次 D 的 rc25→rc26 同根升级边落地（避免出现
 # 无升级路径的拒读窗口）；旧候选根按契约表漂移只读拒收，原因见 REQUIREMENTS
 # 「目标命名前置与普通正文主链」节。
-FROZEN_CONTRACT_IDENTITY = 'fc59cab7521487810d5e5b7bfa33f61ce42213867fd6581e4dede040f3c5726f'
+FROZEN_CONTRACT_IDENTITY = 'e495aab494381c36c43dc0cbb47e1a5901c715825cf339fe2c5448fad7edba51'
 
 #: 冻结时的节点集合（命名前移批后 13 个：stage0/1 两座＋Stage2 五节点＋
 #: Stage4 五（含 naming）＋Stage5 两＋Stage7 一；bind 的承载位决定并入
@@ -241,7 +241,7 @@ def test_frozen_rc_version_label():
     # rc17：CS-H H3 称谓面＋H4 associate v3；rc18：CS-S Phase 1 死字段收口；
     # rc19：CS-S Phase 2 观察面收敛（facts／know.fact／associate v4／D-5／fold 时间线）；
     # rc20：CS-S Phase 3 收官（CHANGE_KEYS 闭集／access／reader 派生／associate v5）。
-    assert STR06_RC_VERSION == 'str06-rc26'
+    assert STR06_RC_VERSION == 'str06-rc27'
 
 
 #: 语义冻结闸（2026-09-29，裁决 D8）钉住的语义层协议字面量。键是常量名、值是
@@ -262,20 +262,20 @@ FROZEN_SEMANTIC_PROTOCOLS = {
     # book v6 增 facts（词表＋known_at_start）、chapters v6 增 know.fact 引用；
     # rc20（CS-S Phase 3）：book/chapters 升 v7——初态键入 CHANGE_KEYS 闭集、
     # ObsBeat 增 access（获知通道）、know.who 禁 reader。
-    'STAGE2_BOOK_PROTOCOL': 'stage2-book-v7',
-    'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v7',
+    'STAGE2_BOOK_PROTOCOL': 'stage2-book-v8',
+    'STAGE2_CHAPTERS_PROTOCOL': 'stage2-chapters-v8',
     'STAGE2_NAMES_PROTOCOL': 'stage2-names-v5',
     # rc17（CS-H H4，RC-65）：associate 升 v3——维度句柄；rc19（CS-S Phase 2）
     # 升 v4——条目级窄 resolver；rc20（CS-S Phase 3）升 v5——same_state_dimension
     # 消失（change 键闭集＝键即 canonical）。
     'STAGE2_ASSOCIATE_PROTOCOL': 'stage2-associate-v5',
-    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v7',
+    'STAGE4_PRESERVE_PROTOCOL': 'stage4-preserve-v8',
     # 2026-10-10 用户授权有限补桥：必要源因果完整交接，形状与 wire 不变。
     # rc26 批次 B（2026-10-18 目标材料）：policy 12——Preserve 消费 NameMapV6，
     # 义务文本用目标姓名转述（源旧字面／身份文本标记按条目硬闸）。
-    'STAGE4_PRESERVE_POLICY_VERSION': 12,
-    'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v5',
-    'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v4',
+    'STAGE4_PRESERVE_POLICY_VERSION': 13,
+    'STAGE4_DESIGN_PROTOCOL': 'stage4-design-v6',
+    'STAGE4_HOOK_DESIGN_PROTOCOL': 'stage4-hook-design-v5',
     # CS-3（2026-10-03）：bind 协议随节点退役——wire 面由 design v6 的 real
     # 承载标注取代，stage4-bind-v1 不再是现役协议字面量（常量删除）。
 }

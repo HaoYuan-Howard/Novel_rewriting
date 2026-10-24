@@ -227,7 +227,7 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
          '木箱中的货量尚未查明，陈禾留在门外等周澄来开箱。'},
     ]
     people = {
-        slug: {'canonical': name, 'surfaces': [{'surface': name, 'source_refs': ['e01_01']}]}
+        slug: {'identity_bindings': [], 'canonical': name, 'surfaces': [{'surface': name, 'source_refs': ['e01_01']}]}
         for slug, name in (('apprentice', '陈禾'), ('keeper', '周澄'))
     }
 
@@ -292,25 +292,25 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
             {'char_ref': 'keeper', 'name': {'family': '宋', 'given': '玉'},
              'aliases': {}, 'keep_reason': None}]},
         'book': {**sample_book_expression(people),
-                 'protocol_version': 'stage2-book-v7', 'characters': people,
+                 'protocol_version': 'stage2-book-v8', 'characters': people,
                  'initial_state': [{'target': {'kind': 'character', 'char_id': 'apprentice'},
                                     'key': 'occupation', 'value': '商铺学徒',
                                     'persistence': 'stable', 'source_refs': ['e01_01'],
                                     'basis': [{'segment': 'e01_01', 'quote': '陈禾是商铺学徒'}]}],
                  'world_constraints': []},
-        'ch01': {'protocol_version': 'stage2-chapters-v7', 'beats': [
+        'ch01': {'protocol_version': 'stage2-chapters-v8', 'beats': [
             source_beat('陈禾在柜台核账，周澄是掌柜。', 'e01_01', boundary='new'),
             source_beat('周澄提出账页齐全才能取货的条件。', 'e01_02',
                         participants=('keeper', 'apprentice')),
             source_beat('陈禾摊开账册逐页清点，发现缺页，决定先补账再出发。', 'e01_03',
-                        effects=[{'target': {'kind': 'character', 'char_id': 'apprentice'},
+                        effects=[{'reader_visible': False, 'target': {'kind': 'character', 'char_id': 'apprentice'},
                                   'key': 'intent', 'op': 'set', 'value': '先补账再出发',
                                   'modality': 'actual', 'basis': [{'segment': 'e01_03',
                                       'quote': '决定先补账再出发'}]}])]},
-        'ch02': {'protocol_version': 'stage2-chapters-v7', 'beats': [
+        'ch02': {'protocol_version': 'stage2-chapters-v8', 'beats': [
             source_beat('次日账页补齐，陈禾从柜台走到后院门口。', 'e02_01', boundary='new'),
             source_beat('木箱中的货量尚未查明，陈禾留在门外等周澄来开箱。', 'e02_02',
-                        effects=[{'target': {'kind': 'world'}, 'key': 'possession',
+                        effects=[{'reader_visible': False, 'target': {'kind': 'world'}, 'key': 'possession',
                                   'op': 'unknown', 'value': None, 'modality': 'actual',
                                   'basis': [{'segment': 'e02_02',
                                              'quote': '木箱中的货量尚未查明'}]}])]},
@@ -323,7 +323,7 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
                       'same_proposition': [], 'loop_pairing': [], 'cross_chapter_cause': [],
                       'scene_continuation': [{'left': 'ch01.sc1', 'right': 'ch02.sc1',
                                               'verdict': 'distinct'}]},
-        'preserve': {'protocol_version': 'stage4-preserve-v7', 'obligations': [
+        'preserve': {'protocol_version': 'stage4-preserve-v8', 'obligations': [
             {'kind': 'initial_state', 'statement': '柳明开场已是商铺学徒',
              'anchors': ['s0_01'], 'must_preserve': True,
              'satisfaction': '柳明原本就是商铺学徒，不改成新来求职', 'requires': []},
@@ -338,7 +338,7 @@ def _causal_material_wires(*, select_detail=False, invent_quantity=False,
              'anchors': ['b02_02.e1'], 'must_preserve': True,
              'satisfaction': '等待开箱时货量保持未知，不补出确定数量', 'requires': []}]},
         'design': design,
-        'hook_design': {'protocol_version': 'stage4-hook-design-v4',
+        'hook_design': {'protocol_version': 'stage4-hook-design-v5',
                         'pov': {'person': 'third', 'focalizers': ['narrator']},
                         'opening_facts': [],
                         'materials': [{'beat_ref': {'scene': 'sc01', 'beat': 'b01'},

@@ -45,7 +45,8 @@ def kp_statement(statements, key: str) -> str | None:
     """kp 句柄 → 命题 statement（R10b「锁以内容送达」的机械面；D6 渲染修复
     2026-10-03）。
 
-    knowledge/reader 增量的 `value` 恒为 "true"（命题成立性），命题内容只在
+    knowledge/reader 的 set 用 `value` 为 "true"／"false" 表达命题极性，unset
+    的值为空；命题内容只在
     句柄；`Brief.propositions` 是唯一登记表（design 验收已按它闭集核对句柄）。
     kp 形状的句柄缺表＝悬空引用，fail fast——渲染面不得以句柄或 "true"
     顶替命题内容（I-34）。非 kp 形状的键返回 None：调用方保持既有行为

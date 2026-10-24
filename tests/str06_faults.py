@@ -55,9 +55,14 @@ def looped_full_chain_wires() -> dict:
 
     wires = deepcopy(_full_chain_wires())
     wires['ch01']['beats'][0]['loops'] = [
-        {'ref': 'q_yu', 'op': 'open', 'question': '玉佩藏着什么秘密？'}]
+        {'ref': 'q_yu', 'op': 'open', 'question': '玉佩藏着什么秘密？', 'answer_refs': []}]
+    wires['ch02']['beats'][0]['cognition'] = [{
+        'proposition': {'ref': 'p_jade_mark', 'statement': '玉佩刻着沈字'},
+        'holder': 'yun_niang', 'op': 'set', 'mode': 'learns', 'polarity': 'positive',
+        'support': 'confirmed', 'reader_visible': True,
+        'basis': [{'segment': 'e02_01', 'quote': '苏芸娘发现玉佩刻着沈字'}]}]
     wires['ch02']['beats'][0]['loops'] = [
-        {'ref': 'q_yu', 'op': 'close', 'resolution': '玉佩刻着沈字，指向旧案。'}]
+        {'ref': 'q_yu', 'op': 'close', 'answer_refs': ['c1']}]
     wires['associate']['loop_pairing'] = [
         {'open': 'ch01.q_yu', 'close': 'ch02.q_yu', 'verdict': 'pair'}]
     wires['associate']['scene_continuation'] = [
@@ -125,7 +130,7 @@ class FaultTransport:
             # rc26：认知命题经 Brief 进写手材料（kp 回填）——命题文本用目标姓名
             # （源侧引文保持原样）；Design 同时声明释放（initial_surfaces 追认），
             # 冲突面只剩 Design 自有事件文本里的旧名字面。
-            wires['ch01']['beats'][0]['cognition'] = [{
+            wires['ch01']['beats'][0]['cognition'] = [{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False,
                 'proposition': {'ref': 'p_name', 'statement': '顾大哥已经娶亲'},
                 'holder': 'yun_niang', 'mode': 'learns',
                 'basis': [{'segment': 'e01_01', 'quote': '苏芸娘嫁入陆家'}]}]

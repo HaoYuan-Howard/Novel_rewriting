@@ -198,7 +198,7 @@ class WriterBookIR(StrictModel):
     rc8（D2，B4）：ChapterIR 增章级验证材料；完整 IR 只作存储与审计面，
     运行时经 `ChapterWriterPacket` 按章投影。"""
 
-    contract_version: Literal['str06-rc26'] = 'str06-rc26'
+    contract_version: Literal['str06-rc27'] = 'str06-rc27'
     book_brief: BookBrief
     chapters: tuple[ChapterIR, ...] = Field(min_length=1)
     provenance: FreeProvenance | LlmProvenance | None = Field(

@@ -230,7 +230,7 @@ def test_empty_beat_conflict_revises_only_reported_beat(tmp_path, out_of_scope):
         assert owner == 'ch01'
         assert '本轮源证据窄修只允许修改以下拍：b01_02' in prompt
         wire = slim_chapter_wire(initial)
-        wire['beats'][1]['know'] = [{'who': 'yun_niang', 'how': 'learns',
+        wire['beats'][1]['know'] = [{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'who': 'yun_niang', 'how': 'learns',
             'what': '夫君从床底现身', 'evidence_refs': ['e01_02']}]
         if out_of_scope:
             wire['beats'][2]['event'] = '我离开了房间'
@@ -332,7 +332,7 @@ def test_empty_beat_missing_conflict_full_chain_heals(tmp_path, monkeypatch):
             if owner == 'ch01' and self._served:
                 self.calls.append(owner)
                 wire = deepcopy(self._inner.wires[owner])
-                wire['beats'][1]['cognition'] = [{
+                wire['beats'][1]['cognition'] = [{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False,
                     'holder': 'yun_niang', 'mode': 'learns',
                     'proposition': {'ref': 'k01', 'statement': '夫君从床底现身'},
                     'basis': [{'segment': 'e01_02', 'quote': '我看见夫君从床底爬出来。'}]}]

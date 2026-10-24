@@ -552,7 +552,7 @@ def _check_fact_marks(marks: tuple[FactLockMark, ...], fact_locks: Mapping[str, 
 
 
 def _check_requires_released(body: BodyDesign, obligations: Mapping[str, Any],
-                             errors: list[str], *, v9_wire: dict | None = None) -> None:
+                             errors: list[str], *, current_wire: dict | None = None) -> None:
     """必保揭名闸（CS-H H3，RC-61）：带 `requires_released` 的 know 所在拍
     必须**已释放**所列称谓——含本拍释放（本拍正式介绍之后同拍可用），拍前不可用。
 
@@ -567,7 +567,7 @@ def _check_requires_released(body: BodyDesign, obligations: Mapping[str, Any],
         return
     from novel.stages.common import ReleasePrefixes
     prefixes = ReleasePrefixes(body)
-    scenes = v9_wire.get('scenes') if isinstance(v9_wire, dict) else None
+    scenes = current_wire.get('scenes') if isinstance(current_wire, dict) else None
     for scene_i, scene in enumerate(body.scenes):
         for beat_i, beat in enumerate(scene.beats):
             rows = (scenes[scene_i]['beats'][beat_i].get('know')
@@ -589,7 +589,7 @@ def _check_requires_released(body: BodyDesign, obligations: Mapping[str, Any],
                         '拍前不可用）；挪 know 拍位到释放之后，或提前释放',
                         code='design_requires_released',
                         location=('requires_released', row['ref'], tuple(missing)),
-                        paths=(where,) if v9_wire is not None else ()))
+                        paths=(where,) if current_wire is not None else ()))
 
 
 def _check_series_summary_order(
@@ -646,11 +646,17 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
     """
     propositions = {p.kp_id: p for p in brief.propositions}
     fact_locks = {f.kf_id: f for f in brief.fact_locks}
-    authorized: dict[tuple[str, str], set[str]] = {}
+    authorized: dict[tuple[str, str], set[tuple]] = {}
     for lock in brief.knowledge_locks:
-        authorized.setdefault((lock.holder, lock.kp), set()).add(lock.mode)
+        authorized.setdefault((lock.holder, lock.kp), set()).add(
+            (lock.op, lock.mode, lock.polarity))
+    initial_authorized = {
+        (lock.holder, lock.kp, lock.op, lock.mode, lock.polarity)
+        for requirement in brief.requirements for lock in requirement.initial_knowledge}
+    initial_realized: set[tuple] = set()
+    initial_indexes = {id(delta): index for index, delta in enumerate(body.initial_state)}
 
-    realized_kp: set[tuple[str, str, str]] = set()
+    realized_kp: set[tuple] = set()
     delta_sites: list[tuple[str, Any, tuple[int, int, int] | None]] = [
         ('initial_state', delta, None) for delta in body.initial_state]
     for scene_i, scene in enumerate(body.scenes):
@@ -669,6 +675,8 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
 
     for where, delta, site in delta_sites:
         key = delta.key
+        paths = _delta_paths(site) if site is not None \
+            else (('initial_state', initial_indexes[id(delta)]),)
         if key.startswith('kp_'):
             if key not in propositions:
                 errors.append(design_issue(
@@ -676,30 +684,42 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
                     '（kp 句柄只能取 Brief.propositions 给出的项）',
                     code='design_kp_key_closed',
                     location=(where, key),
-                    paths=_delta_paths(site)))
+                    paths=paths))
                 continue
             if delta.domain is EffectDomain.KNOWLEDGE:
-                if delta.op == 'set':
+                if delta.op in ('set', 'unset'):
                     # D5 统一后读者揭示也是 knowledge(holder=reader)——授权
                     # 判据同一把尺：known 只能来自 known 锁（线索、误导与
                     # 怀疑不是确认，C6）。
                     allowed = authorized.get((delta.holder, key), set())
-                    if delta.knowledge_mode not in allowed:
+                    polarity = ('positive' if delta.value == 'true' else 'negative') \
+                        if delta.op == 'set' else None
+                    identity = (delta.op, delta.knowledge_mode, polarity)
+                    if identity not in allowed:
                         errors.append(design_issue(
                             f'{where} 的 kp 键 {key} 持有者 {delta.holder} 无锁'
-                            f'或模式越权：{delta.knowledge_mode}（授权：'
-                            f'{sorted(allowed) or "无"}；known 只能来自 known 锁）',
+                            f'或操作/模式/极性越权：{identity}（授权：'
+                            f'{sorted(allowed, key=str) or "无"}；known 只能来自 known 锁）',
                             code='design_kp_mode_authority',
-                            location=(where, delta.holder, key, delta.knowledge_mode),
-                            paths=_delta_paths(site)))
-                    realized_kp.add((delta.holder, key, delta.knowledge_mode))
+                            location=(where, delta.holder, key, *identity),
+                            paths=paths))
+                    full_identity = (delta.holder, key, *identity)
+                    if site is None:
+                        if full_identity not in initial_authorized:
+                            errors.append(design_issue(
+                                f'开场知识 {delta.holder}/{key}/{polarity} '
+                                '没有 Brief.initial_knowledge 授权；剧情中的获知不能提前到初态',
+                                code='design_kp_mode_authority',
+                                location=('initial_knowledge', *full_identity), paths=paths))
+                        initial_realized.add(full_identity)
+                    realized_kp.add(full_identity)
         elif key.startswith('kf_'):
             errors.append(design_issue(
                 f'{where} 的状态键 {key} 是事实锁句柄：kf 句柄不是状态键，'
-                '事实锁在已选状态上用 lock 标注（stage4-design-v9）',
+                '事实锁在已选状态上用 lock 标注（当前 Design wire）',
                 code='design_kf_state_key',
                 location=(where, key),
-                paths=_delta_paths(site)))
+                paths=paths))
     _check_fact_marks(marks, fact_locks, errors)
     bindings = tuple(
         FactLockBinding(kf_id=mark.kf_id,
@@ -719,14 +739,25 @@ def _check_lock_acceptance(body: BodyDesign, brief: ReconstructionBrief,
         know_paths = tuple(sorted({
             ('scenes', s, 'beats', b, 'know')
             for s, b in ((real_sites or {}).get(ob_id) or ())}))
+        if req.must_preserve or (ob_id is not None and (real_sites or {}).get(ob_id)):
+            for initial in req.initial_knowledge:
+                identity = (initial.holder, initial.kp, initial.op, initial.mode, initial.polarity)
+                if identity not in initial_realized:
+                    errors.append(design_issue(
+                        f'义务 {label} 的开场知识未由目标 initial_state 承载：'
+                        f'{initial.holder}/{initial.kp}/{initial.polarity}；晚拍获得不能代替开场已知',
+                        code='design_knowledge_lock',
+                        location=('initial_knowledge', req.core_id, *identity),
+                        paths=(('initial_state',),)))
         for change in req.knowledge_changes if req.must_preserve else ():
-            if (change.holder, change.kp, change.mode) not in realized_kp:
+            if (change.holder, change.kp, change.op, change.mode,
+                    change.polarity) not in realized_kp:
                 errors.append(design_issue(
                     f'必保义务 {label} 的知情锁未兑现：{change.kp} 需由持有者 '
-                    f'{change.holder} 以模式 {change.mode} 承载',
+                    f'{change.holder} 以 {change.op}/{change.mode}/{change.polarity} 承载',
                     code='design_knowledge_lock',
                     location=('knowledge_lock', req.core_id, change.holder, change.kp,
-                              change.mode),
+                              change.op, change.mode, change.polarity),
                     paths=know_paths))
     carrier_refs = {ob: tuple(f'{body.scenes[s].scene_id}#'
                               f'{body.scenes[s].beats[b].beat_id}' for s, b in sites)
@@ -776,7 +807,7 @@ def inspect_body_design(
     faces: Mapping[str, Mapping[str, str]] | None = None,
     name_map=None,
 ) -> tuple[BodyDesign | None, list[str]]:
-    """Design wire（stage4-design-v5／v9）→ canonical BodyDesign。
+    """Design wire（当前瘦面／当前内部展开面）→ canonical BodyDesign。
 
     纯函数：不落盘、不调 LLM、不改输入 wire（deepcopy 后组装）。**一次校验、
     合并报告**（R8b）：wire 形状由 pydantic 模型族一次判，逐字段错误按位置
@@ -788,22 +819,22 @@ def inspect_body_design(
     expression_refs 闭集，`_check_lock_acceptance`）；生产链
     （`chain.run_body_design`）恒传入——缺省 None 仅供不持 Brief 的离线
     工具，跳过的是锁面，不是全书校验。
-    CS-3（2026-10-03）：wire 按协议字面量路由——瘦面（stage4-design-v9）
+    wire 按当前协议字面量路由——瘦面
     先经 `expand_design_wire` 派生成 v5 形状再进同一管道（obligations＝
     ob 编号→需求映射，v6 必传：real 标注闭集与知情行展开依赖它）；另加
     必保义务的 real 标注覆盖闸（未标注的 must 需求当场拦下——承载位是
     v6 的新语义面，漏标即缺承载）。
     """
-    from contracts.schema.design import DesignWireV5, DesignWireV9
+    from contracts.schema.design import DesignWireV5
 
     errors: list[str] = []
     independent_errors: list[str] = []
     marks: tuple[FactLockMark, ...] = ()
     real_sites: dict[str, list[tuple[int, int]]] = {}
-    # 只有直接来自 v9 wire 的候选，下标才是 wire 路径（局部修订的编辑范围）；
+    # 只有直接来自当前瘦 wire 的候选，下标才是 wire 路径（局部修订的编辑范围）；
     # 直接给 v5 中间形状的离线输入没有对应的可编辑 wire，问题不带路径。
     locatable = wire.get('protocol_version') in DESIGN_READ_PROTOCOLS
-    v9_wire = wire
+    current_wire = wire
     if locatable:
         independent_errors.extend(_check_wire_expression_refs(wire, expression_requirements))
         try:
@@ -818,7 +849,7 @@ def inspect_body_design(
                                        paths=(tuple(path),) if path else ())
                           for path, message in expand_issues]
         assert expanded is not None
-        # 标注与承载位只在 v9 wire 上存在（不进中间 v5 形状与 BodyDesign）；
+        # 标注与承载位只在当前瘦 wire 上存在（不进中间 v5 形状与 BodyDesign）；
         # expand 已通过同一份模型校验。
         wire_model = design_wire_model(wire, brief)
         marks = design_fact_marks(wire_model)
@@ -908,7 +939,7 @@ def inspect_body_design(
     def delta_path(scene_i: int, beat_j: int, delta_i: int):
         """canonical 拍增量序 → 产生它的 wire 行：state 行在前、know 行在后（展开顺序）。"""
         try:
-            rows = v9_wire['scenes'][scene_i]['beats'][beat_j].get('state') or []
+            rows = current_wire['scenes'][scene_i]['beats'][beat_j].get('state') or []
         except (KeyError, IndexError, TypeError):
             return None
         if delta_i < len(rows):
@@ -916,7 +947,7 @@ def inspect_body_design(
         return ('scenes', scene_i, 'beats', beat_j, 'know')
 
     def listed(key: str) -> list:
-        value = v9_wire.get(key) if isinstance(v9_wire, dict) else None
+        value = current_wire.get(key) if isinstance(current_wire, dict) else None
         return value if isinstance(value, list) else []
 
     def site_path(site: tuple):
@@ -1048,7 +1079,7 @@ def inspect_body_design(
             if violation.initial is not None:
                 paths = (('initial_state', violation.initial),)
             else:
-                know = (v9_wire['scenes'][violation.scene]['beats'][violation.beat]
+                know = (current_wire['scenes'][violation.scene]['beats'][violation.beat]
                         .get('know') or [])
                 confirm_rows = [i for i, row in enumerate(know)
                                 if isinstance(row, dict) and row.get('confirms') is not None]
@@ -1064,7 +1095,7 @@ def inspect_body_design(
     if obligations is not None:
         _check_requires_released(
             body, obligations, errors,
-            v9_wire=v9_wire if locatable else None)
+            current_wire=current_wire if locatable else None)
         if locatable:
             _check_series_summary_order(obligations, real_sites, errors)
     for err in resolve_design_reads(body).errors:

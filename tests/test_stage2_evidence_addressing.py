@@ -38,7 +38,7 @@ def _chapter_evidence(chapter):
 
 def _book_canonical():
     from contracts.schema.observation import STAGE2_BOOK_PROTOCOL
-    characters = {'fu_jun': {'canonical': '夫君',
+    characters = {'fu_jun': {'identity_bindings': [], 'canonical': '夫君',
                              'surfaces': [{'surface': '夫君', 'source_refs': ['e00_01']}]}}
     return {'protocol_version': STAGE2_BOOK_PROTOCOL,
             **sample_book_expression(characters),
@@ -130,9 +130,9 @@ def test_rc26_multiline_segment_stops_before_request():
 
 def _slim_chapter(start, basis, *, who='yun_niang', beats=None):
     from contracts.schema.observation import STAGE2_CHAPTERS_WIRE_PROTOCOL
-    wire_beats = [{'event': '夫君送走表弟后安慰芸娘，说会再开导表弟。', 'on_stage': ['fu_jun'],
+    wire_beats = [{'location_reader_visible': False, 'event': '夫君送走表弟后安慰芸娘，说会再开导表弟。', 'on_stage': ['fu_jun'],
                    'start': start, 'new_scene': True,
-                   'know': [{'who': who, 'how': 'hears_claim', 'what': '夫君会再开导表弟',
+                   'know': [{'op': 'set', 'polarity': 'positive', 'support': 'claim', 'reader_visible': False, 'who': who, 'how': 'hears_claim', 'what': '夫君会再开导表弟',
                              'evidence_refs': [basis]}]}]
     return {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL,
             'beats': beats if beats is not None else wire_beats}
@@ -155,10 +155,10 @@ def test_basis_segment_outside_derived_interval_revises_whole_beat():
     evidence = _chapter_evidence(1)
     # 两拍：拍1 start=e01_01、拍2 start=e01_03；拍2 的证据指向拍1 区间内的段。
     wire = _slim_chapter('e01_01', 'e01_01', beats=[
-        {'event': '夫君送走表弟后安慰芸娘。', 'on_stage': ['fu_jun'], 'start': 'e01_01',
+        {'location_reader_visible': False, 'event': '夫君送走表弟后安慰芸娘。', 'on_stage': ['fu_jun'], 'start': 'e01_01',
          'new_scene': True},
-        {'event': '夫君问为何。', 'on_stage': ['fu_jun'], 'start': 'e01_03',
-         'know': [{'who': 'yun_niang', 'how': 'hears_claim', 'what': '夫君会再开导表弟',
+        {'location_reader_visible': False, 'event': '夫君问为何。', 'on_stage': ['fu_jun'], 'start': 'e01_03',
+         'know': [{'op': 'set', 'polarity': 'positive', 'support': 'claim', 'reader_visible': False, 'who': 'yun_niang', 'how': 'hears_claim', 'what': '夫君会再开导表弟',
                    'evidence_refs': ['e01_01']}]}])
     observation, errors = compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)
     assert observation is None and len(errors) == 1
@@ -209,7 +209,7 @@ def test_real_chain_publishes_derived_basis(tmp_path):
         'book': book,
         'ch01': _slim_chapter('e01_01', 'e01_01', who='fu_jun'),
         'ch02': {'protocol_version': STAGE2_CHAPTERS_WIRE_PROTOCOL, 'beats': [
-            {'event': '次日清晨夫君出门。', 'on_stage': ['fu_jun'], 'start': 'e02_01',
+            {'location_reader_visible': False, 'event': '次日清晨夫君出门。', 'on_stage': ['fu_jun'], 'start': 'e02_01',
              'new_scene': True}]},
     }
     repo, session, transport = _make_session(tmp_path, wires)
@@ -319,11 +319,11 @@ def test_chapter_prompt_beat_and_loop_key_lists_match_wire_schema():
     151 条），模型不被告知就会少写或不写，所有章的场景位置静默丢失。拍键清单
     必须与 `SlimBeat` 字段集合逐名相等（不只比 change／know 两段），loops 同理。"""
     from contracts.schema.observation import SlimBeat
-    from contracts.schema.source import LoopAction
+    from contracts.schema.observation import SlimLoopAction
     from novel.stages.common import CHAPTER_PROMPT
 
     assert _declared_keys(CHAPTER_PROMPT, '1. beats：', '每拍') == set(SlimBeat.model_fields)
-    assert _declared_keys(CHAPTER_PROMPT, '4. loops：', '每项') == set(LoopAction.model_fields)
+    assert _declared_keys(CHAPTER_PROMPT, '4. loops：', '每项') == set(SlimLoopAction.model_fields)
     # 字段只出现在清单里不够：必须有格式说明（缺省语义＋不进 change 的去向）。
     assert '"scene_location"' in CHAPTER_PROMPT
     assert 'scene_location：' in CHAPTER_PROMPT

@@ -349,8 +349,8 @@ def _reopened_session(repo, transport):
 
 
 @pytest.mark.parametrize('semantic_change', [False, True])
-def test_purchased_v9_candidate_is_diagnostic_only_after_identity_text_upgrade(tmp_path, semantic_change):
-    """旧候选可读取诊断，但缺少逐次身份语义时不得机械冒充 v11 免费沿用。"""
+def test_purchased_v9_evidence_is_preserved_and_refused_for_current_reuse(tmp_path, semantic_change):
+    """旧回答原字节可保留，当前解码拒识且不得作为免费沿用候选。"""
     from novel.stages.chain import _record_design_candidates
     from novel.stages import candidates
     from novel.stages.common import design_rules, pack_prompt
@@ -359,12 +359,12 @@ def test_purchased_v9_candidate_is_diagnostic_only_after_identity_text_upgrade(t
     repo = ctx.repository
     current = deepcopy(wires['design'])
     wires['design']['protocol_version'] = 'stage4-design-v9'
-    prompt = pack_prompt(design_rules(protocol='stage4-design-v9'),
-                         brief=project_design_input(args['brief'], args['obligations'],
-                                                    protocol='stage4-design-v9'))
-    wire, _ref = ctx.ask('design', prompt, lambda w: list(inspect_design_candidate(w, **args).errors))
+    prompt = pack_prompt(design_rules(), 审计说明='历史已购 v9 回答的冻结审计证据')
+    # 假transport保存历史原答，不调用任何旧业务decoder；当前检验明确拒绝。
+    wire, _ref = ctx.ask('design', prompt, lambda _wire: [])
     inspection = inspect_design_candidate(wire, **args)
-    assert inspection.passed
+    assert not inspection.passed
+    assert any('protocol_version' in str(error) for error in inspection.errors)
     _record_design_candidates(ctx, produced={candidates.wire_sha256(wire): inspection.report()},
         upstream_wire=preserve_revision_wire(repo.read_model('runtime/preserve_checkpoint.json')))
     calls = transport.calls.count('design')
@@ -434,9 +434,9 @@ def test_purchased_current_narrow_failure_accepts_current_full_fallback(tmp_path
     assert result['reuse']['action'] == 'narrow_review'
     assert len(fallback.requests) == 2
     assert '【窄返修】' in fallback.requests[0]
-    assert re.search(r'"const"\s*:\s*"stage4-design-v12"', fallback.requests[0])
+    assert re.search(r'"const"\s*:\s*"stage4-design-v13"', fallback.requests[0])
     assert '【修订要求】' in fallback.requests[1]
-    assert re.search(r'"const"\s*:\s*"stage4-design-v12"', fallback.requests[1])
+    assert re.search(r'"const"\s*:\s*"stage4-design-v13"', fallback.requests[1])
     assert result['candidate_preflight']['passed'] is True
     assert repo.read_model('stage4/design/body_design.json').scenes
     assert repo.read_model('stage4/grounding/semantic_binding.json').entries

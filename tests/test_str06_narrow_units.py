@@ -299,14 +299,14 @@ def _plain_flow_case(*, with_facts):
 
     chapters = deepcopy(CHAPTERS)
     wires = _full_stage2_wires()
-    facts = ([{'statement': '夫君藏身床底', 'evidence_refs': ['e01_01'],
+    facts = ([{'statement': '夫君藏身床底', 'evidence': [{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'evidence_refs': ['e01_01']}],
                'known_at_start': []}] if with_facts else [])
     wires['book'] = _book_wire_v9(*facts)
     for no in range(1, 4):
-        wires[f'ch{no:02d}'] = {'protocol_version': 'stage2-chapters-v10', 'beats': [
-            {'event': f'第{no}章延续场景', 'on_stage': ['yun_niang'],
+        wires[f'ch{no:02d}'] = {'protocol_version': 'stage2-chapters-v11', 'beats': [
+            {'location_reader_visible': False, 'event': f'第{no}章延续场景', 'on_stage': ['yun_niang'],
              'start': f'e{no:02d}_01', 'new_scene': no == 1,
-             'know': ([{'who': 'yun_niang', 'how': 'learns', 'fact': 'f01',
+             'know': ([{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'who': 'yun_niang', 'how': 'learns', 'fact': 'f01',
                         'evidence_refs': [f'e{no:02d}_01']}] if with_facts else [])}]}
     wires['associate'] = {'protocol_version': 'stage2-associate-v5',
                           'same_proposition': [], 'loop_pairing': [],

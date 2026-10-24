@@ -33,6 +33,7 @@ def make_context(root: Path, *, ledger: CostLedger, node: str = 'str06.stage2.bo
 
 def v13_effect(target: dict, key: str, value, *, op: str = 'set',
                modality: str = 'actual',
+               reader_visible: bool = True,
                basis: tuple[dict, ...] | None = None) -> dict:
     """v13 effect（R10a a1 起带 modality 与逐字 basis；CS-S 1b 起无
     scope／disclosure／proposition——作用域读时按登记表派生）。basis 缺省给
@@ -40,7 +41,8 @@ def v13_effect(target: dict, key: str, value, *, op: str = 'set',
     return {'target': target, 'key': key, 'op': op, 'value': value,
             'modality': modality,
             'basis': list(basis) if basis is not None
-            else [{'segment': 'e01_01', 'quote': '夫君藏进床底'}]}
+            else [{'segment': 'e01_01', 'quote': '夫君藏进床底'}],
+            'reader_visible': reader_visible}
 
 
 def v13_beat(beat_id: str, event: str, *, participants: tuple[str, ...] = (),
@@ -284,3 +286,30 @@ def stub_body_runner(monkeypatch):
                 'length_disclosed_chapters': []}
 
     monkeypatch.setitem(chain.NODE_RUNNERS, 'str06.stage5.body', stub)
+
+
+def current_design_wire(coordinates: dict, brief) -> dict:
+    """按测试的正式 Brief 将完整坐标投影为当前 wire 短引用，不接受旧协议。
+
+    只构造引用字面，不填语义字段、不修坏选择；闭集外引用保留给真实判据拒绝。
+    """
+    from copy import deepcopy
+    from contracts.schema.design import STAGE4_DESIGN_WIRE_PROTOCOL
+    if coordinates.get('protocol_version') != STAGE4_DESIGN_WIRE_PROTOCOL:
+        raise ValueError('测试构造器只支持当前 Design 协议')
+    aliases = {item.kp_id: item.kp_id[:11] for item in brief.propositions}
+    aliases.update({item.kf_id: item.kf_id[:11] for item in brief.fact_locks})
+    result = deepcopy(coordinates)
+
+    def project(value):
+        if isinstance(value, list):
+            for item in value:
+                project(item)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if key in ('key', 'lock') and isinstance(item, str):
+                    value[key] = aliases.get(item, item)
+                else:
+                    project(item)
+    project(result)
+    return result

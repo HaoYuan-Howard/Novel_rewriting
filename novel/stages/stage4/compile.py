@@ -173,9 +173,14 @@ def compile_execution_plan(
     for scene in graph.scenes:
         establishments = scene_establishments[scene.scene_id]
         # scene 覆盖与 book 真值分别保存；临时覆盖不抹掉长期底值。
-        net = {}
-        for est in establishments:
-            net[(*est.address(), est.scope)] = est
+        # 事实只需场末净变化；认知还承载接受、撤回和说法历史，必须按原序
+        # 重放，不能让后一次 heard 抹掉同址 believes 或吞掉中间的 unset。
+        last_state = {(*est.address(), est.scope): index
+                      for index, est in enumerate(establishments)
+                      if est.domain.value != 'knowledge'}
+        planned = tuple(est for index, est in enumerate(establishments)
+                        if est.domain.value == 'knowledge'
+                        or last_state[(*est.address(), est.scope)] == index)
         owned = sorted(oid for oid, e in entries.items() if e.scene_id == scene.scene_id)
         constraints = tuple(ConstraintSpec(
             domain='obligation', key=oid,
@@ -188,5 +193,5 @@ def compile_execution_plan(
                 before=a, after=b,
                 kind=resolved_edges.get((a, b), 'obligation_or_support'))
                 for a, b in sorted(edges) if b == scene.scene_id),
-            planned_delta=tuple(net[k] for k in sorted(net))))
+            planned_delta=planned))
     return ExecutionPlan(initial_establishments=init_establishments(graph), scenes=tuple(scenes)), []

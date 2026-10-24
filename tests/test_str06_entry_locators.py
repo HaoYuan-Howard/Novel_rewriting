@@ -125,11 +125,11 @@ def test_book_patch_locate_returns_none_for_wire_level_problems():
 def _names_inputs():
     """names 夹具：core（两人物）＋含家族构词的合法 wire 底座。"""
     from contracts.schema.source import CharactersCore, CharacterEntry
-    core = CharactersCore(characters={
-        'fu_jun': CharacterEntry(canonical='夫君', surfaces=[
+    core = CharactersCore(initial_knowledge=[], characters={
+        'fu_jun': CharacterEntry(identity_bindings=[], canonical='夫君', surfaces=[
             {'surface': '夫君', 'from_chapter': 1, 'until_chapter': None,
              'source_refs': ['e01_01']}]),
-        'yun_niang': CharacterEntry(canonical='云娘', surfaces=[
+        'yun_niang': CharacterEntry(identity_bindings=[], canonical='云娘', surfaces=[
             {'surface': '云娘', 'from_chapter': 1, 'until_chapter': None,
              'source_refs': ['e01_02']}]),
     }, initial_state=())

@@ -16,7 +16,15 @@ unver 行常驻披露，不产生审批待办。机械检查只证明形状、�
 
 ## 观察与关联协议（B2；R1 associate 独立版本）
 
-book／chapters 的现役 canonical 协议为 `stage2-book-v7`／`stage2-chapters-v7`，
+rc27 的开场知识正式归 CharactersCore.initial_knowledge：每项包含
+knowledge_id（k0_NN，代码派发）、holder、闭合的 proposition、polarity 与 basis。
+Book 的 known_at_start 声明须有同 holder、同 polarity 的 confirmed 证据；证据文本
+出现章节不作为知识产生时间。Preserve 可选 k0_*，Brief 分开初始知识锁与逐次变化，
+必保初始知识须在 Design.initial_state 以正／负命题承载，后文补获知不能代替。
+fold 从正式 Characters 开场基线起步；Book 观察不是下游的第三份真源。
+
+rc27 的 book／chapters canonical 协议为 `stage2-book-v8`／`stage2-chapters-v8`，
+对应模型 wire 为 `stage2-book-v11`／`stage2-chapters-v11`；
 names 为 `stage2-names-v5`、wire 为 `stage2-names-v7`。每个人物显式给出
 `additional_surfaces`（可为空），仅补充有源段证据的称谓，不增删或拆合人物；唯一
 compiler 合入 Characters，Book 原观察不改。旧 canonical v4 的集中只读适配保留
@@ -36,18 +44,29 @@ facts 流拍对，模型只选 kind 或否决）。**v5（CS-S Phase 3）：`sam
 不可能），维度句柄（`dim{nn}`）与整类合并面（候选生成、`_StateClasses` 规范键
 传播、`dimension_of` 反查）整体退役；v3/v4 wire 关闭式拒读。
 
-**书级命题词表（CS-S Phase 2）**：book 观察增 `facts:[{fact_id, statement,
-basis, known_at_start}]`——F 编号 `f{nn}` 由 compile 按列表序派发（不进 wire，
-I-21）；`known_at_start` 承载初始知情（持有者闭集＝人物 slug，D-5 删 public；
-reader 知情 Phase 3 由 compile 派生）；facts 不带 address（D-3：无消费者）。
-「故事开始」＝**第 1 章第一拍开始**（2026-10-08 统一口径，与 initial_state
-同一判定时刻）：引子（e00）内已完成的告知算开场已知（过程归第 1 章开场拍、
-结果归词表起步）；后置高光前置／全书概括类引子披露不算开场已知，信息由正文
-对应章观察承载（防新书提前披露）。章
-观察的 cognition 可用 `fact` 引用词表编号（wire 面 `fact` 与 `what` 恰写其一；
-canonical 面 proposition.ref=`f{nn}`、statement=None——文本由 compile 回填），
-跨章同一性按引用构造成立；词表近义的转写文本经 associate 候选判定并入。fold 消费
-facts 产出**知情时间线读数**（T-5：结构化只读读数，不进下游 API）。
+**人物身份与称谓（rc27）**：人物候选与 Characters 条目显式携带
+`identity_bindings:[{description,appearance_refs,identity_refs}]`，空数组是合法明确值。
+Book 判断语境指称与人物的同一性；compiler 只核对人物、证据与引用闭合。
+人物可以在姓名出现前匿名参与事件，不能用最早称谓章拒绝更早的内部人物 ID。
+“孩子”等同字面指称可属于不同人物，不做全书唯一通用别名；身体、血缘事实保留
+实际主体。姓名窗口仍由 surface 证据派生，只约束称谓；身份与姓名何时被谁知道归
+认知转移。出场章统计从章观察参与者／认知持有者派生。章节人物材料只投影本章相关
+指称，不把后文同一性证据送成当前已知。
+
+**书级原子命题词表（rc27）**：canonical 为
+`facts:[{fact_id,statement,evidence:[{kind,polarity,holder,basis}],known_at_start:[{holder,polarity}]}]`。
+kind 取 `confirmed/claim/inference`，polarity 取 `positive/negative`，证据 holder
+可为人物 slug 或 null；wire 每项证据以 `evidence_refs` 代替 basis，引文由代码切段。
+F 编号 `f{nn}` 按列表序派发，不进 wire。一个命题只承载可独立确认或否定的主张，
+病因、送来者、运输方式不能无据合成一句；词表引用只说明在讨论同一命题，不赋予真实性。
+编号复用／associate 的 same 须完整语义等价，部分支持、包含、因果关系及否定不得合并。
+原子性、证据性质和语义同一性由语义单元负责，compiler 不按连接词拆句或判真伪。
+
+`known_at_start` 只表达第 1 章第一拍开始时已确认的正／负知识，持有者只收人物
+slug；e00 中已完成告知可进入基线，后置预告不收。章 wire 的 fact 与 what 恰写其一，
+canonical 的 `proposition.ref=f{nn},statement=None` 由 compiler 回填文本。
+本章词表只携带本章相关证据性质，后章确认／反证不倒灌本章确知；fold 保留逐次认知
+流水和初始基线，属于只读度量。
 
 **句柄编码（R1 v2：唯一的关联登记表）**：`AssociationSpace`
 （`novel/stages/stage2/associate.py::project_association_space`）是 prompt、
@@ -80,24 +99,41 @@ compile 必判重复 close、烧尽重问轮——close 端防了 open 端没防
 **变化键闭集与拍级 access（CS-S Phase 3，rc20）**：`CHANGE_KEYS`＝27 个通用维度
 （`contracts/schema/source.py`，rc15 冻结根三本书 184 个真实键聚类定稿——98 个
 单次出现的书内自造键并入通用维度，语义细节由 val 承载）；`scene_location` 只由
-compiler 从拍级字段合成（scene 作用域），不进模型面。拍级 `access`＝获知通道
+compiler 从拍级字段合成（scene 作用域），不进 change 模型面。每拍必填
+`location_reader_visible`：位置已向读者展示才为 true，无位置时必须为 false。
+合成效应复制该值，内部场景位置不自动成为读者确知。拍级 `access`＝获知通道
 闭集（`witnessed` 默认不写／`narrated` 叙述直陈例外——回溯、背景、概括、
 「叙述者点明」；844 拍启发式实测 narrated 约 3%，told 语义由 know 的
-hears_claim/asserts 模式逐条承载，不重复拍级标注）。**reader 知情由 compile 派生**
-（`novel/stages/stage2/compile.py::_derive_reader_knowledge`）：narrated 拍的
-actual 字符串事实与 learns/confirms 命题→reader learns；hears_claim→reader
-hears_claim（任何通道）；悬念 close 的 resolution→reader learns；suspects/
-believes/asserts 不派生。wire 的 `know.who` 禁 reader（schema 层即拒），蓝图
-reader cognition 全部是派生物，其正式命题 ID 由 compiler 唯一序列派发，不占用观察
-本地句柄。读者认知参与 Preserve 的知情锁，但 `reader` 不进入人物 lineage 或 participants。
-`reader` 是认知持有者保留字：Book wire／Book 观察／Characters 人物表均不得
-注册该人物键，facts 的 `known_at_start` 也不得填写。`reader_proxy` 一类真实人物
-slug 沿用原规则，人物知情与 compiler 派生的读者知情分别保留。
-rc15 免费 oracle（21 条模型自写 reader 条目）：
-启发式 access 覆盖 5／21、上界口径（模型写了 reader 的拍强制 narrated）6／21——
-未覆盖集中在 rc15 时代的「内容只存在于 reader 条目、无转移承载」拍（新协议的
-连续性契约与 facts 词表把该内容放进转移/词表，派生面才可消费）与设计上不派生的
-suspects（视角判断）。
+hears_claim/asserts 模式逐条承载，不重复拍级标注）。rc27 起 access 仅表示呈现通道，
+不能证明命题真实或已向读者展示。
+
+**认知与读者知情（rc27）**：Cognition 显式携带 `op,mode,polarity,support,reader_visible`；
+wire 的 mode 名为 how，其余同名。set 的模式及极性非空；unset 的两项为 null，保留
+撤回依据 basis。learns/confirms 只许 confirmed；对话的确认性质仍由语义单元依据
+上下文判断，单纯否认先记为负极性说法。听到否认不自动撤回误信，unset 不证明世界
+命题为假，也不删除曾经听到／说过的历史。
+
+Effect 的 reader_visible 必填。`_derive_reader_knowledge` 只从明确可见原子派生：
+actual/set 事实生成保留主体、键与完整 JSON 值的正命题确知；set＋confirmed 的
+learns/confirms 镜像正负极性为 reader learns；可见 hears_claim/asserts 只生成同极性
+说法层记录。猜测、相信、撤回、access 或 close 文本不独立授予读者确知。
+wire 禁自填 reader；正式 reader 条目及其新命题 ID 仍由 compiler 派发，不占观察句柄，
+参与 Preserve 知情锁而不进入人物 lineage／participants。Book 与 Characters 人物表、
+known_at_start 均禁止把 reader 注册为人物；reader_proxy 等真实人物名仍可正常登记。
+历史 rc15 的 access 启发式读数不作为 rc27 的质量验收结果。
+
+**悬念答案（rc27）**：wire 使用 `SlimLoopAction`，open 的 answer_refs 为空且 question
+非空；close 的 question 为 null。数组答案使用本拍 `{kind:change/know,index:1-based}`，
+索引只数模型数组，原有编号不变。拍级地点答案使用 `{kind:scene_location,index:1}`，
+index 只许 1，且本拍必须实际给出 scene_location；不存在时不能误认普通 change 的 e1。
+位置原子仍须 location_reader_visible=true。仅读者获知地点、人物仍未知时直接选择该
+位置原子，不伪造人物认知、public 或其他 world 键。
+展开到观察的 eN/cN，编译到正式 bNN_NN.eN/cN；scene_location 独立选择器映射合成 e1，
+其它 change 的合成偏移及三类选择器的逆映射由代码确定性换算。
+答案必须是 actual/set/reader_visible 事实，或 set/learns|confirms/confirmed/reader_visible
+认知；未知、计划、撤回、猜测及未确认说法不能关闭悬念。resolution 不接受模型自由文本，
+由答案原子派生；正式 Blueprint 检查答案同拍闭合、可见成立和派生文本非空。
+已有生命周期与跨章配对纪律保持，不能靠删除参与者或改挂 world 迁就错误判据。
 
 **模型输出面去机械化（I-20/I-21）**：协议里没有拍号、状态/约束编号、命题/loop/场景
 正式 ID、章序、offset、hash——一律由 compiler 生成；人物 slug 仍由模型给出（可读
@@ -112,9 +148,8 @@ suspects（视角判断）。
 
 转移语义复用拍模型（`contracts/schema/source.py` 的 `Effect`／`Cognition`／
 `LoopAction`；I-11 同一领域模型不复制）：三类转移、认知模式闭集、登记键作用域、
-悬念开闭形状不变。CS-S 1b 起 effect 不再带 `disclosure`／`proposition`／`scope`
-（命题锚只在 cognition）；Phase 3 起读者知情不由观察面自写，由 compile 按拍级
-`access` 派生。命题/loop 用章内本地
+rc27 增加认知操作、极性、支持性质、可见性与答案引用。CS-S 1b 起 effect 不再带 `disclosure`／`proposition`／`scope`
+（命题锚只在 cognition）；读者知情不由观察面自写，由 compile 按原子可见性与确认性质派生。命题/loop 用章内本地
 句柄（wire `ref`，不进 canonical）：新建带 statement，引用不带文本；同拍先建后引合法，
 章间不引用——跨章同一性归 associate，配不上即未决，compile 拒绝发布并按 item 报告，
 恢复走 owner patch 或 associate 定向修订。
@@ -154,10 +189,10 @@ Stage6 退役后 `stage1/hook_copy.json` 的唯一消费者是本层：切成 `e
 | `stage2/observations/book.json` | `BookObservation` | `str06.stage2.book` | 书级观察：人物候选（可读 slug、称谓及证据）、初态、世界约束 |
 | `stage2/observations/ch{nn}.json` | `ChapterObservation` | `str06.stage2.chapters` | 逐章观察：有序事件＋三类转移＋场景边界＋时间模式＋证据（章内本地句柄） |
 | `stage2/observations/names.json` | `NamesObservation` | `str06.stage2.names` | 源名称结构观察（`NameStructure`） |
-| `stage2/observations/associate.json` | `AssociateObservation` | `str06.stage2.associate` | 跨章关联判定：逐候选 verdict（R1 起独立协议，现役 `stage2-associate-v5`、形状 `str06-rc20`；无候选＝零调用） |
-| `stage2/blueprints/chapter_blueprints.json` | `BlueprintsArtifactV17` | `str06.stage2.compile` | 逐章 Blueprint（三类转移、场景分段、拍级 access 与因果边；compile 唯一 writer） |
+| `stage2/observations/associate.json` | `AssociateObservation` | `str06.stage2.associate` | 跨章关联判定：逐候选 verdict（R1 起独立协议，现役 `stage2-associate-v5`、形状 `str06-rc27`；无候选＝零调用） |
+| `stage2/blueprints/chapter_blueprints.json` | `BlueprintsArtifactV18` | `str06.stage2.compile` | 逐章 Blueprint（三类转移、场景分段、拍级 access 与因果边；compile 唯一 writer） |
 | `stage2/acceptance/fold.json` | 自由形态派生记录 | `str06.stage2.compile` | source fold 读数表（事件＋每章空转移拍比例＋知情时间线读数） |
-| `stage2/characters/characters.json` | `CharactersArtifactV6` | `str06.stage2.compile` | Characters v6：core＋名称结构（compile 合并 book 与 names 观察后唯一发布，D9） |
+| `stage2/characters/characters.json` | `CharactersArtifactV7` | `str06.stage2.compile` | Characters v7：core＋名称结构（compile 合并 book 与 names 观察后唯一发布，D9） |
 
 已退役：`stage2/compiled/book_extraction.json`（联合抽取派生 core；由 compile 直接发布
 Characters 双真源取代）、`stage2/compiled/input_snapshots.json`（逐章输入快照；D3 章观察
@@ -188,16 +223,16 @@ book 观察与全文（字面校验含章前文字）；`str06.stage2.associate`
 | `source_identity_covers_hook_copy` | hard | 源身份覆盖 main_text＋hook_copy 两份字节 |
 | `source_chapter_dense_ordinals` | hard | 源章数组阅读序 1..N 密集且非空 |
 | `source_chapter_blueprint` | hard | 章观察编译闭合（三类转移、场景分段、闭集；章观察只含章内本地句柄） |
-| `source_loop_lifecycle` | hard | loops 只许 open/close：loop 一次性 open、close 必带 resolution、问题文本不可改写 |
+| `source_loop_lifecycle` | hard | loops 只许 open/close：loop 一次性 open、close 引用本拍可见确认原子，resolution 由代码派生、问题文本不可改写 |
 | `source_proposition_closure` | hard | 命题引用闭合：章内本地句柄可解析、新建带 statement、引用不重抄文本；fact 引用（f{nn}）按词表闭集核对、不带文本，跨章同一性按引用构造成立；残余近义漂移配对归 associate 候选判定 |
 | `source_registered_key_scope` | hard | 变化键闭集与作用域（R-2.14）：change 键入 `CHANGE_KEYS` 闭集，表外键（含退役位置键）一律拒；作用域读时按登记表派生（scene_location＝scene，由拍级字段合成；其余键＝book） |
 | `source_fold_consistent` | hard | fold 事件与 Blueprint canonical 一致（含 e00 只读读数） |
 | `source_fold_events` | metric | fold 事件计数与章分布读数 |
 | `source_fold_empty_transition_ratio` | metric | 每章空转移拍比例（三类转移全空的拍所占比例） |
-| `source_fold_knowledge` | metric | 知情 fold 读数（按命题＋持有者＋模式折叠；Phase 2 起含 facts 知情时间线——known_at_start 起步＋逐认知转移事件＋冗余告知读数；度量不是门） |
+| `source_fold_knowledge` | metric | 知情 fold 读数（按命题＋持有者保留极性、撤回及说法历史；含 facts 知情时间线——known_at_start 起步＋逐认知转移事件＋冗余告知读数；度量不是门） |
 | `source_basis_quote_literal` | hard | R10a a1：basis 段属条目自身 source_refs 且引文逐字存在于所引句段（canonical 直通面不归一化、不模糊匹配；C4；wire 面只给段 id、引文＝段全文由 compiler 派生，2026-10-07）；Blueprint v15 证据窗口（被引段全文＋同章前后各句、重叠机械合并）由 compiler 派生——邻句被送达≠邻句成为证据 |
 | `source_effect_modality` | hard | R10a a1：Effect.modality 闭集 actual/planned/expected/conditional 必填（C2 源侧）——计划/预计/条件与已发生分开；认识限定不混入命题文本；源文未说明不得自动填 actual |
-| `names_structure_compile` | hard | Characters v6 名称结构编译闭合 |
+| `names_structure_compile` | hard | Characters v7 名称结构编译闭合 |
 | `names_coverage` | hard | 应改名集合覆盖源名称结构（名称位一致） |
 | `source_semantics_unver` | unver | 源语义与关联决定未经语义审阅，保持未评披露 |
 
@@ -210,10 +245,10 @@ book 观察与全文（字面校验含章前文字）；`str06.stage2.associate`
 每一拍是一次状态转移：`event` 是给人读的事件表述；需要延续的变化全部由三类转移承载——
 `effects`（叙述确立的事实；作用域读时按登记表派生——CS-S 1b 起 effect 不再携带
 `scope`／`disclosure`／`proposition`，命题锚只在 cognition 上）、`cognition`（谁对哪条
-命题持什么模式；holder 为人物 id（观察面不写 reader——读者知情由 compile 按拍级
-`access` 派生，Phase 3；`public` 持有者已删，D-5），
-mode 为 learns/suspects/confirms/hears_claim/believes/asserts）、`loops`（悬念；op 只有
-open/close，close 必带 resolution）。拍上另带 `scene_boundary`（new/continue）与
+命题持什么模式与极性或撤回；holder 为人物 id（观察面不写 reader——读者知情按
+原子可见性与确认性质派生；public 持有者已删），set 的 mode 为
+learns/suspects/confirms/hears_claim/believes/asserts，unset 的 mode／polarity 均 null）、`loops`（悬念；op 只有
+open/close，close 必选本拍答案原子并派生 resolution）。拍上另带 `scene_boundary`（new/continue）与
 `temporal_mode`（single/iterative）；章蓝图带 compiler 生成的 `scenes` 分段（跨章场景在
 续章同样出现）。命题与 loop 的正式 ID（kNN／loopNN）由 compiler 生成：观察 wire 内用
 章内本地句柄；跨章同一性由 associate 配对后由 compiler 授予唯一正式 ID。

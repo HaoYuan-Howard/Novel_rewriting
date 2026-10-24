@@ -856,7 +856,7 @@ class _RoutingTransport:
         for owner, marker in (
                 ('names', '登记全书源名称结构'), ('preserve', '最小语义义务'),
                 ('design', '设计目标书'),
-                ('hook_design', 'stage4-hook-design-v4'), ('naming', '表层姓名')):
+                ('hook_design', 'stage4-hook-design-v5'), ('naming', '表层姓名')):
             if marker in user:
                 return owner
         raise AssertionError(f'无法路由的请求：{user[:80]}')

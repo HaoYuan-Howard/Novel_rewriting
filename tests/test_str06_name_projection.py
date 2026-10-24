@@ -27,7 +27,7 @@ from novel.stages.common import (
 )
 from novel.stages.stage4.hook_context import compile_hook_context
 from novel.stages.stage5.hook_writer import build_hook_user_prompt
-from tests.factories import hook_wire_v3
+from tests.factories import current_hook_wire
 from tests.str06_facilities import name_map_of
 from tests.test_str06_hook import _characters
 
@@ -87,7 +87,7 @@ def test_pure_appellations_are_excluded_and_ambiguous_names_require_explicit_ide
 
 def _ambiguous_appellation_characters():
     """同一字面既是甲的化名，也是乙的纯职称；两条登记都通过正式 schema。"""
-    from contracts.schema.source import CharactersArtifactV6
+    from contracts.schema.source import CharactersArtifactV7
     data = _characters().model_dump(mode='json')
     for char_id in ('fu_jun', 'yun_niang'):
         data['characters'][char_id]['surfaces'].append({
@@ -97,7 +97,7 @@ def _ambiguous_appellation_characters():
     person['aliases'].append({'alias_id': 'al_abbot', 'literal': '方丈'})
     person['surface_forms']['方丈'] = '{alias:al_abbot}'
     data['name_structure']['people']['yun_niang']['surface_forms']['方丈'] = None
-    return CharactersArtifactV6.model_validate(data)
+    return CharactersArtifactV7.model_validate(data)
 
 
 def test_name_bearing_surface_shared_with_a_pure_appellation_is_not_bound():
@@ -161,7 +161,7 @@ def _green_graph():
         source_narration=sample_narration())
     assert body is not None and not errors, errors
     hook, errors = assemble_hook_design(
-        hook_wire_v3(_hook_wire()), body=body, known_char_ids=known,
+        current_hook_wire(_hook_wire(), body=body), body=body, known_char_ids=known,
         name_projection=chars.name_projection(), name_structure=chars.name_structure,
         faces=_faces(chars))
     assert hook is not None and not errors, errors
@@ -170,7 +170,7 @@ def _green_graph():
 
 def _identity_material_case(*, shared=True, fallback=False):
     """正式人物契约和 Design；甲面已释放，乙无面或只有纯称谓回落。"""
-    from contracts.schema.source import CharactersArtifactV6
+    from contracts.schema.source import CharactersArtifactV7
     from contracts.schema.state import SurfaceRelease
     names = {'yun_niang': '同名', 'fu_jun': '同名'} if shared else {
         'yun_niang': '白', 'fu_jun': '若', 'other': '白若'}
@@ -180,10 +180,10 @@ def _identity_material_case(*, shared=True, fallback=False):
         if fallback and cid == 'fu_jun':
             forms['夫君'] = None
         people[cid] = {'given': name, 'surface_forms': forms}
-        chars[cid] = {'canonical': name, 'surfaces': [
+        chars[cid] = {'identity_bindings': [], 'canonical': name, 'surfaces': [
             {'surface': face, 'from_chapter': 1, 'until_chapter': None,
              'source_refs': ['e01_01']} for face in forms]}
-    characters = CharactersArtifactV6.model_validate({
+    characters = CharactersArtifactV7.model_validate({'initial_knowledge': [],
         'characters': chars, 'initial_state': [],
         'name_structure': {'families': {'f_unused': {'literal': '郑', 'forms': []}},
                            'people': people}})
@@ -316,7 +316,7 @@ def test_hook_candidate_presentation_replaces_hidden_source_material_for_preflig
     beats[0] = beats[0].model_copy(update={'event': '陆大哥翻出后墙。'})
     scenes[1] = scenes[1].model_copy(update={'beats': tuple(beats)})
     body = body.model_copy(update={'scenes': tuple(scenes)})
-    wire = hook_wire_v3(_hook_wire())
+    wire = current_hook_wire(_hook_wire(), body=body)
     binding = _binding(_design())
     chars = _characters()
     visible = hook_candidate_material_errors(
@@ -476,10 +476,10 @@ def test_guard_only_reaches_compile_report_and_survives_restart(tmp_path):
     from tests.test_str06_hook import _full_chain_wires
 
     wires = _full_chain_wires()
-    wires['design']['protocol_version'] = 'stage4-design-v12'
+    wires['design']['protocol_version'] = 'stage4-design-v13'
     question = '陆大哥当年去了哪里'
     wires['ch01']['beats'][0]['loops'] = [
-        {'ref': 'q_where', 'op': 'open', 'question': question}]
+        {'ref': 'q_where', 'op': 'open', 'question': question, 'answer_refs': []}]
     wires['preserve']['obligations'].append({
         'kind': 'reveal', 'statement': '夫君当年去向之谜保留为悬念',
         'anchors': ['b01_01.l1'], 'must_preserve': True,
@@ -636,7 +636,7 @@ def _hook_context(**hook_over):
         source_narration=sample_narration())
     assert body is not None and not errors, errors
     hook, errors = assemble_hook_design(
-        hook_wire_v3(_hook_wire(**hook_over)), body=body, known_char_ids=known,
+        current_hook_wire(_hook_wire(**hook_over), body=body), body=body, known_char_ids=known,
         name_projection=chars.name_projection(), name_structure=chars.name_structure,
         faces=_faces(chars))
     assert hook is not None and not errors, errors
@@ -748,7 +748,7 @@ def test_hook_forbidden_lines_project_but_never_join_the_leak_check():
         concealed=[], surface_releases=_released_both(),
         forbidden_reveals=[{'ref': {'scene': 'sc01', 'beat': 'b01'}}])
     hook, errors = assemble_hook_design(
-        hook_wire_v3(wire), body=body, known_char_ids=known,
+        current_hook_wire(wire, body=body), body=body, known_char_ids=known,
         name_projection=chars.name_projection(), faces=_faces(chars))
     assert hook is not None and not errors, errors
     context, errors = compile_hook_context(
@@ -813,7 +813,7 @@ def test_hook_projection_reaches_the_compile_guard_report(tmp_path):
     from tests.test_str06_hook import _full_chain_wires
 
     wires = _full_chain_wires()
-    wires['design']['protocol_version'] = 'stage4-design-v12'
+    wires['design']['protocol_version'] = 'stage4-design-v13'
     wires['hook_design'].update(
         concealed=[], surface_releases=_released_both(),
         local_focus='从深夜冷开倒叙入新婚夜旧约，顾大哥的身份不露。')
@@ -833,5 +833,5 @@ def test_hook_projection_reaches_the_compile_guard_report(tmp_path):
     reopened = Str06Repository(repo.root)
     assert reopened.inspect('stage4/acceptance/guard/report.json') == report
     context = reopened.read_model('stage4/context/hook/hook.json')
-    assert context.contract_version == 'str06-rc26'
+    assert context.contract_version == 'str06-rc27'
     assert '顾大哥' in context.local_focus and '顾大哥' not in build_hook_user_prompt(context)

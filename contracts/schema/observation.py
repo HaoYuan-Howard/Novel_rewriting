@@ -39,12 +39,13 @@ from __future__ import annotations
 import re
 from typing import Annotated, Any, Final, Literal
 
-from pydantic import Field, model_serializer, model_validator
+from pydantic import Field, field_validator, model_serializer, model_validator
 
 from contracts.schema.base import StrictModel
 from contracts.schema.source import (
     ACCESS_PATTERN, CHANGE_KEY_PATTERN, AliasEntry, CharacterKey, Cognition, Effect,
-    EvidenceQuote, FamilyEntry, LoopAction, NameStructure, StateTarget,
+    EvidenceQuote, EvidenceSupport, FamilyEntry, IdentityBinding, LoopAction,
+    NameStructure, Polarity, StateTarget,
 )
 
 #: 观察协议的版本字面量（进请求身份与盘面信封；I-13 显式版本化）。升版 =
@@ -77,14 +78,14 @@ STAGE2_NAMES_PROTOCOL: Final = 'stage2-names-v5'
 #: 时刻）——引子（e00）内已完成的告知算开场已知（过程归第 1 章开场拍、结果
 #: 归词表起步）；后置高光前置／全书概括类引子披露不算开场已知，信息由正文
 #: 对应章观察承载。判据变化经请求身份（prompt 哈希）隔离旧采用。
-STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v7'
+STAGE2_BOOK_PROTOCOL: Final = 'stage2-book-v8'
 #: CS-S Phase 2（2026-10-07）：chapters canonical 升 v6——cognition 的命题
 #: 可引用书级 facts（proposition.ref=f{nn}、statement=None——文本由 compile
 #: 从词表回填，跨章同一性按引用构造成立，不再靠转写配对）。
 #: CS-S Phase 3（2026-10-08）：chapters canonical 升 v7——ObsBeat 增 `access`
 #: （获知通道闭集 witnessed/narrated）；know 的 holder 禁 reader（读者知情由
 #: compile 派生，不进观察面）。
-STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v7'
+STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v8'
 
 #: 书级观察的 **wire 面**（2026-10-07 裁决：模型只选段、代码切原文；同日二次
 #: 收口：wire/canonical 词汇分层——wire 用 `evidence_refs`，canonical 用 basis）：
@@ -100,7 +101,7 @@ STAGE2_CHAPTERS_PROTOCOL: Final = 'stage2-chapters-v7'
 #: 代码派发，I-21）。
 #: CS-S Phase 3（2026-10-08）升 v10：initial_state 键入 `CHANGE_KEYS` 闭集
 #: （提示词渲染清单，表外键即拒）。
-STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v10'
+STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v11'
 
 #: 章观察的**瘦 wire 面**（CS-2 起；2026-10-07 basis 指针化；同日二次收口升 v7：
 #: evidence_refs 词汇＋scene_location 上移拍级元数据；CS-S 1a 升 v8：`src`→`start`
@@ -124,7 +125,7 @@ STAGE2_BOOK_WIRE_PROTOCOL: Final = 'stage2-book-v10'
 #: （与语义对齐：state 条目是变化，ev 是 event 的缩写遗风）；增 `access`
 #: （获知通道：witnessed 默认不写、narrated 变体直陈时显式标注）；change 键入
 #: `CHANGE_KEYS` 闭集；know 的 `who` 禁 reader（读者知情由 compile 派生）。
-STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v10'
+STAGE2_CHAPTERS_WIRE_PROTOCOL: Final = 'stage2-chapters-v11'
 
 #: names 的 **结构 wire 面**（CS-S 1c，2026-10-07 升 v6）：模型只登记姓氏家族
 #: （含家族级 forms）、名、化名与**歧义例外** `form_overrides`——每个 surface
@@ -201,6 +202,7 @@ class CharacterCandidate(StrictModel):
 
     canonical: str = Field(min_length=1)
     surfaces: tuple[SurfaceMention, ...] = Field(min_length=1)
+    identity_bindings: tuple[IdentityBinding, ...]
 
 
 class InitialFact(StrictModel):
@@ -252,25 +254,35 @@ def is_fact_ref(ref: object) -> bool:
     return isinstance(ref, str) and _FACT_ID_RE.fullmatch(ref) is not None
 
 
+class InitialKnowledge(StrictModel):
+    """开场已确认的正／负命题知识；空数组表示开场尚无确认。"""
+
+    holder: CharacterKey
+    polarity: Polarity
+
+
+class FactEvidence(StrictModel):
+    """源文对命题的一次支持、说法或推测；不声明永久世界真值。"""
+
+    kind: EvidenceSupport
+    polarity: Polarity
+    holder: CharacterKey | None
+    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
+
+
 class Fact(StrictModel):
-    """书级命题词表的一条（CS-S Phase 2）：后续抽取的共享词汇（S2-8）。
+    """共享原子命题词表，不是永久世界真相表。
 
-    **没有** fact_id 进 wire：compile 按列表序派发（I-21）；known_at_start
-    承载 1b 删掉的初始知情语义——故事开始那一刻已经知道该命题的人物 slug
-    （空数组＝剧情中才被知晓；持有者闭集＝人物 slug，D-5 删 public、reader
-    知情 Phase 3 由 compile 派生）。facts 不带 address（D-3：无消费者）。
-
-    「故事开始」＝**第 1 章第一拍开始的时刻**（2026-10-08 用户裁决统一口径，
-    与 `InitialFact` 同一判定时刻）：引子（e00）内已完成的告知算开场已知
-    （揭示过程归第 1 章开场拍、完成结果归本字段，fold 时间线并排呈现）；
-    引子若为后置高光前置／全书概括（叙事时间在第 1 章之后），其披露不算
-    开场已知（空数组），信息由正文对应章观察承载，防止新书提前披露。
+    一项只表达可独立确认或否定的主张；evidence 保留原文的确认、说法、推测
+    以及极性和相关人物。原子性与语义同一性由语义单元判断，compiler 不拆句。
+    fact_id 由代码按序派发。known_at_start 仅记录第 1 章第一拍开始时已确认的
+    正／负知识；引子中的后置预告不视为开场已知，reader 认知仍由 compiler 派生。
     """
 
     fact_id: str = Field(pattern=FACT_ID_PATTERN)
     statement: str = Field(min_length=1)
-    basis: tuple[EvidenceQuote, ...] = Field(min_length=1)
-    known_at_start: tuple[CharacterKey, ...] = Field(default=(), min_length=0)
+    evidence: tuple[FactEvidence, ...] = Field(min_length=1)
+    known_at_start: tuple[InitialKnowledge, ...]
 
 
 from contracts.schema.expression import ExpressionObservation
@@ -283,7 +295,7 @@ class BookObservation(StrictModel):
     facts 的 F 编号由 compile 按列表序派发（Phase 2）——词表不是真源
     （S2-8），下游经 cognition 引用与 fold 知情时间线读数消费。"""
 
-    protocol_version: Literal['stage2-book-v7']
+    protocol_version: Literal['stage2-book-v8']
     expression: ExpressionObservation
     characters: dict[CharacterKey, CharacterCandidate] = Field(min_length=1)
     initial_state: tuple[InitialFact, ...] = Field(default=(), min_length=0)
@@ -338,14 +350,21 @@ class WorldRuleWire(StrictModel):
     evidence_refs: tuple[SegmentRef, ...] = Field(min_length=1)
 
 
+class FactEvidenceWire(StrictModel):
+    """命题证据的 wire：只选择证据段，逐字引文由代码展开。"""
+
+    kind: EvidenceSupport
+    polarity: Polarity
+    holder: CharacterKey | None
+    evidence_refs: tuple[SegmentRef, ...] = Field(min_length=1)
+
+
 class FactWire(StrictModel):
-    """书级命题的 wire 面（CS-S Phase 2）：无编号（F 编号代码派发）、无
-    source_refs（evidence_refs 即证据范围——词表条目不参与称谓锚点派生一类
-    的窗口计算）。known_at_start 只收人物 slug（闭集核对归 book owner）。"""
+    """命题 wire 不带编号，逐项证据只选段；开场知识显式给出人物与极性。"""
 
     statement: str = Field(min_length=1)
-    evidence_refs: tuple[SegmentRef, ...] = Field(min_length=1)
-    known_at_start: tuple[CharacterKey, ...] = Field(default=(), min_length=0)
+    evidence: tuple[FactEvidenceWire, ...] = Field(min_length=1)
+    known_at_start: tuple[InitialKnowledge, ...]
 
 
 class BookObservationWire(StrictModel):
@@ -354,7 +373,7 @@ class BookObservationWire(StrictModel):
     人物、称谓证据与表达观察的形状与 canonical 相同（称谓的 source_refs 是
     语义选择——选哪一处出现作锚点）。"""
 
-    protocol_version: Literal['stage2-book-v10']
+    protocol_version: Literal['stage2-book-v11']
     expression: ExpressionObservation
     characters: dict[CharacterKey, CharacterCandidate] = Field(min_length=1)
     initial_state: tuple[InitialFactWire, ...] = Field(default=(), min_length=0)
@@ -398,7 +417,7 @@ class ChapterObservation(StrictModel):
     按拍级 access 派生注入蓝图）。
     """
 
-    protocol_version: Literal['stage2-chapters-v7']
+    protocol_version: Literal['stage2-chapters-v8']
     beats: tuple[ObsBeat, ...] = Field(min_length=1)
 
 
@@ -426,6 +445,7 @@ class SlimEffect(StrictModel):
     op: str | None = Field(default=None, pattern=r'^(set|unset|add|remove|unknown)$')
     modality: str | None = Field(default=None,
                                  pattern=r'^(actual|planned|expected|conditional)$')
+    reader_visible: bool
     evidence_refs: tuple[SegmentRef, ...] = Field(min_length=1)
 
 
@@ -440,7 +460,11 @@ class SlimCognition(StrictModel):
     """
 
     who: str = Field(min_length=1)
-    how: str = Field(pattern=r'^(learns|suspects|confirms|hears_claim|believes|asserts)$')
+    op: Literal['set', 'unset']
+    how: str | None = Field(pattern=r'^(learns|suspects|confirms|hears_claim|believes|asserts)$')
+    polarity: Polarity | None
+    support: EvidenceSupport
+    reader_visible: bool
     what: str | None = Field(default=None, min_length=1)
     fact: str | None = Field(default=None, pattern=FACT_ID_PATTERN)
     evidence_refs: tuple[SegmentRef, ...] = Field(min_length=1)
@@ -460,6 +484,70 @@ class SlimCognition(StrictModel):
                 '不进观察面')
         return self
 
+    @model_validator(mode='after')
+    def _op_shape(self) -> 'SlimCognition':
+        if self.op == 'unset':
+            if self.how is not None or self.polarity is not None:
+                raise ValueError('know unset 的 how／polarity 必须为 null')
+        elif self.how is None or self.polarity is None:
+            raise ValueError('know set 必须显式给出 how／polarity')
+        if self.how in ('learns', 'confirms') and self.support != 'confirmed':
+            raise ValueError('learns／confirms 只接受 confirmed 证据')
+        return self
+
+
+class SlimAnswerRef(StrictModel):
+    """本拍答案选择器；数组保持 1-based，拍级位置用独立选择器指向合成 Effect。"""
+
+    model_config = {'extra': 'forbid', 'json_schema_extra': {'allOf': [{
+        'if': {'properties': {'kind': {'const': 'scene_location'}}, 'required': ['kind']},
+        'then': {'properties': {'index': {'const': 1}}},
+    }]}}
+
+    kind: Literal['change', 'know', 'scene_location']
+    index: int = Field(ge=1)
+
+    @field_validator('index', mode='before')
+    @classmethod
+    def _json_integer_index(cls, value: Any) -> Any:
+        # JSON Schema 的 integer 不接受布尔或数字字符串；Pydantic 默认会强转。
+        # 数值 1.0 属 JSON Schema 的整数，交 int 字段按同一数学整数规则验证。
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError('答案 index 必须是 JSON 整数，不接受布尔或字符串')
+        return value
+
+    @model_validator(mode='after')
+    def _location_index(self) -> 'SlimAnswerRef':
+        if self.kind == 'scene_location' and self.index != 1:
+            raise ValueError('scene_location 答案的 index 只能为 1')
+        return self
+
+
+class SlimLoopAction(StrictModel):
+    """模型只选答案原子，不自由填写可能把猜测固化的收束文本。"""
+
+    ref: str = Field(min_length=1)
+    op: Literal['open', 'close']
+    question: str | None
+    answer_refs: tuple[SlimAnswerRef, ...]
+
+    @model_validator(mode='after')
+    def _op_shape(self) -> 'SlimLoopAction':
+        if self.op == 'open':
+            if not self.question or not self.question.strip():
+                raise ValueError('open 必须带非空 question')
+            if self.answer_refs:
+                raise ValueError('open 不得带答案引用')
+        else:
+            if self.question is not None:
+                raise ValueError('close 不得改写问题文本')
+            if not self.answer_refs:
+                raise ValueError('close 必须引用本拍答案原子')
+            refs = [(item.kind, item.index) for item in self.answer_refs]
+            if len(set(refs)) != len(refs):
+                raise ValueError('close 答案原子引用重复')
+        return self
+
 
 class SlimBeat(StrictModel):
     """一拍的瘦面（v8 起 start 单段；v10 改名 `ev`→`event`、`state`→`change`
@@ -472,30 +560,56 @@ class SlimBeat(StrictModel):
 
     `new_scene`／`iterative` 只写例外（缺省 continue／single）；`access` 只写
     变体直陈的例外（缺省 witnessed——narrated＝叙述者直陈：回溯、背景交代、
-    概括、「叙述者点明」，不经角色展演；它驱动 compile 的读者知情派生）；
+    概括、「叙述者点明」，不经角色展演；不据此推定读者确知）；
     `scene_location` 是拍级场景位置元数据（换景或首次交代位置时给，compiler
     合成登记键 `scene_location` 的 world 效应，证据面＝本拍派生区间全体——
-    覆盖性证据不猜具体句）；loops 保持原形状（悬念句柄仍由模型给——跨章开合
-    配对靠它，D8）。
+    覆盖性证据不猜具体句）；`location_reader_visible` 必填，明确位置内容是否
+    向读者展示，无位置时必须为 false。悬念收束引用本拍已确认的可见原子。
     """
+
+    model_config = {'extra': 'forbid', 'json_schema_extra': {'allOf': [{
+        'if': {
+            'properties': {'loops': {'contains': {
+                'properties': {'answer_refs': {'contains': {
+                    'properties': {'kind': {'const': 'scene_location'}},
+                    'required': ['kind'],
+                }}},
+                'required': ['answer_refs'],
+            }}},
+            'required': ['loops'],
+        },
+        'then': {'required': ['scene_location'],
+                 'properties': {'scene_location': {'type': 'string', 'minLength': 1}}},
+    }]}}
 
     event: str = Field(min_length=1)
     on_stage: tuple[str, ...] = Field(default=(), min_length=0)
     start: SegmentRef
     scene_location: str | None = Field(default=None, min_length=1)
+    location_reader_visible: bool
     new_scene: bool = False
     iterative: bool = False
     access: str = Field(default='witnessed', pattern=ACCESS_PATTERN)
     change: tuple[SlimEffect, ...] = Field(default=(), min_length=0)
     know: tuple[SlimCognition, ...] = Field(default=(), min_length=0)
-    loops: tuple[LoopAction, ...] = Field(default=(), min_length=0)
+    loops: tuple[SlimLoopAction, ...] = Field(default=(), min_length=0)
+
+    @model_validator(mode='after')
+    def _location_visibility_requires_location(self) -> 'SlimBeat':
+        if self.scene_location is None and self.location_reader_visible:
+            raise ValueError('无 scene_location 时 location_reader_visible 必须为 false')
+        if self.scene_location is None and any(
+                answer.kind == 'scene_location' for loop in self.loops
+                for answer in loop.answer_refs):
+            raise ValueError('scene_location 答案必须引用本拍实际存在的拍级位置')
+        return self
 
 
 class ChapterObservationWire(StrictModel):
     """`str06.stage2.chapters` 的瘦输出面（传输面，不落盘；expand 成
     `ChapterObservation` 后进既有管道与盘面）。"""
 
-    protocol_version: Literal['stage2-chapters-v10']
+    protocol_version: Literal['stage2-chapters-v11']
     beats: tuple[SlimBeat, ...] = Field(min_length=1)
 
 

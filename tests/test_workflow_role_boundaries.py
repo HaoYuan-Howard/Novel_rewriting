@@ -4,13 +4,20 @@ import json
 
 import pytest
 
-from novel.stages.chain import ChainContext, run_node, run_workflow
+from novel.stages.chain import ChainContext, build_evidence, run_node, run_workflow
 from novel.stages.owner_revision import OwnerRevisionRequired, read_owner_issue_file
 from novel.stages.stage2 import compile_chapter_observation
 from tests.str06_facilities import json_ask, synthetic_ref, text_ask
 from tests.str06_faults import looped_full_chain_wires
 from tests.test_str06_body import _chapters, _make_session
 from tests.test_str06_r3_selfheal import _ScriptedTransport, _json_session, _request
+
+
+def _confirmed_answer(ref: str, statement: str, segment: str) -> dict:
+    return {'proposition': {'ref': ref, 'statement': statement},
+            'holder': 'yun_niang', 'op': 'set', 'mode': 'learns',
+            'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True,
+            'basis': [{'segment': segment, 'quote': '芸娘'}]}
 
 
 def _prepared(tmp_path, *, through_design=False, wires=None, before_associate=False):
@@ -38,12 +45,12 @@ def test_rc18_duplicate_close_rejected_by_chapter_acceptance():
     wire['beats'][0]['loops'] *= 2
     original = deepcopy(wire)
     observation, errors = compile_chapter_observation(
-        wire, evidence_ids=['e02_01'], chapter=2)
+        wire, evidence_ids=build_evidence(_chapters()), chapter=2)
     assert observation is None and any('重复 close' in e for e in errors)
     assert wire == original
     wire['beats'][0]['loops'].pop()
     observation, errors = compile_chapter_observation(
-        wire, evidence_ids=['e02_01'], chapter=2)
+        wire, evidence_ids=build_evidence(_chapters()), chapter=2)
     assert observation is not None and not errors
 
 
@@ -63,7 +70,11 @@ def test_rc18_close_before_local_open_rejected_and_located(same_beat):
     wires = looped_full_chain_wires()
     wire = _chapter_v3(wires['ch01'], 1)
     opened = deepcopy(wire['beats'][0]['loops'][0])
-    closed = deepcopy(wires['ch02']['beats'][0]['loops'][0])
+    cross_wire = _chapter_v3(wires['ch02'], 2)
+    closed = deepcopy(cross_wire['beats'][0]['loops'][0])
+    answer = deepcopy(cross_wire['beats'][0]['know'][0])
+    answer['evidence_refs'] = ['e01_01']
+    wire['beats'][0]['know'] = [answer]
     # v8 起两拍需要两个不同的 start：给章 1 的闭集补一段合成段。
     evidence = {**build_evidence(_chapters()),
                 'e01_02': {'chapter': 1, 'text': '芸娘回房歇下。'}}
@@ -92,7 +103,11 @@ def test_rc18_close_before_local_open_rejected_and_located(same_beat):
         wire['beats'][0]['loops'] = [opened, closed]
     else:
         wire['beats'][0]['loops'] = [opened]
+        wire['beats'][0].pop('know', None)
         wire['beats'][1]['loops'] = [closed]
+        answer = deepcopy(answer)
+        answer['evidence_refs'] = ['e01_02']
+        wire['beats'][1]['know'] = [answer]
     assert compile_chapter_observation(wire, evidence_ids=evidence, chapter=1)[0] is not None
     cross = _chapter_v3(wires['ch02'], 2)
     assert compile_chapter_observation(cross, evidence_ids=evidence, chapter=2)[0] is not None
@@ -106,7 +121,9 @@ def test_rc19_saved_close_before_open_routes_and_recovers(tmp_path, detector):
     bad = original.model_dump(mode='json')
     later = deepcopy(bad['beats'][0])
     later.update(effects=[], cognition=[], scene_boundary='continue')
-    bad['beats'][0]['loops'] = [{'ref': 'q_yu', 'op': 'close', 'resolution': '旧案已解。'}]
+    bad['beats'][0]['loops'] = [{'ref': 'q_yu', 'op': 'close', 'answer_refs': ['c1']}]
+    bad['beats'][0]['cognition'] = [
+        _confirmed_answer('p_local_answer', '旧案已解', 'e01_01')]
     bad['beats'].append(later)
     repo.write(rel, type(original).model_validate(bad), owners=('ch01',),
                refs=(synthetic_ref('ch01'),))
@@ -135,20 +152,22 @@ def test_rc19_saved_close_before_open_routes_and_recovers(tmp_path, detector):
 def test_rc20_repeated_loop_instances_have_stable_distinct_identities():
     from novel.stages.stage2 import chapter_loop_issues
     from novel.core.validation import validation_identity
-    closed = {'ref': 'q', 'op': 'close', 'resolution': '已解。'}
-    beats = [{'loops': [deepcopy(closed) for _ in range(3)]}]
+    closed = {'ref': 'q', 'op': 'close', 'answer_refs': ['c1']}
+    beats = [{'cognition': [_confirmed_answer('p_answer', '已解', 'e02_01'),
+                            _confirmed_answer('p_other_answer', '另一事已解', 'e02_01')],
+              'loops': [deepcopy(closed) for _ in range(3)]}]
     issues = chapter_loop_issues(beats, chapter=2)
     identities = {validation_identity(i) for i in issues}
     assert len(issues) == len(identities) == 2
     # 无关条目和拍位移动不改变同一重复实例的身份。
     shifted = deepcopy(beats)
-    shifted[0]['loops'].insert(0, {'ref': 'other', 'op': 'close', 'resolution': '已解。'})
+    shifted[0]['loops'].insert(0, {'ref': 'other', 'op': 'close', 'answer_refs': ['c1']})
     shifted.insert(0, {'loops': []})
     assert {validation_identity(i) for i in chapter_loop_issues(shifted, chapter=2)} == identities
     beats[0]['loops'].pop()
     remaining = chapter_loop_issues(beats, chapter=2)
     assert {validation_identity(i) for i in remaining} < identities
-    beats[0]['loops'][0]['resolution'] = '改写收束展示。'
+    beats[0]['loops'][0]['answer_refs'] = ['c2']
     assert [validation_identity(i) for i in chapter_loop_issues(beats, chapter=2)] == [
         validation_identity(i) for i in remaining]
 
@@ -170,9 +189,9 @@ def test_rc20_repeated_close_shrinks_through_acceptance_and_replays_free(tmp_pat
     _, _, session = _json_session(tmp_path, transport)
     def ask():
         return ask_json(session, 'ch02', _request('章观察原始请求'),
-            lambda w: compile_chapter_observation(w, evidence_ids=['e02_01'], chapter=2)[1],
+            lambda w: compile_chapter_observation(w, evidence_ids=build_evidence(_chapters()), chapter=2)[1],
             patch=(lambda w, e: chapter_patch_locate(
-                w, e, evidence_ids=['e02_01'], chapter=2)) if patch else None)
+                w, e, evidence_ids=build_evidence(_chapters()), chapter=2)) if patch else None)
     data, _ = ask()
     assert data == candidates[-1] and len(transport.calls) == 3
     replay, _ = ask()
@@ -291,9 +310,11 @@ def test_rc19_three_digit_chapter_can_persist_and_resume_its_revision(tmp_path):
 def test_rc20_real_associate_issues_shrink_and_replay_free(tmp_path):
     wires = looped_full_chain_wires()
     wires['ch01']['beats'][0]['loops'].append(
-        {'ref': 'q_other', 'op': 'open', 'question': '旧约何时兑现？'})
+        {'ref': 'q_other', 'op': 'open', 'question': '旧约何时兑现？', 'answer_refs': []})
     wires['ch02']['beats'][0]['loops'].append(
-        {'ref': 'q_other', 'op': 'close', 'resolution': '旧约在今晚兑现。'})
+        {'ref': 'q_other', 'op': 'close', 'answer_refs': ['c2']})
+    wires['ch02']['beats'][0]['cognition'].append(
+        _confirmed_answer('p_promise', '旧约在今晚兑现', 'e02_01'))
     a = wires['associate']['loop_pairing'][0]
     # v4：两组 open×close ⇒ 四个 loop 候选，逐候选恰答一次（错配判 distinct）。
     full = [a, {'open': 'ch01.q_other', 'close': 'ch02.q_other', 'verdict': 'pair'},

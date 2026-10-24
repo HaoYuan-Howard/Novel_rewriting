@@ -211,12 +211,12 @@ def test_whole_answer_route_is_confined_to_the_closed_set():
 
 def _actual_design_shape_issues(wire):
     """直接捕获真实Pydantic错误，再走生产诊断构造，避免手造loc掩盖类型丢失。"""
-    from contracts.schema.design import DesignWireV12
+    from contracts.schema.design import DesignWireV13
     from novel.stages.stage4.design import _wire_shape_issues
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError) as caught:
-        DesignWireV12.model_validate(wire)
+        DesignWireV13.model_validate(wire)
     return _wire_shape_issues(caught.value, 'wire 形状错误', wire=wire)
 
 
@@ -409,7 +409,7 @@ def _assemble(wire, brief, obligations):
 
 
 def _locating_cases() -> dict[str, tuple]:
-    """规则码 → 产出它的最小 v8 wire 变形（坏稿）。与 `_v9_wire` 绿底座同源。
+    """规则码 → 产出它的最小 v8 wire 变形（坏稿）。与 `_current_wire` 绿底座同源。
 
     只收**本文件能稳定触发**的码；其余 locate 码（`design_pov_closed_set`、
     `design_unregistered_surface`、`design_knowledge_lock`、kp/kf 家族、
@@ -419,30 +419,30 @@ def _locating_cases() -> dict[str, tuple]:
     「路由表与判据一一对应」这张网，不复制每条判据的红例。
     """
     from copy import deepcopy
-    from tests.test_str06_design_slim import _brief, _obligations, _v9_wire
+    from tests.test_str06_design_slim import _brief, _obligations, _current_wire
 
     def bad_unknown_char():
-        wire = _v9_wire()
+        wire = _current_wire()
         wire['scenes'][0]['beats'][0]['who'] = ['ghost']
         return wire
 
     def bad_chapter_slice():
-        wire = _v9_wire()
+        wire = _current_wire()
         wire['chapters'][0]['scenes'] = 3      # 章切片总数与场景总数不符
         return wire
 
     def bad_scene_weights():
-        wire = _v9_wire()
+        wire = _current_wire()
         wire['scene_weights'] = [1.0]        # 与场景等长失败
         return wire
 
     def bad_expression_ref():
-        wire = _v9_wire()
+        wire = _current_wire()
         wire['scenes'][0]['beats'][0]['ex'] = ['ex_99']
         return wire
 
     def bad_read_unestablished():
-        wire = _v9_wire()
+        wire = _current_wire()
         wire['scenes'][1]['reads'] = [{'domain': 'character', 'subjects': ['yun_niang'],
                                        'key': 'ghost_state'}]
         return wire
@@ -613,25 +613,26 @@ def test_hook_locate_codes_emit_wire_paths():
     from novel.stages.stage4.hook import assemble_hook_design
     from tests.test_str06_hook import _body_wire, _hook_wire
     from novel.stages.stage4.design import assemble_body_design
-    from tests.factories import hook_wire_v3
+    from tests.factories import current_hook_wire
 
     body, errors = assemble_body_design(
         _body_wire(), known_char_ids={'fu_jun', 'yun_niang'},
         expression_requirements=_requirements(), source_narration=_narration())
     assert body is not None and not errors, errors
-    bad_pov = hook_wire_v3(_hook_wire())
+    bad_pov = current_hook_wire(_hook_wire())
     bad_pov['pov'] = {'person': 'first', 'focalizers': ['ghost']}
-    bad_withheld = hook_wire_v3(_hook_wire())
+    bad_withheld = current_hook_wire(_hook_wire())
     # v2 只能选目录事实；合法事实放到别的拍仍须拒绝，不能因引用存在就放行。
     bad_withheld['materials'][0]['withheld'] = [bad_withheld['opening_facts'][1]['fact_ref']]
     bad_fact = _hook_wire()
     bad_fact['materials'][0]['withheld'] = [
-        {'domain': 'character', 'subjects': ['nope'], 'key': 'k'}]
-    bad_shape = hook_wire_v3(_hook_wire())
+        # 显式位置构造故意悬空的原子，让生产判据（而非夹具）报告坏引用。
+        {'domain': 'character', 'subjects': ['nope'], 'key': 'k', 'atom_ordinal': 0}]
+    bad_shape = current_hook_wire(_hook_wire())
     bad_shape['materials'][0]['beat_ref'] = 'sc02#b01'
     matched = []
     cases = ((bad_pov, 'hook_pov_char'), (bad_withheld, 'hook_withheld_ref'),
-             (hook_wire_v3(bad_fact), 'hook_fact_ref'), (bad_shape, 'hook_wire_shape'))
+             (current_hook_wire(bad_fact), 'hook_fact_ref'), (bad_shape, 'hook_wire_shape'))
     for bad, expected in cases:
         _hook, found = assemble_hook_design(
             bad, body=body, known_char_ids={'fu_jun', 'yun_niang'},

@@ -1,4 +1,7 @@
-"""同根升级的薄编排：登记计划 → 排空/CAS → 逐字归档 → 新 epoch。
+"""历史登记升级的薄编排与明确拒识边界。
+
+rc27 不登记跨版本迁移；历史边不抵达当前契约，旧根只读、新根重新生成。
+历史 pending 不能因清理入口仍存在而被当前代码删除。
 
 升级只开放登记的重建范围，不能把旧 Hook 补成新版，不清任何调用或预算账。
 prepared 日志先于失效写入；中断后只能重放同一计划——尚未归档任何文件的日志
@@ -20,7 +23,7 @@ from uuid import uuid4
 
 from contracts.contract_upgrades import REGISTERED_UPGRADES, ContractUpgradeSpec
 from contracts.schema.upgrades import ContractUpgradePlanV1, ContractUpgradeRecordV1, UpgradeFile
-from contracts.schema.workflow import CandidateWorkflow
+from contracts.schema.workflow import CandidateWorkflow, STR06_RC_VERSION
 from novel.appendlog import path_transaction_lock
 from novel.errors import ProvenanceRefused, UpgradeRefused
 from novel import paths
@@ -51,7 +54,8 @@ def _registration(before: CandidateWorkflow) -> ContractUpgradeSpec:
     if match is None:
         raise UpgradeRefused(
             '契约变化未登记或无法证明兼容；禁止改总版本绕过检查',
-            hint='先在 contracts/contract_upgrades.py 登记该 source→target 边')
+            hint='保留旧根与历史证据只读，使用独立新根按当前契约重新生成；'
+                 '历史升级边只与对应冻结旧代码配对')
     return match
 
 
@@ -208,6 +212,22 @@ def _check_retained(repository: Str06Repository, plan: ContractUpgradePlanV1, *,
                 repository.check_model(f.rel)
 
 
+def _current_abort_pending(repository: Str06Repository) -> ContractUpgradeRecordV1 | None:
+    """清理升级日志同样是写动作；旧根及旧目标日志只读保留。"""
+    current = candidate_contract_identity()
+    workflow = workflow_from_disk(repository.inspect(WORKFLOW_REL))
+    if (workflow.contract_identity != current
+            or workflow.epoch.contract_version != STR06_RC_VERSION):
+        raise UpgradeRefused(
+            '旧根契约身份与当前不一致，恢复日志只读保留，禁止清理；'
+            '请在独立新根按当前契约重新生成')
+    pending = _pending(repository)
+    if pending is not None and pending.plan.target_contract_identity != current:
+        raise UpgradeRefused(
+            '恢复日志目标不是当前契约，历史日志只读保留，禁止清理')
+    return pending
+
+
 def abort_pending(repository: Str06Repository, *, base: Path, sid: str,
                   source_identity: str, code_version: str,
                   actor: str, reason: str) -> dict[str, Any]:
@@ -221,12 +241,14 @@ def abort_pending(repository: Str06Repository, *, base: Path, sid: str,
         raise UpgradeRefused('放弃升级恢复日志须登记执行者与理由')
     if repository.root != paths.resolve_novel_dir(base, sid).resolve():
         raise UpgradeRefused('升级书根与执行范围不符')
+    _current_abort_pending(repository)
     from novel.work_units import check_workflow_write
     check_workflow_write(base)
     with operation_scope(base, sid, operation='contract-upgrade-abort',
                          details={}), \
             path_transaction_lock(repository.path(WORKFLOW_REL)):
-        pending = _pending(repository)
+        # 锁内再校验，防止身份在准入与取得 workflow 锁之间变化。
+        pending = _current_abort_pending(repository)
         if pending is None:
             raise UpgradeRefused('盘上没有升级恢复日志，无需放弃')
         subject = digest(pending.plan.model_dump(mode='json'))

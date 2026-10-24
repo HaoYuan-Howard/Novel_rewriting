@@ -57,8 +57,10 @@ __all__ = ['ChapterLengthDisclosure', 'ChapterReceipt',
 BODY_VALIDATOR_VERSION = 'str06-body-mechanical-v5'
 #: 写手材料与机械回执共用的正式版本轴；运行时提示、身份与预算从此取值。
 #: v13（rc26，命名前移批 C）：正文协议切普通正文——不再生成姓名标记与区间。
-RENDERER_VERSION = 'str06-render-v14'
-WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v13'
+#: renderer v15／正文协议 v14（rc27）：带极性的正负命题和认知撤回明确送达写手；
+#: 旧材料身份不得复用为新知情边界，机械校验规则本身保持独立版本。
+RENDERER_VERSION = 'str06-render-v15'
+WRITER_PROTOCOL_VERSION = 'str06-body-protocol-v14'
 #: v5→v6（rc26，命名前移批 C）：同 body——去 `name_text`，定界符并入 no_wrapper。
 HOOK_VALIDATOR_VERSION = 'str06-hook-mechanical-v6'
 #: 回执宣告通过的机械检查项闭集。
@@ -95,7 +97,7 @@ class ChapterReceipt(StrictModel):
     就是最终正文字节，不再有「改名前」中间态与末端替换。
     """
 
-    contract_version: Literal['str06-rc26'] = 'str06-rc26'
+    contract_version: Literal['str06-rc27'] = 'str06-rc27'
     chapter_ordinal: int = Field(ge=1)
     writer_view_sha256: str = Field(
         min_length=64, max_length=64,

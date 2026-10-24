@@ -47,6 +47,22 @@ function stubCandidateApi(candidate: string) {
   return listed
 }
 
+/** 在合法只读响应中替换认知条目；录制 fixture 保留生产原样。 */
+async function stubCognition(records: Record<string, unknown>[]) {
+  const candidate = 'cand'
+  const recorded = await mockApi.getStr06Blueprint(candidate)
+  const firstChapter = recorded.chapters[0]
+  const firstBeat = firstChapter.beats[0]
+  stubCandidateApi(candidate)
+  vi.spyOn(api, 'getStr06Blueprint').mockResolvedValue({
+    ...recorded,
+    chapters: [{ ...firstChapter, beats: [{ ...firstBeat, cognition: records }, ...firstChapter.beats.slice(1)] },
+      ...recorded.chapters.slice(1)],
+  })
+  vi.spyOn(api, 'getStr06Chapter').mockImplementation((_c, o) => mockApi.getStr06Chapter(candidate, o))
+  return { candidate, beatId: firstBeat.beat_id }
+}
+
 describe('Str06MonitorScreen', () => {
   it('renders the recorded candidate root over the single data seam', async () => {
     const listed = await mockApi.getStr06Candidates()
@@ -98,6 +114,77 @@ describe('Str06MonitorScreen', () => {
     expect(observationFailures).toHaveTextContent('无失败章')
     // 干净链从没起过修订轮：回派账缺席是 null，不渲染空账本。
     expect(screen.queryByTestId('str06-owner-issues')).not.toBeInTheDocument()
+  })
+
+  it('distinguishes believing a proposition, believing its negation, and withdrawing acceptance', async () => {
+    const proposition = { ref: 'p_arrival', statement: '阿姐送来夫君' }
+    const basis = [{ segment: 'e01_01', quote: '我以为是阿姐送来的。' }]
+    const belief = {
+      proposition, holder: 'yun_niang', op: 'set', mode: 'believes', polarity: 'positive',
+      support: 'inference', reader_visible: false, basis,
+    }
+    const { candidate, beatId } = await stubCognition([
+      belief,
+      { ...belief, polarity: 'negative' },
+      { ...belief, op: 'unset', mode: null, polarity: null, support: 'confirmed', reader_visible: true,
+        basis: [{ segment: 'e01_01', quote: '我这才知道自己认错了。' }] },
+    ])
+    renderCandidate(candidate)
+
+    const positive = await screen.findByTestId(`str06-cognition-${beatId}-0`)
+    const negative = screen.getByTestId(`str06-cognition-${beatId}-1`)
+    const withdrawn = screen.getByTestId(`str06-cognition-${beatId}-2`)
+    expect(positive).toHaveTextContent('yun_niang 相信「阿姐送来夫君」')
+    expect(negative).toHaveTextContent('yun_niang 相信非「阿姐送来夫君」')
+    expect(withdrawn).toHaveTextContent('yun_niang 已撤回对「阿姐送来夫君」的接受')
+    expect(withdrawn).not.toHaveTextContent('确知非')
+    expect(withdrawn).not.toHaveTextContent('null')
+    expect(positive).toHaveTextContent('证据性质：推测')
+  })
+
+  it('shows claim support and reader visibility independently from the cognition mode', async () => {
+    const shared = { proposition: { ref: 'p_arrival', statement: '阿姐送来夫君' }, holder: 'yun_niang',
+      op: 'set', polarity: 'negative', basis: [{ segment: 'e01_01', quote: '阿姐说不是她送来的。' }] }
+    const { candidate, beatId } = await stubCognition([
+      { ...shared, mode: 'hears_claim', support: 'claim', reader_visible: true },
+      { ...shared, mode: 'learns', support: 'confirmed', reader_visible: false },
+    ])
+    renderCandidate(candidate)
+
+    const claim = await screen.findByTestId(`str06-cognition-${beatId}-0`)
+    const hiddenKnowledge = screen.getByTestId(`str06-cognition-${beatId}-1`)
+    expect(claim).toHaveTextContent('听到说法非「阿姐送来夫君」')
+    expect(claim).toHaveTextContent('证据性质：仅说法 · 读者可见')
+    expect(claim).not.toHaveTextContent('确知')
+    expect(hiddenKnowledge).toHaveTextContent('确知非「阿姐送来夫君」')
+    expect(hiddenKnowledge).toHaveTextContent('证据性质：已确认 · 未向读者展示')
+  })
+
+  it('shows anonymous identity evidence and the holder and polarity of initial knowledge', async () => {
+    const candidate = 'cand'
+    const recorded = await mockApi.getStr06Characters(candidate)
+    const character = recorded.characters[0]
+    stubCandidateApi(candidate)
+    vi.spyOn(api, 'getStr06Characters').mockResolvedValue({
+      ...recorded,
+      characters: [{ ...character, identity_bindings: [{
+        description: '襁褓中背有印记的婴儿', appearance_refs: ['e07_02', 'e08_03'], identity_refs: ['e10_04'],
+      }] }, ...recorded.characters.slice(1)],
+      initial_knowledge: [{
+        knowledge_id: 'k0_01', holder: character.char_id,
+        proposition: { ref: 'p_arrival', statement: '阿姐送来夫君' }, polarity: 'negative',
+        basis: [{ segment: 'e01_01', quote: '他一直知道人不是阿姐送来的。' }],
+      }],
+    })
+    vi.spyOn(api, 'getStr06Chapter').mockImplementation((_c, o) => mockApi.getStr06Chapter(candidate, o))
+    renderCandidate(candidate)
+
+    expect(await screen.findByText('身份指称：襁褓中背有印记的婴儿')).toBeInTheDocument()
+    expect(screen.getByText('e07_02、e08_03').parentElement).toHaveTextContent('出场证据')
+    expect(screen.getByText('e10_04').parentElement).toHaveTextContent('同一性证据')
+    const initialKnowledge = screen.getByText('开场已确认知识').parentElement!.parentElement!
+    expect(initialKnowledge).toHaveTextContent(`持有者 ${character.char_id}`)
+    expect(initialKnowledge).toHaveTextContent('确知非「阿姐送来夫君」 · 负命题')
   })
 
   it('renders the failure shape and chapter failures straight from the run view', async () => {

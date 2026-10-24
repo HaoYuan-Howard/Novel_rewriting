@@ -20,12 +20,12 @@ from novel.llm.paid_requests import digest, purchased_baseline, semantic_owner_u
 from novel.store import Str06Repository
 from novel.stages.chain import (
     ChainContext, ExecutionProfile, NODE_RUNNERS, SYS, BODY_WRITER_SYSTEM, HOOK_WRITER_SYSTEM,
-    _chapter_evidence, build_evidence, chapter_acceptance, derive_total_length_budget,
+    _chapter_evidence, build_evidence, derive_total_length_budget,
     load_stage1_chapters, str06_chat_request, freeze_execution_profile,
     prepare_chapter_request,
 )
 from novel.stages.stage2 import (
-    character_core_view, first_appearance_anchors, chapter_observation_prompt,
+    character_core_view, chapter_observation_prompt,
 )
 from novel.stages.stage5 import chapter_prose_validator, validate_hook_prose
 from novel.stages.common import (
@@ -68,7 +68,7 @@ def request_preview(repository, owner, source, profile, *, upstream_wires=None):
         # ch04 收口实证），预检就此失去判别力。
         prompt, acceptance = prepare_chapter_request(
             repository, no=n, book=book, chapters=source.chapters, chapter_evidence=local,
-            anchors=first_appearance_anchors(core), fact_ids=frozenset(f.fact_id for f in book.facts))
+            fact_ids=frozenset(f.fact_id for f in book.facts))
         validate = lambda w: acceptance(w)[1]
         capture = _Capture(prompt, validate, SYS, True, 0.3)
     elif owner.startswith('body_ch'):

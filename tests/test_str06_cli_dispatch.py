@@ -102,8 +102,8 @@ def test_chapter_patch_preview_accepts_existing_book_fact_reference(tmp_path):
 
     repo, wires = _repo_with_observations(tmp_path)
     book = repo.read_model('stage2/observations/book.json')
-    fact = Fact(fact_id='f01', statement='苏芸娘嫁入陆家',
-                basis=({'segment': 'e01_01', 'quote': '苏芸娘嫁入陆家'},))
+    fact = Fact(fact_id='f01', statement='苏芸娘嫁入陆家', known_at_start=(),
+                evidence=[{'kind': 'confirmed', 'polarity': 'positive', 'holder': None, 'basis': ({'segment': 'e01_01', 'quote': '苏芸娘嫁入陆家'},)}])
     repo.write('stage2/observations/book.json', book.model_copy(update={'facts': (fact,)}),
                owners=('book',), refs=(synthetic_ref('book', '词表基线'),))
     profile = review.freeze_execution_profile(cfg=Config(), reasoning_effort='low',
@@ -111,7 +111,7 @@ def test_chapter_patch_preview_accepts_existing_book_fact_reference(tmp_path):
     _, validate = review.request_preview(repo, 'ch01',
         SimpleNamespace(chapters=_chapters(), hook_copy=''), profile)
     wire = slim_chapter_wire(wires['ch01'])
-    wire['beats'][0]['know'] = [{'who': 'yun_niang', 'how': 'learns', 'fact': 'f01',
+    wire['beats'][0]['know'] = [{'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': False, 'who': 'yun_niang', 'how': 'learns', 'fact': 'f01',
                                'evidence_refs': ['e01_01']}]
     assert validate(wire) == []
     wire['beats'][0]['know'][0]['fact'] = 'f99'

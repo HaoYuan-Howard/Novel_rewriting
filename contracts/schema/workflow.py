@@ -778,7 +778,9 @@ STR06_RUNTIME_CONFIG: Final = CandidateRuntimeConfig()
 # 与 rc25→rc26 同根升级边（naming-forward-rc25-rc26）同批落地，rc25 存量根有
 # 登记升级路径，不进入无升级路径的拒读窗口。后续批次（B～E）的目标链形状
 # 变化沿该版式继续显式升版。
-STR06_RC_VERSION: Final = 'str06-rc26'
+# rc27：身份指称独立于称谓窗口；命题支持、极性、认知撤回和答案原子引用显式化。
+# 旧契约根只读，新根重新生成；当前契约内的免费重放与恢复继续保留。
+STR06_RC_VERSION: Final = 'str06-rc27'
 
 #: 已知 RC 标签面（版本规则见 `contracts/artifacts.py::STR06_ARTIFACT_RC_VERSIONS`）。
 STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 'str06-rc6',
@@ -786,7 +788,7 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
                           'str06-rc12', 'str06-rc13', 'str06-rc14', 'str06-rc15',
                           'str06-rc16', 'str06-rc17', 'str06-rc18', 'str06-rc19',
                           'str06-rc20', 'str06-rc21', 'str06-rc22', 'str06-rc23',
-                          'str06-rc24', 'str06-rc25', 'str06-rc26')
+                          'str06-rc24', 'str06-rc25', 'str06-rc26', 'str06-rc27')
 
 #: Stage4 四个付费语义节点的独立 wire 协议（B3 前半；各节点独立演进，升版互不
 #: 牵连）。wire 顶层 `protocol_version` 与对应常量逐字对账，漏带或错带即拒
@@ -812,7 +814,7 @@ STR06_RC_LABELS: Final = ('str06-rc2', 'str06-rc3', 'str06-rc4', 'str06-rc5', 's
 #: believes→believes；asserts 转公开声称标记）＋kf 事实锁（时态/值未知/
 #: 原文未回答）；requirement 带 series 盲标记与 mechanism。kp/kf 键规则与
 #: 必保锁兑现归 assemble_body_design（revise_self）。
-STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v7'
+STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v8'
 # 2026-10-10 用户授权有限补桥：Preserve 必要源因果完整交接，Design 只在
 # 骨架、事实、结局与知情/未知边界内补局部行动、沟通和决策；wire/canonical 不变。
 # v10：正式交接材料合起来保住骨架，不要求各字段重复因果；唯一登记称谓可自然混用。
@@ -820,12 +822,12 @@ STAGE4_PRESERVE_PROTOCOL: Final = 'stage4-preserve-v7'
 # （NameMapV6），义务/满足条件/细节等进入创作链的自然语言一律用目标姓名；
 # 源旧字面落义务文本即源文抄回，按条目定位返修（policy 12 起）。wire 同批
 # 升 v7（材料集变化换请求身份，防同身份缓存重放源名回答）。
-STAGE4_PRESERVE_POLICY_VERSION: Final = 12
-STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v5'
+STAGE4_PRESERVE_POLICY_VERSION: Final = 13
+STAGE4_DESIGN_PROTOCOL: Final = 'stage4-design-v6'
 # CS-3（2026-10-03）：`str06.stage4.bind` 退役——承载位由 design wire 的 real
 # 标注派生（stage4-design-v6 的面），stage4-bind-v1 wire 协议随之退役。
 # Hook v2：事实引用由代码目录给出；canonical 的位置＋地址形状保持不变。
-STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v4'
+STAGE4_HOOK_DESIGN_PROTOCOL: Final = 'stage4-hook-design-v5'
 
 #: epoch 滚动理由面。`initial` 只允许首开；漂移类要求身份确实变化；`repair`
 #: 是 typed 修复的显式 producer 边界（对齐正式 ExecutionEpochReason 的 continue）。
@@ -1066,6 +1068,7 @@ OWNER_ISSUE_CODES: Final = (
     'schema_violation',    # wire 形状／协议字面量／重复键（同节点）
     'association_undecided',   # 关联未决（D8）：回派 associate
     'chapter_loop_conflict',  # 本地悬念生命周期：按chapter scope回章观察
+    'chapter_loop_answer_invalid',  # 收束答案的引用、可见性或确认资格无效
     'must_keep_unbound',   # 必保义务未承载：按 unbound.owner 回 body_design/preserve
     'source_evidence_conflict',  # 源证据冲突（R10a a3）：按锚点句柄回派 Stage2 owner
     'epistemic_lock_order',  # 知情升级/读者确认早于授权承载位（R10a a5）：回 body_design
@@ -1086,6 +1089,7 @@ OWNER_ISSUE_ROUTES: Final[dict[str, str]] = {
     'schema_violation': 'revise_self',
     'association_undecided': 'revise_upstream:str06.stage2.associate',
     'chapter_loop_conflict': 'revise_upstream:str06.stage2.chapters',
+    'chapter_loop_answer_invalid': 'revise_upstream:str06.stage2.chapters',
     'must_keep_unbound': 'revise_upstream:unbound_owner',
     'source_evidence_conflict': 'revise_upstream:conflict_anchor',
     # R10a a5：锁位置是 Design 的披露顺序决定（Bind 只选承载位）；单一目标
@@ -1133,9 +1137,9 @@ def route_owner_issue(code: str, *, unbound_owner: str = '',
         import re as _re
         if _re.fullmatch(r'b\d{2}_\d{2}(?:\.(?:[ecl]\d+|v1))?', conflict_anchor):
             return 'revise_upstream', 'str06.stage2.chapters'
-        if _re.fullmatch(r'(s0_|wc_)\d{2}', conflict_anchor):
+        if _re.fullmatch(r'(s0_|k0_|wc_)\d{2,}', conflict_anchor):
             return 'revise_upstream', 'str06.stage2.book'
         return ('stop',
                 f'证据冲突锚点 {conflict_anchor!r} 不可解析（应为拍句柄 '
-                'bNN_MM.e|c|lN 或书级 s0_NN/wc_NN；一律停）')
+                'bNN_MM.e|c|lN 或书级 s0_NN/k0_NN/wc_NN；一律停）')
     return 'revise_upstream', target

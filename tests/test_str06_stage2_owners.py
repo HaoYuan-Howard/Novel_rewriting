@@ -63,16 +63,16 @@ def _basis(ref: str) -> list[dict]:
 def _book_wire() -> dict:
     return {**sample_book_expression({
             'fu_jun': {'canonical': '夫君', 'surfaces': [
-                {'surface': '夫君', 'source_refs': ['e01_01']}]},
+                {'surface': '夫君', 'source_refs': ['e01_01']}], 'identity_bindings': []},
             'yun_niang': {'canonical': '云娘', 'surfaces': [
-                {'surface': '云娘', 'source_refs': ['e01_02']}]},
+                {'surface': '云娘', 'source_refs': ['e01_02']}], 'identity_bindings': []},
         }),
-        'protocol_version': 'stage2-book-v7',
+        'protocol_version': 'stage2-book-v8',
         'characters': {
             'fu_jun': {'canonical': '夫君', 'surfaces': [
-                {'surface': '夫君', 'source_refs': ['e01_01']}]},
+                {'surface': '夫君', 'source_refs': ['e01_01']}], 'identity_bindings': []},
             'yun_niang': {'canonical': '云娘', 'surfaces': [
-                {'surface': '云娘', 'source_refs': ['e01_02']}]},
+                {'surface': '云娘', 'source_refs': ['e01_02']}], 'identity_bindings': []},
         },
         'initial_state': [
             {'target': {'kind': 'relation', 'subject': 'fu_jun', 'object': 'yun_niang'},
@@ -195,9 +195,9 @@ def test_chapter_observation_green_wire_compiles_with_local_handles():
                                cognition=({'proposition': {'ref': 'p_noise',
                                                            'statement': '夜半有响动'},
                                           'holder': 'yun_niang', 'mode': 'suspects',
-                                          'basis': _basis('e02_01')},),
+                                          'basis': _basis('e02_01'), 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': True},),
                                loops=({'ref': 'q_noise', 'op': 'open',
-                                       'question': '响动是谁？'},)))
+                                       'question': '响动是谁？', 'answer_refs': []},)))
     obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
     assert errors == [] and obs is not None and len(obs.beats) == 1
 
@@ -213,7 +213,7 @@ def test_chapter_observation_binds_registered_key_scope_and_refuses_retired():
     assert 'residence' in CHANGE_KEYS and 'whereabouts' not in CHANGE_KEYS
     wire = _chapter_wire(_beat('云娘握紧剪刀', ('e02_02',), effects=(
         {'target': {'kind': 'character', 'char_id': 'yun_niang'}, 'key': 'residence',
-         'op': 'set', 'value': '陆家', 'modality': 'actual', 'basis': _basis('e02_02')},)))
+         'op': 'set', 'value': '陆家', 'modality': 'actual', 'basis': _basis('e02_02'), 'reader_visible': True},)))
     raw = json.dumps(wire, ensure_ascii=False)
     obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
     assert errors == [] and obs is not None, \
@@ -221,23 +221,23 @@ def test_chapter_observation_binds_registered_key_scope_and_refuses_retired():
     assert json.dumps(wire, ensure_ascii=False) == raw, '判定在副本上，原 wire 不改（I-24）'
     wire = _chapter_wire(_beat('云娘握紧剪刀', ('e02_02',), effects=(
         {'target': {'kind': 'character', 'char_id': 'yun_niang'}, 'key': 'whereabouts',
-         'op': 'set', 'value': '床底', 'modality': 'actual', 'basis': _basis('e02_02')},)))
+         'op': 'set', 'value': '床底', 'modality': 'actual', 'basis': _basis('e02_02'), 'reader_visible': True},)))
     _obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
     assert any('whereabouts' in e and '变化键闭集' in e for e in errors), errors
 
 
 def test_chapter_observation_refuses_conflicting_statement_and_double_open():
-    second_loop_a = {'ref': 'q_noise', 'op': 'open', 'question': '响动是谁？'}
-    second_loop_b = {'ref': 'q_noise', 'op': 'open', 'question': '另一条？'}
+    second_loop_a = {'ref': 'q_noise', 'op': 'open', 'question': '响动是谁？', 'answer_refs': []}
+    second_loop_b = {'ref': 'q_noise', 'op': 'open', 'question': '另一条？', 'answer_refs': []}
     wire = _chapter_wire(
         _beat('窗外有响动', ('e02_01',),
               cognition=({'proposition': {'ref': 'p_noise', 'statement': '夜半有响动'},
                           'holder': 'yun_niang', 'mode': 'suspects',
-                          'basis': _basis('e02_01')},)),
+                          'basis': _basis('e02_01'), 'op': 'set', 'polarity': 'positive', 'support': 'inference', 'reader_visible': True},)),
         _beat('云娘警觉', ('e02_02',), boundary='continue',
               cognition=({'proposition': {'ref': 'p_noise', 'statement': '来了贼人'},
                           'holder': 'yun_niang', 'mode': 'confirms',
-                          'basis': _basis('e02_02')},),
+                          'basis': _basis('e02_02'), 'op': 'set', 'polarity': 'positive', 'support': 'confirmed', 'reader_visible': True},),
               loops=(second_loop_a, second_loop_b)))
     _obs, errors = compile_chapter_observation(wire, evidence_ids=_ch2_evidence())
     assert any('p_noise' in e and '文本只建立一次' in e for e in errors), errors
@@ -247,8 +247,12 @@ def test_chapter_observation_refuses_conflicting_statement_and_double_open():
 def test_chapter_observation_keeps_cross_chapter_handles_unresolved():
     """跨章句柄不在章内闭合（D3）：close 未知悬念合法落账，配对归 associate（D8）。"""
     wire = _chapter_wire(_beat('夫君说出实情', ('e03_01',),
+                               cognition=({'proposition': {'ref': 'p_answer', 'statement': '是夫君自己'},
+                                           'holder': 'yun_niang', 'op': 'set', 'mode': 'learns',
+                                           'polarity': 'positive', 'support': 'confirmed',
+                                           'reader_visible': True, 'basis': _basis('e03_01')},),
                                loops=({'ref': 'q_night', 'op': 'close',
-                                       'resolution': '是夫君自己'},)))
+                                       'answer_refs': ['c1']},)))
     obs, errors = compile_chapter_observation(
         wire, evidence_ids={k: v for k, v in EVIDENCE.items() if v['chapter'] == 3})
     assert errors == [] and obs.beats[0].loops[0].ref == 'q_night'
@@ -347,7 +351,7 @@ def test_stage2_observation_leg_persists_observations_and_names_remount(tmp_path
                 'stage2/observations/names.json'):
         artifact = repo.inspect(rel)
         assert artifact['protocol_version'] == (
-            'stage2-book-v7' if rel.endswith('/book.json')
+            'stage2-book-v8' if rel.endswith('/book.json')
             else STAGE2_NAMES_PROTOCOL if rel.endswith('/names.json')
             else STAGE2_CHAPTERS_PROTOCOL), rel
         assert '_provenance' in artifact, rel

@@ -22,7 +22,7 @@ from contracts.schema.receipt import (
     BODY_MECHANICAL_CHECKS, BODY_VALIDATOR_VERSION, ChapterReceipt,
     RENDERER_VERSION, WRITER_PROTOCOL_VERSION,
 )
-from contracts.schema.source import CharactersArtifactV6
+from contracts.schema.source import CharactersArtifactV7
 from contracts.schema.stage1 import MainText
 from novel.paths import artifact_path, book_txt_rel
 from tools.book_overlap import measure, split_book
@@ -58,8 +58,8 @@ def _fixture(tmp_path):
     """rc26 零改名度量夹具：已接受正文即最终成文（源章旧名、成书目标姓名）。"""
     novel_dir = tmp_path / '同形人物_123'
     novel_dir.mkdir()
-    characters = CharactersArtifactV6.model_validate({
-        'characters': {char_id: {'canonical': '白', 'surfaces': [{
+    characters = CharactersArtifactV7.model_validate({'initial_knowledge': [],
+        'characters': {char_id: {'identity_bindings': [], 'canonical': '白', 'surfaces': [{
             'surface': '白', 'from_chapter': 1, 'source_refs': ['e01_01']}]}
             for char_id in ('first', 'second')},
         'initial_state': [],

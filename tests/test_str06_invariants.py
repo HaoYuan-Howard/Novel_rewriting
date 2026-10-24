@@ -394,7 +394,7 @@ def test_verification_ir_carries_continuity_fact_view():
 
 
 def test_brief_hides_source_topology_behaviorally():
-    brief = ReconstructionBrief(contract_version='str06-rc26',**sample_brief_expression(),
+    brief = ReconstructionBrief(contract_version='str06-rc27',**sample_brief_expression(),
         brief_id='br1', preserve_checkpoint_sha256=H64,
         requirements=(
             BriefRequirement(kind='event_core', must_preserve=False, satisfaction='', core_id='c1', summary='约定成立', participants=('ch1',)),
@@ -442,11 +442,12 @@ def test_stage_engine_packages_import_discipline():
                     'dataclasses', 'collections', 'functools', 'itertools',
                     'enum', 'abc', 'datetime', 'json', 're', 'os', 'sys', 'copy',
                     'math')
-    # core.repair 是契约已登记的纯 schema／路径原语；精确放行此模块，
-    # 不扩成 novel.core 子树，付费、持久化和编排依赖仍由下方禁项守住。
+    # core.repair 是纯 schema／路径原语，core.state_proposition 只格式化类型化
+    # 状态原子；逐模块放行，不扩成 novel.core 子树，付费与持久化仍由禁项守住。
     allowed_roots = ('contracts', 'novel.errors', 'novel.stages',
                      'novel.core.text', 'novel.core.name_materials', 'novel.core.name_residue',
-                     'novel.core.material_trace', 'novel.core.validation', 'novel.core.repair')
+                     'novel.core.material_trace', 'novel.core.validation', 'novel.core.repair',
+                     'novel.core.state_proposition')
     banned_novel = ('novel.llm', 'novel.orchestrator', 'novel.store',
                     'novel.views', 'novel.api', 'novel.run', 'novel.work_units',
                     'novel.consumption', 'novel.prov', 'novel.paths')

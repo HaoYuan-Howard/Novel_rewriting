@@ -50,9 +50,10 @@ from contracts.schema.design import TargetBeat, TargetDelta, ThreadKind
 from contracts.schema.execution import Establishment
 from contracts.schema.state import StateAddress, SurfaceIntroduction, SurfaceRelease
 from contracts.schema.grounding import BriefDetail, SourceObligation
+from contracts.schema.source import Polarity
 from typing import Literal, Mapping, Sequence
 
-__all__ = ['BeatIR', 'KnowledgeEntry', 'ObligationCarrier', 'OpenThreadIR',
+__all__ = ['BeatIR', 'KnowledgeEntry', 'ObligationCarrier', 'OpenThreadIR', 'ProjectedDelta',
            'PriorSeriesEvent', 'StateEntry', 'SupportingBeatEvent', 'SurfaceRelease', 'ThreadOpIR', 'UnansweredGuard',
            'VerificationIR', 'WriterBrief', 'WriterContext', 'WriterDetail', 'WriterPacket']
 
@@ -75,7 +76,23 @@ class KnowledgeEntry(StrictModel):
     key: str = Field(min_length=1)
     status: Literal['set', 'unset', 'unknown'] = 'set'
     #: v13（D14）补 believes：持有者以为为真，不代表世界为真。
-    mode: Literal['known', 'suspected', 'heard', 'believes']
+    mode: Literal['known', 'suspected', 'heard', 'believes'] | None
+    polarity: Polarity | None
+
+    @model_validator(mode='after')
+    def _operation_shape(self) -> 'KnowledgeEntry':
+        if self.status != 'set':
+            if self.mode is not None or self.polarity is not None:
+                raise ValueError('已撤回或未知认知不得携带模式和极性')
+        elif self.mode is None or self.polarity is None:
+            raise ValueError('当前认知必须携带模式和极性')
+        return self
+
+
+class ProjectedDelta(TargetDelta):
+    """写手 IR 的派生文本；保留真源的操作和值，不改写布尔极性。"""
+
+    proposition_statement: str | None = None
 
 
 class WriterDetail(BriefDetail):
@@ -93,7 +110,7 @@ class BeatIR(StrictModel):
 
     beat_ref: str = Field(min_length=1, description='场景#场内拍 的完整引用')
     event: str = Field(min_length=1)
-    deltas: tuple[TargetDelta, ...] = Field(default=(), min_length=0)
+    deltas: tuple[ProjectedDelta, ...] = Field(default=(), min_length=0)
     #: 本拍承载的源表达任务（a4：ex_id 原样保留；renderer v7（R10b）把它
     #: 展开成拍级表达任务——v6 阶段仅随 IR 存档，不进阅读面）。
     expression_refs: tuple[str, ...] = Field(default=(), min_length=0)
@@ -131,6 +148,7 @@ class PendingConfirmation(StrictModel):
     """
 
     fact: str = Field(min_length=1)
+    polarity: Polarity
     key: str = Field(min_length=1)
     subjects: tuple[str, ...] = ()
     address: StateAddress
@@ -232,7 +250,7 @@ class VerificationIR(StrictModel):
     entry_state: tuple[StateEntry, ...] = Field(default=(), min_length=0)
     entry_knowledge: tuple[KnowledgeEntry, ...] = Field(default=(), min_length=0)
     released_surfaces: tuple[SurfaceRelease, ...] = Field(default=(), min_length=0)
-    planned_delta: tuple[TargetDelta, ...] = Field(default=(), min_length=0)
+    planned_delta: tuple[ProjectedDelta, ...] = Field(default=(), min_length=0)
     #: 尚未向读者确认的事实（D15）：本场开头及以后才发生的 reader 确认。
     pending_reader_confirmations: tuple[PendingConfirmation, ...] = Field(
         default=(), min_length=0)
@@ -295,7 +313,7 @@ class WriterContext(StrictModel):
     消费该地址的章包。rc10（R2）：拍级读取值挂 BeatIR.reads；线程投影面
     thread_ops／open_threads 进 IR。"""
 
-    contract_version: Literal['str06-rc22'] = 'str06-rc22'
+    contract_version: Literal['str06-rc27'] = 'str06-rc27'
     scene_id: str = Field(min_length=1)
     execution_slice_sha256: str = Field(min_length=64, max_length=64)
     verification_ir: VerificationIR
@@ -324,7 +342,7 @@ class WriterPacket(StrictModel):
     默认空值冒充「已经按该身份考虑过」（I-14/I-42）。
     """
 
-    contract_version: Literal['str06-rc12'] = 'str06-rc12'
+    contract_version: Literal['str06-rc27'] = 'str06-rc27'
     chapter_ordinal: int = Field(ge=1)
     #: 必须写出：本章拍的事件与目标效应；本场义务的满足条件；本场的线程操作。
     must_realize: tuple[str, ...]
@@ -374,6 +392,7 @@ class WriterPacket(StrictModel):
 def beats_ir(scene_id: str, beats: tuple[TargetBeat, ...],
              reads_by_beat: Mapping[str, Sequence[StateEntry | KnowledgeEntry]] | None = None,
              details_by_id: Mapping[str, WriterDetail] | None = None,
+             deltas_by_beat: Mapping[str, Sequence[ProjectedDelta]] | None = None,
              ) -> tuple[BeatIR, ...]:
     """canonical 拍 → BeatIR 的确定性投影（供 compiler 复用，单一产地）。
 
@@ -382,9 +401,12 @@ def beats_ir(scene_id: str, beats: tuple[TargetBeat, ...],
     """
     reads_by_beat = dict(reads_by_beat or {})
     details_by_id = dict(details_by_id or {})
+    deltas_by_beat = dict(deltas_by_beat or {})
     return tuple(
         BeatIR(beat_ref=f'{scene_id}#{b.beat_id}', event=b.event,
-               deltas=b.target_delta,
+               deltas=tuple(deltas_by_beat.get(b.beat_id, ()))
+               if b.beat_id in deltas_by_beat else tuple(
+                   ProjectedDelta(**delta.model_dump()) for delta in b.target_delta),
                expression_refs=b.expression_refs,
                details=tuple(details_by_id[ref] for ref in b.detail_refs),
                surface_introductions=tuple(

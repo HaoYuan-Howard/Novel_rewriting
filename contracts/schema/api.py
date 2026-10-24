@@ -1100,10 +1100,19 @@ class Str06SurfaceWindowView(StrictModel):
     until_chapter: int | None = None
 
 
+class Str06IdentityBindingView(StrictModel):
+    """人物身份的证据投影，不作为称谓释放或读者知情依据。"""
+
+    description: str = Field(min_length=1)
+    appearance_refs: tuple[str, ...] = Field(min_length=1)
+    identity_refs: tuple[str, ...] = Field(min_length=1)
+
+
 class Str06CharacterView(StrictModel):
     char_id: str = Field(min_length=1)
     canonical: str = Field(min_length=1)
     surfaces: tuple[Str06SurfaceWindowView, ...] = Field(min_length=1)
+    identity_bindings: tuple[Str06IdentityBindingView, ...]
 
 
 class Str06NameStructureView(StrictModel):
@@ -1119,6 +1128,7 @@ class Str06CharactersView(StrictModel):
     present: bool
     contract_version: str | None = None
     characters: tuple[Str06CharacterView, ...] = ()
+    initial_knowledge: tuple[dict[str, Any], ...] = ()
     name_structure: Str06NameStructureView | None = None
 
 
